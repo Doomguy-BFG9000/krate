@@ -59,7 +59,11 @@ mod player {
         };
         run_player(&data_root, handles);
         // The app is the process: when the flow ends -- back button, close,
-        // cancel at the wall -- no blank activity shell may linger.
+        // cancel at the wall -- no blank activity shell may linger. Finish
+        // the activity first: Android restarts a top activity whose process
+        // died moments after launch, with the same link, so a file that
+        // could not be read flickered open and shut forever (K-1015).
+        crate::intent::finish(handles);
         std::process::exit(0);
     }
 
@@ -83,7 +87,9 @@ mod player {
                         Ok(bytes) => bytes,
                         Err(why) => {
                             log::error!("could not fetch the app: {why}");
-                            return;
+                            let why =
+                                format!("{why}. Check the connection and open the link again.");
+                            return notice(data_root, "Could not download this app", &why);
                         }
                     }
                 } else {
@@ -92,7 +98,7 @@ mod player {
                         Ok(bytes) => bytes,
                         Err(why) => {
                             log::error!("could not read the file: {why}");
-                            return;
+                            return notice(data_root, "Could not open this file", &why);
                         }
                     }
                 };
@@ -100,7 +106,13 @@ mod player {
                     Ok(open) => open,
                     Err(err) => {
                         log::error!("that is not a Krate app: {err:#}");
-                        return;
+                        // A Krate too old for the app says so in words a person
+                        // can act on; anything else is a damaged or wrong file.
+                        let why = match err {
+                            krate_bundle::BundleError::NeedsNewerKrate { .. } => format!("{err}"),
+                            _ => "This file is not a Krate app, or it was damaged on the way. Ask for it again.".to_string(),
+                        };
+                        return notice(data_root, "This app did not open", &why);
                     }
                 };
                 manifest_text = std::fs::read_to_string(open.manifest_path()).unwrap_or_default();
@@ -175,7 +187,14 @@ mod player {
         };
         match runtime.run_bytes_for_world(&component, &config, krate_runtime::RuntimeWorld::Auto) {
             Ok(outcome) => log::info!("app finished: {outcome:?}"),
-            Err(err) => log::error!("app failed: {err:#}"),
+            Err(err) => {
+                log::error!("app failed: {err:#}");
+                notice(
+                    data_root,
+                    &format!("{} stopped", manifest.app.name),
+                    &format!("{err:#}"),
+                );
+            }
         }
     }
 
@@ -242,6 +261,38 @@ mod player {
         }
         // No decision line at all -- a crashed or killed wall. Fail closed.
         None
+    }
+
+    /// Tell the person why nothing opened, on the wall's trusted card, and
+    /// wait for Close. A failure that only reached the log looked, on a
+    /// phone, like the app flashing and vanishing.
+    fn notice(data_root: &std::path::Path, title: &str, message: &str) {
+        // The runtime refuses arguments with newlines; a reason never needs one.
+        let message = message.replace(['\n', '\0'], " ");
+        let Some(wall_manifest) = krate_manifest::Manifest::parse(WALL_MANIFEST).ok() else {
+            return;
+        };
+        let Ok(policy) = krate_policy::SessionPolicy::allow_all_declared(&wall_manifest) else {
+            return;
+        };
+        let config = krate_runtime::Config {
+            session_policy: policy,
+            sandbox_root: data_root.join("wall"),
+            app_args: vec![
+                "wall:notice".to_string(),
+                title.replace(['\n', '\0'], " "),
+                message,
+            ],
+            phase3_ui_mode: krate_runtime::phase3_ui::Phase3HostUiMode::NativePrototype,
+            ..Default::default()
+        };
+        if let Ok(runtime) = krate_runtime::Runtime::new(&config) {
+            let _ = runtime.run_bytes_captured_for_world(
+                WALL_WASM,
+                &config,
+                krate_runtime::RuntimeWorld::Gui,
+            );
+        }
     }
 
     fn fetch(url: &str) -> Result<Vec<u8>, String> {

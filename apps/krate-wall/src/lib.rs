@@ -24,26 +24,33 @@
 //!
 //! `quick` renders one frame of a sample wall and answers `wall:open` with
 //! everything granted, so check-app can verify the drawing path headless.
+//!
+//! `wall:notice`, a title and a message is the player saying why something
+//! did not open (a missing file, a failed download, an app that stopped):
+//! one card and a Close button, answered with `wall:closed`. It never
+//! answers `wall:open`, so an app named "wall:notice" gains nothing.
 
 #![no_std]
-
 
 extern crate alloc;
 use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
-use krate::gfx::{canvas2d, types as gfx};
 use krate::bindings::krate::io::{args, stdio};
 use krate::bindings::krate::time::clock;
-use krate::ui::{events, tree, types, window};
+use krate::gfx::{canvas2d, types as gfx};
 use krate::motion::Spring;
+use krate::ui::{events, tree, types, window};
 
 const ROOT_ID: u64 = 1;
 const CANVAS_ID: u64 = 2;
 /// Arguments arrive newline-joined, and the runtime refuses an argument that
 /// contains one -- so this split cannot be steered by any manifest string.
 const ARG_SEP: char = '\n';
+
+/// The first argument when the player has something to tell, not ask.
+const NOTICE: &str = "wall:notice";
 
 /// Name, then three fields per request.
 const FIELDS_PER_ASK: usize = 3;
@@ -99,7 +106,12 @@ struct Ask {
 /// it cannot read completely is a request it does not draw.
 fn parse_input(raw: &str) -> (String, Vec<Ask>) {
     let args: Vec<&str> = raw.split(ARG_SEP).collect();
-    let name = args.first().copied().unwrap_or("This app").trim().to_string();
+    let name = args
+        .first()
+        .copied()
+        .unwrap_or("This app")
+        .trim()
+        .to_string();
 
     let mut asks = Vec::new();
     let rest = args.get(1..).unwrap_or(&[]);
@@ -251,7 +263,13 @@ impl Sheet {
         // Buttons pin to the bottom; rows scroll between header and them.
         let buttons_top = l.h - 132.0;
         let rows_top = sheet_top + 96.0;
-        canvas2d::set_clip(canvas, l.col_x, rows_top, l.col_w, buttons_top - rows_top - 8.0)?;
+        canvas2d::set_clip(
+            canvas,
+            l.col_x,
+            rows_top,
+            l.col_w,
+            buttons_top - rows_top - 8.0,
+        )?;
 
         let mut y = rows_top + 8.0 - self.scroll;
         for index in 0..self.asks.len() {
@@ -350,7 +368,10 @@ impl Sheet {
         canvas2d::draw_text(
             canvas,
             "Cancel",
-            gfx::Point { x: cx, y: cancel_y + 20.0 },
+            gfx::Point {
+                x: cx,
+                y: cancel_y + 20.0,
+            },
             15.0,
             color(1.0, 1.0, 1.0, 0.55),
         )?;
@@ -386,6 +407,107 @@ impl Sheet {
     }
 }
 
+/// Show why something did not open, until Close is tapped or the window is
+/// dismissed.
+fn notice(title: &str, message: &str) {
+    let Ok(win) = window::create(
+        "Krate",
+        types::WindowSize {
+            width: 390,
+            height: 720,
+        },
+    ) else {
+        return;
+    };
+    if tree::set_root(win, &node(ROOT_ID, None, types::WidgetKind::Stack)).is_err() {
+        return;
+    }
+    let _ = tree::upsert_node(
+        win,
+        &node(CANVAS_ID, Some(ROOT_ID), types::WidgetKind::Canvas),
+    );
+    let Ok(canvas) = canvas2d::bind(win, CANVAS_ID) else {
+        return;
+    };
+    loop {
+        let l = match canvas2d::canvas_size(canvas) {
+            Ok(size) => Layout::from_canvas(size.width.max(1.0), size.height.max(1.0)),
+            Err(_) => Layout::from_canvas(390.0, 720.0),
+        };
+        let close = match draw_notice(canvas, &l, title, message) {
+            Ok(close) => close,
+            Err(_) => return,
+        };
+        let _ = window::request_redraw(win);
+        match events::wait(None) {
+            Some(types::Event::CloseRequested(_)) => return,
+            Some(types::Event::Pointer(p)) if p.pressed && p.button.is_some() => {
+                let (bx, by, bw, bh) = close;
+                if p.x >= bx && p.x <= bx + bw && p.y >= by && p.y <= by + bh {
+                    return;
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Draw the notice card; returns where Close is.
+fn draw_notice(
+    canvas: u64,
+    l: &Layout,
+    title: &str,
+    message: &str,
+) -> Result<(f32, f32, f32, f32), gfx::GfxError> {
+    canvas2d::clear(canvas, color(0.02, 0.024, 0.038, 1.0))?;
+    let x = l.col_x + 24.0;
+    let text_w = l.col_w - 48.0;
+    let lines = wrap_lines(canvas, message, 15.5, text_w);
+    let card_h = 72.0 + lines.len() as f32 * 21.0 + 92.0;
+    let top = ((l.h - card_h) / 2.0).max(16.0);
+    canvas2d::fill_round_rect(
+        canvas,
+        rect(l.col_x + 8.0, top, l.col_w - 16.0, card_h),
+        radii(24.0),
+        color(0.075, 0.086, 0.125, 1.0),
+    )?;
+    canvas2d::draw_text_styled(
+        canvas,
+        title,
+        gfx::Point { x, y: top + 48.0 },
+        22.0,
+        color(1.0, 1.0, 1.0, 1.0),
+        style(700, -0.3),
+    )?;
+    let mut y = top + 80.0;
+    for line in &lines {
+        canvas2d::draw_text(
+            canvas,
+            line,
+            gfx::Point { x, y },
+            15.5,
+            color(1.0, 1.0, 1.0, 0.75),
+        )?;
+        y += 21.0;
+    }
+    let close = rect(x, y + 14.0, text_w, 50.0);
+    canvas2d::fill_round_rect(canvas, close, radii(25.0), color(0.42, 0.55, 1.0, 1.0))?;
+    let m = canvas2d::measure_text_styled(canvas, "Close", 17.0, style(650, 0.2))?;
+    canvas2d::draw_text_styled(
+        canvas,
+        "Close",
+        gfx::Point {
+            x: close.x + close.width / 2.0 - m.width / 2.0,
+            y: close.y + 32.0,
+        },
+        17.0,
+        color(1.0, 1.0, 1.0, 1.0),
+        style(650, 0.2),
+    )?;
+    canvas2d::present(canvas)?;
+    Ok((close.x, close.y, close.width, close.height))
+}
+
 fn node(id: u64, parent: Option<u64>, kind: types::WidgetKind) -> types::WidgetNode {
     types::WidgetNode {
         id,
@@ -414,11 +536,18 @@ struct Component;
 impl krate::Guest for Component {
     fn run() -> i32 {
         let raw = args::raw();
+        let mut parts = raw.splitn(3, ARG_SEP);
+        if parts.next() == Some(NOTICE) {
+            let title = parts.next().unwrap_or("").trim();
+            let message = parts.next().unwrap_or("").trim();
+            notice(title, message);
+            out("wall:closed");
+            return 0;
+        }
         // A real invocation carries a name and at least one whole request, so
         // four arguments at the least. Anything shorter (no args, a harness
         // probe) renders the sample sheet headlessly.
-        let quick = raw.split(ARG_SEP).filter(|a| !a.is_empty()).count()
-            < 1 + FIELDS_PER_ASK;
+        let quick = raw.split(ARG_SEP).filter(|a| !a.is_empty()).count() < 1 + FIELDS_PER_ASK;
 
         let (name, asks) = if quick {
             parse_input(&format!(
@@ -451,7 +580,10 @@ impl krate::Guest for Component {
             out("wall:cancel");
             return 1;
         }
-        let _ = tree::upsert_node(win, &node(CANVAS_ID, Some(ROOT_ID), types::WidgetKind::Canvas));
+        let _ = tree::upsert_node(
+            win,
+            &node(CANVAS_ID, Some(ROOT_ID), types::WidgetKind::Canvas),
+        );
         let canvas = match canvas2d::bind(win, CANVAS_ID) {
             Ok(canvas) => canvas,
             Err(_) => {

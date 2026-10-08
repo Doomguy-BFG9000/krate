@@ -75,6 +75,14 @@ pub fn read_uri(handles: ActivityHandles, uri: &str, max_bytes: usize) -> Result
     // straight into the player's folder was refused as "could not be
     // opened" though it was right there.
     if let Some(path) = uri.strip_prefix("file://") {
+        if let Err(e) = std::fs::metadata(path) {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                return Err(
+                    "The file is not there any more -- it may have been moved or deleted."
+                        .to_string(),
+                );
+            }
+        }
         if let Ok(meta) = std::fs::metadata(path) {
             if meta.len() > max_bytes as u64 {
                 return Err(format!("the file is larger than {max_bytes} bytes"));
@@ -157,6 +165,22 @@ fn get_string(env: &mut jni::JNIEnv, obj: JObject) -> Option<String> {
     }
     let jstring = JString::from(obj);
     env.get_string(&jstring).ok().map(|s| s.into())
+}
+
+/// Finish the activity, so Android does not bring it back when the process
+/// ends.
+pub fn finish(handles: ActivityHandles) {
+    let finished = (|| -> Result<(), String> {
+        let vm = unsafe { jni::JavaVM::from_raw(handles.vm.cast()) }.map_err(err)?;
+        let mut env = vm.attach_current_thread().map_err(err)?;
+        let activity = unsafe { JObject::from_raw(handles.activity.cast()) };
+        env.call_method(&activity, "finish", "()V", &[])
+            .map_err(err)?;
+        Ok(())
+    })();
+    if let Err(why) = finished {
+        log::warn!("could not finish the activity: {why}");
+    }
 }
 
 fn err(e: impl core::fmt::Display) -> String {
