@@ -2178,6 +2178,7 @@ dependencies = [
 name = "krate-adapter-android"
 version = "0.5.5"
 dependencies = [
+ "jni 0.21.1",
  "krate-adapter-common",
  "libc",
  "softbuffer",
