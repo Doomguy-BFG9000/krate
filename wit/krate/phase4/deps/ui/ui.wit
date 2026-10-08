@@ -682,6 +682,29 @@ interface pointer {
   captured: func(window: u64) -> bool;
 }
 
+/// The fingers on a touch screen, asked about the way a game asks about keys.
+///
+/// A phone has no mouse and many fingers: a game moves with one thumb, aims
+/// with the other and fires with a tap, all at once. Taps and scrolls still
+/// arrive as pointer and wheel events for ordinary apps; this is for an app
+/// that wants every finger, where it is, right now.
+interface touch {
+  /// One finger on the screen.
+  record touch-point {
+    /// Stays the same from the moment the finger lands until it lifts, so an
+    /// app can follow one thumb while another comes and goes.
+    id: u64,
+    /// Across the window, in logical pixels from the content's left edge.
+    x: f32,
+    /// Down the window, in logical pixels from the content's top edge.
+    y: f32,
+  }
+
+  /// Every finger touching the window now. Empty where there is no touch
+  /// screen, and after the window loses focus, so a finger never sticks.
+  touches: func(window: u64) -> list<touch-point>;
+}
+
 /// System dialog calls.
 interface dialog {
   use types.{chosen-file, ui-error};

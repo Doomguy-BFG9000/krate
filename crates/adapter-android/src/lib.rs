@@ -391,11 +391,21 @@ impl WindowAdapter for AndroidWinitPrototypeUiAdapter {
                 eprintln!("krate-adapter: native create failed: {e:?}");
                 e
             })?;
+        let actual = snapshot.size;
         self.attach_winit_session(id, raw_handle, snapshot)
             .map_err(|e| {
                 eprintln!("krate-adapter: attach failed: {e:?}");
                 e
             })?;
+        // A phone window is the whole screen, whatever size was asked for.
+        // The session starts from the real size, so a resize to it later
+        // reads as "no change" and is skipped -- leaving the window record at
+        // the requested size forever, and every frame laid out for a window
+        // the phone does not have (stretched, then cropped and zoomed).
+        // Bring the record to the real size here, once, at the source.
+        if actual != options.size {
+            WindowAdapter::queue_host_resize(&self.headless, id, actual)?;
+        }
         Ok(id)
     }
 
@@ -496,6 +506,11 @@ impl UiAdapter for AndroidWinitPrototypeUiAdapter {
 
     fn drain_raw_pointer_input(&self) -> Vec<RawPointerSample> {
         winit_native::drain_pointer_samples()
+    }
+
+    /// Every finger on the window (krate:ui/touch).
+    fn touches(&self, window: WindowId) -> Vec<(u64, f32, f32)> {
+        winit_native::touches(window)
     }
 
     fn drain_raw_key_input(&self) -> Vec<krate_adapter_common::ui::RawKeySample> {

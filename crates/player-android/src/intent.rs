@@ -69,6 +69,21 @@ fn try_view_target(handles: ActivityHandles) -> Result<Option<String>, String> {
 /// Read every byte behind a content:// or file:// URI through the
 /// platform's ContentResolver -- the only path modern Android guarantees.
 pub fn read_uri(handles: ActivityHandles, uri: &str, max_bytes: usize) -> Result<Vec<u8>, String> {
+    // A file:// link the player can read itself -- its own folder, or one a
+    // file manager handed over with access -- is read directly. The
+    // resolver only knows files the media index has seen, so a .krate saved
+    // straight into the player's folder was refused as "could not be
+    // opened" though it was right there.
+    if let Some(path) = uri.strip_prefix("file://") {
+        if let Ok(meta) = std::fs::metadata(path) {
+            if meta.len() > max_bytes as u64 {
+                return Err(format!("the file is larger than {max_bytes} bytes"));
+            }
+            if let Ok(bytes) = std::fs::read(path) {
+                return Ok(bytes);
+            }
+        }
+    }
     let vm = unsafe { jni::JavaVM::from_raw(handles.vm.cast()) }.map_err(err)?;
     let mut env = vm.attach_current_thread().map_err(err)?;
     let activity = unsafe { JObject::from_raw(handles.activity.cast()) };

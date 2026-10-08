@@ -7,7 +7,7 @@
 
 #![allow(clippy::too_many_arguments)]
 
-/// `krate:ui`: clipboard, dialog, events, image, launcher, menu, notify, pointer, print, tree, window.
+/// `krate:ui`: clipboard, dialog, events, image, launcher, menu, notify, pointer, print, touch, tree, window.
 pub mod ui {
     /// `krate:ui/clipboard`.
     pub mod clipboard {
@@ -292,6 +292,16 @@ pub mod ui {
         /// Print the pages added so far, wait for the person, and start over.
         pub fn finish(window: u64, title: &str) -> Result<PrintOutcome, UiError> {
             crate::bindings::krate::ui::print::finish(window, title)
+        }
+    }
+    /// `krate:ui/touch`.
+    pub mod touch {
+        pub use crate::bindings::krate::ui::touch::TouchPoint;
+
+        /// Every finger touching the window now. Empty where there is no touch
+        /// screen, and after the window loses focus, so a finger never sticks.
+        pub fn touches(window: u64) -> alloc::vec::Vec<TouchPoint> {
+            crate::bindings::krate::ui::touch::touches(window)
         }
     }
     /// `krate:ui/tree`.

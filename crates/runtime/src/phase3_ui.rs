@@ -577,6 +577,11 @@ impl<'a> Phase3UiDispatcher<'a> {
         self.adapter.pointer(id)
     }
 
+    /// Every finger on a window now.
+    pub fn touches(&self, id: WindowId) -> Vec<(u64, f32, f32)> {
+        self.adapter.touches(id)
+    }
+
     /// A window's pointer motion since the last call.
     pub fn take_pointer_motion(&self, id: WindowId) -> (f32, f32) {
         self.adapter.take_pointer_motion(id)

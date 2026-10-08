@@ -527,6 +527,11 @@ impl UiAdapter for LinuxWinitPrototypeUiAdapter {
         winit_native::take_pointer_motion(window)
     }
 
+    /// Every finger on the window, for touch-screen laptops (krate:ui/touch).
+    fn touches(&self, window: WindowId) -> Vec<(u64, f32, f32)> {
+        winit_native::touches(window)
+    }
+
     fn set_pointer_capture(&self, window: WindowId, capture: bool) -> Result<(), UiAdapterError> {
         winit_native::set_pointer_capture(window, capture)
     }

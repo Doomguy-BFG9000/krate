@@ -1324,6 +1324,8 @@ impl Runtime {
         link_gui!(ui4::print);
         // Phase 4 only: the mouse as a game asks about it (IC-909).
         link_gui!(ui4::pointer);
+        // Phase 4 only: every finger on a touch screen.
+        link_gui!(ui4::touch);
 
         link_gui!(ui::window);
         link_gui!(ui::image);

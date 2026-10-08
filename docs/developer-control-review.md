@@ -15,8 +15,8 @@ Developer ownership and control is the default (IC-175, IC-176). Krate enforces 
 
 ## Summary
 
-- 56 boundaries reviewed, 47 of them WIT interfaces (47 declared under wit/krate).
-- 33 compulsory, each with a justification or a recorded gap; 23 optional.
+- 57 boundaries reviewed, 48 of them WIT interfaces (48 declared under wit/krate).
+- 34 compulsory, each with a justification or a recorded gap; 23 optional.
 - 7 recorded gaps where the escape hatch does not yet exist or the boundary is narrower than a developer would want.
 
 ## Every boundary
@@ -67,6 +67,7 @@ Developer ownership and control is the default (IC-175, IC-176). Krate enforces 
 | `krate:ui@0.1.0/notify` | wit | that a notification is attributed to the app the person consented to, never to a title the app chose, and is a grant | when and what | draw the message in the app's own window | yes | recipient-permission |
 | `krate:ui@0.1.0/pointer` | wit | that the person can always take a held pointer back: Escape and focus loss release it on every system | what the pointer does: aiming, turning a camera, dragging, menus | the mouse's own motion, unfiltered, while the pointer is held | yes | platform |
 | `krate:ui@0.1.0/print` | wit | that nothing reaches a printer unless the person says so in the system's own dialog, and that the answer is what happened (printed, cancelled, or opened in the viewer), never a guess | what is on each page, how many pages, and when to offer printing | write a PDF the app built itself to a picked folder, or share it | no | -- |
+| `krate:ui@0.1.0/touch` | wit | every finger on a touch screen, by a stable id, in logical pixels, cleared when the window loses focus | what each finger does: a stick, a look, a button, a gesture | the raw finger positions, unfiltered | yes | platform |
 | `krate:ui@0.1.0/tree` | wit | nothing: an optional portable widget tree the hosts lower to native controls or paint | any UI approach; a canvas of the app's own pixels is equal to a tree | image and canvas widgets with the app's own rendering | no | -- |
 | `krate:ui@0.1.0/types` | wit | widget kinds, event shapes and errors every host lowers to | what the app builds from them | none needed: a type carries no authority | yes | portability |
 | `krate:ui@0.1.0/window` | wit | that windows come from the host and are closed by the person | how many, what size, what is drawn in them | none: a window is the host's | yes | platform |

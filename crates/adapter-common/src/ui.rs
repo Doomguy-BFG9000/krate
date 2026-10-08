@@ -1800,6 +1800,12 @@ pub trait UiAdapter: WindowAdapter {
         (0.0, 0.0)
     }
 
+    /// Every finger on a window now, as (id, x, y) in logical pixels. Hosts
+    /// without a touch screen have none.
+    fn touches(&self, _window: WindowId) -> Vec<(u64, f32, f32)> {
+        Vec::new()
+    }
+
     /// Hold the pointer in a window (`true`) or let it go (`false`).
     ///
     /// Default is honest refusal, so a host that has not wired capture says so

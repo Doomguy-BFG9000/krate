@@ -54,6 +54,38 @@ mod real {
             const { RefCell::new(None) };
     }
 
+    /// Ask Android to hold landscape (either way up, by the sensor) for a
+    /// window wider than tall, and give the choice back to the phone for any
+    /// other. A game drawn 16:10 was otherwise shown in a strip across an
+    /// upright phone whenever the person happened to hold it that way.
+    fn request_orientation(landscape: bool) {
+        // ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE / _UNSPECIFIED.
+        let orientation: i32 = if landscape { 6 } else { -1 };
+        ANDROID_APP.with(|slot| {
+            let Some(app) = slot.borrow().clone() else {
+                return;
+            };
+            let Ok(vm) = (unsafe { jni::JavaVM::from_raw(app.vm_as_ptr().cast()) }) else {
+                return;
+            };
+            let Ok(mut env) = vm.attach_current_thread() else {
+                return;
+            };
+            let activity = unsafe { jni::objects::JObject::from_raw(app.activity_as_ptr().cast()) };
+            if env
+                .call_method(
+                    &activity,
+                    "setRequestedOrientation",
+                    "(I)V",
+                    &[jni::objects::JValue::Int(orientation)],
+                )
+                .is_err()
+            {
+                let _ = env.exception_clear();
+            }
+        });
+    }
+
     /// Display scale of a tracked window, 1.0 when unknown.
     pub fn window_scale(krate: WindowId) -> f32 {
         if !host_initialized() {
@@ -110,6 +142,9 @@ mod real {
     struct PumpApp {
         pending_creates: Vec<PendingCreate>,
         touch: Option<TouchGesture>,
+        /// Every finger on each window, by Krate window id then finger id,
+        /// for apps that ask for all of them (krate:ui/touch).
+        fingers: BTreeMap<u64, BTreeMap<u64, (f32, f32)>>,
         windows: BTreeMap<NativeWindowId, TrackedWindow>,
         events: CollectedNativeEvents,
         cursor: BTreeMap<NativeWindowId, (f32, f32)>,
@@ -133,6 +168,10 @@ mod real {
     struct TrackedWindow {
         krate: WindowId,
         window: Rc<Window>,
+        /// The physical size last reported to Krate. Android sends no resize
+        /// when the phone turns (the activity handles the orientation change
+        /// itself), so the pump compares and reports the difference.
+        reported: (u32, u32),
         surface: Option<DrawSurface>,
         placements: Vec<WidgetPlacement>,
         hovered: Option<krate_adapter_common::ui::WidgetId>,
@@ -188,6 +227,7 @@ mod real {
     impl PumpApp {
         fn drain_pending_creates(&mut self, event_loop: &ActiveEventLoop) {
             for pending in self.pending_creates.drain(..) {
+                request_orientation(pending.size.width > pending.size.height);
                 let attributes = WindowAttributes::default()
                     .with_title(pending.title)
                     // Physical, not logical -- see the same note in the Windows
@@ -202,10 +242,29 @@ mod real {
                     // no window; Linux had the identical bug.
                     .with_visible(true);
                 if let Ok(window) = event_loop.create_window(attributes) {
+                    // A phone window is the whole screen, whatever size the
+                    // app asked for, and Android sends no resize to say so.
+                    // Without this Krate kept the requested 1280x800 and the
+                    // frame was stretched across a 20:9 screen; reporting the
+                    // real size at once lets the app lay out (and render) for
+                    // the screen it is actually on.
+                    let scale = window.scale_factor().max(0.25);
+                    let inner = window.inner_size();
+                    if inner.width > 0 && inner.height > 0 {
+                        let logical = WindowSize::new(
+                            ((f64::from(inner.width) / scale).round() as u32).max(1),
+                            ((f64::from(inner.height) / scale).round() as u32).max(1),
+                        );
+                        if let Ok(logical) = logical {
+                            self.events
+                                .push((pending.krate, WinitWindowNativeEvent::Resized(logical)));
+                        }
+                    }
                     self.windows.insert(
                         window.id(),
                         TrackedWindow {
                             krate: pending.krate,
+                            reported: (inner.width, inner.height),
                             window: Rc::new(window),
                             surface: None,
                             placements: Vec::new(),
@@ -258,6 +317,9 @@ mod real {
             let mapped = match event {
                 WindowEvent::CloseRequested => Some(WinitWindowNativeEvent::CloseRequested),
                 WindowEvent::Resized(size) if size.width > 0 && size.height > 0 => {
+                    if let Some(tracked) = self.windows.get_mut(&native) {
+                        tracked.reported = (size.width, size.height);
+                    }
                     // Logical, like every other size the app sees.
                     let scale = self
                         .windows
@@ -271,7 +333,13 @@ mod real {
                         .ok()
                         .map(WinitWindowNativeEvent::Resized)
                 }
-                WindowEvent::Focused(focused) => Some(WinitWindowNativeEvent::Focused(focused)),
+                WindowEvent::Focused(focused) => {
+                    if !focused {
+                        // Lifted fingers never arrive once focus is gone.
+                        self.fingers.remove(&krate.get());
+                    }
+                    Some(WinitWindowNativeEvent::Focused(focused))
+                }
                 WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
                     Some(WinitWindowNativeEvent::ScaleChanged(scale_factor as f32))
                 }
@@ -312,6 +380,18 @@ mod real {
                     // from a tap into a scroll -- the standard slop every
                     // mobile toolkit uses so a wobbly finger still taps.
                     const SLOP: f32 = 8.0;
+                    {
+                        let fingers = self.fingers.entry(krate.get()).or_default();
+                        match touch.phase {
+                            winit::event::TouchPhase::Started | winit::event::TouchPhase::Moved => {
+                                fingers.insert(touch.id, (x, y));
+                            }
+                            winit::event::TouchPhase::Ended
+                            | winit::event::TouchPhase::Cancelled => {
+                                fingers.remove(&touch.id);
+                            }
+                        }
+                    }
                     match touch.phase {
                         winit::event::TouchPhase::Started => {
                             if self.touch.is_none() {
@@ -675,6 +755,28 @@ mod real {
     fn pump(host: &mut Host) {
         let Host { event_loop, app } = host;
         let _status = event_loop.pump_app_events(Some(Duration::ZERO), app);
+        // Turning the phone resizes the window without a resize event; a
+        // layout left at the old shape drew every frame cropped and zoomed
+        // onto the new one. Whatever changed the size, report it.
+        for tracked in app.windows.values_mut() {
+            let inner = tracked.window.inner_size();
+            if inner.width == 0
+                || inner.height == 0
+                || (inner.width, inner.height) == tracked.reported
+            {
+                continue;
+            }
+            tracked.reported = (inner.width, inner.height);
+            tracked.dirty = true;
+            let scale = tracked.window.scale_factor().max(0.25);
+            if let Ok(logical) = WindowSize::new(
+                ((f64::from(inner.width) / scale).round() as u32).max(1),
+                ((f64::from(inner.height) / scale).round() as u32).max(1),
+            ) {
+                app.events
+                    .push((tracked.krate, WinitWindowNativeEvent::Resized(logical)));
+            }
+        }
     }
 
     /// Create a real (initially hidden) winit window for a Krate window id.
@@ -807,6 +909,20 @@ mod real {
         with_host(|host| {
             pump(host);
             Ok(std::mem::take(&mut host.app.events))
+        })
+    }
+
+    /// Every finger on a window now.
+    pub fn touches(id: WindowId) -> Vec<(u64, f32, f32)> {
+        if !host_initialized() {
+            return Vec::new();
+        }
+        WINIT_HOST.with(|slot| {
+            slot.borrow()
+                .as_ref()
+                .and_then(|host| host.app.fingers.get(&id.get()))
+                .map(|fingers| fingers.iter().map(|(f, (x, y))| (*f, *x, *y)).collect())
+                .unwrap_or_default()
         })
     }
 
@@ -971,6 +1087,11 @@ mod stub {
 
     /// Winit windows are only available in Linux builds.
     pub fn drain_pointer_samples() -> Vec<RawPointerSample> {
+        Vec::new()
+    }
+
+    /// Winit windows are only available in Android builds.
+    pub fn touches(_id: WindowId) -> Vec<(u64, f32, f32)> {
         Vec::new()
     }
 

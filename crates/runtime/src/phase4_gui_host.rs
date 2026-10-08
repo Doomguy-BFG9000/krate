@@ -319,6 +319,17 @@ impl ui4::pointer::Host for Phase3GuiHost {
     }
 }
 
+/// The fingers on a touch screen. Phase 4 only.
+impl ui4::touch::Host for Phase3GuiHost {
+    fn touches(&mut self, window: u64) -> wasmtime::Result<Vec<ui4::touch::TouchPoint>> {
+        Ok(self
+            .touch_points(window)
+            .into_iter()
+            .map(|(id, x, y)| ui4::touch::TouchPoint { id, x, y })
+            .collect())
+    }
+}
+
 impl ui4::events::Host for Phase3GuiHost {
     fn poll(&mut self) -> wasmtime::Result<Option<ui4::types::Event>> {
         if let Some(notice) = self.take_drop_notice() {

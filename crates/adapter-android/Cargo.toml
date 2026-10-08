@@ -25,3 +25,5 @@ winit = { version = "0.30", default-features = false, features = [
 # CPU framebuffer presentation, same as the Linux adapter: the painter is
 # vello_cpu pixels and softbuffer blits them to the NativeWindow.
 softbuffer = { version = "0.4", default-features = false }
+# Activity.setRequestedOrientation: a game wider than tall plays in landscape.
+jni = "0.21"

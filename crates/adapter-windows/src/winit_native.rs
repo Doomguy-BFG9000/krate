@@ -77,6 +77,8 @@ mod real {
         cursor: BTreeMap<NativeWindowId, (f32, f32)>,
         /// Each window's pointer for apps that ask (IC-909), by Krate id.
         pointers: BTreeMap<u64, krate_adapter_common::ui::PointerTracker>,
+        /// Every finger on each window (touch-screen laptops), by Krate id.
+        fingers: BTreeMap<u64, BTreeMap<u64, (f32, f32)>>,
         pointer_samples: Vec<RawPointerSample>,
         key_samples: Vec<RawKeySample>,
         wheel_samples: Vec<RawWheelSample>,
@@ -410,6 +412,24 @@ mod real {
                     WindowEvent::Focused(false) => {
                         release = tracker.captured;
                         tracker.focus_lost();
+                        self.fingers.remove(&krate.get());
+                    }
+                    WindowEvent::Touch(touch) => {
+                        let fingers = self.fingers.entry(krate.get()).or_default();
+                        match touch.phase {
+                            winit::event::TouchPhase::Started | winit::event::TouchPhase::Moved => {
+                                fingers.insert(
+                                    touch.id,
+                                    (
+                                        (touch.location.x / scale) as f32,
+                                        (touch.location.y / scale) as f32,
+                                    ),
+                                );
+                            }
+                            _ => {
+                                fingers.remove(&touch.id);
+                            }
+                        }
                     }
                     WindowEvent::KeyboardInput { event, .. } => {
                         if event.state == winit::event::ElementState::Pressed
@@ -1233,6 +1253,20 @@ mod real {
         })
     }
 
+    /// Every finger on a window now (touch-screen laptops).
+    pub fn touches(id: WindowId) -> Vec<(u64, f32, f32)> {
+        if !host_initialized() {
+            return Vec::new();
+        }
+        WINIT_HOST.with(|slot| {
+            slot.borrow()
+                .as_ref()
+                .and_then(|host| host.app.fingers.get(&id.get()))
+                .map(|fingers| fingers.iter().map(|(f, (x, y))| (*f, *x, *y)).collect())
+                .unwrap_or_default()
+        })
+    }
+
     /// Hold or let go of a window's pointer.
     pub fn set_pointer_capture(id: WindowId, capture: bool) -> Result<(), UiAdapterError> {
         if !host_initialized() {
@@ -1412,6 +1446,11 @@ mod stub {
     /// Winit windows are only available in Windows builds.
     pub fn pointer_state(_id: WindowId) -> krate_adapter_common::ui::PointerTracker {
         Default::default()
+    }
+
+    /// Winit windows are only available in Windows builds.
+    pub fn touches(_id: WindowId) -> Vec<(u64, f32, f32)> {
+        Vec::new()
     }
 
     /// Winit windows are only available in Windows builds.

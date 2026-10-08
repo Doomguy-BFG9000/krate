@@ -2884,6 +2884,15 @@ impl Phase3GuiHost {
             .any(|window| dispatcher.pointer(*window).held(button))
     }
 
+    /// The fingers on a window the app owns; none for one it does not.
+    pub(crate) fn touch_points(&self, window: u64) -> Vec<(u64, f32, f32)> {
+        self.pump_for_query();
+        match self.window_id(window) {
+            Ok(id) => self.dispatcher().touches(id),
+            Err(_) => Vec::new(),
+        }
+    }
+
     pub(crate) fn pointer_take_motion(&self, window: u64) -> (f32, f32) {
         self.pump_for_query();
         match self.window_id(window) {
@@ -6407,6 +6416,9 @@ pub(crate) fn save_file_on_host(
     Ok(dialog.save_file())
 }
 
+// Desktop only, like its neighbour: on the phones and in a browser `rfd`
+// is not linked at all, and an ungated call broke the Android build.
+#[cfg(not(any(target_os = "android", target_os = "ios", target_arch = "wasm32")))]
 pub(crate) fn choose_file_on_host(
     title: &str,
     filter: &str,

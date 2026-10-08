@@ -6322,7 +6322,7 @@ fn an_app_asks_about_the_mouse_and_a_headless_capture_is_refused() {
         .unwrap_or_else(|| panic!("no report line in: {stdout}"));
     assert!(
         report.starts_with(
-            "position=none primary=up secondary=up middle=up motion=0,0 captured=false capture=refused: "
+            "position=none primary=up secondary=up middle=up motion=0,0 captured=false touches=0 capture=refused: "
         ),
         "headless: nowhere, nothing held, nothing moved, capture refused with a reason: {report}"
     );
