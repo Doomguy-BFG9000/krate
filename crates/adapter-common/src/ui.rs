@@ -2570,9 +2570,89 @@ fn validate_f32(field: &str, value: f32) -> Result<(), UiAdapterError> {
     Ok(())
 }
 
+/// The fingers on one window, for apps that ask for every finger
+/// (krate:ui/touch).
+///
+/// A finger that lands and lifts between two reads is still reported once:
+/// apps read fingers once a frame, and a quick tap -- or one a test injects,
+/// which lands and lifts in the same instant -- would otherwise never be
+/// seen at all.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct FingerTracker {
+    down: BTreeMap<u64, Finger>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Finger {
+    x: f32,
+    y: f32,
+    /// An app has read this finger at least once.
+    read: bool,
+    /// It lifted before any app read it; the next read reports it and drops it.
+    lifted: bool,
+}
+
+impl FingerTracker {
+    /// A finger landed or moved, in logical pixels.
+    pub fn touch(&mut self, id: u64, x: f32, y: f32) {
+        let finger = self.down.entry(id).or_insert(Finger {
+            x,
+            y,
+            read: false,
+            lifted: false,
+        });
+        finger.x = x;
+        finger.y = y;
+        finger.lifted = false;
+    }
+
+    /// A finger lifted (or the system cancelled it).
+    pub fn lift(&mut self, id: u64) {
+        match self.down.get_mut(&id) {
+            Some(finger) if !finger.read => finger.lifted = true,
+            Some(_) => {
+                self.down.remove(&id);
+            }
+            None => {}
+        }
+    }
+
+    /// The window lost focus: lifted fingers never arrive after that.
+    pub fn clear(&mut self) {
+        self.down.clear();
+    }
+
+    /// Every finger as an app sees it now: id, x, y.
+    pub fn read(&mut self) -> Vec<(u64, f32, f32)> {
+        let now = self.down.iter().map(|(id, f)| (*id, f.x, f.y)).collect();
+        self.down.retain(|_, f| !f.lifted);
+        for finger in self.down.values_mut() {
+            finger.read = true;
+        }
+        now
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A tap that lands and lifts between two reads is reported once, then
+    /// gone; a finger that was read lifts at once.
+    #[test]
+    fn a_quick_tap_is_still_seen_once() {
+        let mut f = FingerTracker::default();
+        f.touch(7, 10.0, 20.0);
+        f.lift(7);
+        assert_eq!(f.read(), vec![(7, 10.0, 20.0)]);
+        assert_eq!(f.read(), vec![]);
+
+        f.touch(8, 1.0, 2.0);
+        assert_eq!(f.read(), vec![(8, 1.0, 2.0)]);
+        f.touch(8, 3.0, 4.0);
+        f.lift(8);
+        assert_eq!(f.read(), vec![]);
+    }
 
     /// K-392: a tree built with upsert_node alone works. The first
     /// parentless node of an empty window is its root; the root can be

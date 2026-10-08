@@ -144,7 +144,7 @@ mod real {
         touch: Option<TouchGesture>,
         /// Every finger on each window, by Krate window id then finger id,
         /// for apps that ask for all of them (krate:ui/touch).
-        fingers: BTreeMap<u64, BTreeMap<u64, (f32, f32)>>,
+        fingers: BTreeMap<u64, krate_adapter_common::ui::FingerTracker>,
         windows: BTreeMap<NativeWindowId, TrackedWindow>,
         events: CollectedNativeEvents,
         cursor: BTreeMap<NativeWindowId, (f32, f32)>,
@@ -384,11 +384,11 @@ mod real {
                         let fingers = self.fingers.entry(krate.get()).or_default();
                         match touch.phase {
                             winit::event::TouchPhase::Started | winit::event::TouchPhase::Moved => {
-                                fingers.insert(touch.id, (x, y));
+                                fingers.touch(touch.id, x, y);
                             }
                             winit::event::TouchPhase::Ended
                             | winit::event::TouchPhase::Cancelled => {
-                                fingers.remove(&touch.id);
+                                fingers.lift(touch.id);
                             }
                         }
                     }
@@ -918,10 +918,10 @@ mod real {
             return Vec::new();
         }
         WINIT_HOST.with(|slot| {
-            slot.borrow()
-                .as_ref()
-                .and_then(|host| host.app.fingers.get(&id.get()))
-                .map(|fingers| fingers.iter().map(|(f, (x, y))| (*f, *x, *y)).collect())
+            slot.borrow_mut()
+                .as_mut()
+                .and_then(|host| host.app.fingers.get_mut(&id.get()))
+                .map(|fingers| fingers.read())
                 .unwrap_or_default()
         })
     }
