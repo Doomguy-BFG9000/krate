@@ -648,6 +648,94 @@ impl Runtime {
             .map_err(|err| RuntimeError::InvalidComponent(err.to_string()))
     }
 
+    /// The engine settings for an app compiled to native code ahead of time
+    /// and built INTO the host's own binary -- the iPhone's road to native
+    /// speed (mobile plan M3, measured: the interpreter runs Counter-Strike
+    /// 39x slower than native code).
+    ///
+    /// iOS lets no app make memory executable, so it cannot compile at run
+    /// time; but code that was compiled on our machines and linked into the
+    /// app is signed with it and already executable. wasmtime's images carry
+    /// no relocations, so such an image runs in place, untouched.
+    ///
+    /// Memory keeps wasmtime's usual layout -- a large address-space
+    /// reservation, so bounds cost nothing, and traps through the system's
+    /// fault handling. Measured on Counter-Strike: checking bounds in code
+    /// instead ran 45% slower (3,331 frames against 6,132 in one 40 s
+    /// match); this way the image matches the JIT (6,032). Both ends --
+    /// [`Self::precompile_native_image`] and [`Self::new_for_native_image`]
+    /// -- read this one function, so they cannot disagree.
+    fn native_image_settings(config: &Config, target: Option<&str>) -> Result<wasmtime::Config> {
+        let mut wt_config = Self::engine_settings(config)?;
+        // engine_settings picks the interpreter on iOS; this road is native.
+        let target = target.map(str::to_string).unwrap_or_else(|| {
+            if cfg!(target_os = "ios") {
+                "aarch64-apple-ios".to_string()
+            } else {
+                String::new()
+            }
+        });
+        if !target.is_empty() {
+            wt_config
+                .target(&target)
+                .map_err(|err| RuntimeError::EngineInit(format!("target {target}: {err}")))?;
+        }
+        Ok(wt_config)
+    }
+
+    /// Compile a component to native code for `target` (a triple such as
+    /// `aarch64-apple-ios`), as an image to build into that host's binary
+    /// and load with [`Self::load_native_image`].
+    ///
+    /// Tied to this exact wasmtime version and these settings, like any
+    /// precompiled artifact: build it with the same release that runs it.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn precompile_native_image(config: &Config, bytes: &[u8], target: &str) -> Result<Vec<u8>> {
+        let wt_config = Self::native_image_settings(config, Some(target))?;
+        let engine =
+            Engine::new(&wt_config).map_err(|err| RuntimeError::EngineInit(err.to_string()))?;
+        engine
+            .precompile_component(bytes)
+            .map_err(|err| RuntimeError::InvalidComponent(err.to_string()))
+    }
+
+    /// An engine that runs a native image from the host's own binary.
+    ///
+    /// Its code memory hook does nothing, by design: the image sits in the
+    /// binary's executable, signed text, so there is nothing to make
+    /// executable -- and on iOS nothing could be.
+    pub fn new_for_native_image(config: &Config) -> Result<Self> {
+        let mut wt_config = Self::native_image_settings(config, None)?;
+        wt_config.with_custom_code_memory(Some(std::sync::Arc::new(SignedCode)));
+        let engine =
+            Engine::new(&wt_config).map_err(|err| RuntimeError::EngineInit(err.to_string()))?;
+        Ok(Self { engine })
+    }
+
+    /// Load an image made by [`Self::precompile_native_image`], in place.
+    ///
+    /// # Safety
+    ///
+    /// `image` must be such an image, from this same Krate, and must sit in
+    /// memory that is already executable -- a section of the host binary's
+    /// signed text -- for the life of the program. Bytes read from a file
+    /// into ordinary memory are not that, and fail on the first call.
+    pub unsafe fn load_native_image(&self, image: &'static [u8]) -> Result<LoadedComponent> {
+        let component = unsafe { Component::deserialize_raw(&self.engine, image.into()) }
+            .map_err(|err| RuntimeError::InvalidComponent(err.to_string()))?;
+        Ok(LoadedComponent { component })
+    }
+
+    /// Run a loaded component with its stdout going to the host's stdout.
+    pub fn run_loaded_for_world(
+        &self,
+        component: &LoadedComponent,
+        config: &Config,
+        world: RuntimeWorld,
+    ) -> Result<RunOutcome> {
+        self.run_component_with_output(component, config, OutputMode::Stdout, world)
+    }
+
     #[cfg(not(target_arch = "wasm32"))]
     pub fn load_component(&self, bytes: &[u8]) -> Result<LoadedComponent> {
         let component = Component::from_binary(&self.engine, bytes)
@@ -1394,6 +1482,24 @@ impl Runtime {
         };
 
         Ok(RunOutcome::Exited(code))
+    }
+}
+
+/// Code memory that is already executable: the host binary's own signed
+/// text. See [`Runtime::new_for_native_image`].
+struct SignedCode;
+
+impl wasmtime::CustomCodeMemory for SignedCode {
+    fn required_alignment(&self) -> usize {
+        16
+    }
+
+    fn publish_executable(&self, _ptr: *const u8, _len: usize) -> wasmtime::Result<()> {
+        Ok(())
+    }
+
+    fn unpublish_executable(&self, _ptr: *const u8, _len: usize) -> wasmtime::Result<()> {
+        Ok(())
     }
 }
 
@@ -3793,6 +3899,53 @@ mod tests {
                 !text.to_lowercase().contains("type mismatch") && !text.contains("gui"),
                 "no other world's complaint may replace the cause: {text}"
             );
+        }
+
+        /// The iPhone road (mobile plan M3): an app compiled ahead of time
+        /// to native code loads in place into the native-image engine and
+        /// runs. Both ends read `native_image_settings`; if one ever drifts
+        /// from the other, wasmtime refuses the image and this fails.
+        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+        #[test]
+        fn a_native_image_runs_in_place_from_executable_memory() {
+            let config = Config::default();
+            let bytes = component(&[CLOCK], "s32", false);
+            let image = Runtime::precompile_native_image(&config, &bytes, "aarch64-apple-darwin")
+                .expect("compiles to a native image");
+
+            // Stand-in for a binary's signed text: a page made executable by
+            // hand, which macOS still lets a test do. On iOS the image is a
+            // section of the app binary instead.
+            let len = image.len().next_multiple_of(16384);
+            let image: &'static [u8] = unsafe {
+                let page = libc::mmap(
+                    std::ptr::null_mut(),
+                    len,
+                    libc::PROT_READ | libc::PROT_WRITE,
+                    libc::MAP_PRIVATE | libc::MAP_ANON,
+                    -1,
+                    0,
+                );
+                assert_ne!(page, libc::MAP_FAILED);
+                std::ptr::copy_nonoverlapping(image.as_ptr(), page.cast(), image.len());
+                assert_eq!(
+                    libc::mprotect(page, len, libc::PROT_READ | libc::PROT_EXEC),
+                    0
+                );
+                std::slice::from_raw_parts(page.cast(), image.len())
+            };
+
+            let runtime = Runtime::new_for_native_image(&config).expect("engine");
+            let loaded = unsafe { runtime.load_native_image(image) }.expect("the image loads");
+            let outcome = runtime
+                .run_component_with_output(
+                    &loaded,
+                    &config,
+                    crate::OutputMode::Sink,
+                    crate::RuntimeWorld::Auto,
+                )
+                .expect("the image runs");
+            assert!(matches!(outcome, RunOutcome::Exited(0)), "{outcome:?}");
         }
 
         /// A limit that bites during instantiation is a limit, not a wrong

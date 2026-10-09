@@ -519,6 +519,10 @@ impl UiAdapter for IosUikitPrototypeUiAdapter {
         uikit_native::window_scale(id)
     }
 
+    fn touches(&self, window: WindowId) -> Vec<(u64, f32, f32)> {
+        uikit_native::touches(window)
+    }
+
     fn drain_raw_pointer_input(&self) -> Vec<RawPointerSample> {
         uikit_native::drain_pointer_samples()
     }

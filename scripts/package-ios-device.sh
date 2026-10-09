@@ -23,6 +23,12 @@
 #   PROFILE=/path/to/embedded.mobileprovision \
 #   scripts/package-ios-device.sh
 #
+# A wrapper -- one app carried as native code (see crates/player-ios/build.rs)
+# -- gets its own identity on the home screen:
+#   BUNDLE_ID=tech.krate.cs NAME="Counter-Strike" LANDSCAPE=1 FILES=1
+# LANDSCAPE=1 holds the app sideways (games); FILES=1 shows its folder in
+# the Files app and Finder, so a person can bring the app's data.
+#
 # Find the identity name:  security find-identity -v -p codesigning
 # Find the profile: ~/Library/Developer/Xcode/DerivedData/<throwaway>/
 #   Build/Products/Debug-iphoneos/<app>.app/embedded.mobileprovision
@@ -33,6 +39,8 @@ cd "$(dirname "$0")/.."
 
 BIN=target/aarch64-apple-ios/release/krate-player-ios
 OUT=target/ios-device/KratePlayer.app
+BUNDLE_ID="${BUNDLE_ID:-tech.krate.player}"
+NAME="${NAME:-Krate}"
 : "${IDENTITY:?set IDENTITY to your Apple Development signing identity}"
 : "${PROFILE:?set PROFILE to the .mobileprovision path}"
 [ -f "$BIN" ] || { echo "error: build the device binary first:
@@ -45,13 +53,20 @@ cp "$PROFILE" "$OUT/embedded.mobileprovision"
 # desktop app ships; iOS rounds the corners itself.
 cp crates/player-ios/icons/AppIcon60x60@2x.png "$OUT/"
 cp crates/player-ios/icons/AppIcon60x60@3x.png "$OUT/"
-cat > "$OUT/Info.plist" <<'PLIST'
+EXTRA=""
+if [ "${LANDSCAPE:-0}" = 1 ]; then
+  EXTRA="$EXTRA<key>UISupportedInterfaceOrientations</key><array><string>UIInterfaceOrientationLandscapeRight</string><string>UIInterfaceOrientationLandscapeLeft</string></array><key>UIRequiresFullScreen</key><true/><key>UIStatusBarHidden</key><true/><key>UIViewControllerBasedStatusBarAppearance</key><false/>"
+fi
+if [ "${FILES:-0}" = 1 ]; then
+  EXTRA="$EXTRA<key>UIFileSharingEnabled</key><true/><key>LSSupportsOpeningDocumentsInPlace</key><true/>"
+fi
+cat > "$OUT/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
-  <key>CFBundleIdentifier</key><string>tech.krate.player</string>
-  <key>CFBundleName</key><string>Krate</string>
-  <key>CFBundleDisplayName</key><string>Krate</string>
+  <key>CFBundleIdentifier</key><string>$BUNDLE_ID</string>
+  <key>CFBundleName</key><string>$NAME</string>
+  <key>CFBundleDisplayName</key><string>$NAME</string>
   <key>CFBundleExecutable</key><string>KratePlayer</string>
   <key>CFBundleVersion</key><string>1</string>
   <key>CFBundleShortVersionString</key><string>0.1.9</string>
@@ -59,6 +74,7 @@ cat > "$OUT/Info.plist" <<'PLIST'
   <key>MinimumOSVersion</key><string>15.0</string>
   <key>UIDeviceFamily</key><array><integer>1</integer></array>
   <key>UILaunchScreen</key><dict/>
+  $EXTRA
   <key>CFBundleIcons</key><dict>
     <key>CFBundlePrimaryIcon</key><dict>
       <key>CFBundleIconFiles</key><array><string>AppIcon60x60</string></array>
@@ -73,6 +89,10 @@ PLIST
 security cms -D -i "$PROFILE" > /tmp/krate-profile.plist
 /usr/libexec/PlistBuddy -x -c 'Print :Entitlements' /tmp/krate-profile.plist \
   > /tmp/krate-entitlements.plist
+# A team's wildcard profile grants "TEAMID.*"; the app is signed for one id.
+TEAM=$(/usr/libexec/PlistBuddy -c 'Print :Entitlements:com.apple.developer.team-identifier' /tmp/krate-profile.plist)
+/usr/libexec/PlistBuddy -c "Set :application-identifier $TEAM.$BUNDLE_ID" /tmp/krate-entitlements.plist
+/usr/libexec/PlistBuddy -c 'Delete :keychain-access-groups' /tmp/krate-entitlements.plist 2>/dev/null || true
 codesign --force --sign "$IDENTITY" \
   --entitlements /tmp/krate-entitlements.plist "$OUT"
 echo "signed: $OUT"

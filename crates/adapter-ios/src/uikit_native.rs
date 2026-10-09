@@ -140,6 +140,8 @@ mod real {
         /// drain is what a finger actually means.
         pending_scroll: Option<(f32, f32, f32, f32)>,
         gesture: Option<TouchGesture>,
+        /// Every finger, for apps that read them all (krate:ui/touch).
+        fingers: krate_adapter_common::ui::FingerTracker,
         hovered: Option<krate_adapter_common::ui::WidgetId>,
         pressed_widget: Option<krate_adapter_common::ui::WidgetId>,
         paint_buffer: Vec<u32>,
@@ -409,6 +411,7 @@ mod real {
                     wheel_samples: Vec::new(),
                     pending_scroll: None,
                     gesture: None,
+                    fingers: Default::default(),
                     hovered: None,
                     pressed_widget: None,
                     paint_buffer: Vec::new(),
@@ -436,6 +439,12 @@ mod real {
             return;
         };
         for touch in raw {
+            match touch.phase {
+                UITouchPhase::Ended | UITouchPhase::Cancelled => {
+                    guest.fingers.lift(touch.finger as u64)
+                }
+                _ => guest.fingers.touch(touch.finger as u64, touch.x, touch.y),
+            }
             match touch.phase {
                 UITouchPhase::Began => {
                     if guest.gesture.is_none() {
@@ -694,6 +703,18 @@ mod real {
         true
     }
 
+    /// Every finger on the window now, in logical pixels.
+    pub fn touches(_id: WindowId) -> Vec<(u64, f32, f32)> {
+        if !guest_initialized() {
+            return Vec::new();
+        }
+        with_guest(|guest| {
+            digest_touches(guest);
+            Ok(guest.fingers.read())
+        })
+        .unwrap_or_default()
+    }
+
     pub fn drain_pointer_samples() -> Vec<RawPointerSample> {
         if !guest_initialized() {
             return Vec::new();
@@ -925,6 +946,10 @@ mod stub {
 
     pub fn park_for_events(_max: std::time::Duration) -> bool {
         false
+    }
+
+    pub fn touches(_id: WindowId) -> Vec<(u64, f32, f32)> {
+        Vec::new()
     }
 
     pub fn drain_pointer_samples() -> Vec<RawPointerSample> {

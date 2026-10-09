@@ -23,9 +23,27 @@ mod player {
     use objc2_ui_kit::{UIApplication, UIApplicationDelegate};
     use std::cell::Cell;
 
+    /// A wrapper build's app, compiled to native code on our machines and
+    /// linked into this binary's executable text: signed with the app, so
+    /// it runs at native speed where iOS lets nothing become executable at
+    /// run time. The 16 KB alignment is the iPhone's page size.
+    #[cfg(krate_native_image)]
+    mod native {
+        const N: usize = include_bytes!(env!("KRATE_NATIVE_IMAGE")).len();
+        #[repr(C, align(16384))]
+        pub struct Aligned(pub [u8; N]);
+        #[link_section = "__TEXT,__krate_app,regular,pure_instructions"]
+        pub static IMAGE: Aligned = Aligned(*include_bytes!(env!("KRATE_NATIVE_IMAGE")));
+        pub const MANIFEST: &str = include_str!(env!("KRATE_NATIVE_MANIFEST"));
+    }
+
+    #[cfg(not(krate_native_image))]
     const GRAM_WASM: &[u8] =
         include_bytes!("../../../apps/krate-gram/target/wasm32-wasip1/release/krate_gram.wasm");
+    #[cfg(not(krate_native_image))]
     const GRAM_MANIFEST: &str = include_str!("../../../apps/krate-gram/manifest.toml");
+    #[cfg(krate_native_image)]
+    const GRAM_MANIFEST: &str = native::MANIFEST;
     const WALL_WASM: &[u8] =
         include_bytes!("../../../apps/krate-wall/target/wasm32-wasip1/release/krate_wall.wasm");
     const WALL_MANIFEST: &str = include_str!("../../../apps/krate-wall/manifest.toml");
@@ -153,14 +171,58 @@ mod player {
             .collect();
         let policy = krate_policy::SessionPolicy::from_grants(kept);
 
-        let sandbox = data_root.join("apps").join("demo");
+        let sandbox = data_root.join("apps").join(sanitize(&manifest.app.id));
         let _ = std::fs::create_dir_all(&sandbox);
-        let config = krate_runtime::Config {
+        // What the app declared with memory.budget, or the default.
+        let budget_mib = manifest
+            .capabilities
+            .iter()
+            .find_map(|c| c.cap.strip_prefix("memory.budget:")?.parse::<u64>().ok());
+        let mut config = krate_runtime::Config {
             session_policy: policy,
             sandbox_root: sandbox,
             phase3_ui_mode: krate_runtime::phase3_ui::Phase3HostUiMode::NativePrototype,
             ..Default::default()
         };
+        if let Some(mib) = budget_mib {
+            config.memory_bytes = mib * 1024 * 1024;
+        }
+        #[cfg(krate_native_image)]
+        {
+            let runtime = match krate_runtime::Runtime::new_for_native_image(&config) {
+                Ok(runtime) => runtime,
+                Err(err) => {
+                    eprintln!("engine failed to start: {err:#}");
+                    return;
+                }
+            };
+            let started = std::time::Instant::now();
+            // SAFETY: the image was made by this Krate's precompile_native_image
+            // and sits in this binary's signed, executable text for the life
+            // of the process.
+            let loaded = match unsafe { runtime.load_native_image(&native::IMAGE.0) } {
+                Ok(loaded) => loaded,
+                Err(err) => {
+                    eprintln!("the app's code did not load: {err:#}");
+                    return;
+                }
+            };
+            eprintln!(
+                "native image loaded in {:.1} ms",
+                started.elapsed().as_secs_f64() * 1000.0
+            );
+            match runtime.run_loaded_for_world(&loaded, &config, krate_runtime::RuntimeWorld::Gui) {
+                Ok(outcome) => eprintln!("app finished: {outcome:?}"),
+                Err(err) => eprintln!("app failed: {err:#}"),
+            }
+        }
+        #[cfg(not(krate_native_image))]
+        self::run_demo(&config);
+    }
+
+    #[cfg(not(krate_native_image))]
+    fn run_demo(config: &krate_runtime::Config) {
+        let config = config.clone();
         let runtime = match krate_runtime::Runtime::new(&config) {
             Ok(runtime) => runtime,
             Err(err) => {
@@ -172,6 +234,20 @@ mod player {
             Ok(outcome) => eprintln!("app finished: {outcome:?}"),
             Err(err) => eprintln!("app failed: {err:#}"),
         }
+    }
+
+    /// App ids become directory names; nothing an id says may escape the
+    /// apps folder.
+    fn sanitize(id: &str) -> String {
+        id.chars()
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || c == '.' || c == '-' {
+                    c
+                } else {
+                    '_'
+                }
+            })
+            .collect()
     }
 
     fn show_wall(
