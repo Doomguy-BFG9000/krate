@@ -42,6 +42,7 @@ mod java;
 mod location;
 mod motion;
 pub mod phone;
+mod share;
 
 #[derive(Debug, Default)]
 pub struct AndroidUiAdapter {
@@ -626,6 +627,19 @@ impl UiAdapter for AndroidWinitPrototypeUiAdapter {
         filter: &str,
     ) -> Option<std::path::PathBuf> {
         documents::choose(folder, filter)
+    }
+
+    /// The system's share sheet with the app's text, link and files; true
+    /// when the person sent them to an app (IC-919).
+    #[cfg(target_os = "android")]
+    fn share(
+        &self,
+        _window: WindowId,
+        text: Option<&str>,
+        url: Option<&str>,
+        files: &[(String, Vec<u8>)],
+    ) -> Result<bool, String> {
+        share::share(text, url, files)
     }
 
     /// Whether the phone has Bluetooth (IC-917).

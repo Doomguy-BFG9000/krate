@@ -62,7 +62,7 @@ mod player {
         // and a save on a phone is written there before it is placed
         // (K-1032). Picks and saves a run left behind go at the next start.
         let cache = crate::intent::cache_dir(handles).unwrap_or_else(|| data_root.join("tmp"));
-        for left in ["krate-picked", "krate-saves"] {
+        for left in ["krate-picked", "krate-saves", "krate-share"] {
             let _ = std::fs::remove_dir_all(cache.join(left));
         }
         let _ = std::fs::create_dir_all(&cache);

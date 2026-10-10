@@ -1,12 +1,20 @@
 package tech.krate.player;
 
 import android.app.NativeActivity;
+import android.app.PendingIntent;
 import android.content.ActivityNotFoundException;
+import android.content.BroadcastReceiver;
+import android.content.ClipData;
+import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.pm.PackageManager;
 import android.net.Uri;
+import android.os.SystemClock;
 import android.util.Log;
 
+import java.io.File;
+import java.util.ArrayList;
 import java.util.HashMap;
 
 /**
@@ -28,6 +36,16 @@ public class KrateActivity extends NativeActivity {
     private static final int PICK = 0x4b01;
     /** The request code of the phone's permission prompts. */
     private static final int ASK = 0x4b02;
+    /** The request code of the share sheet. */
+    private static final int SHARE = 0x4b03;
+    /** What the share sheet tells Krate when the person picks a target. */
+    private static final String SHARED = "tech.krate.player.SHARED";
+
+    /** The share sheet: up, then closed at this time, and whether a target was picked. */
+    private boolean sharing;
+    private long shareClosedAt;
+    private boolean shareSent;
+    private BroadcastReceiver shareReceiver;
 
     /** krateAsk's answers. */
     static final int GRANTED = 0;
@@ -46,6 +64,13 @@ public class KrateActivity extends NativeActivity {
     @Override
     protected void onActivityResult(int request, int result, Intent data) {
         super.onActivityResult(request, result, data);
+        if (request == SHARE) {
+            synchronized (lock) {
+                sharing = false;
+                shareClosedAt = SystemClock.elapsedRealtime();
+            }
+            return;
+        }
         if (request != PICK) {
             return;
         }
@@ -330,6 +355,105 @@ public class KrateActivity extends NativeActivity {
     @SuppressWarnings("deprecation")
     public int krateDisplayRotation() {
         return getWindowManager().getDefaultDisplay().getRotation();
+    }
+
+    /**
+     * Open the system's share sheet (krate:ui/share) with text (may be empty)
+     * and files already written to Krate's share folder. Answered through
+     * krateShareAnswer.
+     */
+    public void krateShare(final String text, final String[] paths) {
+        synchronized (lock) {
+            sharing = true;
+            shareSent = false;
+            shareClosedAt = 0;
+        }
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                openShareSheet(text, paths);
+            }
+        });
+    }
+
+    private void openShareSheet(String text, String[] paths) {
+        ArrayList<Uri> uris = new ArrayList<>();
+        for (String path : paths) {
+            uris.add(Shared.uriFor(new File(path)));
+        }
+        Intent send;
+        if (uris.size() > 1) {
+            send = new Intent(Intent.ACTION_SEND_MULTIPLE);
+            send.putParcelableArrayListExtra(Intent.EXTRA_STREAM, uris);
+            send.setType("*/*");
+        } else {
+            send = new Intent(Intent.ACTION_SEND);
+            if (uris.size() == 1) {
+                send.putExtra(Intent.EXTRA_STREAM, uris.get(0));
+                send.setType(Documents.mimeOf(paths[0]));
+            } else {
+                send.setType("text/plain");
+            }
+        }
+        if (text != null && !text.isEmpty()) {
+            send.putExtra(Intent.EXTRA_TEXT, text);
+        }
+        if (!uris.isEmpty()) {
+            // The grant rides on the clip: the one app picked may read these
+            // files, and only these.
+            ClipData clip = ClipData.newRawUri("", uris.get(0));
+            for (int i = 1; i < uris.size(); i++) {
+                clip.addItem(new ClipData.Item(uris.get(i)));
+            }
+            send.setClipData(clip);
+            send.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        }
+        if (shareReceiver == null) {
+            shareReceiver = new BroadcastReceiver() {
+                @Override
+                public void onReceive(Context context, Intent intent) {
+                    synchronized (lock) {
+                        shareSent = true;
+                    }
+                    Log.i(TAG, "share: sent to " + intent.getParcelableExtra(
+                            Intent.EXTRA_CHOSEN_COMPONENT));
+                }
+            };
+            if (android.os.Build.VERSION.SDK_INT >= 33) {
+                registerReceiver(shareReceiver, new IntentFilter(SHARED), RECEIVER_NOT_EXPORTED);
+            } else {
+                registerReceiver(shareReceiver, new IntentFilter(SHARED));
+            }
+        }
+        Intent chosen = new Intent(SHARED).setPackage(getPackageName());
+        PendingIntent told = PendingIntent.getBroadcast(this, 0, chosen,
+                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_MUTABLE);
+        try {
+            startActivityForResult(Intent.createChooser(send, null, told.getIntentSender()), SHARE);
+            Log.i(TAG, "share: sheet open, " + uris.size() + " files");
+        } catch (ActivityNotFoundException e) {
+            synchronized (lock) {
+                sharing = false;
+                shareClosedAt = 1;
+            }
+        }
+    }
+
+    /**
+     * -1 while the sheet is up; then 1 when the person sent it to an app, 0
+     * when they closed it. The "sent" word can trail the sheet closing, so
+     * a closed sheet waits a moment for it.
+     */
+    public int krateShareAnswer() {
+        synchronized (lock) {
+            if (shareSent) {
+                return 1;
+            }
+            if (sharing || shareClosedAt == 0) {
+                return -1;
+            }
+            return SystemClock.elapsedRealtime() - shareClosedAt > 1500 ? 0 : -1;
+        }
     }
 
     /** Write the file at path into the document at uri; true when it all went. */

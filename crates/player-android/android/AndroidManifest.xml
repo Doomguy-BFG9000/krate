@@ -91,5 +91,12 @@
         <data android:scheme="file" android:mimeType="*/*" android:pathPattern=".*\\.krate" />
       </intent-filter>
     </activity>
+    <!-- Files an app shares (krate:ui/share), read-only, to the one app the
+         person picked in the share sheet. -->
+    <provider
+        android:name="tech.krate.player.Shared"
+        android:authorities="tech.krate.player.share"
+        android:exported="false"
+        android:grantUriPermissions="true" />
   </application>
 </manifest>
