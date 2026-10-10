@@ -446,7 +446,16 @@ and asks the person; keep calling (twice a second is plenty) and draw \
 \"Finding where you are\" meanwhile. `Err(NotAllowed)` means they said no: \
 say so plainly and keep the rest of the app working; `Err(Unavailable)` \
 is a computer or location switched off. A position carries `accuracy` in \
-metres -- show it, never pretend a fix is exact. A picture that does not change \
+metres -- show it, never pretend a fix is exact. \
+Bluetooth LE devices (a heart-rate strap, a sensor, a light): declare \
+`bluetooth.connect`, then `krate::ui::bluetooth::choose(win, \"180D\", \
+\"Pick your heart-rate monitor\")` from a button the person taps -- it \
+shows Krate's own list of nearby devices offering that service and \
+answers the one they pick (`None` if they cancel). The app never scans. \
+Then `read`, `write` and `subscribe` by service and characteristic UUID, \
+and drain `notifications(device)` each frame; on `Err(Disconnected)` or \
+`connected()` false, offer to choose again. `Err(NotFound)` from choose \
+means nothing nearby offers the service: say so. A picture that does not change \
 between frames (a screenshot, an avatar, a sprite sheet) is kept once \
 with `krate::gfx::canvas_images::keep(canvas, w, h, &rgba)` and drawn \
 by handle with `draw`/`draw_round` each frame: `draw_pixels` sends \
@@ -806,6 +815,7 @@ fn capability_note(pattern: &str) -> &'static str {
         "store.group" => "share a key-value store with the same publisher's other apps, in a named group its signed list admits",
         "camera.capture" => "see through the camera",
         "location.read" => "where the phone is; the person is asked on Krate's sheet and by the phone itself",
+        "bluetooth.connect" => "Bluetooth devices the person picks in Krate's own list; only the picked one is reachable",
         _ => "",
     }
 }

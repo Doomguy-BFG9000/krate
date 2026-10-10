@@ -18716,6 +18716,7 @@ fn manifest_overreach(manifest: &krate_manifest::Manifest, imports: &[String]) -
             "audio.capture" => Some(":audio/capture"),
             "camera.capture" => Some(":camera/capture"),
             "location.read" => Some(":ui/location"),
+            "bluetooth.connect" => Some(":ui/bluetooth"),
             "ui.dialog" => Some(":ui/dialog"),
             "ui.clipboard" => Some(":ui/clipboard"),
             // System and always-on families carry no signal here.
@@ -18742,7 +18743,10 @@ fn manifest_overreach(manifest: &krate_manifest::Manifest, imports: &[String]) -
         // existing whenever they appear at all. A file dialog or the clipboard
         // is genuinely a nice-to-have in most apps; a camera is not something
         // an app reaches for in passing.
-        let defining = matches!(family, "camera.capture" | "audio.capture" | "location.read");
+        let defining = matches!(
+            family,
+            "camera.capture" | "audio.capture" | "location.read" | "bluetooth.connect"
+        );
         if defining && !request.required {
             return Some(format!(
                 "the manifest asks for {cap} but marks it optional. The person is only asked about required capabilities, so this one is never granted and never even mentioned -- the app opens without it, with nothing on screen to say why. If the app still makes sense without {cap}, do not declare it; if it does not, mark it required"

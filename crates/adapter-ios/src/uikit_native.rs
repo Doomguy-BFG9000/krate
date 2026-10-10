@@ -496,6 +496,7 @@ mod real {
         if !visible {
             stop_motion();
             stop_location();
+            crate::bluetooth::disconnect_all();
         }
         if visible {
             // A close tapped before this app began (on the screen before
@@ -943,6 +944,14 @@ mod real {
                 age_ms: (age.max(0.0) * 1000.0) as u64,
             })
         }
+    }
+
+    /// The controller Krate's own sheets are shown from.
+    pub(crate) fn main_controller() -> Option<Retained<objc2_ui_kit::UIViewController>> {
+        MAIN_SIDE
+            .0
+            .get()
+            .map(|main_side| Retained::into_super(main_side.controller.clone()))
     }
 
     /// The app closed: stop looking, so the location arrow goes away.

@@ -22,6 +22,8 @@ pub enum UapiCall {
     Camera(CameraCall),
     /// Where the phone is (IC-917).
     Location(LocationCall),
+    /// Bluetooth devices the person picks (IC-917).
+    Bluetooth(BluetoothCall),
     Store(StoreCall),
     Random(RandomCall),
     /// Asking for more than the default memory (K-416). Not a call a guest
@@ -59,6 +61,7 @@ impl UapiCall {
             Self::Audio(call) => format!("audio.{call}"),
             Self::Camera(call) => format!("camera.{call}"),
             Self::Location(call) => format!("location.{call}"),
+            Self::Bluetooth(call) => format!("bluetooth.{call}"),
             Self::Store(call) => format!("store.{call}"),
             Self::Random(call) => format!("random.{call}"),
             Self::Memory(call) => format!("memory.{call}"),
@@ -151,6 +154,20 @@ impl fmt::Display for LocationCall {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
             Self::Read => "read",
+        })
+    }
+}
+
+/// Bluetooth. One call kind: reaching a device the person picks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BluetoothCall {
+    Connect,
+}
+
+impl fmt::Display for BluetoothCall {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Connect => "connect",
         })
     }
 }

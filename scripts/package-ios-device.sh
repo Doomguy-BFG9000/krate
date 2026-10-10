@@ -92,6 +92,7 @@ cat > "$OUT/Info.plist" <<PLIST
   <key>UIBackgroundModes</key><array><string>audio</string></array>
   <key>UIDeviceFamily</key><array><integer>1</integer></array>
   <key>UILaunchScreen</key><dict/>
+  <key>NSBluetoothAlwaysUsageDescription</key><string>An app you opened in Krate asked to reach a Bluetooth device, and you allowed it on Krate's sheet. It reaches only the device you pick.</string>
   <key>NSLocationWhenInUseUsageDescription</key><string>An app you opened in Krate asked where you are, and you allowed it on Krate's sheet. It is told only while it is open.</string>
   $EXTRA
   <key>CFBundleIcons</key><dict>

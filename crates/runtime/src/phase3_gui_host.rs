@@ -723,6 +723,169 @@ impl Phase3GuiHost {
         self.runtime.dispatcher()
     }
 
+    /// Whether `bluetooth.connect` was granted (IC-917).
+    fn bluetooth_granted(&self) -> bool {
+        self.runtime
+            .guard()
+            .check(&UapiCall::Bluetooth(crate::uapi::BluetoothCall::Connect))
+            .is_ok()
+    }
+
+    /// Whether this device has Bluetooth (IC-917). Headless with
+    /// `KRATE_BLUETOOTH=heart`, a stand-in heart-rate strap is nearby.
+    pub(crate) fn bluetooth_available(&self) -> bool {
+        if self.headless {
+            return fake_heart();
+        }
+        self.dispatcher().bluetooth().bluetooth_available()
+    }
+
+    /// Krate's chooser, then the picked device (IC-917). Not granted, the
+    /// person is never shown a list and nothing is scanned.
+    pub(crate) fn bluetooth_choose(
+        &self,
+        window: u64,
+        service: &str,
+        title: &str,
+    ) -> Result<Option<krate_adapter_common::ui::BtDevice>, krate_adapter_common::ui::BtError> {
+        use krate_adapter_common::ui::{BtDevice, BtError};
+        if !self.bluetooth_granted() {
+            return Err(BtError::NotAllowed);
+        }
+        if self.headless {
+            return match fake_heart() {
+                true if short_uuid(service) == "180D" => Ok(Some(BtDevice {
+                    handle: 1,
+                    name: "Test Heart".to_string(),
+                })),
+                true => Err(BtError::NotFound),
+                false => Err(BtError::Unavailable),
+            };
+        }
+        let id = self.window_id(window).map_err(|_| BtError::NotFound)?;
+        self.dispatcher()
+            .bluetooth()
+            .bluetooth_choose(id, service, title)
+    }
+
+    /// Read, write, subscribe, collect, check and let go of a picked
+    /// device (IC-917): each behind the grant, the stand-in headless.
+    pub(crate) fn bluetooth_read(
+        &self,
+        device: u64,
+        service: &str,
+        characteristic: &str,
+    ) -> Result<Vec<u8>, krate_adapter_common::ui::BtError> {
+        use krate_adapter_common::ui::BtError;
+        if !self.bluetooth_granted() {
+            return Err(BtError::NotAllowed);
+        }
+        if self.headless {
+            return match (
+                device,
+                short_uuid(service).as_str(),
+                short_uuid(characteristic).as_str(),
+            ) {
+                (1, "180F", "2A19") => Ok(vec![87]),
+                (1, _, _) => Err(BtError::NotFound),
+                _ => Err(BtError::Disconnected),
+            };
+        }
+        self.dispatcher()
+            .bluetooth()
+            .bluetooth_read(device, service, characteristic)
+    }
+
+    pub(crate) fn bluetooth_write(
+        &self,
+        device: u64,
+        service: &str,
+        characteristic: &str,
+        data: &[u8],
+        with_response: bool,
+    ) -> Result<(), krate_adapter_common::ui::BtError> {
+        use krate_adapter_common::ui::BtError;
+        if !self.bluetooth_granted() {
+            return Err(BtError::NotAllowed);
+        }
+        if self.headless {
+            return if device == 1 {
+                Ok(())
+            } else {
+                Err(BtError::Disconnected)
+            };
+        }
+        self.dispatcher().bluetooth().bluetooth_write(
+            device,
+            service,
+            characteristic,
+            data,
+            with_response,
+        )
+    }
+
+    pub(crate) fn bluetooth_subscribe(
+        &self,
+        device: u64,
+        service: &str,
+        characteristic: &str,
+    ) -> Result<(), krate_adapter_common::ui::BtError> {
+        use krate_adapter_common::ui::BtError;
+        if !self.bluetooth_granted() {
+            return Err(BtError::NotAllowed);
+        }
+        if self.headless {
+            return match (
+                device,
+                short_uuid(service).as_str(),
+                short_uuid(characteristic).as_str(),
+            ) {
+                (1, "180D", "2A37") => Ok(()),
+                (1, _, _) => Err(BtError::NotFound),
+                _ => Err(BtError::Disconnected),
+            };
+        }
+        self.dispatcher()
+            .bluetooth()
+            .bluetooth_subscribe(device, service, characteristic)
+    }
+
+    pub(crate) fn bluetooth_notifications(
+        &self,
+        device: u64,
+    ) -> Vec<krate_adapter_common::ui::BtNotification> {
+        if !self.bluetooth_granted() {
+            return Vec::new();
+        }
+        if self.headless {
+            // One heartbeat each ask: flags 0, then 72 beats a minute.
+            return if device == 1 {
+                vec![("180D".to_string(), "2A37".to_string(), vec![0, 72])]
+            } else {
+                Vec::new()
+            };
+        }
+        self.dispatcher()
+            .bluetooth()
+            .bluetooth_notifications(device)
+    }
+
+    pub(crate) fn bluetooth_connected(&self, device: u64) -> bool {
+        if !self.bluetooth_granted() {
+            return false;
+        }
+        if self.headless {
+            return device == 1 && fake_heart();
+        }
+        self.dispatcher().bluetooth().bluetooth_connected(device)
+    }
+
+    pub(crate) fn bluetooth_disconnect(&self, device: u64) {
+        if self.bluetooth_granted() && !self.headless {
+            self.dispatcher().bluetooth().bluetooth_disconnect(device);
+        }
+    }
+
     /// Where the device is (IC-917), behind `location.read`: an app that
     /// was not granted it hears `not-allowed` and the phone is never asked.
     /// Headless, `KRATE_LOCATION=lat,lon,accuracy` stands in for a fix.
@@ -7264,6 +7427,22 @@ pub(crate) fn save_file_on_host(
         dialog = dialog.add_filter("Supported files", &extensions);
     }
     Ok(dialog.save_file())
+}
+
+/// Headless, `KRATE_BLUETOOTH=heart`: a stand-in heart-rate strap is
+/// nearby (service 180D, measurement 2A37; battery 180F/2A19 at 87%).
+fn fake_heart() -> bool {
+    std::env::var("KRATE_BLUETOOTH").is_ok_and(|v| v == "heart")
+}
+
+/// A Bluetooth UUID in its short form when it is one of the standard ones
+/// ("0000180D-0000-1000-8000-00805F9B34FB" is "180D"), upper case.
+pub(crate) fn short_uuid(uuid: &str) -> String {
+    let upper = uuid.trim().to_ascii_uppercase();
+    match upper.strip_suffix("-0000-1000-8000-00805F9B34FB") {
+        Some(head) if head.len() == 8 && head.starts_with("0000") => head[4..].to_string(),
+        _ => upper,
+    }
 }
 
 /// Where a save on a phone is written before it goes to the save sheet: a

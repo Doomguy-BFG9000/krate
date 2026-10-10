@@ -24054,6 +24054,701 @@ pub mod krate {
                 }
             }
         }
+
+        /// A Bluetooth device the person picks: a heart-rate strap, a sensor, a
+        /// light, a toy (IC-917). Bluetooth Low Energy, its services and
+        /// characteristics named by their UUIDs ("180D", or the full form).
+        ///
+        /// Behind `bluetooth.connect`. An app never scans: `choose` shows Krate's
+        /// own list of nearby devices offering a service, the person taps one, and
+        /// that one device -- only it, only for this run -- is the app's. The pick
+        /// is the grant, as with a file.
+        #[allow(dead_code, async_fn_in_trait, unused_imports, clippy::all)]
+        pub mod bluetooth {
+            #[used]
+            #[doc(hidden)]
+            static __FORCE_SECTION_REF: fn() =
+                super::super::super::__link_custom_section_describing_imports;
+
+            use super::super::super::_rt;
+            /// A device the person picked.
+            #[derive(Clone)]
+            pub struct Device {
+                /// The handle to pass to the calls below; good for this run only.
+                pub id: u64,
+                /// The name it gives itself, or "Unnamed device".
+                pub name: _rt::String,
+            }
+            impl ::core::fmt::Debug for Device {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    f.debug_struct("Device")
+                        .field("id", &self.id)
+                        .field("name", &self.name)
+                        .finish()
+                }
+            }
+            /// A value a device sent on its own, after `subscribe`.
+            #[derive(Clone)]
+            pub struct Notification {
+                /// The service it came from, as the app named it.
+                pub service: _rt::String,
+                /// The characteristic that changed, as the app named it.
+                pub characteristic: _rt::String,
+                /// Its new value.
+                pub data: _rt::Vec<u8>,
+            }
+            impl ::core::fmt::Debug for Notification {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    f.debug_struct("Notification")
+                        .field("service", &self.service)
+                        .field("characteristic", &self.characteristic)
+                        .field("data", &self.data)
+                        .finish()
+                }
+            }
+            /// Why a Bluetooth call did not work.
+            #[derive(Clone)]
+            pub enum BluetoothError {
+                /// The person said no on Krate's sheet or the phone's prompt, or the
+                /// app did not declare `bluetooth.connect`.
+                NotAllowed,
+                /// No Bluetooth here, or it is switched off.
+                Unavailable,
+                /// No such device nearby, or the device has no such service or
+                /// characteristic.
+                NotFound,
+                /// The device went out of range or was switched off: choose it again.
+                Disconnected,
+                /// The device refused, in its own words.
+                Failed(_rt::String),
+            }
+            impl ::core::fmt::Debug for BluetoothError {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    match self {
+                        BluetoothError::NotAllowed => {
+                            f.debug_tuple("BluetoothError::NotAllowed").finish()
+                        }
+                        BluetoothError::Unavailable => {
+                            f.debug_tuple("BluetoothError::Unavailable").finish()
+                        }
+                        BluetoothError::NotFound => {
+                            f.debug_tuple("BluetoothError::NotFound").finish()
+                        }
+                        BluetoothError::Disconnected => {
+                            f.debug_tuple("BluetoothError::Disconnected").finish()
+                        }
+                        BluetoothError::Failed(e) => {
+                            f.debug_tuple("BluetoothError::Failed").field(e).finish()
+                        }
+                    }
+                }
+            }
+            impl ::core::fmt::Display for BluetoothError {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    write!(f, "{:?}", self)
+                }
+            }
+
+            #[cfg(feature = "std")]
+            impl std::error::Error for BluetoothError {}
+            #[allow(unused_unsafe, clippy::all)]
+            /// Whether this device has Bluetooth at all.
+            pub fn available() -> bool {
+                unsafe {
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:ui/bluetooth@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "available"]
+                        fn wit_import0() -> i32;
+                    }
+
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import0() -> i32 {
+                        unreachable!()
+                    }
+                    let ret = unsafe { wit_import0() };
+                    _rt::bool_lift(ret as u8)
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Look for nearby devices offering `service`, show them in Krate's own
+            /// list under `title` ("Pick your heart-rate monitor"), and connect to
+            /// the one the person taps. None when they cancel.
+            pub fn choose(
+                window: u64,
+                service: &str,
+                title: &str,
+            ) -> Result<Option<Device>, BluetoothError> {
+                unsafe {
+                    #[repr(align(8))]
+                    struct RetArea(
+                        [::core::mem::MaybeUninit<u8>;
+                            24 + 2 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let mut ret_area = RetArea(
+                        [::core::mem::MaybeUninit::uninit();
+                            24 + 2 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let vec0 = service;
+                    let ptr0 = vec0.as_ptr().cast::<u8>();
+                    let len0 = vec0.len();
+                    let vec1 = title;
+                    let ptr1 = vec1.as_ptr().cast::<u8>();
+                    let len1 = vec1.len();
+                    let ptr2 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:ui/bluetooth@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "choose"]
+                        fn wit_import3(
+                            _: i64,
+                            _: *mut u8,
+                            _: usize,
+                            _: *mut u8,
+                            _: usize,
+                            _: *mut u8,
+                        );
+                    }
+
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import3(
+                        _: i64,
+                        _: *mut u8,
+                        _: usize,
+                        _: *mut u8,
+                        _: usize,
+                        _: *mut u8,
+                    ) {
+                        unreachable!()
+                    }
+                    unsafe {
+                        wit_import3(
+                            _rt::as_i64(&window),
+                            ptr0.cast_mut(),
+                            len0,
+                            ptr1.cast_mut(),
+                            len1,
+                            ptr2,
+                        )
+                    };
+                    let l4 = i32::from(*ptr2.add(0).cast::<u8>());
+                    let result15 = match l4 {
+                        0 => {
+                            let e = {
+                                let l5 = i32::from(*ptr2.add(8).cast::<u8>());
+
+                                match l5 {
+                                    0 => None,
+                                    1 => {
+                                        let e = {
+                                            let l6 = *ptr2.add(16).cast::<i64>();
+                                            let l7 = *ptr2.add(24).cast::<*mut u8>();
+                                            let l8 = *ptr2
+                                                .add(24 + 1 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len9 = l8;
+                                            let bytes9 =
+                                                _rt::Vec::from_raw_parts(l7.cast(), len9, len9);
+
+                                            Device {
+                                                id: l6 as u64,
+                                                name: _rt::string_lift(bytes9),
+                                            }
+                                        };
+                                        Some(e)
+                                    }
+                                    _ => _rt::invalid_enum_discriminant(),
+                                }
+                            };
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l10 = i32::from(*ptr2.add(8).cast::<u8>());
+                                let v14 = match l10 {
+                                    0 => BluetoothError::NotAllowed,
+                                    1 => BluetoothError::Unavailable,
+                                    2 => BluetoothError::NotFound,
+                                    3 => BluetoothError::Disconnected,
+                                    n => {
+                                        debug_assert_eq!(n, 4, "invalid enum discriminant");
+                                        let e14 = {
+                                            let l11 = *ptr2
+                                                .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l12 = *ptr2
+                                                .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len13 = l12;
+                                            let bytes13 =
+                                                _rt::Vec::from_raw_parts(l11.cast(), len13, len13);
+
+                                            _rt::string_lift(bytes13)
+                                        };
+                                        BluetoothError::Failed(e14)
+                                    }
+                                };
+
+                                v14
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    };
+                    result15
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Read a characteristic's value once.
+            pub fn read(
+                device: u64,
+                service: &str,
+                characteristic: &str,
+            ) -> Result<_rt::Vec<u8>, BluetoothError> {
+                unsafe {
+                    #[cfg_attr(target_pointer_width = "64", repr(align(8)))]
+                    #[cfg_attr(target_pointer_width = "32", repr(align(4)))]
+                    struct RetArea(
+                        [::core::mem::MaybeUninit<u8>; 4 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let mut ret_area = RetArea(
+                        [::core::mem::MaybeUninit::uninit();
+                            4 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let vec0 = service;
+                    let ptr0 = vec0.as_ptr().cast::<u8>();
+                    let len0 = vec0.len();
+                    let vec1 = characteristic;
+                    let ptr1 = vec1.as_ptr().cast::<u8>();
+                    let len1 = vec1.len();
+                    let ptr2 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:ui/bluetooth@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "read"]
+                        fn wit_import3(
+                            _: i64,
+                            _: *mut u8,
+                            _: usize,
+                            _: *mut u8,
+                            _: usize,
+                            _: *mut u8,
+                        );
+                    }
+
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import3(
+                        _: i64,
+                        _: *mut u8,
+                        _: usize,
+                        _: *mut u8,
+                        _: usize,
+                        _: *mut u8,
+                    ) {
+                        unreachable!()
+                    }
+                    unsafe {
+                        wit_import3(
+                            _rt::as_i64(&device),
+                            ptr0.cast_mut(),
+                            len0,
+                            ptr1.cast_mut(),
+                            len1,
+                            ptr2,
+                        )
+                    };
+                    let l4 = i32::from(*ptr2.add(0).cast::<u8>());
+                    let result13 = match l4 {
+                        0 => {
+                            let e = {
+                                let l5 = *ptr2
+                                    .add(::core::mem::size_of::<*const u8>())
+                                    .cast::<*mut u8>();
+                                let l6 = *ptr2
+                                    .add(2 * ::core::mem::size_of::<*const u8>())
+                                    .cast::<usize>();
+                                let len7 = l6;
+
+                                _rt::Vec::from_raw_parts(l5.cast(), len7, len7)
+                            };
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l8 = i32::from(
+                                    *ptr2.add(::core::mem::size_of::<*const u8>()).cast::<u8>(),
+                                );
+                                let v12 = match l8 {
+                                    0 => BluetoothError::NotAllowed,
+                                    1 => BluetoothError::Unavailable,
+                                    2 => BluetoothError::NotFound,
+                                    3 => BluetoothError::Disconnected,
+                                    n => {
+                                        debug_assert_eq!(n, 4, "invalid enum discriminant");
+                                        let e12 = {
+                                            let l9 = *ptr2
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l10 = *ptr2
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len11 = l10;
+                                            let bytes11 =
+                                                _rt::Vec::from_raw_parts(l9.cast(), len11, len11);
+
+                                            _rt::string_lift(bytes11)
+                                        };
+                                        BluetoothError::Failed(e12)
+                                    }
+                                };
+
+                                v12
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    };
+                    result13
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Write a characteristic's value; `with-response` waits for the device
+            /// to say it took it.
+            pub fn write(
+                device: u64,
+                service: &str,
+                characteristic: &str,
+                data: &[u8],
+                with_response: bool,
+            ) -> Result<(), BluetoothError> {
+                unsafe {
+                    #[cfg_attr(target_pointer_width = "64", repr(align(8)))]
+                    #[cfg_attr(target_pointer_width = "32", repr(align(4)))]
+                    struct RetArea(
+                        [::core::mem::MaybeUninit<u8>; 4 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let mut ret_area = RetArea(
+                        [::core::mem::MaybeUninit::uninit();
+                            4 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let vec0 = service;
+                    let ptr0 = vec0.as_ptr().cast::<u8>();
+                    let len0 = vec0.len();
+                    let vec1 = characteristic;
+                    let ptr1 = vec1.as_ptr().cast::<u8>();
+                    let len1 = vec1.len();
+                    let vec2 = data;
+                    let ptr2 = vec2.as_ptr().cast::<u8>();
+                    let len2 = vec2.len();
+                    let ptr3 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:ui/bluetooth@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "write"]
+                        fn wit_import4(
+                            _: i64,
+                            _: *mut u8,
+                            _: usize,
+                            _: *mut u8,
+                            _: usize,
+                            _: *mut u8,
+                            _: usize,
+                            _: i32,
+                            _: *mut u8,
+                        );
+                    }
+
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import4(
+                        _: i64,
+                        _: *mut u8,
+                        _: usize,
+                        _: *mut u8,
+                        _: usize,
+                        _: *mut u8,
+                        _: usize,
+                        _: i32,
+                        _: *mut u8,
+                    ) {
+                        unreachable!()
+                    }
+                    unsafe {
+                        wit_import4(
+                            _rt::as_i64(&device),
+                            ptr0.cast_mut(),
+                            len0,
+                            ptr1.cast_mut(),
+                            len1,
+                            ptr2.cast_mut(),
+                            len2,
+                            match &with_response {
+                                true => 1,
+                                false => 0,
+                            },
+                            ptr3,
+                        )
+                    };
+                    let l5 = i32::from(*ptr3.add(0).cast::<u8>());
+                    let result11 = match l5 {
+                        0 => {
+                            let e = ();
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l6 = i32::from(
+                                    *ptr3.add(::core::mem::size_of::<*const u8>()).cast::<u8>(),
+                                );
+                                let v10 = match l6 {
+                                    0 => BluetoothError::NotAllowed,
+                                    1 => BluetoothError::Unavailable,
+                                    2 => BluetoothError::NotFound,
+                                    3 => BluetoothError::Disconnected,
+                                    n => {
+                                        debug_assert_eq!(n, 4, "invalid enum discriminant");
+                                        let e10 = {
+                                            let l7 = *ptr3
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l8 = *ptr3
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len9 = l8;
+                                            let bytes9 =
+                                                _rt::Vec::from_raw_parts(l7.cast(), len9, len9);
+
+                                            _rt::string_lift(bytes9)
+                                        };
+                                        BluetoothError::Failed(e10)
+                                    }
+                                };
+
+                                v10
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    };
+                    result11
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Be sent a characteristic's value each time it changes (a heartbeat,
+            /// a reading); collect them with `notifications`.
+            pub fn subscribe(
+                device: u64,
+                service: &str,
+                characteristic: &str,
+            ) -> Result<(), BluetoothError> {
+                unsafe {
+                    #[cfg_attr(target_pointer_width = "64", repr(align(8)))]
+                    #[cfg_attr(target_pointer_width = "32", repr(align(4)))]
+                    struct RetArea(
+                        [::core::mem::MaybeUninit<u8>; 4 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let mut ret_area = RetArea(
+                        [::core::mem::MaybeUninit::uninit();
+                            4 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let vec0 = service;
+                    let ptr0 = vec0.as_ptr().cast::<u8>();
+                    let len0 = vec0.len();
+                    let vec1 = characteristic;
+                    let ptr1 = vec1.as_ptr().cast::<u8>();
+                    let len1 = vec1.len();
+                    let ptr2 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:ui/bluetooth@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "subscribe"]
+                        fn wit_import3(
+                            _: i64,
+                            _: *mut u8,
+                            _: usize,
+                            _: *mut u8,
+                            _: usize,
+                            _: *mut u8,
+                        );
+                    }
+
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import3(
+                        _: i64,
+                        _: *mut u8,
+                        _: usize,
+                        _: *mut u8,
+                        _: usize,
+                        _: *mut u8,
+                    ) {
+                        unreachable!()
+                    }
+                    unsafe {
+                        wit_import3(
+                            _rt::as_i64(&device),
+                            ptr0.cast_mut(),
+                            len0,
+                            ptr1.cast_mut(),
+                            len1,
+                            ptr2,
+                        )
+                    };
+                    let l4 = i32::from(*ptr2.add(0).cast::<u8>());
+                    let result10 = match l4 {
+                        0 => {
+                            let e = ();
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l5 = i32::from(
+                                    *ptr2.add(::core::mem::size_of::<*const u8>()).cast::<u8>(),
+                                );
+                                let v9 = match l5 {
+                                    0 => BluetoothError::NotAllowed,
+                                    1 => BluetoothError::Unavailable,
+                                    2 => BluetoothError::NotFound,
+                                    3 => BluetoothError::Disconnected,
+                                    n => {
+                                        debug_assert_eq!(n, 4, "invalid enum discriminant");
+                                        let e9 = {
+                                            let l6 = *ptr2
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l7 = *ptr2
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len8 = l7;
+                                            let bytes8 =
+                                                _rt::Vec::from_raw_parts(l6.cast(), len8, len8);
+
+                                            _rt::string_lift(bytes8)
+                                        };
+                                        BluetoothError::Failed(e9)
+                                    }
+                                };
+
+                                v9
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    };
+                    result10
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Every value sent since the last ask, oldest first.
+            pub fn notifications(device: u64) -> _rt::Vec<Notification> {
+                unsafe {
+                    #[cfg_attr(target_pointer_width = "64", repr(align(8)))]
+                    #[cfg_attr(target_pointer_width = "32", repr(align(4)))]
+                    struct RetArea(
+                        [::core::mem::MaybeUninit<u8>; 2 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let mut ret_area = RetArea(
+                        [::core::mem::MaybeUninit::uninit();
+                            2 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:ui/bluetooth@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "notifications"]
+                        fn wit_import1(_: i64, _: *mut u8);
+                    }
+
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import1(_: i64, _: *mut u8) {
+                        unreachable!()
+                    }
+                    unsafe { wit_import1(_rt::as_i64(&device), ptr0) };
+                    let l2 = *ptr0.add(0).cast::<*mut u8>();
+                    let l3 = *ptr0
+                        .add(::core::mem::size_of::<*const u8>())
+                        .cast::<usize>();
+                    let base13 = l2;
+                    let len13 = l3;
+                    let mut result13 = _rt::Vec::with_capacity(len13);
+                    for i in 0..len13 {
+                        let base = base13.add(i * (6 * ::core::mem::size_of::<*const u8>()));
+                        let e13 = {
+                            let l4 = *base.add(0).cast::<*mut u8>();
+                            let l5 = *base
+                                .add(::core::mem::size_of::<*const u8>())
+                                .cast::<usize>();
+                            let len6 = l5;
+                            let bytes6 = _rt::Vec::from_raw_parts(l4.cast(), len6, len6);
+                            let l7 = *base
+                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                .cast::<*mut u8>();
+                            let l8 = *base
+                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                .cast::<usize>();
+                            let len9 = l8;
+                            let bytes9 = _rt::Vec::from_raw_parts(l7.cast(), len9, len9);
+                            let l10 = *base
+                                .add(4 * ::core::mem::size_of::<*const u8>())
+                                .cast::<*mut u8>();
+                            let l11 = *base
+                                .add(5 * ::core::mem::size_of::<*const u8>())
+                                .cast::<usize>();
+                            let len12 = l11;
+
+                            Notification {
+                                service: _rt::string_lift(bytes6),
+                                characteristic: _rt::string_lift(bytes9),
+                                data: _rt::Vec::from_raw_parts(l10.cast(), len12, len12),
+                            }
+                        };
+                        result13.push(e13);
+                    }
+                    _rt::cabi_dealloc(
+                        base13,
+                        len13 * (6 * ::core::mem::size_of::<*const u8>()),
+                        ::core::mem::size_of::<*const u8>(),
+                    );
+                    let result14 = result13;
+                    result14
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Whether the device is still connected.
+            pub fn connected(device: u64) -> bool {
+                unsafe {
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:ui/bluetooth@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "connected"]
+                        fn wit_import0(_: i64) -> i32;
+                    }
+
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import0(_: i64) -> i32 {
+                        unreachable!()
+                    }
+                    let ret = unsafe { wit_import0(_rt::as_i64(&device)) };
+                    _rt::bool_lift(ret as u8)
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Let the device go. Closing the app does this too.
+            pub fn disconnect(device: u64) -> () {
+                unsafe {
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:ui/bluetooth@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "disconnect"]
+                        fn wit_import0(_: i64);
+                    }
+
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import0(_: i64) {
+                        unreachable!()
+                    }
+                    unsafe { wit_import0(_rt::as_i64(&device)) };
+                }
+            }
+        }
     }
 }
 mod _rt {
@@ -24368,8 +25063,8 @@ pub(crate) use __export_gui_impl as export;
 #[unsafe(link_section = "component-type:wit-bindgen:0.41.0:krate:app@0.2.0:gui:encoded world")]
 #[doc(hidden)]
 #[allow(clippy::octal_escapes)]
-pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 15790] = *b"\
-\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\xb4z\x01A\x02\x01A\x93\
+pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 16327] = *b"\
+\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\xcd~\x01A\x02\x01A\x95\
 \x01\x01B\x04\x01m\x05\x05trace\x05debug\x04info\x04warn\x05error\x04\0\x09log-l\
 evel\x03\0\0\x01q\x05\x06closed\0\0\x0binterrupted\0\0\x0eunexpected-eof\0\0\x0c\
 invalid-utf8\0\0\x05other\x01s\0\x04\0\x08io-error\x03\0\x02\x03\0\x14krate:io/t\
@@ -24600,29 +25295,41 @@ motion@0.1.0\x05=\x01B\x0a\x01kv\x01r\x07\x08latitudeu\x09longitudeu\x08accuracy
 v\x08altitude\0\x05speed\0\x06course\0\x06age-msw\x04\0\x08position\x03\0\x01\x01\
 q\x03\x0bnot-allowed\0\0\x0bunavailable\0\0\x07finding\0\0\x04\0\x0elocation-err\
 or\x03\0\x03\x01@\0\0\x7f\x04\0\x09available\x01\x05\x01j\x01\x02\x01\x04\x01@\0\
-\0\x06\x04\0\x07current\x01\x07\x03\0\x17krate:ui/location@0.1.0\x05>\x01B\x14\x01\
-r\x04\x01rv\x01gv\x01bv\x01av\x04\0\x05color\x03\0\0\x01r\x02\x01xv\x01yv\x04\0\x05\
-point\x03\0\x02\x01r\x02\x05widthv\x06heightv\x04\0\x04size\x03\0\x04\x01r\x04\x05\
-widthv\x06heightv\x06ascentv\x07descentv\x04\0\x0ctext-metrics\x03\0\x06\x01r\x04\
-\x01xv\x01yv\x05widthv\x06heightv\x04\0\x04rect\x03\0\x08\x01r\x02\x06offsetv\x05\
-color\x01\x04\0\x0dgradient-stop\x03\0\x0a\x01m\x03\x04sans\x05serif\x04mono\x04\
-\0\x0bfont-family\x03\0\x0c\x01r\x04\x06weight{\x06italic\x7f\x0eletter-spacingv\
-\x06family\x0d\x04\0\x0atext-style\x03\0\x0e\x01r\x04\x08top-leftv\x09top-rightv\
-\x0cbottom-rightv\x0bbottom-leftv\x04\0\x0ccorner-radii\x03\0\x10\x01q\x04\x11pe\
-rmission-denied\0\0\x0einvalid-target\0\0\x0bunsupported\x01s\0\x08platform\x01s\
-\0\x04\0\x09gfx-error\x03\0\x12\x03\0\x15krate:gfx/types@0.1.0\x05?\x02\x03\0)\x05\
-color\x02\x03\0)\x05point\x02\x03\0)\x04rect\x02\x03\0)\x04size\x02\x03\0)\x0cte\
-xt-metrics\x02\x03\0)\x09gfx-error\x02\x03\0)\x0dgradient-stop\x02\x03\0)\x0ccor\
-ner-radii\x02\x03\0)\x0atext-style\x02\x03\0)\x0bfont-family\x01BK\x02\x03\x02\x01\
-@\x04\0\x05color\x03\0\0\x02\x03\x02\x01A\x04\0\x05point\x03\0\x02\x02\x03\x02\x01\
-B\x04\0\x04rect\x03\0\x04\x02\x03\x02\x01C\x04\0\x04size\x03\0\x06\x02\x03\x02\x01\
-D\x04\0\x0ctext-metrics\x03\0\x08\x02\x03\x02\x01E\x04\0\x09gfx-error\x03\0\x0a\x02\
-\x03\x02\x01F\x04\0\x0dgradient-stop\x03\0\x0c\x02\x03\x02\x01G\x04\0\x0ccorner-\
-radii\x03\0\x0e\x02\x03\x02\x01H\x04\0\x0atext-style\x03\0\x10\x02\x03\x02\x01I\x04\
-\0\x0bfont-family\x03\0\x12\x01j\x01w\x01\x0b\x01@\x02\x06windoww\x06widgetw\0\x14\
-\x04\0\x04bind\x01\x15\x01j\x01\x07\x01\x0b\x01@\x01\x06canvasw\0\x16\x04\0\x0bc\
-anvas-size\x01\x17\x01j\0\x01\x0b\x01@\x02\x06canvasw\x04size\x07\0\x18\x04\0\x0f\
-set-design-size\x01\x19\x01@\x05\x06canvasw\x01xv\x01yv\x01wv\x01hv\0\x18\x04\0\x08\
+\0\x06\x04\0\x07current\x01\x07\x03\0\x17krate:ui/location@0.1.0\x05>\x01B\x1c\x01\
+r\x02\x02idw\x04names\x04\0\x06device\x03\0\0\x01p}\x01r\x03\x07services\x0echar\
+acteristics\x04data\x02\x04\0\x0cnotification\x03\0\x03\x01q\x05\x0bnot-allowed\0\
+\0\x0bunavailable\0\0\x09not-found\0\0\x0cdisconnected\0\0\x06failed\x01s\0\x04\0\
+\x0fbluetooth-error\x03\0\x05\x01@\0\0\x7f\x04\0\x09available\x01\x07\x01k\x01\x01\
+j\x01\x08\x01\x06\x01@\x03\x06windoww\x07services\x05titles\0\x09\x04\0\x06choos\
+e\x01\x0a\x01j\x01\x02\x01\x06\x01@\x03\x06devicew\x07services\x0echaracteristic\
+s\0\x0b\x04\0\x04read\x01\x0c\x01j\0\x01\x06\x01@\x05\x06devicew\x07services\x0e\
+characteristics\x04data\x02\x0dwith-response\x7f\0\x0d\x04\0\x05write\x01\x0e\x01\
+@\x03\x06devicew\x07services\x0echaracteristics\0\x0d\x04\0\x09subscribe\x01\x0f\
+\x01p\x04\x01@\x01\x06devicew\0\x10\x04\0\x0dnotifications\x01\x11\x01@\x01\x06d\
+evicew\0\x7f\x04\0\x09connected\x01\x12\x01@\x01\x06devicew\x01\0\x04\0\x0adisco\
+nnect\x01\x13\x03\0\x18krate:ui/bluetooth@0.1.0\x05?\x01B\x14\x01r\x04\x01rv\x01\
+gv\x01bv\x01av\x04\0\x05color\x03\0\0\x01r\x02\x01xv\x01yv\x04\0\x05point\x03\0\x02\
+\x01r\x02\x05widthv\x06heightv\x04\0\x04size\x03\0\x04\x01r\x04\x05widthv\x06hei\
+ghtv\x06ascentv\x07descentv\x04\0\x0ctext-metrics\x03\0\x06\x01r\x04\x01xv\x01yv\
+\x05widthv\x06heightv\x04\0\x04rect\x03\0\x08\x01r\x02\x06offsetv\x05color\x01\x04\
+\0\x0dgradient-stop\x03\0\x0a\x01m\x03\x04sans\x05serif\x04mono\x04\0\x0bfont-fa\
+mily\x03\0\x0c\x01r\x04\x06weight{\x06italic\x7f\x0eletter-spacingv\x06family\x0d\
+\x04\0\x0atext-style\x03\0\x0e\x01r\x04\x08top-leftv\x09top-rightv\x0cbottom-rig\
+htv\x0bbottom-leftv\x04\0\x0ccorner-radii\x03\0\x10\x01q\x04\x11permission-denie\
+d\0\0\x0einvalid-target\0\0\x0bunsupported\x01s\0\x08platform\x01s\0\x04\0\x09gf\
+x-error\x03\0\x12\x03\0\x15krate:gfx/types@0.1.0\x05@\x02\x03\0*\x05color\x02\x03\
+\0*\x05point\x02\x03\0*\x04rect\x02\x03\0*\x04size\x02\x03\0*\x0ctext-metrics\x02\
+\x03\0*\x09gfx-error\x02\x03\0*\x0dgradient-stop\x02\x03\0*\x0ccorner-radii\x02\x03\
+\0*\x0atext-style\x02\x03\0*\x0bfont-family\x01BK\x02\x03\x02\x01A\x04\0\x05colo\
+r\x03\0\0\x02\x03\x02\x01B\x04\0\x05point\x03\0\x02\x02\x03\x02\x01C\x04\0\x04re\
+ct\x03\0\x04\x02\x03\x02\x01D\x04\0\x04size\x03\0\x06\x02\x03\x02\x01E\x04\0\x0c\
+text-metrics\x03\0\x08\x02\x03\x02\x01F\x04\0\x09gfx-error\x03\0\x0a\x02\x03\x02\
+\x01G\x04\0\x0dgradient-stop\x03\0\x0c\x02\x03\x02\x01H\x04\0\x0ccorner-radii\x03\
+\0\x0e\x02\x03\x02\x01I\x04\0\x0atext-style\x03\0\x10\x02\x03\x02\x01J\x04\0\x0b\
+font-family\x03\0\x12\x01j\x01w\x01\x0b\x01@\x02\x06windoww\x06widgetw\0\x14\x04\
+\0\x04bind\x01\x15\x01j\x01\x07\x01\x0b\x01@\x01\x06canvasw\0\x16\x04\0\x0bcanva\
+s-size\x01\x17\x01j\0\x01\x0b\x01@\x02\x06canvasw\x04size\x07\0\x18\x04\0\x0fset\
+-design-size\x01\x19\x01@\x05\x06canvasw\x01xv\x01yv\x01wv\x01hv\0\x18\x04\0\x08\
 set-clip\x01\x1a\x01@\x01\x06canvasw\0\x18\x04\0\x0aclear-clip\x01\x1b\x01@\x02\x06\
 canvasw\x04fill\x01\0\x18\x04\0\x05clear\x01\x1c\x01@\x03\x06canvasw\x04area\x05\
 \x04fill\x01\0\x18\x04\0\x09fill-rect\x01\x1d\x01@\x04\x06canvasw\x04area\x05\x06\
@@ -24648,8 +25355,8 @@ canvasw\x04texts\x06origin\x03\x09font-sizev\x03ink\x01\0\x18\x04\0\x09draw-text
 @\x05\x06canvasw\x04area\x05\x05widthy\x06heighty\x04rgba(\0\x18\x04\0\x0bdraw-p\
 ixels\x010\x01@\x07\x06canvasw\x06center\x03\x03dst\x07\x05anglev\x05widthy\x06h\
 eighty\x04rgba(\0\x18\x04\0\x0bdraw-sprite\x011\x04\0\x07present\x01\x1b\x03\0\x18\
-krate:gfx/canvas2d@0.1.0\x05J\x01B%\x02\x03\x02\x01@\x04\0\x05color\x03\0\0\x02\x03\
-\x02\x01E\x04\0\x09gfx-error\x03\0\x02\x01pv\x01r\x0a\x07ambientv\x08specularv\x09\
+krate:gfx/canvas2d@0.1.0\x05K\x01B%\x02\x03\x02\x01A\x04\0\x05color\x03\0\0\x02\x03\
+\x02\x01F\x04\0\x09gfx-error\x03\0\x02\x01pv\x01r\x0a\x07ambientv\x08specularv\x09\
 shininessv\x0bfog-densityv\x09fog-color\x01\x0efill-direction\x04\x0afill-color\x01\
 \x0dshadow-radiusv\x0fshadow-softnessv\x08exposurev\x04\0\x08lighting\x03\0\x05\x01\
 j\x01w\x01\x03\x01@\x02\x06windoww\x06widgetw\0\x07\x04\0\x04bind\x01\x08\x01j\0\
@@ -24667,50 +25374,50 @@ ooth\x01\x12\x01@\x02\x05scenew\x08lighting\x06\0\x09\x04\0\x0cset-lighting\x01\
 texturew\x0enormal-texturew\x04tint\x01\0\x09\x04\0\x0dnormal-mapped\x01\x14\x04\
 \0\x05unlit\x01\x11\x01@\x02\x05scenew\x07enabled\x7f\0\x09\x04\0\x0fcull-back-f\
 aces\x01\x15\x01@\x01\x05scenew\0\x09\x04\0\x07present\x01\x16\x03\0\x17krate:gf\
-x/scene3d@0.1.0\x05K\x01B\x11\x02\x03\x02\x01B\x04\0\x04rect\x03\0\0\x02\x03\x02\
-\x01G\x04\0\x0ccorner-radii\x03\0\x02\x02\x03\x02\x01E\x04\0\x09gfx-error\x03\0\x04\
+x/scene3d@0.1.0\x05L\x01B\x11\x02\x03\x02\x01C\x04\0\x04rect\x03\0\0\x02\x03\x02\
+\x01H\x04\0\x0ccorner-radii\x03\0\x02\x02\x03\x02\x01F\x04\0\x09gfx-error\x03\0\x04\
 \x01p}\x01j\x01w\x01\x05\x01@\x04\x06canvasw\x05widthy\x06heighty\x04rgba\x06\0\x07\
 \x04\0\x04keep\x01\x08\x01j\0\x01\x05\x01@\x03\x06canvasw\x05imagew\x04area\x01\0\
 \x09\x04\0\x04draw\x01\x0a\x01@\x04\x06canvasw\x05imagew\x04area\x01\x05radii\x03\
 \0\x09\x04\0\x0adraw-round\x01\x0b\x01@\x02\x06canvasw\x05imagew\x01\0\x04\0\x06\
-forget\x01\x0c\x03\0\x1dkrate:gfx/canvas-images@0.1.0\x05L\x01B\x06\x01m\x02\x07\
+forget\x01\x0c\x03\0\x1dkrate:gfx/canvas-images@0.1.0\x05M\x01B\x06\x01m\x02\x07\
 pcm-s16\x07float32\x04\0\x0dsample-format\x03\0\0\x01r\x04\x0bsample-ratey\x08ch\
 annels{\x06format\x01\x0dbuffer-framesy\x04\0\x0dstream-config\x03\0\x02\x01q\x05\
 \x11permission-denied\0\0\x0einvalid-stream\0\0\x12device-unavailable\0\0\x0buns\
 upported\x01s\0\x08platform\x01s\0\x04\0\x0baudio-error\x03\0\x04\x03\0\x17krate\
-:audio/types@0.1.0\x05M\x02\x03\0-\x0baudio-error\x02\x03\0-\x0dstream-config\x01\
-B\x15\x02\x03\x02\x01N\x04\0\x0baudio-error\x03\0\0\x02\x03\x02\x01O\x04\0\x0dst\
+:audio/types@0.1.0\x05N\x02\x03\0.\x0baudio-error\x02\x03\0.\x0dstream-config\x01\
+B\x15\x02\x03\x02\x01O\x04\0\x0baudio-error\x03\0\0\x02\x03\x02\x01P\x04\0\x0dst\
 ream-config\x03\0\x02\x01j\x01w\x01\x01\x01@\x01\x06config\x03\0\x04\x04\0\x04op\
 en\x01\x05\x01j\0\x01\x01\x01@\x01\x09stream-idw\0\x06\x04\0\x05start\x01\x07\x04\
 \0\x04stop\x01\x07\x01p}\x01j\x01y\x01\x01\x01@\x02\x09stream-idw\x05bytes\x08\0\
 \x09\x04\0\x05write\x01\x0a\x01@\x02\x09stream-idw\x05bytes\x08\0\x04\x04\0\x0al\
 oad-sound\x01\x0b\x01@\x03\x09stream-idw\x05soundw\x04gainv\0\x06\x04\0\x0aplay-\
 sound\x01\x0c\x01@\x02\x09stream-idw\x05soundw\0\x06\x04\0\x0astop-sound\x01\x0d\
-\x03\0\x1akrate:audio/playback@0.1.0\x05P\x01B\x05\x02\x03\x02\x01N\x04\0\x0baud\
+\x03\0\x1akrate:audio/playback@0.1.0\x05Q\x01B\x05\x02\x03\x02\x01O\x04\0\x0baud\
 io-error\x03\0\0\x01j\x01y\x01\x01\x01@\x01\x09stream-idw\0\x02\x04\0\x06queued\x01\
-\x03\x03\0\x20krate:audio/playback-queue@0.1.0\x05Q\x01B\x0f\x02\x03\x02\x01N\x04\
-\0\x0baudio-error\x03\0\0\x02\x03\x02\x01O\x04\0\x0dstream-config\x03\0\x02\x01j\
+\x03\x03\0\x20krate:audio/playback-queue@0.1.0\x05R\x01B\x0f\x02\x03\x02\x01O\x04\
+\0\x0baudio-error\x03\0\0\x02\x03\x02\x01P\x04\0\x0dstream-config\x03\0\x02\x01j\
 \x01w\x01\x01\x01@\x01\x06config\x03\0\x04\x04\0\x04open\x01\x05\x01j\0\x01\x01\x01\
 @\x01\x09stream-idw\0\x06\x04\0\x05start\x01\x07\x04\0\x04stop\x01\x07\x01p}\x01\
 j\x01\x08\x01\x01\x01@\x02\x09stream-idw\x09max-bytesy\0\x09\x04\0\x04read\x01\x0a\
-\x03\0\x19krate:audio/capture@0.1.0\x05R\x01B\x0d\x01m\x01\x05rgba8\x04\0\x0cfra\
+\x03\0\x19krate:audio/capture@0.1.0\x05S\x01B\x0d\x01m\x01\x05rgba8\x04\0\x0cfra\
 me-format\x03\0\0\x01r\x04\x05widthy\x06heighty\x03fpsy\x06format\x01\x04\0\x0ds\
 tream-config\x03\0\x02\x01r\x04\x05widthy\x06heighty\x03fpsy\x06format\x01\x04\0\
 \x0aframe-info\x03\0\x04\x01r\x02\x02ids\x05labels\x04\0\x0bdevice-info\x03\0\x06\
 \x01p}\x01r\x04\x05bytes\x08\x05widthy\x06heighty\x0eelapsed-millisw\x04\0\x05fr\
 ame\x03\0\x09\x01q\x06\x11permission-denied\0\0\x0einvalid-stream\0\0\x12device-\
 unavailable\0\0\x0dsystem-denied\0\0\x0bunsupported\x01s\0\x08platform\x01s\0\x04\
-\0\x0ccamera-error\x03\0\x0b\x03\0\x18krate:camera/types@0.1.0\x05S\x02\x03\01\x0c\
-camera-error\x02\x03\01\x0bdevice-info\x02\x03\01\x05frame\x02\x03\01\x0aframe-i\
-nfo\x02\x03\01\x0dstream-config\x01B\x1d\x02\x03\x02\x01T\x04\0\x0ccamera-error\x03\
-\0\0\x02\x03\x02\x01U\x04\0\x0bdevice-info\x03\0\x02\x02\x03\x02\x01V\x04\0\x05f\
-rame\x03\0\x04\x02\x03\x02\x01W\x04\0\x0aframe-info\x03\0\x06\x02\x03\x02\x01X\x04\
+\0\x0ccamera-error\x03\0\x0b\x03\0\x18krate:camera/types@0.1.0\x05T\x02\x03\02\x0c\
+camera-error\x02\x03\02\x0bdevice-info\x02\x03\02\x05frame\x02\x03\02\x0aframe-i\
+nfo\x02\x03\02\x0dstream-config\x01B\x1d\x02\x03\x02\x01U\x04\0\x0ccamera-error\x03\
+\0\0\x02\x03\x02\x01V\x04\0\x0bdevice-info\x03\0\x02\x02\x03\x02\x01W\x04\0\x05f\
+rame\x03\0\x04\x02\x03\x02\x01X\x04\0\x0aframe-info\x03\0\x06\x02\x03\x02\x01Y\x04\
 \0\x0dstream-config\x03\0\x08\x01p\x03\x01j\x01\x0a\x01\x01\x01@\0\0\x0b\x04\0\x07\
 devices\x01\x0c\x01j\x01w\x01\x01\x01@\x02\x06devices\x06config\x09\0\x0d\x04\0\x04\
 open\x01\x0e\x01j\x01\x07\x01\x01\x01@\x01\x09stream-idw\0\x0f\x04\0\x04info\x01\
 \x10\x01j\0\x01\x01\x01@\x01\x09stream-idw\0\x11\x04\0\x05start\x01\x12\x04\0\x04\
 stop\x01\x12\x01k\x05\x01j\x01\x13\x01\x01\x01@\x01\x09stream-idw\0\x14\x04\0\x04\
-read\x01\x15\x04\0\x05close\x01\x12\x03\0\x1akrate:camera/capture@0.1.0\x05Y\x01\
+read\x01\x15\x04\0\x05close\x01\x12\x03\0\x1akrate:camera/capture@0.1.0\x05Z\x01\
 B\x12\x01r\x01\x04texts\x04\0\x0atranscript\x03\0\0\x01q\x05\x0finvalid-request\x01\
 s\0\x0fmodel-not-found\0\0\x0dmodel-invalid\x01s\0\x0bunsupported\x01s\0\x09infe\
 rence\x01s\0\x04\0\x0cspeech-error\x03\0\x02\x01m\x05\x0finvalid-request\x0fmode\
@@ -24721,13 +25428,13 @@ l-not-found\x0dmodel-invalid\x0bunsupported\x09inference\x04\0\x0bmatch-error\x0
 expecteds\0\x0a\x04\0\x0amatch-line\x01\x0b\x01k}\x01j\x01\x0c\x01\x05\x01@\x06\x0b\
 model-assets\x0apcm-s16-le\x06\x0bsample-ratey\x08language\x07\x08expecteds\x06f\
 inish\x7f\0\x0d\x04\0\x11match-line-stream\x01\x0e\x03\0\x20krate:speech/transcr\
-iption@0.1.0\x05Z\x01B\x12\x01r\x03\x02ids\x04names\x08languages\x04\0\x05voice\x03\
+iption@0.1.0\x05[\x01B\x12\x01r\x03\x02ids\x04names\x08languages\x04\0\x05voice\x03\
 \0\0\x01q\x04\x11permission-denied\0\0\x0finvalid-request\x01s\0\x0bunsupported\x01\
 s\0\x08platform\x01s\0\x04\0\x09say-error\x03\0\x02\x01p\x01\x01j\x01\x04\x01\x03\
 \x01@\0\0\x05\x04\0\x06voices\x01\x06\x01ks\x01kv\x01j\0\x01\x03\x01@\x03\x04tex\
 ts\x05voice\x07\x04rate\x08\0\x09\x04\0\x03say\x01\x0a\x01@\0\0\x09\x04\0\x04sto\
 p\x01\x0b\x01j\x01\x7f\x01\x03\x01@\0\0\x0c\x04\0\x08speaking\x01\x0d\x03\0\x1ck\
-rate:speech/synthesis@0.1.0\x05[\x01@\0\0z\x04\0\x03run\x01\\\x04\0\x13krate:app\
+rate:speech/synthesis@0.1.0\x05\\\x01@\0\0z\x04\0\x03run\x01]\x04\0\x13krate:app\
 /gui@0.2.0\x04\0\x0b\x09\x01\0\x03gui\x03\0\0\0G\x09producers\x01\x0cprocessed-b\
 y\x02\x0dwit-component\x070.227.1\x10wit-bindgen-rust\x060.41.0";
 

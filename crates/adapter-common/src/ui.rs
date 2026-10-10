@@ -1663,6 +1663,26 @@ impl PointerTracker {
 /// renderer consumes it, and this crate only carries it between them.
 pub type CanvasListHandle = std::sync::Arc<dyn std::any::Any + Send + Sync>;
 
+/// Why a Bluetooth call did not work (IC-917).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum BtError {
+    NotAllowed,
+    Unavailable,
+    NotFound,
+    Disconnected,
+    Failed(String),
+}
+
+/// A Bluetooth device the person picked, by the handle the host gave it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BtDevice {
+    pub handle: u64,
+    pub name: String,
+}
+
+/// A value a device sent on its own: service, characteristic, data.
+pub type BtNotification = (String, String, Vec<u8>);
+
 /// One fix of where the phone is (IC-917).
 #[derive(Clone, Copy, Debug, PartialEq, Default)]
 pub struct Position {
@@ -1978,6 +1998,67 @@ pub trait UiAdapter: WindowAdapter {
     fn haptic(&self, _feel: Option<HapticFeel>, _strength: f32) -> bool {
         false
     }
+
+    /// Whether this device has Bluetooth (IC-917).
+    fn bluetooth_available(&self) -> bool {
+        false
+    }
+
+    /// Show the platform's list of nearby devices offering `service` and
+    /// connect to the one the person picks; None when they cancel.
+    fn bluetooth_choose(
+        &self,
+        _window: WindowId,
+        _service: &str,
+        _title: &str,
+    ) -> Result<Option<BtDevice>, BtError> {
+        Err(BtError::Unavailable)
+    }
+
+    /// Read a characteristic of a picked device.
+    fn bluetooth_read(
+        &self,
+        _device: u64,
+        _service: &str,
+        _characteristic: &str,
+    ) -> Result<Vec<u8>, BtError> {
+        Err(BtError::Unavailable)
+    }
+
+    /// Write a characteristic of a picked device.
+    fn bluetooth_write(
+        &self,
+        _device: u64,
+        _service: &str,
+        _characteristic: &str,
+        _data: &[u8],
+        _with_response: bool,
+    ) -> Result<(), BtError> {
+        Err(BtError::Unavailable)
+    }
+
+    /// Be sent a characteristic's changes.
+    fn bluetooth_subscribe(
+        &self,
+        _device: u64,
+        _service: &str,
+        _characteristic: &str,
+    ) -> Result<(), BtError> {
+        Err(BtError::Unavailable)
+    }
+
+    /// Values sent since the last ask.
+    fn bluetooth_notifications(&self, _device: u64) -> Vec<BtNotification> {
+        Vec::new()
+    }
+
+    /// Whether a picked device is still connected.
+    fn bluetooth_connected(&self, _device: u64) -> bool {
+        false
+    }
+
+    /// Let a picked device go.
+    fn bluetooth_disconnect(&self, _device: u64) {}
 
     /// Whether this device can tell where it is (IC-917).
     fn location_available(&self) -> bool {

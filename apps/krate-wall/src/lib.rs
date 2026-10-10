@@ -298,6 +298,7 @@ fn describe(cap: &str) -> (String, gfx::Color) {
         "speech" | "speech.say" | "speech.listen" => ("Speech".to_string(), pink),
         "camera.capture" | "camera" => ("Camera".to_string(), gray),
         "location.read" => ("Where you are".to_string(), blue),
+        "bluetooth.connect" => ("Bluetooth devices you pick".to_string(), blue),
         "store.kv" | "store.sql" => ("Keep its data".to_string(), green),
         "store.shared" => ("Share data with people you invite".to_string(), green),
         "store.secret" => ("Keep secrets safe".to_string(), green),
@@ -365,6 +366,27 @@ fn ask_icon(canvas: u64, cap: &str, x: f32, y: f32) -> Result<(), gfx::GfxError>
             canvas2d::fill_round_rect(canvas, rect(x - 3.5, y - 8.0, 7.0, 3.5), radii(1.2), ink)?;
             canvas2d::fill_circle(canvas, p(x, y + 1.0), 4.2, color(0.56, 0.56, 0.58, 1.0))?;
             canvas2d::fill_circle(canvas, p(x, y + 1.0), 2.6, ink)?;
+        }
+        "bluetooth.connect" => {
+            // The Bluetooth rune: a stem, and two strokes crossing it to
+            // the arrowheads on the right.
+            let seg = |x0: f32, y0: f32, x1: f32, y1: f32| -> Result<(), gfx::GfxError> {
+                for i in 0..=10 {
+                    let t = i as f32 / 10.0;
+                    canvas2d::fill_circle(
+                        canvas,
+                        p(x0 + (x1 - x0) * t, y0 + (y1 - y0) * t),
+                        0.95,
+                        ink,
+                    )?;
+                }
+                Ok(())
+            };
+            seg(x, y - 8.0, x, y + 8.0)?;
+            seg(x, y - 8.0, x + 5.0, y - 4.0)?;
+            seg(x + 5.0, y - 4.0, x - 5.0, y + 4.0)?;
+            seg(x, y + 8.0, x + 5.0, y + 4.0)?;
+            seg(x + 5.0, y + 4.0, x - 5.0, y - 4.0)?;
         }
         "location.read" => {
             // A map pin: a round head over a point.

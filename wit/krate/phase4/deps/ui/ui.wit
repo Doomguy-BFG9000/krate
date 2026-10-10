@@ -874,6 +874,78 @@ interface location {
   current: func() -> result<position, location-error>;
 }
 
+/// A Bluetooth device the person picks: a heart-rate strap, a sensor, a
+/// light, a toy (IC-917). Bluetooth Low Energy, its services and
+/// characteristics named by their UUIDs ("180D", or the full form).
+///
+/// Behind `bluetooth.connect`. An app never scans: `choose` shows Krate's
+/// own list of nearby devices offering a service, the person taps one, and
+/// that one device -- only it, only for this run -- is the app's. The pick
+/// is the grant, as with a file.
+interface bluetooth {
+  /// A device the person picked.
+  record device {
+    /// The handle to pass to the calls below; good for this run only.
+    id: u64,
+    /// The name it gives itself, or "Unnamed device".
+    name: string,
+  }
+
+  /// A value a device sent on its own, after `subscribe`.
+  record notification {
+    /// The service it came from, as the app named it.
+    service: string,
+    /// The characteristic that changed, as the app named it.
+    characteristic: string,
+    /// Its new value.
+    data: list<u8>,
+  }
+
+  /// Why a Bluetooth call did not work.
+  variant bluetooth-error {
+    /// The person said no on Krate's sheet or the phone's prompt, or the
+    /// app did not declare `bluetooth.connect`.
+    not-allowed,
+    /// No Bluetooth here, or it is switched off.
+    unavailable,
+    /// No such device nearby, or the device has no such service or
+    /// characteristic.
+    not-found,
+    /// The device went out of range or was switched off: choose it again.
+    disconnected,
+    /// The device refused, in its own words.
+    failed(string),
+  }
+
+  /// Whether this device has Bluetooth at all.
+  available: func() -> bool;
+
+  /// Look for nearby devices offering `service`, show them in Krate's own
+  /// list under `title` ("Pick your heart-rate monitor"), and connect to
+  /// the one the person taps. None when they cancel.
+  choose: func(window: u64, service: string, title: string) -> result<option<device>, bluetooth-error>;
+
+  /// Read a characteristic's value once.
+  read: func(device: u64, service: string, characteristic: string) -> result<list<u8>, bluetooth-error>;
+
+  /// Write a characteristic's value; `with-response` waits for the device
+  /// to say it took it.
+  write: func(device: u64, service: string, characteristic: string, data: list<u8>, with-response: bool) -> result<_, bluetooth-error>;
+
+  /// Be sent a characteristic's value each time it changes (a heartbeat,
+  /// a reading); collect them with `notifications`.
+  subscribe: func(device: u64, service: string, characteristic: string) -> result<_, bluetooth-error>;
+
+  /// Every value sent since the last ask, oldest first.
+  notifications: func(device: u64) -> list<notification>;
+
+  /// Whether the device is still connected.
+  connected: func(device: u64) -> bool;
+
+  /// Let the device go. Closing the app does this too.
+  disconnect: func(device: u64);
+}
+
 /// The system's own text entry, for an app that draws its own text fields:
 /// a game's name box, an emulator, a canvas editor.
 ///

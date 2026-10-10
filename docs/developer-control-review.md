@@ -15,8 +15,8 @@ Developer ownership and control is the default (IC-175, IC-176). Krate enforces 
 
 ## Summary
 
-- 63 boundaries reviewed, 54 of them WIT interfaces (54 declared under wit/krate).
-- 35 compulsory, each with a justification or a recorded gap; 28 optional.
+- 64 boundaries reviewed, 55 of them WIT interfaces (55 declared under wit/krate).
+- 35 compulsory, each with a justification or a recorded gap; 29 optional.
 - 7 recorded gaps where the escape hatch does not yet exist or the boundary is narrower than a developer would want.
 
 ## Every boundary
@@ -59,6 +59,7 @@ Developer ownership and control is the default (IC-175, IC-176). Krate enforces 
 | `krate:store@0.1.0/sql` | wit | the same namespace rule for a database | schema, queries, whether to use SQL at all; any embedded database over fs/files under a grant | fs/files with the app's own database library | yes | os-safety |
 | `krate:time@0.1.0/clock` | wit | where the host clock is read | everything computed from it | none needed | no | -- |
 | `krate:time@0.1.0/sleep` | wit | a blocking sleep for CLI apps | scheduling, timers, event loops built on it or not | events/wait with a timeout in GUI apps | no | -- |
+| `krate:ui@0.1.0/bluetooth` | wit | Bluetooth LE reached only through a device the person picks in Krate's own list, then read, write, subscribe and notifications by service and characteristic UUID | which service to ask for, what to read and write, and what the values mean | none: bluetooth.connect is opt-in, and an app can never scan or reach a device the person did not pick | no | -- |
 | `krate:ui@0.1.0/clipboard` | wit | that the clipboard is the person's and reached through a grant | what is put on it | none: the clipboard is the host's | yes | recipient-permission |
 | `krate:ui@0.1.0/dialog` | wit | that a path outside the grants is chosen by the person in a system dialog, never named by the app | when to ask, what to do with the answer | none: this is how the person's authority reaches the app | yes | recipient-permission |
 | `krate:ui@0.1.0/events` | wit | that input arrives from the host, one event at a time, in the person's own order | what every event means | none: input is the host's to deliver | yes | platform |

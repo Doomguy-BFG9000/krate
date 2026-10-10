@@ -1592,14 +1592,30 @@ fn inspect_content(path: &str, text: &str, analysis: &mut Analysis) {
     );
     detect_pattern(
         analysis,
+        "bluetooth",
+        &[
+            "corebluetooth",
+            "cbcentralmanager",
+            "web bluetooth",
+            "navigator.bluetooth",
+            "bluetoothgatt",
+            "btleplug",
+            "bleak",
+        ],
+        path,
+        text,
+        Severity::Change,
+        "Bluetooth devices",
+        "Reach Bluetooth LE devices through Krate bluetooth.connect: the app never scans -- krate::ui::bluetooth::choose(win, service, title) shows Krate's own list of nearby devices offering the service and connects to the one the person taps. Then read, write and subscribe by service and characteristic UUID, and collect notifications each frame. Handle Disconnected by offering to choose again.",
+        Some("bluetooth.connect"),
+    );
+    detect_pattern(
+        analysis,
         "hardware",
         &[
             "serialport",
             "libusb",
             "hidapi",
-            "corebluetooth",
-            "web bluetooth",
-            "navigator.bluetooth",
             "videocapturedevice",
             "avcapturevideo",
             "camera",

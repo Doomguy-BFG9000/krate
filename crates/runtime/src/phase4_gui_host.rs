@@ -403,6 +403,105 @@ impl ui4::haptics::Host for Phase3GuiHost {
     }
 }
 
+/// Bluetooth devices the person picks (IC-917). Phase 4 only, behind
+/// `bluetooth.connect`.
+impl ui4::bluetooth::Host for Phase3GuiHost {
+    fn available(&mut self) -> wasmtime::Result<bool> {
+        Ok(self.bluetooth_available())
+    }
+
+    fn choose(
+        &mut self,
+        window: u64,
+        service: String,
+        title: String,
+    ) -> wasmtime::Result<Result<Option<ui4::bluetooth::Device>, ui4::bluetooth::BluetoothError>>
+    {
+        Ok(self
+            .bluetooth_choose(window, &service, &title)
+            .map(|picked| {
+                picked.map(|d| ui4::bluetooth::Device {
+                    id: d.handle,
+                    name: d.name,
+                })
+            })
+            .map_err(bt_error))
+    }
+
+    fn read(
+        &mut self,
+        device: u64,
+        service: String,
+        characteristic: String,
+    ) -> wasmtime::Result<Result<Vec<u8>, ui4::bluetooth::BluetoothError>> {
+        Ok(self
+            .bluetooth_read(device, &service, &characteristic)
+            .map_err(bt_error))
+    }
+
+    fn write(
+        &mut self,
+        device: u64,
+        service: String,
+        characteristic: String,
+        data: Vec<u8>,
+        with_response: bool,
+    ) -> wasmtime::Result<Result<(), ui4::bluetooth::BluetoothError>> {
+        Ok(self
+            .bluetooth_write(device, &service, &characteristic, &data, with_response)
+            .map_err(bt_error))
+    }
+
+    fn subscribe(
+        &mut self,
+        device: u64,
+        service: String,
+        characteristic: String,
+    ) -> wasmtime::Result<Result<(), ui4::bluetooth::BluetoothError>> {
+        Ok(self
+            .bluetooth_subscribe(device, &service, &characteristic)
+            .map_err(bt_error))
+    }
+
+    fn notifications(
+        &mut self,
+        device: u64,
+    ) -> wasmtime::Result<Vec<ui4::bluetooth::Notification>> {
+        Ok(self
+            .bluetooth_notifications(device)
+            .into_iter()
+            .map(
+                |(service, characteristic, data)| ui4::bluetooth::Notification {
+                    service,
+                    characteristic,
+                    data,
+                },
+            )
+            .collect())
+    }
+
+    fn connected(&mut self, device: u64) -> wasmtime::Result<bool> {
+        Ok(self.bluetooth_connected(device))
+    }
+
+    fn disconnect(&mut self, device: u64) -> wasmtime::Result<()> {
+        self.bluetooth_disconnect(device);
+        Ok(())
+    }
+}
+
+fn bt_error(error: krate_adapter_common::ui::BtError) -> ui4::bluetooth::BluetoothError {
+    use krate_adapter_common::ui::BtError;
+    use ui4::bluetooth::BluetoothError;
+    match error {
+        BtError::NotAllowed => BluetoothError::NotAllowed,
+        BtError::Unavailable => BluetoothError::Unavailable,
+        BtError::NotFound => BluetoothError::NotFound,
+        BtError::Disconnected => BluetoothError::Disconnected,
+        BtError::Failed(why) => BluetoothError::Failed(why),
+    }
+}
+
 /// Where the phone is (IC-917). Phase 4 only, behind `location.read`.
 impl ui4::location::Host for Phase3GuiHost {
     fn available(&mut self) -> wasmtime::Result<bool> {

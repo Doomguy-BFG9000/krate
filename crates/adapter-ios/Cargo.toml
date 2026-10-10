@@ -52,6 +52,7 @@ objc2-ui-kit = { version = "0.3.2", default-features = false, features = [
     "std",
     "UIApplication",
     "UIDevice",
+    "UIAlertController",
     "UIDocumentPickerViewController",
     "UIFeedbackGenerator",
     "UIImpactFeedbackGenerator",

@@ -26,6 +26,8 @@ use std::time::Duration;
 /// Host family handled by this adapter crate.
 pub const HOST_FAMILY: &str = "ios";
 
+#[cfg(target_os = "ios")]
+mod bluetooth;
 /// Linux Phase 3 UI adapter entry point.
 ///
 /// This is still a headless draft adapter. It proves the Linux crate exposes
@@ -534,6 +536,71 @@ impl UiAdapter for IosUikitPrototypeUiAdapter {
         filter: &str,
     ) -> Option<std::path::PathBuf> {
         uikit_native::choose_path(folder, filter)
+    }
+
+    #[cfg(target_os = "ios")]
+    fn bluetooth_available(&self) -> bool {
+        bluetooth::available()
+    }
+
+    #[cfg(target_os = "ios")]
+    fn bluetooth_choose(
+        &self,
+        _window: WindowId,
+        service: &str,
+        title: &str,
+    ) -> Result<Option<krate_adapter_common::ui::BtDevice>, krate_adapter_common::ui::BtError> {
+        bluetooth::choose(service, title)
+    }
+
+    #[cfg(target_os = "ios")]
+    fn bluetooth_read(
+        &self,
+        device: u64,
+        service: &str,
+        characteristic: &str,
+    ) -> Result<Vec<u8>, krate_adapter_common::ui::BtError> {
+        bluetooth::read(device, service, characteristic)
+    }
+
+    #[cfg(target_os = "ios")]
+    fn bluetooth_write(
+        &self,
+        device: u64,
+        service: &str,
+        characteristic: &str,
+        data: &[u8],
+        with_response: bool,
+    ) -> Result<(), krate_adapter_common::ui::BtError> {
+        bluetooth::write(device, service, characteristic, data, with_response)
+    }
+
+    #[cfg(target_os = "ios")]
+    fn bluetooth_subscribe(
+        &self,
+        device: u64,
+        service: &str,
+        characteristic: &str,
+    ) -> Result<(), krate_adapter_common::ui::BtError> {
+        bluetooth::subscribe(device, service, characteristic)
+    }
+
+    #[cfg(target_os = "ios")]
+    fn bluetooth_notifications(
+        &self,
+        device: u64,
+    ) -> Vec<krate_adapter_common::ui::BtNotification> {
+        bluetooth::notifications(device)
+    }
+
+    #[cfg(target_os = "ios")]
+    fn bluetooth_connected(&self, device: u64) -> bool {
+        bluetooth::connected(device)
+    }
+
+    #[cfg(target_os = "ios")]
+    fn bluetooth_disconnect(&self, device: u64) {
+        bluetooth::disconnect(device)
     }
 
     fn location_available(&self) -> bool {

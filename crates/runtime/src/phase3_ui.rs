@@ -611,6 +611,12 @@ impl<'a> Phase3UiDispatcher<'a> {
         self.adapter.haptic(feel, strength)
     }
 
+    /// The adapter, for the Bluetooth calls (IC-917), which pass through
+    /// as they are.
+    pub fn bluetooth(&self) -> &dyn krate_adapter_common::ui::UiAdapter {
+        self.adapter
+    }
+
     /// Whether the device can tell where it is (IC-917).
     pub fn location_available(&self) -> bool {
         self.adapter.location_available()

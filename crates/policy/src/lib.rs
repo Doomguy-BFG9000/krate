@@ -545,6 +545,7 @@ pub fn reaches_outside_the_run(cap: &Capability) -> bool {
         "audio.capture",
         "camera.capture",
         "location.read",
+        "bluetooth.connect",
         // The person's attention, data, and machine outside the sandbox.
         "ui.notify",
         "ui.open-url",
@@ -1532,6 +1533,7 @@ mod tests {
             "audio.capture",
             "camera.capture",
             "location.read",
+            "bluetooth.connect",
             "ui.notify",
             "ui.open-url",
             "ui.clipboard:read",
@@ -1580,6 +1582,7 @@ mod tests {
             "audio.capture",
             "camera.capture",
             "location.read",
+            "bluetooth.connect",
             "ui.notify",
             "ui.open-url",
             "ui.clipboard",

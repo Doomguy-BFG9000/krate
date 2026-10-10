@@ -7,8 +7,80 @@
 
 #![allow(clippy::too_many_arguments)]
 
-/// `krate:ui`: clipboard, dialog, events, haptics, image, launcher, location, menu, motion, notify, pointer, print, screen, text_entry, touch, tree, window.
+/// `krate:ui`: bluetooth, clipboard, dialog, events, haptics, image, launcher, location, menu, motion, notify, pointer, print, screen, text_entry, touch, tree, window.
 pub mod ui {
+    /// `krate:ui/bluetooth`.
+    pub mod bluetooth {
+        pub use crate::bindings::krate::ui::bluetooth::{BluetoothError, Device, Notification};
+
+        /// Whether this device has Bluetooth at all.
+        pub fn available() -> bool {
+            crate::bindings::krate::ui::bluetooth::available()
+        }
+
+        /// Look for nearby devices offering `service`, show them in Krate's own
+        /// list under `title` ("Pick your heart-rate monitor"), and connect to
+        /// the one the person taps. None when they cancel.
+        pub fn choose(
+            window: u64,
+            service: &str,
+            title: &str,
+        ) -> Result<Option<Device>, BluetoothError> {
+            crate::bindings::krate::ui::bluetooth::choose(window, service, title)
+        }
+
+        /// Read a characteristic's value once.
+        pub fn read(
+            device: u64,
+            service: &str,
+            characteristic: &str,
+        ) -> Result<alloc::vec::Vec<u8>, BluetoothError> {
+            crate::bindings::krate::ui::bluetooth::read(device, service, characteristic)
+        }
+
+        /// Write a characteristic's value; `with-response` waits for the device
+        /// to say it took it.
+        pub fn write(
+            device: u64,
+            service: &str,
+            characteristic: &str,
+            data: &[u8],
+            with_response: bool,
+        ) -> Result<(), BluetoothError> {
+            crate::bindings::krate::ui::bluetooth::write(
+                device,
+                service,
+                characteristic,
+                data,
+                with_response,
+            )
+        }
+
+        /// Be sent a characteristic's value each time it changes (a heartbeat,
+        /// a reading); collect them with `notifications`.
+        pub fn subscribe(
+            device: u64,
+            service: &str,
+            characteristic: &str,
+        ) -> Result<(), BluetoothError> {
+            crate::bindings::krate::ui::bluetooth::subscribe(device, service, characteristic)
+        }
+
+        /// Every value sent since the last ask, oldest first.
+        pub fn notifications(device: u64) -> alloc::vec::Vec<Notification> {
+            crate::bindings::krate::ui::bluetooth::notifications(device)
+        }
+
+        /// Whether the device is still connected.
+        pub fn connected(device: u64) -> bool {
+            crate::bindings::krate::ui::bluetooth::connected(device)
+        }
+
+        /// Let the device go. Closing the app does this too.
+        pub fn disconnect(device: u64) {
+            crate::bindings::krate::ui::bluetooth::disconnect(device)
+        }
+    }
     /// `krate:ui/clipboard`.
     pub mod clipboard {
         pub use crate::bindings::krate::ui::clipboard::UiError;

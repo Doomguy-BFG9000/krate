@@ -6378,6 +6378,87 @@ fn an_app_taps_back_on_a_phone_and_a_computer_says_it_cannot() {
     );
 }
 
+/// An app reaches a Bluetooth device only through the person's pick, and
+/// only when allowed (krate:ui/bluetooth behind bluetooth.connect, IC-917).
+///
+/// `bluetooth-probe.wasm` is apps/krate-bluetooth-probe built ("Heart").
+/// With KRATE_BLUETOOTH=heart a stand-in heart-rate strap is nearby: the
+/// app picks it, subscribes to its measurement, reads a beat and the
+/// battery. Not granted -- not even declared -- it hears not-allowed though
+/// the strap is there. A computer with no Bluetooth says unavailable.
+#[test]
+fn an_app_reaches_a_bluetooth_device_only_when_allowed() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let wasm = dir.path().join("code.wasm");
+    std::fs::write(&wasm, include_bytes!("fixtures/bluetooth-probe.wasm")).expect("probe");
+    let manifest = |with_bluetooth: bool| {
+        let path = dir.path().join(if with_bluetooth {
+            "with.toml"
+        } else {
+            "without.toml"
+        });
+        let bluetooth = if with_bluetooth {
+            "[[capabilities]]\ncap = \"bluetooth.connect\"\nrationale = \"heart rate\"\nrequired = true\n\n"
+        } else {
+            ""
+        };
+        std::fs::write(
+            &path,
+            format!(
+                "[app]\nid = \"dev.krate.bluetooth-probe\"\nname = \"Heart\"\nversion = \"1.0.0\"\n\
+                 entry = \"code.wasm\"\nworld = \"krate:app/gui@0.2.0\"\n\n\
+                 [[capabilities]]\ncap = \"ui.window:create\"\nrationale = \"window\"\nrequired = true\n\n\
+                 {bluetooth}\
+                 [[capabilities]]\ncap = \"io.stdout\"\nrationale = \"print\"\nrequired = true\n\n\
+                 [[capabilities]]\ncap = \"io.args\"\nrationale = \"args\"\nrequired = true\n"
+            ),
+        )
+        .expect("manifest");
+        path
+    };
+    let run = |manifest: &std::path::Path, strap: bool| -> String {
+        let mut cmd = krate();
+        cmd.arg("run")
+            .arg("--headless")
+            .arg(&wasm)
+            .arg("--manifest")
+            .arg(manifest)
+            .arg("--auto-grant")
+            .arg("--")
+            .arg("quick")
+            .env_remove("KRATE_BLUETOOTH");
+        if strap {
+            cmd.env("KRATE_BLUETOOTH", "heart");
+        }
+        let out = cmd.output().expect("run");
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+    let with = manifest(true);
+    let without = manifest(false);
+    let picked = run(&with, true);
+    assert!(
+        picked
+            .lines()
+            .any(|l| l == "bluetooth:Test Heart subscribed=yes bpm=72 battery=87"),
+        "a granted app picks the strap and reads it: {picked}"
+    );
+    let refused = run(&without, true);
+    assert!(
+        refused.lines().any(|l| l == "bluetooth:not-allowed"),
+        "an app never granted bluetooth.connect hears not-allowed, strap or no strap: {refused}"
+    );
+    let computer = run(&with, false);
+    assert!(
+        computer.lines().any(|l| l == "bluetooth:unavailable"),
+        "a computer with no Bluetooth says so: {computer}"
+    );
+}
+
 /// An app learns where the phone is only when the person allowed it
 /// (krate:ui/location behind location.read, IC-917).
 ///

@@ -215,6 +215,9 @@ const KRATE_CAPABILITY_SPECS: &[CapabilitySpec] = &[
     // the camera, and the phone asks too -- its own prompt is the second,
     // unfakeable signal, and its location arrow shows while it is read.
     CapabilitySpec::resource_free(CapabilityPhase::Phase3, "location", "read", false),
+    // Bluetooth devices the person picks (IC-917): opt-in, and even granted
+    // an app reaches only the one device the person taps in Krate's list.
+    CapabilitySpec::resource_free(CapabilityPhase::Phase3, "bluetooth", "connect", false),
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
