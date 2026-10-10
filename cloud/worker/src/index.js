@@ -2571,6 +2571,9 @@ P.S. If you get stuck, here\u2019s a 3-minute demo of making an app from scratch
 `;
 }
 
+// For scripts/send-welcome-test.mjs: the exact note, sent by hand.
+export { welcomeText, WELCOME_FROM, WELCOME_REPLY_TO, WELCOME_SUBJECT };
+
 /// Send the welcomes that are due: each at most once (the account records
 /// that it was welcomed before the due mark is dropped), twenty a run.
 async function sendDueWelcomes(env, now = Date.now()) {
