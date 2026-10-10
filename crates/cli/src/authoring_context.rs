@@ -889,7 +889,12 @@ buffer_frames: 1024 })`. For effects, synthesize or embed short PCM, load \
 once with `load_sound(stream, &bytes)`, then `play_sound(stream, handle, \
 1.0)` on the frame it happens -- it mixes, returns immediately, and playing \
 it again overlaps a second copy. A dozen lines of generated square-wave PCM \
-makes a click, a beep, a hit; no asset files needed.\n\n\
+makes a click, a beep, a hit; no asset files needed. The handle \
+`load_sound` returns is never 0: keep it exactly as returned and pass it \
+back unchanged -- a cache that stores `handle + 1` and plays `slot - 1` \
+plays nothing at all, silently, because `play_sound`'s error is easy to \
+drop. Music is the same calls: render each note once, then play the \
+handles on a step clock.\n\n\
 **Microphone** (`audio.capture`, an explicit ask -- the person sees \
 \"record from the microphone\"): same `open` shape on \
 `audio::capture` with `sample_rate: 16_000, channels: 1, format: PcmS16`, \

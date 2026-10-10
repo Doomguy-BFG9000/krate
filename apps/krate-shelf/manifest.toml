@@ -18,3 +18,8 @@ required = true
 cap = "io.args"
 rationale = "Draw once and stop when checked"
 required = false
+
+[[capabilities]]
+cap = "audio.playback"
+rationale = "Play the records"
+required = true

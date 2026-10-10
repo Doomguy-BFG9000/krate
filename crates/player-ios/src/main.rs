@@ -154,7 +154,26 @@ mod player {
         Received(PathBuf),
     }
 
+    /// Krate's sound is media the person chose to start: it plays with the
+    /// phone's silent switch on, as a music app's does. Left alone, iOS's
+    /// default session is silenced by the switch -- Shelf played every note
+    /// into a muted session and the person heard nothing.
+    fn audio_session() {
+        // SAFETY: the shared session exists for the life of the process;
+        // setting a category and activating it are ordinary session calls.
+        unsafe {
+            let session = objc2_avf_audio::AVAudioSession::sharedInstance();
+            if let Some(playback) = objc2_avf_audio::AVAudioSessionCategoryPlayback {
+                if let Err(why) = session.setCategory_error(playback) {
+                    eprintln!("krate: audio session category refused: {why:?}");
+                }
+            }
+            let _ = session.setActive_error(true);
+        }
+    }
+
     fn run_player() {
+        audio_session();
         let data_root = std::env::var("HOME")
             .map(|home| PathBuf::from(home).join("Documents"))
             .unwrap_or_else(|_| PathBuf::from("."));

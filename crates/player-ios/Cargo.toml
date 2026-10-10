@@ -30,6 +30,13 @@ objc2 = "0.6.4"
 libc = "0.2"
 block2 = "0.6"
 dispatch2 = "0.3"
+# The audio session: sound plays with the silent switch on, as a music
+# app's does.
+objc2-avf-audio = { version = "0.3.2", default-features = false, features = [
+    "std",
+    "AVAudioSession",
+    "AVAudioSessionTypes",
+] }
 # The store: the hub's catalogue and apps over TLS, its screenshots decoded.
 ureq.workspace = true
 serde_json.workspace = true
