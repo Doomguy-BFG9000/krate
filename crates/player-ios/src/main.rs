@@ -627,9 +627,19 @@ mod player {
 
         let sandbox = data_root.join("apps").join(sanitize(&manifest.app.id));
         let _ = std::fs::create_dir_all(&sandbox);
+        // The app's key-value store and database: the runtime opens them only
+        // when told where, and the phone players never said, so every
+        // store.kv and store.sql call was refused and a recipe book made in
+        // Studio quit at start. Kept beside the sandbox, not in it, as on a
+        // desktop: the app names keys, never files.
+        let stores = data_root.join("stores");
+        let _ = std::fs::create_dir_all(&stores);
+        let store = stores.join(format!("{}.kv", sanitize(&manifest.app.id)));
         let mut config = krate_runtime::Config {
             session_policy: krate_policy::SessionPolicy::from_grants(kept),
             sandbox_root: sandbox,
+            app_store_path: Some(store.clone()),
+            app_database_path: Some(store.with_extension("sqlite")),
             bundle_assets_root: assets_root,
             phase3_ui_mode: krate_runtime::phase3_ui::Phase3HostUiMode::NativePrototype,
             ..Default::default()

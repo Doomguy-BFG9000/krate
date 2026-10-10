@@ -37,7 +37,16 @@ pub struct ScreenFacts {
     pub off_edge: Vec<(String, f32)>,
     /// How many strings were drawn on the screen.
     pub texts: usize,
+    /// Visible text drawn over other visible text: the two strings. A
+    /// sidebar's button drawn across its own list did this on a turned phone
+    /// (an AI-made music player, 2026-10-10).
+    #[serde(default)]
+    pub overlaps: Vec<(String, String)>,
 }
+
+/// Two strings sharing at least this much of the smaller one's box are one
+/// on top of the other, not neighbours whose descenders touch.
+pub const MIN_OVERLAP: f32 = 0.4;
 
 /// Fully transparent text cannot be read, so it cannot be too small.
 fn is_invisible(color: u32) -> bool {
@@ -100,8 +109,10 @@ pub fn measure(
         (bl, bt, br, bb)
     };
     let mut clip: Option<(f32, f32, f32, f32)> = None;
-    // Visible strings, for naming a cut box by what it holds.
+    // Visible strings, for naming a cut box by what it holds, and the box
+    // each one takes for finding text drawn over text.
     let mut shown: Vec<((f32, f32), String)> = Vec::new();
+    let mut boxes: Vec<((f32, f32, f32, f32), String)> = Vec::new();
     let mut cut_boxes: Vec<((f32, f32, f32, f32), f32)> = Vec::new();
     for op in ops {
         if let CanvasOp::SetClip(rect) = op {
@@ -150,6 +161,10 @@ pub fn measure(
             }
             facts.texts += 1;
             shown.push((*origin, text.clone()));
+            boxes.push((
+                (left.max(bl), top.max(bt), right.min(br), bottom.min(bb)),
+                text.clone(),
+            ));
             let on_screen = font_size * k;
             if facts
                 .smallest_text
@@ -161,6 +176,21 @@ pub fn measure(
             let past = (bl - left).max(right - br);
             if past > 2.0 {
                 facts.off_edge.push((text.clone(), past * k));
+            }
+        }
+    }
+    for i in 0..boxes.len() {
+        for j in (i + 1)..boxes.len() {
+            let ((al, at, ar, ab), a) = &boxes[i];
+            let ((bl2, bt2, br2, bb2), b) = &boxes[j];
+            let w = ar.min(*br2) - al.max(*bl2);
+            let h = ab.min(*bb2) - at.max(*bt2);
+            if w <= 0.0 || h <= 0.0 {
+                continue;
+            }
+            let smaller = ((ar - al) * (ab - at)).min((br2 - bl2) * (bb2 - bt2));
+            if smaller > 0.0 && w * h / smaller >= MIN_OVERLAP {
+                facts.overlaps.push((a.clone(), b.clone()));
             }
         }
     }
@@ -228,6 +258,19 @@ pub fn fault(name: &str, facts: &ScreenFacts) -> Option<String> {
             } else {
                 format!("\"{}\"", short(text))
             },
+            if more > 0 {
+                format!(" (and {more} more)")
+            } else {
+                String::new()
+            }
+        ));
+    }
+    if let Some((a, b)) = facts.overlaps.first() {
+        let more = facts.overlaps.len() - 1;
+        found.push(format!(
+            "\"{}\" is drawn over \"{}\"{}",
+            short(a),
+            short(b),
             if more > 0 {
                 format!(" (and {more} more)")
             } else {
@@ -364,6 +407,37 @@ mod tests {
         assert_eq!(facts.off_edge[0].0, "the box holding Tue");
         let fault = fault("a phone", &facts).unwrap();
         assert!(fault.contains("the box holding \"Tue\" is cut"), "{fault}");
+    }
+
+    #[test]
+    fn text_drawn_over_text_is_a_fault_and_neighbours_are_not() {
+        // A sidebar button's label drawn across a list row's, and two rows
+        // whose descenders brush.
+        let ops = vec![
+            text(20.0, 120.0, 16.0, "Choose Folder"),
+            text(24.0, 122.0, 16.0, "Now Playing"),
+            text(20.0, 200.0, 16.0, "Albums"),
+            text(20.0, 219.0, 16.0, "Artists"),
+        ];
+        let facts = measure(&ops, (844.0, 390.0), (844.0, 390.0), None);
+        assert_eq!(facts.overlaps.len(), 1, "{facts:?}");
+        let fault = fault("a phone turned sideways", &facts).unwrap();
+        assert!(
+            fault.contains("\"Choose Folder\" is drawn over \"Now Playing\""),
+            "{fault}"
+        );
+    }
+
+    #[test]
+    fn text_clipped_away_cannot_overlap() {
+        let ops = vec![
+            text(20.0, 120.0, 16.0, "Visible row"),
+            CanvasOp::SetClip(Some((0.0, 200.0, 390.0, 300.0))),
+            text(20.0, 121.0, 16.0, "Scrolled away"),
+            CanvasOp::SetClip(None),
+        ];
+        let facts = measure(&ops, (390.0, 844.0), (390.0, 844.0), None);
+        assert!(facts.overlaps.is_empty(), "{facts:?}");
     }
 
     #[test]
