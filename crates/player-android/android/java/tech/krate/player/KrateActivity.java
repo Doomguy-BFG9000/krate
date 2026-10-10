@@ -543,6 +543,31 @@ public class KrateActivity extends NativeActivity {
         return Photos.save(this, data);
     }
 
+    /** Set a reminder (krate:ui/reminders); null once set, else why not. */
+    public String krateRemind(String id, String sender, String title, String body,
+            long afterSeconds, boolean daily, String opens) {
+        return Reminder.schedule(this, id, sender, title, body, afterSeconds, daily, opens);
+    }
+
+    public void krateRemindCancel(String id) {
+        Reminder.cancel(this, id);
+    }
+
+    public String[] krateRemindPending(String prefix) {
+        return Reminder.pending(this, prefix);
+    }
+
+    /**
+     * Krate runs one app at a time in one activity (singleTask): a link, a
+     * file or a reminder tapped while it runs comes here rather than starting
+     * a second player beside the first.
+     */
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        Log.i(TAG, "opened again while running: " + intent.getAction());
+    }
+
     /** Write the file at path into the document at uri; true when it all went. */
     public boolean krateCopyOut(String path, String uri) {
         return Documents.copyOut(this, path, Uri.parse(uri));

@@ -88,6 +88,10 @@ mod player {
         // The extracted bundle dir is removed on drop, and the runtime
         // reads assets from it during the run -- it must live to the end.
         let mut _opened_bundle = None;
+        // The bundle as it came, kept so a reminder tapped later can open
+        // this app again (IC-921): a link may be offline by then, and a
+        // file's grant from the app that sent it does not last.
+        let mut kept_bytes: Option<Vec<u8>> = None;
 
         match target {
             Some(uri) => {
@@ -112,6 +116,7 @@ mod player {
                         }
                     }
                 };
+                kept_bytes = Some(bytes.clone());
                 let open = match krate_bundle::open_reader(Cursor::new(bytes)) {
                     Ok(open) => open,
                     Err(err) => {
@@ -201,6 +206,18 @@ mod player {
             phase3_ui_mode: krate_runtime::phase3_ui::Phase3HostUiMode::NativePrototype,
             ..Default::default()
         };
+        // Which app runs, for its reminders: their ids carry its id, and a
+        // tapped one opens the copy kept here.
+        let opens = kept_bytes
+            .and_then(|bytes| {
+                let kept = data_root.join("kept");
+                let _ = std::fs::create_dir_all(&kept);
+                let path = kept.join(format!("{}.krate", sanitize(&manifest.app.id)));
+                std::fs::write(&path, bytes).ok()?;
+                Some(format!("file://{}", path.display()))
+            })
+            .unwrap_or_default();
+        krate_adapter_android::reminders::set_current_app(Some((manifest.app.id.clone(), opens)));
         let runtime = match krate_runtime::Runtime::new(&config) {
             Ok(runtime) => runtime,
             Err(err) => {

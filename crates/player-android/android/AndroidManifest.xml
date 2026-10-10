@@ -37,6 +37,11 @@
   <uses-permission android:name="android.permission.CAMERA" />
   <uses-permission android:name="android.permission.RECORD_AUDIO" />
   <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+  <!-- krate:ui/reminders: alarms at the time asked (when the person allows
+       "Alarms & reminders" for Krate; otherwise Android picks a time close
+       by), and set again after the phone restarts. -->
+  <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+  <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
   <!-- krate:ui/photos save, for an app allowed photos.add: from Android 10
        adding to Pictures needs no permission; before, it needs this. -->
   <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
@@ -63,6 +68,7 @@
     <activity
         android:name="tech.krate.player.KrateActivity"
         android:exported="true"
+        android:launchMode="singleTask"
         android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|density">
       <meta-data android:name="android.app.lib_name" android:value="krate_player" />
       <intent-filter>
@@ -95,6 +101,13 @@
         <data android:scheme="file" android:mimeType="*/*" android:pathPattern=".*\\.krate" />
       </intent-filter>
     </activity>
+    <!-- krate:ui/reminders: posts a reminder when its alarm comes, and sets
+         them all again when the phone restarts. -->
+    <receiver android:name="tech.krate.player.Reminder" android:exported="false">
+      <intent-filter>
+        <action android:name="android.intent.action.BOOT_COMPLETED" />
+      </intent-filter>
+    </receiver>
     <!-- Files an app shares (krate:ui/share), read-only, to the one app the
          person picked in the share sheet. -->
     <provider

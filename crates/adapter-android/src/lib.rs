@@ -43,6 +43,7 @@ mod location;
 mod motion;
 pub mod phone;
 mod photos;
+pub mod reminders;
 mod share;
 
 #[derive(Debug, Default)]
@@ -628,6 +629,30 @@ impl UiAdapter for AndroidWinitPrototypeUiAdapter {
         filter: &str,
     ) -> Option<std::path::PathBuf> {
         documents::choose(folder, filter)
+    }
+
+    /// A reminder that comes with the app closed (IC-921).
+    #[cfg(target_os = "android")]
+    fn reminder_schedule(
+        &self,
+        id: &str,
+        sender: &str,
+        title: &str,
+        body: &str,
+        after_seconds: u64,
+        daily: bool,
+    ) -> Result<(), String> {
+        reminders::schedule(id, sender, title, body, after_seconds, daily)
+    }
+
+    #[cfg(target_os = "android")]
+    fn reminder_cancel(&self, id: &str) {
+        reminders::cancel(id)
+    }
+
+    #[cfg(target_os = "android")]
+    fn reminder_pending(&self) -> Vec<String> {
+        reminders::pending()
     }
 
     /// The system's photo picker; the photos picked, copied in (IC-920).
