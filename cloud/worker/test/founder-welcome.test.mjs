@@ -18,6 +18,10 @@ import worker from "../src/index.js";
 const KV = new Map();
 const env = {
   PUBLIC_BASE: "https://hub.test",
+  // The automatic welcome is off unless switched on; these first tests
+  // switch it on. The founder's own way is the notification and the desk.
+  WELCOME_AUTO: "1",
+  KRATE_ADMINS: "boss",
   GITHUB_CLIENT_SECRET: "gh-secret",
   RESEND_API_KEY: "resend-key",
   APPS: {
@@ -29,6 +33,7 @@ const env = {
 };
 
 const mailed = [];
+const notified = [];
 let githubUser = { id: 41, login: "ada", name: "Ada Lovelace", email: "ada@example.com" };
 const realFetch = globalThis.fetch;
 globalThis.fetch = async (input, init = {}) => {
@@ -38,7 +43,9 @@ globalThis.fetch = async (input, init = {}) => {
   if (url === "https://api.github.com/user") return reply(githubUser);
   if (url === "https://api.github.com/user/emails") return reply([{ email: githubUser.email, primary: true, verified: true }]);
   if (url === "https://api.resend.com/emails") {
-    mailed.push(JSON.parse(init.body));
+    const mail = JSON.parse(init.body);
+    // The founder's sign-up notifications are kept apart from welcomes.
+    (mail.subject && mail.subject.startsWith("New on Krate:") ? notified : mailed).push(mail);
     return reply({ id: "sent" });
   }
   return realFetch(input, init);
@@ -185,4 +192,63 @@ test("a wrong app password leaves the welcome due, to try again", async () => {
   await worker.scheduled({ cron: "*/10 * * * *" }, gmailEnv);
   assert.equal(KV.get("welcome-due:due-person"), "1000", "still due");
   assert.equal(JSON.parse(KV.get("user:due-person")).welcomed, undefined, "not marked welcomed");
+});
+
+
+test("a sign-up tells the founder at once, with the welcome ready in Gmail; nothing goes by itself", async () => {
+  const offEnv = { ...env, WELCOME_AUTO: undefined };
+  githubUser = { id: 44, login: "katherine", name: "Katherine Johnson", email: "kj@example.com" };
+  const before = notified.length;
+  const ctx = { waitUntil() {} };
+  const start = await worker.fetch(new Request("https://hub.test/login/start"), offEnv, ctx);
+  const state = new URL(start.headers.get("location")).searchParams.get("state");
+  await worker.fetch(new Request(`https://hub.test/login/callback?state=${state}&code=abc`), offEnv, ctx);
+  assert.equal(notified.length, before + 1, "the founder hears straight away");
+  const note = notified[notified.length - 1];
+  assert.deepEqual(note.to, ["incyashraj@gmail.com", "yashraj@krate.tech"]);
+  assert.equal(note.subject, "New on Krate: Katherine Johnson");
+  assert.ok(note.text.includes("Email:  kj@example.com"));
+  assert.ok(note.text.includes("Signed in with: github"));
+  const compose = new URL(note.text.match(/https:\/\/mail\.google\.com\/mail\/\S+/)[0]);
+  assert.equal(compose.searchParams.get("to"), "kj@example.com");
+  assert.equal(compose.searchParams.get("cc"), "yashraj@krate.tech");
+  assert.equal(compose.searchParams.get("authuser"), "incyashraj@gmail.com");
+  assert.equal(compose.searchParams.get("su"), "You\u2019re in. One question from me");
+  assert.ok(compose.searchParams.get("body").startsWith("Hi Katherine,\n"));
+  // Nothing marked due, and the ten-minute run sends nothing.
+  const id = [...KV.entries()].find(([k, v]) => k.startsWith("user:") && v.includes("kj@example.com"))[0].slice(5);
+  assert.equal(KV.get(`welcome-due:${id}`), undefined, "no automatic welcome queued");
+  const welcomesBefore = mailed.length;
+  const real = Date.now;
+  const later = Date.now() + 30 * 60 * 1000;
+  Date.now = () => later;
+  await worker.scheduled({ cron: "*/10 * * * *" }, offEnv).finally(() => {
+    Date.now = real;
+  });
+  assert.equal(mailed.length, welcomesBefore, "the founder writes them; nothing goes by itself");
+});
+
+test("the desk lists who is waiting for a welcome, and marks them welcomed", async () => {
+  KV.set("session:krs_admin", "a1");
+  KV.set("user:a1", JSON.stringify({ id: "a1", login: "boss", name: "Boss" }));
+  const as = (path, init = {}) =>
+    worker.fetch(
+      new Request(`https://hub.test${path}`, {
+        ...init,
+        headers: { authorization: "Bearer krs_admin", "content-type": "application/json" },
+      }),
+      env,
+      { waitUntil() {} },
+    );
+  const list = await (await as("/admin/api/welcomes")).json();
+  const kj = list.people.find((p) => p.email === "kj@example.com");
+  assert.ok(kj && !kj.welcomed, "a new person is waiting");
+  assert.ok(kj.compose.startsWith("https://mail.google.com/mail/?"), "with the one-click compose link");
+  const waiting = list.waiting;
+  await as("/admin/api/welcomed", { method: "POST", body: JSON.stringify({ id: kj.id, welcomed: true }) });
+  const after = await (await as("/admin/api/welcomes")).json();
+  assert.ok(after.people.find((p) => p.id === kj.id).welcomed > 0);
+  assert.equal(after.waiting, waiting - 1);
+  const stranger = await worker.fetch(new Request("https://hub.test/admin/api/welcomes"), env, { waitUntil() {} });
+  assert.equal(stranger.status, 404, "nobody but an admin sees the list");
 });
