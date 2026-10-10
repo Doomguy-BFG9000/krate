@@ -67,6 +67,51 @@ public class KrateActivity extends NativeActivity {
     /** What the picker answered: a content URI, or "" for cancelled. */
     private String picked = "";
 
+    /** Pixels the status bar, gesture bar and camera cutout cover: top, right, bottom, left. */
+    private volatile int[] covered = new int[4];
+
+    @Override
+    protected void onCreate(android.os.Bundle saved) {
+        super.onCreate(saved);
+        // What covers the window's edges, kept as Android says, so an app
+        // keeps its text out from under the clock and the gesture bar (K-1039).
+        getWindow().getDecorView().setOnApplyWindowInsetsListener(
+                new android.view.View.OnApplyWindowInsetsListener() {
+                    @Override
+                    @SuppressWarnings("deprecation")
+                    public android.view.WindowInsets onApplyWindowInsets(android.view.View view,
+                            android.view.WindowInsets insets) {
+                        int[] edges;
+                        if (android.os.Build.VERSION.SDK_INT >= 30) {
+                            android.graphics.Insets bars = insets.getInsets(
+                                    android.view.WindowInsets.Type.systemBars()
+                                    | android.view.WindowInsets.Type.displayCutout());
+                            edges = new int[] {bars.top, bars.right, bars.bottom, bars.left};
+                        } else {
+                            edges = new int[] {insets.getSystemWindowInsetTop(),
+                                    insets.getSystemWindowInsetRight(),
+                                    insets.getSystemWindowInsetBottom(),
+                                    insets.getSystemWindowInsetLeft()};
+                            android.view.DisplayCutout cut = android.os.Build.VERSION.SDK_INT >= 28
+                                    ? insets.getDisplayCutout() : null;
+                            if (cut != null) {
+                                edges[0] = Math.max(edges[0], cut.getSafeInsetTop());
+                                edges[1] = Math.max(edges[1], cut.getSafeInsetRight());
+                                edges[2] = Math.max(edges[2], cut.getSafeInsetBottom());
+                                edges[3] = Math.max(edges[3], cut.getSafeInsetLeft());
+                            }
+                        }
+                        covered = edges;
+                        return view.onApplyWindowInsets(insets);
+                    }
+                });
+    }
+
+    /** Pixels covered at the top, right, bottom and left edges. */
+    public int[] krateCovered() {
+        return covered;
+    }
+
     @Override
     protected void onActivityResult(int request, int result, Intent data) {
         super.onActivityResult(request, result, data);

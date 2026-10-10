@@ -530,12 +530,15 @@ impl UiAdapter for AndroidWinitPrototypeUiAdapter {
         winit_native::drain_pointer_samples()
     }
 
-    /// A phone or tablet is touched. Its covered edges (cutout, gesture
-    /// bar) are not read yet, so none are reported.
-    fn screen_kind(&self, _window: WindowId) -> krate_adapter_common::ui::ScreenKind {
+    /// A phone or tablet is touched, and its status bar, gesture bar and
+    /// camera cutout cover its edges (K-1039): reported in points, so an app
+    /// keeps its text out from under them.
+    fn screen_kind(&self, window: WindowId) -> krate_adapter_common::ui::ScreenKind {
+        let scale = winit_native::window_scale(window).max(0.25);
+        let (top, right, bottom, left) = phone::covered_edges();
         krate_adapter_common::ui::ScreenKind {
             touch: true,
-            safe: (0.0, 0.0, 0.0, 0.0),
+            safe: (top / scale, right / scale, bottom / scale, left / scale),
         }
     }
 

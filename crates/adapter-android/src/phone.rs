@@ -49,6 +49,28 @@ mod real {
         }
     }
 
+    /// Pixels the status bar, gesture bar and cutout cover: top, right,
+    /// bottom, left.
+    pub fn covered_edges() -> (f32, f32, f32, f32) {
+        with_activity("reading the covered edges", |env, activity| {
+            let all = env
+                .call_method(activity, "krateCovered", "()[I", &[])?
+                .l()?;
+            let all = jni::objects::JIntArray::from(all);
+            let mut edges = [0i32; 4];
+            if env.get_array_length(&all)? == 4 {
+                env.get_int_array_region(&all, 0, &mut edges)?;
+            }
+            Ok((
+                edges[0] as f32,
+                edges[1] as f32,
+                edges[2] as f32,
+                edges[3] as f32,
+            ))
+        })
+        .unwrap_or((0.0, 0.0, 0.0, 0.0))
+    }
+
     pub fn read_clipboard() -> Result<String, String> {
         with_activity("reading the clipboard", |env, activity| {
             let text = env
@@ -189,6 +211,11 @@ pub use real::*;
 
 #[cfg(not(target_os = "android"))]
 mod stub {
+    /// No phone, nothing covering the edges.
+    pub fn covered_edges() -> (f32, f32, f32, f32) {
+        (0.0, 0.0, 0.0, 0.0)
+    }
+
     pub fn read_clipboard() -> Result<String, String> {
         Err("the clipboard is Android's only on Android".to_string())
     }
