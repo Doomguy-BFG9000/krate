@@ -2317,6 +2317,13 @@ impl Phase3GuiHost {
         for window in &self.windows {
             self.sync_native_text(*window, &dispatcher);
         }
+        // Files saved on a phone and let go of go to the save sheet.
+        let exports = self.chosen_files.borrow_mut().take_ready_exports();
+        if let Some(window) = self.windows.first() {
+            for path in exports {
+                dispatcher.export_file(*window, &path);
+            }
+        }
 
         // Route raw native pointer input through layout hit testing so the
         // app-facing event carries a widget id. Raw samples never reach the
@@ -4360,7 +4367,23 @@ impl Phase3GuiHost {
         if self.headless {
             return Ok(None);
         }
-        #[cfg(any(target_os = "android", target_os = "ios", target_arch = "wasm32"))]
+        // A phone: the app writes into a file of Krate's, and once it lets
+        // go the file goes to the system's save sheet, where the person
+        // picks the place (K-1032). The person's tap on Save in the app is
+        // the ask; the sheet is the answer.
+        #[cfg(target_os = "ios")]
+        {
+            let _ = title;
+            let chosen = export_path(suggested, filter);
+            let name = crate::chosen_files::ChosenFiles::display_name(&chosen);
+            let Some(token) = self.chosen_files.borrow_mut().remember_export(chosen) else {
+                return Err(ui::types::UiError::Unsupported(
+                    "too many files chosen in one run".to_string(),
+                ));
+            };
+            Ok(Some((name, token)))
+        }
+        #[cfg(any(target_os = "android", target_arch = "wasm32"))]
         {
             let _ = (title, suggested, filter);
             Ok(None)
@@ -7171,6 +7194,46 @@ pub(crate) fn save_file_on_host(
     Ok(dialog.save_file())
 }
 
+/// Where a save on a phone is written before it goes to the save sheet: a
+/// fresh folder of its own in the app's temporary space (so two saves of
+/// one name never meet), under the name the app suggested, with the
+/// filter's first extension when the name has none.
+#[cfg(any(target_os = "ios", test))]
+pub(crate) fn export_path(suggested: &str, filter: &str) -> std::path::PathBuf {
+    let mut name: String = suggested
+        .chars()
+        .map(|c| {
+            if c == '/' || c == '\\' || c.is_control() {
+                '-'
+            } else {
+                c
+            }
+        })
+        .collect::<String>()
+        .trim()
+        .trim_start_matches('.')
+        .to_string();
+    if name.is_empty() {
+        name = "Untitled".to_string();
+    }
+    let ext = filter
+        .split(',')
+        .map(|e| e.trim().trim_start_matches('.'))
+        .find(|e| !e.is_empty() && e.chars().all(|c| c.is_ascii_alphanumeric()));
+    if let Some(ext) = ext {
+        if std::path::Path::new(&name).extension().is_none() {
+            name = format!("{name}.{ext}");
+        }
+    }
+    static SAVES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = SAVES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let dir = std::env::temp_dir()
+        .join("krate-saves")
+        .join(format!("{}-{n}", std::process::id()));
+    let _ = std::fs::create_dir_all(&dir);
+    dir.join(name)
+}
+
 // Desktop only, like its neighbour: on the phones and in a browser `rfd`
 // is not linked at all, and an ungated call broke the Android build.
 #[cfg(not(any(target_os = "android", target_os = "ios", target_arch = "wasm32")))]
@@ -7200,6 +7263,33 @@ pub(crate) fn choose_file_on_host(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_phone_save_keeps_the_apps_name_and_gets_an_extension() {
+        let path = export_path("Sketch", "png,jpg");
+        assert_eq!(path.file_name().unwrap(), "Sketch.png");
+        assert_eq!(
+            export_path("notes.txt", "md").file_name().unwrap(),
+            "notes.txt"
+        );
+        assert_eq!(export_path("", "").file_name().unwrap(), "Untitled");
+        let sneaky = export_path("../../etc/x", "");
+        assert_eq!(
+            sneaky
+                .parent()
+                .unwrap()
+                .parent()
+                .unwrap()
+                .file_name()
+                .unwrap(),
+            "krate-saves"
+        );
+        assert_ne!(
+            export_path("a", "").parent(),
+            export_path("a", "").parent(),
+            "two saves never meet"
+        );
+    }
 
     /// "You cannot" and "this Mac cannot" must not reach a GUI app as the
     /// same error (CP2).

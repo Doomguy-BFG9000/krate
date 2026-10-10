@@ -721,12 +721,19 @@ impl fs::files::Host for Phase2Host<'_> {
         else {
             return Ok(Err(fs::types::FsError::NotFound));
         };
+        let writes = !matches!(mode, fs::types::OpenMode::Read);
         let mode = bridge::open_mode_from_wit(mode);
         let handle = match self.dispatcher().fs_open_chosen(&path, mode) {
             Ok(handle) => handle,
             Err(err) => return Ok(Err(bridge::fs_error_to_wit(err))),
         };
-        Ok(Ok(self.resources.insert_file(handle)?))
+        let file = self.resources.insert_file(handle)?;
+        if writes {
+            self.chosen_files
+                .borrow_mut()
+                .opened_for_writing(file.rep(), &path);
+        }
+        Ok(Ok(file))
     }
 
     fn stat(
@@ -928,6 +935,7 @@ impl fs::files::HostFile for Phase2Host<'_> {
             let _ = self.dispatcher().close_file_handle(&handle);
         }
         self.resources.remove_file(rep.rep());
+        self.chosen_files.borrow_mut().closed(rep.rep());
         Ok(())
     }
 }

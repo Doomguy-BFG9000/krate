@@ -1837,6 +1837,14 @@ pub trait UiAdapter: WindowAdapter {
         None
     }
 
+    /// Hand a file the app has written to the platform's own save sheet,
+    /// where the person picks where it goes (phones, K-1032). The file is
+    /// moved there, or left behind if they cancel. False when the host has
+    /// no such sheet (the desktops save straight to the path picked).
+    fn export_file(&self, _window: WindowId, _path: &std::path::Path) -> bool {
+        false
+    }
+
     /// What the screen a window is on is like, beyond its size: a finger
     /// or a mouse, and the edges something else covers (IC-912). Desktop
     /// hosts are pointer screens with nothing covering an edge.

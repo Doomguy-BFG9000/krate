@@ -691,6 +691,40 @@ mod real {
             .presentViewController_animated_completion(&picker, true, None);
     }
 
+    /// Hand a file the app wrote to iOS's own "Save to Files" sheet: the
+    /// person picks where it goes (iCloud Drive, On My iPhone, a folder of
+    /// theirs) and the file is moved there. Saving on a phone is this two
+    /// step: an app cannot write straight into a place it has not been
+    /// given, and the sheet is how a person gives one (K-1032).
+    pub fn export_file(path: &std::path::Path) -> bool {
+        if !path.is_file() {
+            return false;
+        }
+        let path = path.to_path_buf();
+        DispatchQueue::main().exec_async(move || present_export(&path));
+        true
+    }
+
+    fn present_export(path: &std::path::Path) {
+        let (Some(mtm), Some(main_side)) = (MainThreadMarker::new(), MAIN_SIDE.0.get()) else {
+            return;
+        };
+        let url = objc2_foundation::NSURL::fileURLWithPath(&objc2_foundation::NSString::from_str(
+            &path.to_string_lossy(),
+        ));
+        let urls = objc2_foundation::NSArray::from_retained_slice(&[url]);
+        // Moved, not copied: the file was written only to be placed, and a
+        // copy would leave it behind in Krate.
+        let picker = objc2_ui_kit::UIDocumentPickerViewController::initForExportingURLs_asCopy(
+            objc2_ui_kit::UIDocumentPickerViewController::alloc(mtm),
+            &urls,
+            false,
+        );
+        main_side
+            .controller
+            .presentViewController_animated_completion(&picker, true, None);
+    }
+
     /// Where the running app's preview goes, and when to take it: a picture
     /// of the app as it really looks, for its card on Krate's home screen,
     /// taken once a couple of seconds in so the app has drawn its content.
@@ -2018,6 +2052,10 @@ mod stub {
 
     pub fn choose_path(_folder: bool, _filter: &str) -> Option<std::path::PathBuf> {
         None
+    }
+
+    pub fn export_file(_path: &std::path::Path) -> bool {
+        false
     }
 
     pub fn show_loading(_title: &str, _status: &str) {}

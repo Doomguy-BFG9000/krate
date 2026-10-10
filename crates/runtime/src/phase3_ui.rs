@@ -597,6 +597,11 @@ impl<'a> Phase3UiDispatcher<'a> {
         self.adapter.choose_path(id, folder, filter)
     }
 
+    /// Hand a written file to the platform's save sheet (phones).
+    pub fn export_file(&self, id: WindowId, path: &std::path::Path) -> bool {
+        self.adapter.export_file(id, path)
+    }
+
     /// Touch or pointer, and the covered edges, of a window's screen.
     pub fn screen_kind(&self, id: WindowId) -> krate_adapter_common::ui::ScreenKind {
         self.adapter.screen_kind(id)

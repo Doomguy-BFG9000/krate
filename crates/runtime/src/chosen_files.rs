@@ -29,6 +29,15 @@ pub struct ChosenFiles {
     /// only, which is the answer to "a tidier cannot name a folder" (K-075):
     /// the person names it by picking, and the pick is the grant.
     folders_by_token: HashMap<String, PathBuf>,
+    /// Files a save dialog handed out on a phone, where a save is a file
+    /// written in Krate first and then handed to the system to place: the
+    /// app writes it, and once the app lets go of it, it goes to the
+    /// system's save sheet (K-1032).
+    exports: std::collections::HashSet<PathBuf>,
+    /// Export files open for writing now, by the app's file handle.
+    writing: HashMap<u32, PathBuf>,
+    /// Export files written and let go of, waiting for the save sheet.
+    ready: Vec<PathBuf>,
     /// Counts every token ever issued in this run, so a token is never reused
     /// even after one is dropped.
     issued: u64,
@@ -72,6 +81,36 @@ impl ChosenFiles {
         let token = format!("folder-{}", self.issued);
         self.folders_by_token.insert(token.clone(), path);
         Some(token)
+    }
+
+    /// Record a file a phone's save will hand to the system once written,
+    /// and return its token, as `remember` does.
+    pub fn remember_export(&mut self, path: PathBuf) -> Option<String> {
+        let token = self.remember(path.clone())?;
+        self.exports.insert(path);
+        Some(token)
+    }
+
+    /// An app opened `path` for writing as handle `handle`: when it lets
+    /// go, an export is ready.
+    pub fn opened_for_writing(&mut self, handle: u32, path: &Path) {
+        if self.exports.contains(path) {
+            self.writing.insert(handle, path.to_path_buf());
+        }
+    }
+
+    /// The app let go of `handle`.
+    pub fn closed(&mut self, handle: u32) {
+        if let Some(path) = self.writing.remove(&handle) {
+            if !self.ready.contains(&path) {
+                self.ready.push(path);
+            }
+        }
+    }
+
+    /// Export files written and let go of since last asked.
+    pub fn take_ready_exports(&mut self) -> Vec<PathBuf> {
+        std::mem::take(&mut self.ready)
     }
 
     /// The folder behind a token, if this run issued it.
@@ -122,6 +161,26 @@ impl ChosenFiles {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_phone_save_is_ready_once_written_and_let_go_of_and_only_then() {
+        let mut files = ChosenFiles::new();
+        let saved = PathBuf::from("/tmp/krate-saves/1-0/Sketch.png");
+        let other = PathBuf::from("/tmp/opened.txt");
+        files.remember_export(saved.clone()).unwrap();
+        files.remember(other.clone()).unwrap();
+        files.opened_for_writing(7, &saved);
+        files.opened_for_writing(8, &other);
+        assert!(files.take_ready_exports().is_empty(), "still being written");
+        files.closed(8);
+        assert!(
+            files.take_ready_exports().is_empty(),
+            "an ordinary file is no save"
+        );
+        files.closed(7);
+        assert_eq!(files.take_ready_exports(), vec![saved]);
+        assert!(files.take_ready_exports().is_empty(), "handed over once");
+    }
 
     #[test]
     fn a_token_resolves_only_for_the_run_that_issued_it() {

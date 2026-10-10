@@ -536,6 +536,10 @@ impl UiAdapter for IosUikitPrototypeUiAdapter {
         uikit_native::choose_path(folder, filter)
     }
 
+    fn export_file(&self, _window: WindowId, path: &std::path::Path) -> bool {
+        uikit_native::export_file(path)
+    }
+
     fn set_adapts(&self, adapts: bool) {
         uikit_native::set_adapts(adapts)
     }
