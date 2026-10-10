@@ -658,11 +658,10 @@ impl Runtime {
     /// app is signed with it and already executable. wasmtime's images carry
     /// no relocations, so such an image runs in place, untouched.
     ///
-    /// Memory keeps wasmtime's usual layout -- a large address-space
-    /// reservation, so bounds cost nothing, and traps through the system's
-    /// fault handling. Measured on Counter-Strike: checking bounds in code
-    /// instead ran 45% slower (3,331 frames against 6,132 in one 40 s
-    /// match); this way the image matches the JIT (6,032). Both ends --
+    /// In place costs nothing: with wasmtime's usual memory layout a
+    /// Counter-Strike image built into a Mac binary ran 6,132 frames of a
+    /// 40 s match against the JIT's 6,032. The memory layout below is the
+    /// phone's, and the config's memory budget is part of it. Both ends --
     /// [`Self::precompile_native_image`] and [`Self::new_for_native_image`]
     /// -- read this one function, so they cannot disagree.
     fn native_image_settings(config: &Config, target: Option<&str>) -> Result<wasmtime::Config> {
@@ -680,6 +679,17 @@ impl Runtime {
                 .target(&target)
                 .map_err(|err| RuntimeError::EngineInit(format!("target {target}: {err}")))?;
         }
+        // An iPhone gives an app far less address space than wasmtime's
+        // usual 4 GB reservation per memory -- an iPhone 13 Pro refused it
+        // ("mmap failed to reserve 0x104000000 bytes"). So reserve what the
+        // app may ever use, its memory budget, and keep the memory where it
+        // is: bounds are checked in code against a base that never moves.
+        // Measured on Counter-Strike (40 s dust2 match): 4,559 frames
+        // against 6,132 with the 4 GB layout; turning off the Spectre guard
+        // on those checks only reached 4,829, so it stays on.
+        wt_config.memory_reservation(config.memory_bytes.next_multiple_of(1 << 16));
+        wt_config.memory_guard_size(0);
+        wt_config.memory_may_move(false);
         Ok(wt_config)
     }
 
