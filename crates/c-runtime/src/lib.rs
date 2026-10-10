@@ -58,6 +58,10 @@ const O_DIRECTORY: i32 = 2;
 const O_EXCL: i32 = 4;
 const O_TRUNC: i32 = 8;
 const FD_APPEND: i32 = 1;
+
+/// The most bytes one `krate:fs` read or write moves; the host refuses more
+/// (MAX_PHASE2_READ_BYTES and MAX_PHASE2_WRITE_BYTES in krate-runtime).
+const IO_CHUNK: u32 = 8 * 1024 * 1024;
 const RIGHT_READ: i64 = 1 << 1;
 const RIGHT_WRITE: i64 = 1 << 6;
 
@@ -461,13 +465,21 @@ pub unsafe extern "C" fn __imported_wasi_snapshot_preview1_fd_write(
                 let _ = stdio::stdout().write(data);
                 total += len as u32;
             }
-            Entry::File { file, pos, .. } => match file.write(data) {
-                Ok(w) => {
-                    *pos += w as u64;
-                    total += w;
+            Entry::File { file, pos, .. } => {
+                for chunk in data.chunks(IO_CHUNK as usize) {
+                    match file.write(chunk) {
+                        Ok(w) => {
+                            *pos += w as u64;
+                            total += w;
+                            if (w as usize) < chunk.len() {
+                                break;
+                            }
+                        }
+                        Err(err) if total == 0 => return errno(&err),
+                        Err(_) => break,
+                    }
                 }
-                Err(err) => return errno(&err),
-            },
+            }
             _ => return EBADF,
         }
     }
@@ -491,16 +503,28 @@ pub unsafe extern "C" fn __imported_wasi_snapshot_preview1_fd_read(
             if len == 0 {
                 continue;
             }
-            match file.read(len) {
-                Ok(data) => {
-                    bytes_mut(buf, data.len() as i32).copy_from_slice(&data);
-                    *pos += data.len() as u64;
-                    total += data.len() as u32;
-                    if (data.len() as u32) < len {
-                        break;
+            // The host answers at most IO_CHUNK bytes a call; a bigger buffer
+            // (std::fs::read of a large file asks for all of it) is filled
+            // chunk by chunk rather than refused.
+            let mut done = 0u32;
+            while done < len {
+                let want = (len - done).min(IO_CHUNK);
+                match file.read(want) {
+                    Ok(data) => {
+                        bytes_mut(buf + done as i32, data.len() as i32).copy_from_slice(&data);
+                        *pos += data.len() as u64;
+                        done += data.len() as u32;
+                        if (data.len() as u32) < want {
+                            break;
+                        }
                     }
+                    Err(err) if total + done == 0 => return errno(&err),
+                    Err(_) => break,
                 }
-                Err(err) => return errno(&err),
+            }
+            total += done;
+            if done < len {
+                break;
             }
         }
     } else if !matches!(e, Entry::Stdin) {
