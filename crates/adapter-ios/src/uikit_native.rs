@@ -86,6 +86,10 @@ mod real {
         /// the GPU renders at true density, so the CPU path's 2x quality
         /// cap dies here.
         metal_layer: Option<(usize, f32)>,
+        /// The panel's own scale (3 on a current iPhone): whole-frame
+        /// pictures are drawn at it, one pass, with no second stretch by the
+        /// compositor.
+        panel_scale: f32,
     }
 
     static SHARED: Mutex<Shared> = Mutex::new(Shared {
@@ -93,6 +97,7 @@ mod real {
         typed: Vec::new(),
         screen: None,
         metal_layer: None,
+        panel_scale: 2.0,
     });
 
     /// Signaled by the touch callouts AND by the display link, so a parked
@@ -585,6 +590,7 @@ mod real {
                 }
 
                 let metal_ptr = objc2::rc::Retained::as_ptr(&metal) as usize;
+                SHARED.lock().expect("shared state lock").panel_scale = screen.scale() as f32;
                 SHARED.lock().expect("shared state lock").metal_layer =
                     Some((metal_ptr, native_scale));
 
@@ -1166,15 +1172,35 @@ mod real {
             }
             diag("gpu-present-start");
             let gpu = slot.as_mut().expect("gpu initialized");
-            // The screen turned: the drawable follows the view's new size.
+            // The drawable follows the view's size (the screen turned) and
+            // the kind of frame: a whole-frame picture (a game, an emulator)
+            // at the panel's full scale, so it is stretched once, by us,
+            // crisply when the ratio is whole; interface frames at the 2x
+            // cap the vector renderer can keep up with.
             let wanted = {
                 let shared = SHARED.lock().expect("shared state lock");
-                shared.metal_layer.zip(shared.screen.map(|(l, _)| l))
+                shared
+                    .metal_layer
+                    .zip(shared.screen.map(|(l, _)| l))
+                    .map(|(layer, logical)| (layer, logical, shared.panel_scale))
             };
-            if let Some(((_, native_scale), logical)) = wanted {
+            if let Some(((_, native_scale), logical, panel_scale)) = wanted {
+                let scale = if crate::vello_canvas::whole_frame_picture(list).is_some() {
+                    panel_scale
+                } else {
+                    native_scale
+                };
+                if gpu.layer_scale() != scale {
+                    DispatchQueue::main().exec_sync(|| {
+                        if let Some(main_side) = MAIN_SIDE.0.get() {
+                            main_side.metal.setContentsScale(scale as f64);
+                        }
+                    });
+                    gpu.set_layer_scale(scale);
+                }
                 gpu.resize(
-                    (logical.width as f32 * native_scale) as u32,
-                    (logical.height as f32 * native_scale) as u32,
+                    (logical.width as f32 * scale) as u32,
+                    (logical.height as f32 * scale) as u32,
                 );
             }
             let outcome =

@@ -33,6 +33,9 @@ pub struct GpuCanvas {
     surface: wgpu::Surface<'static>,
     surface_format: wgpu::TextureFormat,
     surface_config: wgpu::SurfaceConfiguration,
+    /// The layer's contents scale: the 2x cap, or the panel's full scale
+    /// while the frames are whole pictures.
+    layer_scale: f32,
     renderer: vello::Renderer,
     target: wgpu::Texture,
     target_view: wgpu::TextureView,
@@ -151,6 +154,7 @@ impl GpuCanvas {
             surface,
             surface_format,
             surface_config,
+            layer_scale: scale,
             renderer,
             target,
             target_view,
@@ -164,6 +168,15 @@ impl GpuCanvas {
             layout_cx: parley::LayoutContext::new(),
             glyph_cache: HashMap::new(),
         })
+    }
+
+    /// The scale the layer is shown at now.
+    pub fn layer_scale(&self) -> f32 {
+        self.layer_scale
+    }
+
+    pub fn set_layer_scale(&mut self, scale: f32) {
+        self.layer_scale = scale;
     }
 
     /// Follow the screen to a new physical size (it turned).
@@ -517,8 +530,13 @@ impl GpuCanvas {
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
-        self.blit
-            .blit(&self.device, &mut encoder, &self.target_view, &frame_view);
+        self.blit.blit(
+            &self.device,
+            &mut encoder,
+            &self.target_view,
+            &frame_view,
+            false,
+        );
         self.queue.submit([encoder.finish()]);
         frame.present();
         let submit_ms = t_submit.elapsed().as_secs_f64() * 1000.0;
@@ -606,8 +624,11 @@ impl GpuCanvas {
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        // Crisp when the picture fills the screen by a whole number.
+        let (sw, sh) = (self.width, self.height);
+        let crisp = sw % w == 0 && sh % h == 0 && sw / w == sh / h;
         self.blit
-            .blit(&self.device, &mut encoder, view, &frame_view);
+            .blit(&self.device, &mut encoder, view, &frame_view, crisp);
         self.queue.submit([encoder.finish()]);
         frame.present();
         crate::uikit_native::diag(&format!(
@@ -806,6 +827,7 @@ fn unpack(argb: u32) -> Color {
 struct BlitPipeline {
     pipeline: wgpu::RenderPipeline,
     sampler: wgpu::Sampler,
+    nearest: wgpu::Sampler,
     layout: wgpu::BindGroupLayout,
 }
 
@@ -887,16 +909,19 @@ fn fs(in: VsOut) -> @location(0) vec4<f32> {
             multiview_mask: None,
             cache: None,
         });
-        // Linear: a whole-frame picture is drawn scaled to the screen. At
-        // the same size (vello's own target) linear and nearest agree.
+        // Linear for a picture scaled by an odd ratio; nearest for one
+        // scaled by a whole number, so each of its pixels lands as a crisp
+        // block. At the same size (vello's own target) the two agree.
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
             ..Default::default()
         });
+        let nearest = device.create_sampler(&wgpu::SamplerDescriptor::default());
         BlitPipeline {
             pipeline,
             sampler,
+            nearest,
             layout,
         }
     }
@@ -907,6 +932,7 @@ fn fs(in: VsOut) -> @location(0) vec4<f32> {
         encoder: &mut wgpu::CommandEncoder,
         src: &wgpu::TextureView,
         dst: &wgpu::TextureView,
+        crisp: bool,
     ) {
         let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: None,
@@ -918,7 +944,11 @@ fn fs(in: VsOut) -> @location(0) vec4<f32> {
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&self.sampler),
+                    resource: wgpu::BindingResource::Sampler(if crisp {
+                        &self.nearest
+                    } else {
+                        &self.sampler
+                    }),
                 },
             ],
         });
@@ -946,7 +976,9 @@ fn fs(in: VsOut) -> @location(0) vec4<f32> {
 
 /// The one picture a frame consists of, if that is all it is: an opaque
 /// image covering the whole canvas, after at most a clear.
-fn whole_frame_picture(list: &CanvasList) -> Option<&krate_adapter_common::ui::ImagePixels> {
+pub(crate) fn whole_frame_picture(
+    list: &CanvasList,
+) -> Option<&krate_adapter_common::ui::ImagePixels> {
     let mut picture = None;
     for op in &list.ops {
         match op {
