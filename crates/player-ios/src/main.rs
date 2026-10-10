@@ -546,6 +546,8 @@ mod player {
         #[cfg(not(krate_native_image))]
         let native = false;
 
+        // Krate's close capsule over the app, the way back home.
+        krate_adapter_ios::uikit_native::set_app_chrome(true);
         let outcome = if native {
             run_native(&config)
         } else {
@@ -556,6 +558,7 @@ mod player {
                 runtime.run_bytes_for_world(&wasm, &config, krate_runtime::RuntimeWorld::Gui)
             })
         };
+        krate_adapter_ios::uikit_native::set_app_chrome(false);
         match outcome {
             Ok(outcome) => eprintln!("app finished: {outcome:?}"),
             Err(err) => {

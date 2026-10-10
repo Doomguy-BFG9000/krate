@@ -975,6 +975,7 @@ impl krate::Guest for Component {
         let mut dirty = true;
         let mut velocity = 0.0f32;
         let mut last_wheel = 0u64;
+        let mut pressed_at: Option<usize> = None;
         loop {
             let (w, h) = match canvas2d::canvas_size(canvas) {
                 Ok(size) => (size.width.max(1.0), size.height.max(1.0)),
@@ -1010,11 +1011,25 @@ impl krate::Guest for Component {
                         dirty = true;
                     }
                 }
+                // Act on release over the item that was pressed, as iOS
+                // does: a press that turns into a scroll is let go elsewhere
+                // (or far outside the window), and opens nothing.
                 Some(types::Event::Pointer(p)) if p.pressed && p.button.is_some() => {
                     velocity = 0.0;
-                    let hit = screen.hits.iter().rev().find(|(r, _)| {
+                    pressed_at = screen.hits.iter().rposition(|(r, _)| {
                         p.x >= r.x && p.x <= r.x + r.width && p.y >= r.y && p.y <= r.y + r.height
                     });
+                }
+                Some(types::Event::Pointer(p)) if !p.pressed && p.button.is_some() => {
+                    let released_at = screen.hits.iter().rposition(|(r, _)| {
+                        p.x >= r.x && p.x <= r.x + r.width && p.y >= r.y && p.y <= r.y + r.height
+                    });
+                    let same = released_at.is_some() && released_at == pressed_at.take();
+                    let hit = if same {
+                        released_at.map(|i| &screen.hits[i])
+                    } else {
+                        None
+                    };
                     match hit.map(|(_, hit)| hit) {
                         Some(Hit::Open(index)) => {
                             out(&format!("home:open:{index}"));

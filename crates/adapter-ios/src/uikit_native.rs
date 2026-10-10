@@ -80,6 +80,8 @@ mod real {
         touches: Vec<RawTouch>,
         /// Typing from the on-screen keyboard, waiting for the guest.
         typed: Vec<Typed>,
+        /// The close capsule was tapped: the app is asked to close.
+        close_tapped: bool,
         /// Set once the main thread has built the window.
         screen: Option<(WindowSize, f32)>,
         /// The CAMetalLayer's raw pointer plus the FULL native scale --
@@ -95,6 +97,7 @@ mod real {
     static SHARED: Mutex<Shared> = Mutex::new(Shared {
         touches: Vec::new(),
         typed: Vec::new(),
+        close_tapped: false,
         screen: None,
         metal_layer: None,
         panel_scale: 2.0,
@@ -185,7 +188,16 @@ mod real {
         start: (f32, f32),
         last: (f32, f32),
         scrolling: bool,
+        /// When the finger landed, and whether its press has gone out yet.
+        began: std::time::Instant,
+        pressed: bool,
     }
+
+    /// How long a finger rests before its press goes out, unless it starts
+    /// to scroll first -- iOS's own rule for touches inside scrolling
+    /// content. A tap used to press only when the finger lifted, a beat
+    /// late on every button; a drag that scrolls still presses nothing.
+    const PRESS_AFTER: std::time::Duration = std::time::Duration::from_millis(50);
 
     thread_local! {
         static GUEST: RefCell<Option<GuestSide>> = const { RefCell::new(None) };
@@ -194,6 +206,9 @@ mod real {
     /// Main-thread-only UIKit objects, created on first use via dispatch.
     struct MainSide {
         window: Retained<UIWindow>,
+        /// Krate's close capsule, over every app (see `set_app_chrome`).
+        close: Retained<objc2_ui_kit::UIButton>,
+        _close_target: Retained<KrateCloseTarget>,
         controller: Retained<KrateViewController>,
         metal: Retained<objc2_quartz_core::CAMetalLayer>,
         /// Held so the link's target outlives the link that calls it.
@@ -349,6 +364,49 @@ mod real {
         }
     );
 
+    define_class!(
+        // SAFETY:
+        // - NSObject has no subclassing requirements for a target-action
+        //   receiver.
+        // - UIKit calls it on the main thread.
+        #[unsafe(super = objc2_foundation::NSObject)]
+        #[thread_kind = MainThreadOnly]
+        #[ivars = ()]
+        struct KrateCloseTarget;
+
+        // SAFETY: NSObjectProtocol has no additional requirements.
+        unsafe impl NSObjectProtocol for KrateCloseTarget {}
+
+        impl KrateCloseTarget {
+            #[unsafe(method(krateClose:))]
+            fn krate_close(&self, _sender: &objc2_foundation::NSObject) {
+                SHARED.lock().expect("shared state lock").close_tapped = true;
+                INPUT_ARRIVED.notify_all();
+            }
+        }
+    );
+
+    /// Show (true) or hide Krate's close capsule. The player shows it over
+    /// every app it runs and hides it on Krate's own screens.
+    ///
+    /// A phone has no window close button, so an app had no way back. A
+    /// gesture would collide with apps: a pinch is a map's zoom, an edge
+    /// swipe a game's thumb stick, and neither can be discovered. A capsule
+    /// drawn by Krate -- not by the app, so no app can hide or imitate it --
+    /// is always there and means the same thing everywhere. Tapping it asks
+    /// the app to close, as a desktop close button does; a second tap closes
+    /// an app that does not answer.
+    pub fn set_app_chrome(visible: bool) {
+        APP_CHROME.store(visible, std::sync::atomic::Ordering::Relaxed);
+        DispatchQueue::main().exec_async(move || {
+            if let Some(main_side) = MAIN_SIDE.0.get() {
+                main_side.close.setHidden(!visible);
+            }
+        });
+    }
+
+    static APP_CHROME: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
     /// Which way up the app's window wants the screen: landscape when the
     /// app asked for a window wider than tall (a game), portrait otherwise.
     static LANDSCAPE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -448,6 +506,19 @@ mod real {
             objc2_quartz_core::CATransaction::setDisableActions(true);
             main_side.metal.setFrame(bounds);
             objc2_quartz_core::CATransaction::commit();
+            // The capsule: top right, inside the safe area (clear of the
+            // notch and the status bar), above the app.
+            let safe = uiview.safeAreaInsets();
+            let (cw, ch) = (44.0, 30.0);
+            let close: &UIView = &main_side.close;
+            close.setFrame(CGRect::new(
+                CGPoint::new(
+                    bounds.size.width - safe.right - 12.0 - cw,
+                    safe.top.max(8.0) + 6.0,
+                ),
+                objc2_core_foundation::CGSize::new(cw, ch),
+            ));
+            uiview.bringSubviewToFront(close);
         }
         let Ok(logical) = WindowSize::new(
             (bounds.size.width as u32).max(1),
@@ -481,6 +552,11 @@ mod real {
         drop(shared);
         diag("touch");
         INPUT_ARRIVED.notify_all();
+        // Wake the guest again when a resting finger's press falls due.
+        std::thread::spawn(|| {
+            std::thread::sleep(PRESS_AFTER + std::time::Duration::from_millis(2));
+            INPUT_ARRIVED.notify_all();
+        });
     }
 
     /// Build the UIKit side, on the main queue, once.
@@ -594,7 +670,38 @@ mod real {
                 SHARED.lock().expect("shared state lock").metal_layer =
                     Some((metal_ptr, native_scale));
 
+                // Krate's close capsule: dark glass, the system's own xmark,
+                // above the app's drawing, hidden until the player runs an app.
+                let close_target: Retained<KrateCloseTarget> = {
+                    let this = KrateCloseTarget::alloc(mtm).set_ivars(());
+                    unsafe { msg_send![super(this), init] }
+                };
+                let close =
+                    objc2_ui_kit::UIButton::buttonWithType(objc2_ui_kit::UIButtonType::System, mtm);
+                unsafe {
+                    close.setImage_forState(
+                        UIImage::systemImageNamed(&objc2_foundation::NSString::from_str("xmark"))
+                            .as_deref(),
+                        objc2_ui_kit::UIControlState::Normal,
+                    );
+                    close.setTintColor(Some(&objc2_ui_kit::UIColor::whiteColor()));
+                    let as_view: &UIView = &close;
+                    as_view.setBackgroundColor(Some(&objc2_ui_kit::UIColor::colorWithWhite_alpha(
+                        0.0, 0.38,
+                    )));
+                    as_view.layer().setCornerRadius(15.0);
+                    as_view.setHidden(!APP_CHROME.load(std::sync::atomic::Ordering::Relaxed));
+                    close.addTarget_action_forControlEvents(
+                        Some(&close_target),
+                        objc2::sel!(krateClose:),
+                        objc2_ui_kit::UIControlEvents::TouchUpInside,
+                    );
+                    let host: &UIView = &view;
+                    host.addSubview(as_view);
+                }
                 let _ = MAIN_SIDE.0.set(MainSide {
+                    close,
+                    _close_target: close_target,
                     metal,
                     _link_target: link_target,
                     _display_link: display_link,
@@ -670,6 +777,8 @@ mod real {
                             start: (touch.x, touch.y),
                             last: (touch.x, touch.y),
                             scrolling: false,
+                            began: std::time::Instant::now(),
+                            pressed: false,
                         });
                         guest.hovered = krate_adapter_common::painter::topmost_interactive_at(
                             &guest.placements,
@@ -690,6 +799,18 @@ mod real {
                             let sy = touch.y - gesture.start.1;
                             if sx * sx + sy * sy > SLOP * SLOP {
                                 gesture.scrolling = true;
+                                // A press already sent is let go far outside
+                                // the window, so nothing that acts on a
+                                // release under the finger fires: the touch
+                                // became a scroll.
+                                if gesture.pressed {
+                                    guest.pointer_samples.push(RawPointerSample {
+                                        window: krate,
+                                        x: -10_000.0,
+                                        y: -10_000.0,
+                                        pressed: false,
+                                    });
+                                }
                             }
                         }
                         let dx = touch.x - gesture.last.0;
@@ -715,12 +836,16 @@ mod real {
                     if same {
                         let gesture = guest.gesture.take().expect("gesture checked");
                         if !gesture.scrolling {
-                            guest.pointer_samples.push(RawPointerSample {
-                                window: krate,
-                                x: touch.x,
-                                y: touch.y,
-                                pressed: true,
-                            });
+                            // A quick tap lifts before its press went out:
+                            // both now, at the lift.
+                            if !gesture.pressed {
+                                guest.pointer_samples.push(RawPointerSample {
+                                    window: krate,
+                                    x: touch.x,
+                                    y: touch.y,
+                                    pressed: true,
+                                });
+                            }
                             guest.pointer_samples.push(RawPointerSample {
                                 window: krate,
                                 x: touch.x,
@@ -740,6 +865,25 @@ mod real {
                     }
                 }
                 _ => {}
+            }
+        }
+    }
+
+    /// A finger that has rested past PRESS_AFTER without scrolling presses
+    /// now, where it landed.
+    fn deliver_due_press(guest: &mut GuestSide) {
+        let Some(krate) = guest.krate else {
+            return;
+        };
+        if let Some(gesture) = guest.gesture.as_mut() {
+            if !gesture.pressed && !gesture.scrolling && gesture.began.elapsed() >= PRESS_AFTER {
+                gesture.pressed = true;
+                guest.pointer_samples.push(RawPointerSample {
+                    window: krate,
+                    x: gesture.start.0,
+                    y: gesture.start.1,
+                    pressed: true,
+                });
             }
         }
     }
@@ -873,6 +1017,12 @@ mod real {
         }
         with_guest(|guest| {
             digest_touches(guest);
+            let close = std::mem::take(&mut SHARED.lock().expect("shared state lock").close_tapped);
+            if let (true, Some(krate)) = (close, guest.krate) {
+                guest
+                    .events
+                    .push((krate, WinitWindowNativeEvent::CloseRequested));
+            }
             let screen = SHARED.lock().expect("shared state lock").screen;
             if let (Some((logical, _)), Some(krate)) = (screen, guest.krate) {
                 if logical != guest.logical {
@@ -953,7 +1103,12 @@ mod real {
         if !guest_initialized() {
             return Vec::new();
         }
-        with_guest(|guest| Ok(std::mem::take(&mut guest.pointer_samples))).unwrap_or_default()
+        with_guest(|guest| {
+            digest_touches(guest);
+            deliver_due_press(guest);
+            Ok(std::mem::take(&mut guest.pointer_samples))
+        })
+        .unwrap_or_default()
     }
 
     pub fn drain_key_samples() -> Vec<RawKeySample> {
@@ -1286,6 +1441,8 @@ mod stub {
     pub fn set_text_entry(_id: WindowId, _on: bool) -> bool {
         false
     }
+
+    pub fn set_app_chrome(_visible: bool) {}
 
     pub fn drain_wheel_samples() -> Vec<RawWheelSample> {
         Vec::new()
