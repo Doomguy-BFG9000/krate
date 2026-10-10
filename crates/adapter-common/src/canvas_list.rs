@@ -113,10 +113,134 @@ pub enum CanvasOp {
 pub struct CanvasList {
     pub logical_width: u32,
     pub logical_height: u32,
+    /// The size the app designs in (canvas2d set-design-size), if any. Its
+    /// ops are in those coordinates; a consumer maps them onto the canvas
+    /// with [`CanvasList::design_transform`], as the CPU raster does.
+    pub design: Option<(f32, f32)>,
     pub ops: Vec<CanvasOp>,
 }
 
+/// The colours along an app's four edges, for the spare space around a
+/// letterboxed design: packed 0xAARRGGBB, top, bottom, left, right.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EdgeColors {
+    pub top: u32,
+    pub bottom: u32,
+    pub left: u32,
+    pub right: u32,
+}
+
+impl EdgeColors {
+    fn all(color: u32) -> Self {
+        EdgeColors {
+            top: color,
+            bottom: color,
+            left: color,
+            right: color,
+        }
+    }
+}
+
+/// The average colour of some RGBA pixels, packed opaque.
+fn average(pixels: impl Iterator<Item = [u8; 4]>) -> u32 {
+    let (mut r, mut g, mut b, mut n) = (0u64, 0u64, 0u64, 0u64);
+    for p in pixels {
+        r += p[0] as u64;
+        g += p[1] as u64;
+        b += p[2] as u64;
+        n += 1;
+    }
+    let n = n.max(1);
+    0xFF00_0000 | (((r / n) as u32) << 16) | (((g / n) as u32) << 8) | (b / n) as u32
+}
+
+fn mix(a: u32, b: u32) -> u32 {
+    let ch = |shift: u32| (((a >> shift) & 0xFF) + ((b >> shift) & 0xFF)) / 2;
+    0xFF00_0000 | (ch(16) << 16) | (ch(8) << 8) | ch(0)
+}
+
 impl CanvasList {
+    /// The colours at the edges of the app's design area, read from the
+    /// first call that paints all of it -- its background. Where a design
+    /// is letterboxed onto a screen of another shape, the spare space is
+    /// painted with these, so the app reads as filling the screen instead
+    /// of sitting between black bars. None without a design size, when a
+    /// `clear` already paints the whole canvas, or when no call covers the
+    /// design area first.
+    pub fn edge_colors(&self) -> Option<EdgeColors> {
+        let (dw, dh) = self.design?;
+        let covers = |(x, y, w, h): (f32, f32, f32, f32)| {
+            x <= 0.5 && y <= 0.5 && x + w >= dw - 0.5 && y + h >= dh - 0.5
+        };
+        for op in &self.ops {
+            return match op {
+                CanvasOp::SetClip(None) => continue,
+                CanvasOp::Clear(_) => None,
+                CanvasOp::FillRect { rect, color }
+                | CanvasOp::FillRoundRect { rect, color, .. }
+                    if covers(*rect) =>
+                {
+                    Some(EdgeColors::all(*color | 0xFF00_0000))
+                }
+                CanvasOp::LinearGradient { rect, top, bottom } if covers(*rect) => {
+                    let side = mix(*top, *bottom);
+                    Some(EdgeColors {
+                        top: *top | 0xFF00_0000,
+                        bottom: *bottom | 0xFF00_0000,
+                        left: side,
+                        right: side,
+                    })
+                }
+                CanvasOp::LinearGradientStops { rect, stops, .. } if covers(*rect) => {
+                    let first = stops.first()?.1 | 0xFF00_0000;
+                    let last = stops.last()?.1 | 0xFF00_0000;
+                    let side = mix(first, last);
+                    Some(EdgeColors {
+                        top: first,
+                        bottom: last,
+                        left: side,
+                        right: side,
+                    })
+                }
+                CanvasOp::Pixels { rect, image } | CanvasOp::PixelsRound { rect, image, .. }
+                    if covers(*rect) && image.width > 0 && image.height > 0 =>
+                {
+                    let (w, h) = (image.width as usize, image.height as usize);
+                    let px = |x: usize, y: usize| {
+                        let i = (y * w + x) * 4;
+                        [
+                            image.rgba[i],
+                            image.rgba[i + 1],
+                            image.rgba[i + 2],
+                            image.rgba[i + 3],
+                        ]
+                    };
+                    Some(EdgeColors {
+                        top: average((0..w).map(|x| px(x, 0))),
+                        bottom: average((0..w).map(|x| px(x, h - 1))),
+                        left: average((0..h).map(|y| px(0, y))),
+                        right: average((0..h).map(|y| px(w - 1, y))),
+                    })
+                }
+                _ => None,
+            };
+        }
+        None
+    }
+
+    /// Scale and offset from design space onto the canvas: uniform,
+    /// centred, letterboxed -- the same formula as the CPU raster's, so a
+    /// design-size app looks and hit-tests the same on every path.
+    /// `(1.0, 0.0, 0.0)` without a design size.
+    pub fn design_transform(&self) -> (f32, f32, f32) {
+        let Some((dw, dh)) = self.design else {
+            return (1.0, 0.0, 0.0);
+        };
+        let (cw, ch) = (self.logical_width as f32, self.logical_height as f32);
+        let k = (cw / dw).min(ch / dh);
+        (k, (cw - dw * k) / 2.0, (ch - dh * k) / 2.0)
+    }
+
     pub fn clear_for_frame(&mut self, width: u32, height: u32) {
         self.logical_width = width;
         self.logical_height = height;

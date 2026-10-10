@@ -162,6 +162,15 @@ pub struct Phase3GuiHost {
     /// and the next handle. One Arc per picture, so every frame that draws
     /// it hands the adapters the same picture and they upload it once.
     kept_images: std::cell::RefCell<std::collections::BTreeMap<(u64, u64), Arc<ImagePixels>>>,
+    /// The size each window was asked for, and the canvases whose apps have
+    /// asked how big they are (`canvas-size`). A canvas app that never asks
+    /// can only be drawing for the size it requested; where the window is
+    /// another size (a phone, a resized window) the host fits that size to
+    /// it, as if the app had set it as its design size. Those implicit
+    /// designs are tracked so asking, or setting a design, undoes them.
+    requested_sizes: std::cell::RefCell<std::collections::BTreeMap<WindowId, (f32, f32)>>,
+    canvases_that_asked: std::cell::RefCell<std::collections::BTreeSet<u64>>,
+    implicit_designs: std::cell::RefCell<std::collections::BTreeSet<u64>>,
     next_kept_image: std::cell::Cell<u64>,
     /// Connected gamepads, polled on demand.
     gamepads: std::cell::RefCell<crate::gamepad::Gamepads>,
@@ -441,6 +450,9 @@ impl Phase3GuiHost {
             images: std::cell::RefCell::new(std::collections::BTreeMap::new()),
             canvases: std::cell::RefCell::new(std::collections::BTreeMap::new()),
             kept_images: std::cell::RefCell::new(std::collections::BTreeMap::new()),
+            requested_sizes: std::cell::RefCell::new(std::collections::BTreeMap::new()),
+            canvases_that_asked: std::cell::RefCell::new(std::collections::BTreeSet::new()),
+            implicit_designs: std::cell::RefCell::new(std::collections::BTreeSet::new()),
             next_kept_image: std::cell::Cell::new(1),
             gamepads: std::cell::RefCell::new(crate::gamepad::Gamepads::new()),
             held_keys: std::cell::RefCell::new(std::collections::BTreeSet::new()),
@@ -1613,6 +1625,7 @@ impl Phase3GuiHost {
     pub fn usability_report(&self) -> Option<crate::usability::UsabilityReport> {
         self.usability.as_ref().map(|d| {
             let mut report = d.report.clone();
+            report.fit = self.fit_facts();
             let ran = d.started.map(|s| s.elapsed()).unwrap_or_default();
             report.ran_millis = ran.as_millis() as u64;
             if d.plan.check_stay_open && report.stay_open.is_none() && report.opened_window {
@@ -1624,6 +1637,23 @@ impl Phase3GuiHost {
             }
             report
         })
+    }
+
+    /// How the app's first canvas lays itself out, for the fit check: the
+    /// fixed size it draws in (its own design size, or the window size it
+    /// asked for when it never asked its real size), or None when it lays
+    /// out from the real canvas. None for an app with no canvas.
+    fn fit_facts(&self) -> Option<crate::usability::FitFacts> {
+        let canvases = self.canvases.borrow();
+        let (&canvas, (window, _, surface)) = canvases.iter().next()?;
+        if self.canvases_that_asked.borrow().contains(&canvas) {
+            return Some(crate::usability::FitFacts { fixed: None });
+        }
+        let explicit = surface
+            .design_size()
+            .filter(|_| !self.implicit_designs.borrow().contains(&canvas));
+        let fixed = explicit.or_else(|| self.requested_sizes.borrow().get(window).copied());
+        Some(crate::usability::FitFacts { fixed })
     }
 
     /// Where the report should be written, if this is a driven run.
@@ -2734,6 +2764,7 @@ impl Phase3GuiHost {
                 let list = lists.entry(canvas).or_default();
                 list.logical_width = lw;
                 list.logical_height = lh;
+                list.design = surface.design_size();
                 let frame = std::mem::take(list);
                 (*window, *widget, frame)
             };
@@ -2897,6 +2928,49 @@ impl Phase3GuiHost {
         match self.window_id(window) {
             Ok(id) => self.dispatcher().touches(id),
             Err(_) => Vec::new(),
+        }
+    }
+
+    /// Fit a canvas whose app never asked its size and never set a design
+    /// size. Such an app can only be drawing for the size it requested; on a
+    /// phone, or after the window was resized, the canvas is another size,
+    /// and drawn as-is it sat in a corner, cut off, its taps off target. The
+    /// requested size becomes its design size -- uniform scale, centred,
+    /// pointer mapped -- exactly what an app gets by asking for one. Made
+    /// once, it then fits any screen. Runs at every present.
+    fn fit_unasked_canvas(&self, canvas: u64) {
+        if self.canvases_that_asked.borrow().contains(&canvas) {
+            return;
+        }
+        let implicit = self.implicit_designs.borrow().contains(&canvas);
+        let (window, explicit) = {
+            let canvases = self.canvases.borrow();
+            let Some((window, _, surface)) = canvases.get(&canvas) else {
+                return;
+            };
+            (*window, surface.design_size().is_some() && !implicit)
+        };
+        if explicit {
+            return;
+        }
+        let Some(requested) = self.requested_sizes.borrow().get(&window).copied() else {
+            return;
+        };
+        if self.refit_canvas(canvas).is_err() {
+            return;
+        }
+        let mut canvases = self.canvases.borrow_mut();
+        let Some((_, _, surface)) = canvases.get_mut(&canvas) else {
+            return;
+        };
+        let (w, h) = surface.dimensions();
+        let differs = (w as f32 - requested.0).abs() > 1.0 || (h as f32 - requested.1).abs() > 1.0;
+        if differs && !implicit {
+            surface.set_design_size(requested.0, requested.1);
+            self.implicit_designs.borrow_mut().insert(canvas);
+        } else if !differs && implicit {
+            surface.set_design_size(0.0, 0.0);
+            self.implicit_designs.borrow_mut().remove(&canvas);
         }
     }
 
@@ -3466,9 +3540,11 @@ impl ui::window::Host for Phase3GuiHost {
         krate_adapter_common::vector_text::warm_text_engine();
 
         let title_note = options.title.clone();
+        let requested = (size.width as f32, size.height as f32);
         match self.dispatcher().create_window(options) {
             Ok(id) => {
                 self.windows.push(id);
+                self.requested_sizes.borrow_mut().insert(id, requested);
                 // One line to stderr, native backends only. A person running a
                 // GUI app from a terminal watched a silent prompt for minutes
                 // because the window was invisible; had it said this, the gap
@@ -4445,6 +4521,8 @@ impl gfx::canvas2d::Host for Phase3GuiHost {
             return Ok(Err(gfx::types::GfxError::InvalidTarget));
         };
         surface.set_design_size(size.width, size.height);
+        // The app's own design replaces any the host chose for it.
+        self.implicit_designs.borrow_mut().remove(&canvas);
         Ok(Ok(()))
     }
 
@@ -4452,6 +4530,14 @@ impl gfx::canvas2d::Host for Phase3GuiHost {
         &mut self,
         canvas: u64,
     ) -> wasmtime::Result<Result<gfx::types::Size, gfx::types::GfxError>> {
+        // An app that asks lays itself out from the answer: it is responsive,
+        // and a design the host chose for it (see `fit_unasked_canvas`) goes.
+        self.canvases_that_asked.borrow_mut().insert(canvas);
+        if self.implicit_designs.borrow_mut().remove(&canvas) {
+            if let Some((_, _, surface)) = self.canvases.borrow_mut().get_mut(&canvas) {
+                surface.set_design_size(0.0, 0.0);
+            }
+        }
         // Re-fit to the widget's current rect before answering. The window is
         // resizable, so the rect the canvas was bound to is not the rect it
         // still has. Asking is how an app learns it was resized, and a stale
@@ -5215,6 +5301,7 @@ impl gfx::canvas2d::Host for Phase3GuiHost {
     }
 
     fn present(&mut self, canvas: u64) -> wasmtime::Result<Result<(), gfx::types::GfxError>> {
+        self.fit_unasked_canvas(canvas);
         // The one call that reaches the widget. Draw calls mutate the raster;
         // this publishes it, so a hundred fills cost one render.
         // Pace the frame. A game loop calls poll and present with no sleep of

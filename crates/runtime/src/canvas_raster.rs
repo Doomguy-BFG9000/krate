@@ -333,6 +333,58 @@ impl CanvasSurface {
         ((k), (cw - dw * k) / 2.0, (ch - dh * k) / 2.0)
     }
 
+    /// Paint the spare space around a letterboxed design with the colour
+    /// along each of its edges, so an app designed for one shape reads as
+    /// filling a screen of another instead of sitting between bars. The
+    /// iPhone's GPU path does the same from the app's background call
+    /// (`CanvasList::edge_colors`).
+    fn blend_letterbox(&self, rgba: &mut [u8]) {
+        if self.design.is_none() {
+            return;
+        }
+        let (k, ox, oy) = self.design_transform();
+        let Some((dw, dh)) = self.design else {
+            return;
+        };
+        let (w, h) = (self.width as usize, self.height as usize);
+        let s = self.width as f32 / self.logical_width.max(1) as f32;
+        let x0 = ((ox * s).round() as usize).min(w);
+        let y0 = ((oy * s).round() as usize).min(h);
+        let x1 = (((ox + dw * k) * s).round() as usize).clamp(x0, w);
+        let y1 = (((oy + dh * k) * s).round() as usize).clamp(y0, h);
+        if x1 <= x0 || y1 <= y0 || (x0 == 0 && y0 == 0 && x1 == w && y1 == h) {
+            return;
+        }
+        let avg = |rgba: &[u8], points: &mut dyn Iterator<Item = (usize, usize)>| {
+            let (mut r, mut g, mut b, mut n) = (0u64, 0u64, 0u64, 0u64);
+            for (x, y) in points {
+                let i = (y * w + x) * 4;
+                r += rgba[i] as u64;
+                g += rgba[i + 1] as u64;
+                b += rgba[i + 2] as u64;
+                n += 1;
+            }
+            let n = n.max(1);
+            [(r / n) as u8, (g / n) as u8, (b / n) as u8, 255u8]
+        };
+        let top = avg(rgba, &mut (x0..x1).map(|x| (x, y0)));
+        let bottom = avg(rgba, &mut (x0..x1).map(|x| (x, y1 - 1)));
+        let left = avg(rgba, &mut (y0..y1).map(|y| (x0, y)));
+        let right = avg(rgba, &mut (y0..y1).map(|y| (x1 - 1, y)));
+        let mut fill = |xs: std::ops::Range<usize>, ys: std::ops::Range<usize>, c: [u8; 4]| {
+            for y in ys {
+                for x in xs.clone() {
+                    let i = (y * w + x) * 4;
+                    rgba[i..i + 4].copy_from_slice(&c);
+                }
+            }
+        };
+        fill(0..w, 0..y0, top);
+        fill(0..w, y1..h, bottom);
+        fill(0..x0, y0..y1, left);
+        fill(x1..w, y0..y1, right);
+    }
+
     /// Map one design-space point onto the canvas.
     fn map_point(&self, x: f32, y: f32) -> (f32, f32) {
         let (k, ox, oy) = self.design_transform();
@@ -878,20 +930,21 @@ impl CanvasSurface {
     /// easing to `bottom` at `y + h`. For skies, panels, backdrops.
     pub fn linear_gradient_v(&mut self, x: f32, y: f32, w: f32, h: f32, top: u32, bottom: u32) {
         self.materialize();
-        let (x, y) = self.map_point(x, y);
-        let (w, h) = (self.map_len(w), self.map_len(h));
-        let k = self.scale;
-        let (x, y, w, h) = (x * k, y * k, w * k, h * k);
-        if h <= 0.0 || w <= 0.0 {
+        // One band per device row, each handed to `fill_rect` in the app's
+        // OWN coordinates, because `fill_rect` maps and scales itself. This
+        // used to map and scale first and pass the result on -- the double
+        // transform K-425 found in strokes -- so in a design-size app or on
+        // a dense screen the gradient landed at the wrong place and size,
+        // and the screen around a letterboxed design stayed blank.
+        let rows = (self.map_len(h) * self.scale).ceil() as i32;
+        if rows <= 0 || w <= 0.0 {
             return;
         }
-        let rows = h.ceil() as i32;
-        let mut i = 0i32;
-        while i < rows {
-            let t = (i as f32 + 0.5) / h;
+        let step = h / rows as f32;
+        for i in 0..rows {
+            let t = (i as f32 + 0.5) / rows as f32;
             let c = lerp_color(top, bottom, t.clamp(0.0, 1.0));
-            self.fill_rect(x, y + i as f32, w, 1.0, c);
-            i += 1;
+            self.fill_rect(x, y + i as f32 * step, w, step, c);
         }
     }
 
@@ -1357,6 +1410,7 @@ impl CanvasSurface {
             chunk[2] = *word as u8;
             chunk[3] = (word >> 24) as u8;
         }
+        self.blend_letterbox(&mut rgba);
         ImagePixels::new(self.width, self.height, rgba)
     }
 }
@@ -1399,6 +1453,77 @@ mod tests {
     /// A frame that is one opaque picture covering the canvas goes out at
     /// the picture's own size; anything else, or anything drawn after it,
     /// rasters exactly as before.
+    /// A design-size app looks and hit-tests the same on every path: the
+    /// list the iPhone's GPU draws from maps design space exactly as this
+    /// raster does. They once disagreed -- the GPU drew design coordinates
+    /// unscaled while taps were mapped into design space -- and a calculator
+    /// on a phone was too small and answered touches in the wrong places.
+    /// Smart fit: an app designed at 320x470 on a phone-shaped 390x844
+    /// canvas does not sit between bars. The spare space above takes the
+    /// colour along the design's top edge and the space below its bottom
+    /// edge, on the CPU raster and in the list the iPhone's GPU draws from.
+    #[test]
+    fn the_spare_space_around_a_design_takes_its_edge_colours() {
+        let (top, bottom) = (0xFF13_1620u32, 0xFF0B_0D14u32);
+        let mut surface = CanvasSurface::new(390, 844).expect("surface");
+        surface.set_design_size(320.0, 470.0);
+        surface.linear_gradient_v(0.0, 0.0, 320.0, 470.0, top, bottom);
+        let image = surface.to_image().expect("image");
+        let px = |x: u32, y: u32| {
+            let i = ((y * image.width + x) * 4) as usize;
+            [image.rgba[i], image.rgba[i + 1], image.rgba[i + 2]]
+        };
+        let near = |p: [u8; 3], c: u32| {
+            let want = [(c >> 16) as u8, (c >> 8) as u8, c as u8];
+            p.iter().zip(want).all(|(a, b)| a.abs_diff(b) <= 3)
+        };
+        // Above and below the design, across the full width.
+        assert!(near(px(2, 2), top), "top bar {:?}", px(2, 2));
+        assert!(near(px(387, 2), top), "top bar right {:?}", px(387, 2));
+        assert!(near(px(2, 841), bottom), "bottom bar {:?}", px(2, 841));
+
+        let list = krate_adapter_common::canvas_list::CanvasList {
+            logical_width: 390,
+            logical_height: 844,
+            design: Some((320.0, 470.0)),
+            ops: vec![
+                krate_adapter_common::canvas_list::CanvasOp::LinearGradient {
+                    rect: (0.0, 0.0, 320.0, 470.0),
+                    top,
+                    bottom,
+                },
+            ],
+        };
+        let edges = list
+            .edge_colors()
+            .expect("the background call gives the edges");
+        assert_eq!((edges.top, edges.bottom), (top, bottom));
+    }
+
+    #[test]
+    fn the_gpu_list_maps_design_space_exactly_as_the_raster_does() {
+        for (canvas, design) in [((390, 844), (360.0, 560.0)), ((844, 390), (360.0, 560.0))] {
+            let mut surface = CanvasSurface::new(canvas.0, canvas.1).expect("surface");
+            surface.set_design_size(design.0, design.1);
+            let list = krate_adapter_common::canvas_list::CanvasList {
+                logical_width: canvas.0,
+                logical_height: canvas.1,
+                design: surface.design_size(),
+                ops: Vec::new(),
+            };
+            assert_eq!(
+                list.design_transform(),
+                surface.design_transform(),
+                "{canvas:?}"
+            );
+            assert_ne!(
+                list.design_transform(),
+                (1.0, 0.0, 0.0),
+                "the fixture must letterbox"
+            );
+        }
+    }
+
     #[test]
     fn a_whole_frame_picture_is_kept_at_its_own_size() {
         let frame = |w: u32, h: u32, alpha: u8| {

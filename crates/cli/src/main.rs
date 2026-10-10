@@ -19600,6 +19600,26 @@ fn run_usability_stage(
                 .to_string(),
         });
     }
+    // Made once, run on any device: a layout drawn as a fixed card fits a
+    // phone, a tablet and a desktop only by leaving most of them empty.
+    if let Some(wasted) = report.fit.and_then(|fit| fit.wasted()) {
+        let fixed = report
+            .fit
+            .and_then(|fit| fit.fixed)
+            .map(|(w, h)| format!("{w:.0}x{h:.0}"))
+            .unwrap_or_default();
+        return Err(CheckFailure {
+            stage: CheckStage::Usability,
+            detail: format!("the app is laid out as a fixed {fixed} layout: {wasted}"),
+            fix: "Lay the app out from the real screen: call `canvas2d::canvas_size(canvas)` \
+                  each frame and size and place everything from that width and height -- \
+                  wider rows and bigger buttons on a tall phone, columns on a tablet or a \
+                  desktop -- with hit-testing from the same numbers. Do not call \
+                  `set_design_size` for an app like this; keep it for a game whose \
+                  proportions are the design."
+                .to_string(),
+        });
+    }
     if let Some(Observation::Broke { detail }) = &report.click {
         return Err(CheckFailure {
             stage: CheckStage::Usability,

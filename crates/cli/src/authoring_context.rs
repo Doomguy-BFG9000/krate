@@ -302,7 +302,12 @@ choice for a dashboard, a feed, a list, a settings pane, or anything with \
 cards and rows: those should USE a bigger window, and under a design size \
 they instead sit letterboxed with dead bands around them while the text \
 scales up soft. When in doubt, lay out from `canvas_size`. It is the \
-recoverable mistake; a design size baked into 2000 lines of drawing is not.\n\n\
+recoverable mistake; a design size baked into 2000 lines of drawing is not. \
+check-app measures it: an app made once runs on a phone, a tablet and a \
+desktop, and a fixed layout fails a screen it must shrink below 75% of \
+its size to fit (too small to read: a 1180x760 layout on a phone shrinks \
+to 51%) or fills less than 60% of (a 320x470 card on a desktop fills \
+43%). A wide layout is measured with the phone held sideways.\n\n\
 **A design size does not excuse you from handling the wheel.** This is the \
 trap it sets, and a real generated weather dashboard fell into it: because \
 the design box never overflows itself, it looks like there is nothing to \

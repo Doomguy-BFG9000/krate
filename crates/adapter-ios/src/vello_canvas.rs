@@ -205,15 +205,47 @@ impl GpuCanvas {
         }
         let t_scene = std::time::Instant::now();
         let mut scene = vello::Scene::new();
-        let base = Affine::scale(self.scale as f64);
+        // An app that set a design size draws in its own coordinates; map
+        // them onto the canvas uniformly and centred, exactly as the CPU
+        // raster does. Without this the picture sat unscaled while taps were
+        // mapped into design space: a calculator drawn too small and
+        // off-centre, its buttons answering touches in the wrong places.
+        let screen = Affine::scale(self.scale as f64);
+        let (k, ox, oy) = list.design_transform();
+        let base = screen * Affine::translate((ox as f64, oy as f64)) * Affine::scale(k as f64);
+        // The spare space around a letterboxed design takes the app's own
+        // edge colours, so it reads as filling the screen, not as a card
+        // between black bars.
+        if let (Some(edges), Some((dw, dh))) = (list.edge_colors(), list.design) {
+            let (cw, ch) = (list.logical_width as f64, list.logical_height as f64);
+            let (x0, y0) = (ox as f64, oy as f64);
+            let (x1, y1) = (x0 + dw as f64 * k as f64, y0 + dh as f64 * k as f64);
+            for (color, area) in [
+                (edges.top, Rect::new(0.0, 0.0, cw, y0 + 0.5)),
+                (edges.bottom, Rect::new(0.0, y1 - 0.5, cw, ch)),
+                (edges.left, Rect::new(0.0, y0, x0 + 0.5, y1)),
+                (edges.right, Rect::new(x1 - 0.5, y0, cw, y1)),
+            ] {
+                if area.width() > 0.5 && area.height() > 0.5 {
+                    scene.fill(
+                        Fill::NonZero,
+                        screen,
+                        &Brush::Solid(unpack(color)),
+                        None,
+                        &area,
+                    );
+                }
+            }
+        }
         let mut clip_depth = 0usize;
 
         for op in &list.ops {
             match op {
                 CanvasOp::Clear(color) => {
+                    // The whole canvas, letterbox bars included.
                     scene.fill(
                         Fill::NonZero,
-                        base,
+                        screen,
                         &Brush::Solid(unpack(*color)),
                         None,
                         &Rect::new(
@@ -979,6 +1011,9 @@ fn fs(in: VsOut) -> @location(0) vec4<f32> {
 pub(crate) fn whole_frame_picture(
     list: &CanvasList,
 ) -> Option<&krate_adapter_common::ui::ImagePixels> {
+    if list.design.is_some() {
+        return None;
+    }
     let mut picture = None;
     for op in &list.ops {
         match op {

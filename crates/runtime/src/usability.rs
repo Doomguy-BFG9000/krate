@@ -272,6 +272,86 @@ pub struct UsabilityReport {
     pub opened_window: bool,
     /// How long the app ran before it returned, in milliseconds.
     pub ran_millis: u64,
+    /// How the app's canvas lays itself out, for the fit check. Absent for
+    /// an app with no canvas (the widget tree always fills its window).
+    #[serde(default)]
+    pub fit: Option<FitFacts>,
+}
+
+/// What decides how an app fills screens of other shapes.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq)]
+pub struct FitFacts {
+    /// The fixed size the app draws in: the design size it set, or -- when
+    /// it never asked its real size -- the size it asked its window to be.
+    /// None for an app that lays out from the real canvas size.
+    pub fixed: Option<(f32, f32)>,
+}
+
+/// The screens an app made once must fill: a phone (held the way the app's
+/// shape suggests), a tablet, a desktop window.
+pub const FIT_SCREENS: [(&str, f32, f32); 3] = [
+    ("a phone", 390.0, 844.0),
+    ("a tablet", 820.0, 1180.0),
+    ("a desktop window", 1280.0, 800.0),
+];
+
+/// A fixed layout fails a screen it must shrink below this much of its
+/// designed size to fit -- its text and buttons become too small to read
+/// and hit (a 1180x760 desktop layout on a phone shrinks to half) -- or
+/// leaves mostly empty, filling less than this much of it.
+pub const FIT_MIN_SCALE: f32 = 0.75;
+pub const FIT_MIN_FILL: f32 = 0.60;
+
+impl FitFacts {
+    /// For each screen, the scale a fixed layout is drawn at and how much of
+    /// the screen it fills, scaled uniformly to fit and centred (wide layouts
+    /// on a phone or tablet held sideways, as Krate turns the screen for
+    /// them). Empty for a layout that fills any screen.
+    pub fn fill(&self) -> Vec<(&'static str, f32, f32)> {
+        let Some((dw, dh)) = self.fixed else {
+            return Vec::new();
+        };
+        if dw <= 0.0 || dh <= 0.0 {
+            return Vec::new();
+        }
+        FIT_SCREENS
+            .iter()
+            .map(|&(name, w, h)| {
+                let (w, h) = if dw > dh && name != "a desktop window" {
+                    (w.max(h), w.min(h))
+                } else {
+                    (w, h)
+                };
+                let k = (w / dw).min(h / dh);
+                (name, k, (dw * k * dh * k) / (w * h))
+            })
+            .collect()
+    }
+
+    /// The screens this layout fails, as "on a phone it shrinks to 51% of
+    /// its size, too small to read" -- or None when it fits them all.
+    pub fn wasted(&self) -> Option<String> {
+        let findings: Vec<String> = self
+            .fill()
+            .into_iter()
+            .filter_map(|(name, k, f)| {
+                if k < FIT_MIN_SCALE {
+                    Some(format!(
+                        "on {name} it shrinks to {:.0}% of its size, too small to read",
+                        k * 100.0
+                    ))
+                } else if f < FIT_MIN_FILL {
+                    Some(format!(
+                        "on {name} it fills only {:.0}% of the screen",
+                        f * 100.0
+                    ))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        (!findings.is_empty()).then(|| findings.join("; "))
+    }
 }
 
 impl UsabilityReport {
@@ -399,6 +479,44 @@ impl FrameBuffer {
             return false;
         };
         iter.any(|p| p != first)
+    }
+}
+
+#[cfg(test)]
+mod fit_tests {
+    use super::*;
+
+    /// A fixed portrait card (the calculator) wastes every screen; a game
+    /// whose proportions are its design fills them; a layout from the real
+    /// size fills anything.
+    #[test]
+    fn the_fit_check_tells_a_fixed_card_from_a_layout_that_fills() {
+        // A small fixed card (the calculator) leaves a desktop mostly empty.
+        let card = FitFacts {
+            fixed: Some((320.0, 470.0)),
+        };
+        assert_eq!(
+            card.wasted().as_deref(),
+            Some("on a desktop window it fills only 43% of the screen")
+        );
+        // A desktop-shaped layout shrinks to half on a phone.
+        let desktop = FitFacts {
+            fixed: Some((1180.0, 760.0)),
+        };
+        let wasted = desktop.wasted().expect("unreadable on a phone");
+        assert!(
+            wasted.starts_with("on a phone it shrinks to 51%"),
+            "{wasted}"
+        );
+        // A 4:3 game is scaled up and fills enough everywhere.
+        let game = FitFacts {
+            fixed: Some((320.0, 240.0)),
+        };
+        assert_eq!(game.wasted(), None, "{:?}", game.fill());
+
+        let responsive = FitFacts { fixed: None };
+        assert_eq!(responsive.wasted(), None);
+        assert!(responsive.fill().is_empty());
     }
 }
 
@@ -565,10 +683,14 @@ mod tests {
             click: Some(Observation::unobserved("no clickable widget")),
             opened_window: true,
             ran_millis: 1234,
+            fit: Some(FitFacts {
+                fixed: Some((320.0, 470.0)),
+            }),
         };
         report.write(&path).expect("write");
         let back = UsabilityReport::read(&path).expect("read");
         assert_eq!(back.stay_open, Some(Observation::Held));
+        assert_eq!(back.fit, report.fit);
         assert_eq!(
             back.resize,
             Some(Observation::broke("the frame did not change"))
