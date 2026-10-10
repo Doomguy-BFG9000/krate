@@ -388,90 +388,61 @@ pub fn skeleton(name: &str, sdk_prefix: &str, world: Skeleton) -> Result<Generat
     Ok(GeneratedApp { files })
 }
 
-/// A minimal GUI skeleton: opens a window with one label, waits a bounded number
-/// of rounds (short when the first argument is `quick`), then exits. No_std, no
-/// behavior, imports only `krate:*`. The agent replaces the body.
+/// A minimal GUI skeleton: a canvas laid out from the screen it is on
+/// (`krate::layout`), redrawn when the screen turns, with taps tested against
+/// what was drawn and a list that scrolls. No_std, no behavior, imports only
+/// `krate:*`. The agent replaces the body and keeps the shape.
+///
+/// It used to be a widget tree with a 480-point window and a 440-point label,
+/// waiting `if quick { 20 } else { 600 }` rounds: every generated app started
+/// as a desktop-only layout that closed itself after thirty seconds -- the
+/// exact shape `bounded_interactive_loop` refuses.
 fn gui_skeleton_source() -> String {
     // Kept deliberately small and heavily commented: the comments are the
     // agent's in-file guide to the shape it must keep (the SDK's `krate::ui`,
-    // quick, the pure_string helper, `krate::export!`). No bindings module of
-    // the app's own: the SDK's `gui` feature carries the gui world (IC-298).
-    r####"//! A minimal Krate GUI skeleton. Replace this with the real app.
+    // `krate::layout`, quick, `krate::export!`). No bindings module of the
+    // app's own: the SDK's `gui` feature carries the gui world (IC-298).
+    r####"//! A minimal Krate GUI skeleton. Replace the content with the real app.
 //!
-//! It opens a window with one label, honors the `quick` argument (exit
-//! promptly for automated checks), and imports only `krate:*`. Keep the
-//! shape -- `#![no_std]`, `krate::ui` from the SDK, the `quick` check,
-//! `pure_string`, `krate::export!` -- and build the requested app inside
-//! `run`. Read
-//! KRATE_AUTHORING.md first, then the closest example under apps/, and run
-//! `krate check-app .` until it prints OK.
+//! The same app opens on a phone held upright, a phone turned sideways, a
+//! tablet and a desktop window, and `krate check-app` runs it on each. So the
+//! layout comes from the screen in front of it (`Screen::of`), never from
+//! one device's numbers: keep that shape, the `quick` check and
+//! `krate::export!`, and build the requested app inside it. Read
+//! KRATE_AUTHORING.md first, then run `krate check-app .` until it prints OK.
 
 // A Krate guest is no_std: the SDK owns the allocator, the panic handler, and
 // the mem intrinsics, so nothing here can pull std's latent `wasi:*` imports.
-// Linking std instead would fail the import check the moment this app does
-// anything real, which is far too late to find out.
 #![no_std]
 
 extern crate alloc;
 
-// The SDK owns the allocator, the panic handler and the mem intrinsics, and
-// with its `gui` feature (see Cargo.toml) it carries the gui world: the
-// windowing, widget and event interfaces are `krate::ui::*`, and the raw
-// bindings for the shared packages sit under `krate::bindings`. This app
-// has no generated bindings module of its own.
-use alloc::string::String;
+use alloc::format;
+use alloc::vec::Vec;
 use krate::bindings::krate::io::args;
+use krate::gfx::{canvas2d, types as gfx};
+use krate::layout::{Rect, Screen};
 use krate::ui::{events, tree, types, window};
 
 const ROOT_ID: u64 = 1;
-const LABEL_ID: u64 = 2;
+const CANVAS_ID: u64 = 2;
 
-/// How many 50ms rounds to stay open: a short window for `quick`, a longer
-/// one for a real session.
-const QUICK_ROUNDS: u32 = 20;
-const SESSION_ROUNDS: u32 = 600;
-const ROUND_MILLIS: u32 = 50;
+const BG: gfx::Color = gfx::Color { r: 0.98, g: 0.98, b: 0.99, a: 1.0 };
+const INK: gfx::Color = gfx::Color { r: 0.07, g: 0.07, b: 0.08, a: 1.0 };
+const MUTED: gfx::Color = gfx::Color { r: 0.50, g: 0.50, b: 0.54, a: 1.0 };
+const CARD: gfx::Color = gfx::Color { r: 1.0, g: 1.0, b: 1.0, a: 1.0 };
 
-struct Component;
-
-fn root() -> types::WidgetNode {
+fn node(id: u64, parent: Option<u64>, kind: types::WidgetKind) -> types::WidgetNode {
     types::WidgetNode {
-        id: ROOT_ID,
-        parent: None,
-        kind: types::WidgetKind::Stack,
+        id,
+        parent,
+        kind,
         label: None,
         role: None,
-        // `text`, `place` and `box_` are the three optional fields Style
-        // gained after this skeleton was written. None everywhere means it
-        // looks exactly as it did; naming them is what keeps the skeleton
-        // compiling as the record grows.
         style: types::Style {
-            width: Some(480.0),
-            height: Some(320.0),
-            grow: 0.0,
-            padding: 16.0,
-            text: None,
-            place: None,
-            box_: None,
-        },
-        checked: None,
-        value: None,
-        selected: None,
-        text_cursor: None,
-    }
-}
-
-fn label(text: &str) -> types::WidgetNode {
-    types::WidgetNode {
-        id: LABEL_ID,
-        parent: Some(ROOT_ID),
-        kind: types::WidgetKind::Text,
-        label: Some(pure_string(text)),
-        role: Some(pure_string("text")),
-        style: types::Style {
-            width: Some(440.0),
-            height: Some(28.0),
-            grow: 0.0,
+            width: None,
+            height: None,
+            grow: 1.0,
             padding: 0.0,
             text: None,
             place: None,
@@ -484,56 +455,134 @@ fn label(text: &str) -> types::WidgetNode {
     }
 }
 
-impl krate::Guest for Component {
-    fn run() -> i32 {
-        let size = types::WindowSize { width: 480, height: 320 };
-        let Ok(win) = window::create("Krate App", size) else { return 30; };
-        if window::show(win).is_err() { return 31; }
-        if tree::set_root(win, &root()).is_err()
-            || tree::upsert_node(win, &label("Replace me")).is_err()
-        {
-            let _ = window::close(win);
-            return 32;
+fn r(rect: Rect) -> gfx::Rect {
+    gfx::Rect { x: rect.x, y: rect.y, width: rect.w, height: rect.h }
+}
+
+fn style(weight: u16) -> gfx::TextStyle {
+    gfx::TextStyle { weight, italic: false, letter_spacing: 0.0, family: gfx::FontFamily::Sans }
+}
+
+/// Everything the app shows, and where its tappable things were drawn.
+struct App {
+    canvas: u64,
+    screen: Screen,
+    scroll: f32,
+    content_h: f32,
+    view_h: f32,
+    /// (where it was drawn, which row): taps are tested against these.
+    hits: Vec<(Rect, usize)>,
+    chosen: Option<usize>,
+}
+
+impl App {
+    fn draw(&mut self) {
+        let c = self.canvas;
+        let s = self.screen;
+        self.hits.clear();
+        // The background fills the whole window; text and controls stay
+        // inside the safe area (clear of a phone's notch, home bar and the
+        // close button Krate draws).
+        let _ = canvas2d::clear(c, BG);
+        let mut area = s.safe_area().inset(0.0, 20.0, 0.0, 20.0);
+        let title = area.take_top(if s.short() { 48.0 } else { 72.0 });
+        let size = if s.compact() { 32.0 } else { 28.0 };
+        let _ = canvas2d::draw_text_styled(c, "Replace me", gfx::Point { x: title.x, y: title.bottom() - 14.0 }, size, INK, style(800));
+
+        // A list that scrolls: rows at least `s.tap()` tall, laid out in as
+        // many columns as the width takes (one on a phone held upright).
+        self.view_h = area.h;
+        let _ = canvas2d::set_clip(c, area.x, area.y, area.w, area.h);
+        let page = Rect { y: area.y - self.scroll, ..area };
+        let cells = page.grid(12, 280.0, s.tap() + 20.0, 12.0);
+        for (i, cell) in cells.iter().enumerate() {
+            let card = if self.chosen == Some(i) { gfx::Color { r: 0.90, g: 0.93, b: 1.0, a: 1.0 } } else { CARD };
+            let _ = canvas2d::fill_round_rect(c, r(*cell), gfx::CornerRadii { top_left: 12.0, top_right: 12.0, bottom_right: 12.0, bottom_left: 12.0 }, card);
+            let line = format!("Row {}", i + 1);
+            let _ = canvas2d::draw_text_styled(c, &line, gfx::Point { x: cell.x + 16.0, y: cell.y + cell.h / 2.0 + 6.0 }, s.body(), INK, style(500));
+            self.hits.push((*cell, i));
         }
-
-        // `quick` is a bare first argument (not a flag). Compare bytes, not
-        // with str methods, so no panic path pulls wasi in.
-        let raw = args::raw();
-        let quick = raw
-            .as_bytes()
-            .split(|b| *b == b'\n')
-            .next()
-            .is_some_and(|first| first == b"quick");
-        let rounds = if quick { QUICK_ROUNDS } else { SESSION_ROUNDS };
-
-        for _ in 0..rounds {
-            if let Some(types::Event::CloseRequested(id)) = events::wait(Some(ROUND_MILLIS)) {
-                if id == win {
-                    break;
-                }
-            }
-        }
-
-        let _ = window::close(win);
-        0
+        let _ = canvas2d::clear_clip(c);
+        let bottom = cells.last().map(|cell| cell.bottom() + self.scroll).unwrap_or(area.y);
+        self.content_h = bottom - area.y + 20.0;
+        let hint = "Tap a row";
+        let _ = canvas2d::draw_text_styled(c, hint, gfx::Point { x: title.x, y: title.bottom() + 2.0 }, 13.0, MUTED, style(500));
     }
 }
 
-/// Build an owned `String` without touching std's allocation-error handler,
-/// whose panic path drags the whole `wasi:*` import set in. Keep this helper.
-fn pure_string(text: &str) -> String {
-    let len = text.len();
-    if len == 0 {
-        return String::new();
-    }
-    unsafe {
-        let layout = core::alloc::Layout::from_size_align_unchecked(len, 1);
-        let ptr = alloc::alloc::alloc(layout);
-        if ptr.is_null() {
-            core::arch::wasm32::unreachable()
+struct Component;
+
+impl krate::Guest for Component {
+    fn run() -> i32 {
+        // The size a desktop opens it at; a phone or tablet gives it the
+        // whole screen, and `Screen::of` says which.
+        let size = types::WindowSize { width: 960, height: 680 };
+        let Ok(win) = window::create("Krate App", size) else { return 30; };
+        if tree::set_root(win, &node(ROOT_ID, None, types::WidgetKind::Stack)).is_err() {
+            return 32;
         }
-        core::ptr::copy_nonoverlapping(text.as_ptr(), ptr, len);
-        String::from_raw_parts(ptr, len, len)
+        let _ = tree::upsert_node(win, &node(CANVAS_ID, Some(ROOT_ID), types::WidgetKind::Canvas));
+        let Ok(canvas) = canvas2d::bind(win, CANVAS_ID) else { return 33; };
+        let mut app = App {
+            canvas,
+            screen: Screen::of(win),
+            scroll: 0.0,
+            content_h: 0.0,
+            view_h: 0.0,
+            hits: Vec::new(),
+            chosen: None,
+        };
+
+        // `quick` (a bare first argument): draw once and stop, for automated
+        // checks. Otherwise run until the window is closed -- never for a
+        // fixed number of rounds, which closes the app on the person using it.
+        let raw = args::raw();
+        let quick = raw.split('\n').next() == Some("quick");
+        let mut dirty = true;
+        let mut pressed: Option<(f32, f32)> = None;
+        loop {
+            if dirty {
+                app.draw();
+                let _ = canvas2d::present(canvas);
+                let _ = window::request_redraw(win);
+                dirty = false;
+                if quick {
+                    return 0;
+                }
+            }
+            match events::wait(None) {
+                Some(types::Event::CloseRequested(_)) => return 0,
+                // A phone turned, a window resized: ask the screen again.
+                Some(types::Event::Resized(_)) => {
+                    app.screen = Screen::of(win);
+                    dirty = true;
+                }
+                // A finger drag on a phone arrives as a wheel too.
+                Some(types::Event::Wheel(wheel)) => {
+                    let max = (app.content_h - app.view_h).max(0.0);
+                    let next = (app.scroll + wheel.dy).clamp(0.0, max);
+                    if next != app.scroll {
+                        app.scroll = next;
+                        dirty = true;
+                    }
+                }
+                // A tap: act on release, over what was pressed, and not after
+                // a drag (that was a scroll).
+                Some(types::Event::Pointer(p)) if p.button.is_some() => {
+                    if p.pressed {
+                        pressed = Some((p.x, p.y));
+                    } else if let Some((x0, y0)) = pressed.take() {
+                        if (p.x - x0).abs() < 10.0 && (p.y - y0).abs() < 10.0 {
+                            if let Some((_, row)) = app.hits.iter().find(|(rect, _)| rect.contains(p.x, p.y)) {
+                                app.chosen = Some(*row);
+                                dirty = true;
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
     }
 }
 
@@ -1024,21 +1073,16 @@ fn title_case(name: &str) -> String {
     }
 }
 
-/// Cargo.toml for the AI-authoring skeleton.
+/// Cargo.toml for the AI-authoring skeleton: the checklist template's wiring,
+/// the SDK with its `gui` feature and nothing else.
 ///
-/// Same as the checklist template except the `krate` dependency turns on the
-/// SDK's `std` feature, because `gui_skeleton_source` is a `std` app. The SDK
-/// is `no_std` by default so guests link no std and cannot leak its latent
-/// `wasi:*` imports; linking that default into a `std` guest fails with
-/// "failed to load bitcode of module std". An agent converting the app to
-/// `#![no_std]` should drop `features = ["std"]` at the same time.
+/// It used to turn on the SDK's `std` feature too, for a skeleton that was
+/// long since `#![no_std]`. That links std's allocation-error path, which
+/// pulls `wasi:*` imports in the moment the app uses `format!` or a `Vec`:
+/// the fetch starter failed the import check with twenty of them (K-894),
+/// and the skeleton laid out from `krate::layout` failed the same way.
 fn skeleton_cargo_toml(request: &AppRequest, sdk_prefix: &str) -> String {
-    checklist_cargo_toml(request, sdk_prefix).replace(
-        &format!(r#"krate = {{ path = "{sdk_prefix}/crates/bindings-rust", features = ["gui"] }}"#),
-        &format!(
-            r#"krate = {{ path = "{sdk_prefix}/crates/bindings-rust", features = ["gui", "std"] }}"#
-        ),
-    )
+    checklist_cargo_toml(request, sdk_prefix)
 }
 
 fn checklist_cargo_toml(request: &AppRequest, sdk_prefix: &str) -> String {
@@ -1293,10 +1337,8 @@ mod tests {
         // to build before the agent writes a line.
         let skel = skeleton("todo", "../..", Skeleton::Gui).expect("skeleton");
         let skel_cargo = skel.file("Cargo.toml").expect("cargo");
-        // Match the dependency, not its exact spelling. The skeleton is a `std`
-        // app so it carries `features = ["std"]`; the SDK is no_std by default
-        // and linking that into a std guest fails with "failed to load bitcode
-        // of module std". An exact-string check fails on a correct Cargo.toml.
+        // Match the dependency, not its exact spelling: an exact-string check
+        // fails on a correct Cargo.toml.
         assert!(
             skel_cargo.lines().any(|line| {
                 let line = line.trim_start();
@@ -1306,9 +1348,12 @@ mod tests {
             "the GUI skeleton must depend on the SDK, got:\n{skel_cargo}"
         );
         assert!(
-            skel_cargo.contains(r#"features = ["gui", "std"]"#),
+            skel_cargo.contains(r#"features = ["gui"]"#),
             "the skeleton is a windowed app, so the SDK's gui feature is on:\n{skel_cargo}"
         );
+        // And not `std`: the skeleton is no_std, and the feature leaks wasi
+        // imports the moment the app allocates (K-894).
+        assert!(!skel_cargo.contains(r#""std""#), "{skel_cargo}");
         // And the skeleton reaches the gui world through the SDK, not through a
         // bindings module of its own (IC-298).
         let skel_lib = skel.file("src/lib.rs").expect("lib");

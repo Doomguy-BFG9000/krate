@@ -18777,13 +18777,12 @@ fn person_words_only(request: &str) -> String {
 
 /// The skeleton's Cargo.toml, made to agree with the starter it seeds.
 ///
-/// The skeleton is a `std` app, so its Cargo.toml turns on the SDK's `std`
-/// feature. A model starter replaces the code with a shipped example, and
-/// every one is `#![no_std]` and built WITHOUT that feature. Left as it was,
-/// the `std` feature linked std's allocator glue beside the starter, and the
-/// fetch starter -- untouched -- failed the import check with twenty
-/// `wasi:*` imports (K-894). The SDK owns the allocator, panic handler and
-/// memory intrinsics for a no_std guest, exactly as the shipped app has it.
+/// A model starter replaces the code with a shipped example, and every one
+/// is `#![no_std]` and built WITHOUT the SDK's `std` feature. The skeleton
+/// once asked for `std`, which linked std's allocator glue beside the
+/// starter: the fetch starter -- untouched -- failed the import check with
+/// twenty `wasi:*` imports (K-894). The skeleton no longer asks for it; this
+/// stays as the guard that a no_std starter is never seeded with it.
 fn starter_cargo_toml(skeleton_cargo: &str, starter_lib: &str) -> String {
     let no_std = starter_lib.lines().any(|line| line.trim() == "#![no_std]");
     if no_std {
@@ -22435,10 +22434,11 @@ mod starter_cargo_tests {
             .find(|f| f.path == "Cargo.toml")
             .expect("the skeleton writes a Cargo.toml")
             .contents;
-        // The hazard is real: the skeleton itself asks for std.
+        // The skeleton itself no longer asks for std (the root of K-894);
+        // every starter must still come out with what its shipped app uses.
         assert!(
-            cargo.contains(r#"features = ["gui", "std"]"#),
-            "the skeleton no longer asks for std, so this test no longer tests anything"
+            !cargo.contains(r#""std""#),
+            "the skeleton asks for std again, which leaks wasi imports: {cargo}"
         );
         let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         for example in crate::authoring_context::EMBEDDED_EXAMPLES {
