@@ -114,6 +114,21 @@ public class KrateActivity extends NativeActivity {
         return Haptics.play(this, feel, strength);
     }
 
+    /** Whether the phone can tell how it is held (krate:ui/motion). */
+    public boolean krateMotionAvailable() {
+        return Motion.available(this);
+    }
+
+    /** The latest motion reading, starting the sensors on the first ask. */
+    public float[] krateMotion() {
+        return Motion.read(this);
+    }
+
+    /** Stop the motion sensors. */
+    public void krateMotionStop() {
+        Motion.stop();
+    }
+
     /** Write the file at path into the document at uri; true when it all went. */
     public boolean krateCopyOut(String path, String uri) {
         return Documents.copyOut(this, path, Uri.parse(uri));

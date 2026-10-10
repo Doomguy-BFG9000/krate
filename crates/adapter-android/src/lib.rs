@@ -37,6 +37,7 @@ mod documents;
 mod haptics;
 #[cfg(target_os = "android")]
 mod java;
+mod motion;
 
 #[derive(Debug, Default)]
 pub struct AndroidUiAdapter {
@@ -423,6 +424,8 @@ impl WindowAdapter for AndroidWinitPrototypeUiAdapter {
         // The app is done with any folder it was given: what it changed
         // goes back to the real folder (K-1032).
         documents::put_back_folders();
+        // Sensors stop with the app, so they cost nothing after it.
+        motion::stop();
         self.remove_session(id);
         WindowAdapter::close_window(&self.headless, id)
     }
@@ -614,6 +617,17 @@ impl UiAdapter for AndroidWinitPrototypeUiAdapter {
         filter: &str,
     ) -> Option<std::path::PathBuf> {
         documents::choose(folder, filter)
+    }
+
+    /// Whether the phone has motion sensors (IC-917).
+    fn motion_available(&self) -> bool {
+        motion::available()
+    }
+
+    /// The latest reading in the screen's frame, sensors started on the
+    /// first ask.
+    fn motion(&self) -> Option<krate_adapter_common::ui::MotionReading> {
+        motion::read()
     }
 
     /// Whether the phone has a vibrator to tap back with (IC-917).
