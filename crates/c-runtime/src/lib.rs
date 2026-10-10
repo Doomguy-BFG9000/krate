@@ -69,6 +69,21 @@ enum Entry {
 }
 
 static mut FDS: Vec<Option<Entry>> = Vec::new();
+/// Each open directory's entries (name, type), read once when listing starts.
+/// libc reads a directory in buffer-sized calls; answering each one by
+/// listing the folder and stat-ing every entry again made reading a folder
+/// of n entries cost about n*n/k host calls -- slow wherever a host call is
+/// dear, which on an iPhone is everywhere.
+static mut LISTINGS: Vec<Option<Vec<(String, u8)>>> = Vec::new();
+
+fn listing_slot(fd: i32) -> &'static mut Option<Vec<(String, u8)>> {
+    let listings = unsafe { &mut *core::ptr::addr_of_mut!(LISTINGS) };
+    let i = fd as usize;
+    if listings.len() <= i {
+        listings.resize_with(i + 1, || None);
+    }
+    &mut listings[i]
+}
 static mut ARGS: Vec<String> = Vec::new();
 static mut STARTED: bool = false;
 static mut EXIT_CODE: Option<i32> = None;
@@ -124,12 +139,15 @@ fn fds() -> &'static mut Vec<Option<Entry>> {
 
 fn put_fd(entry: Entry) -> i32 {
     let fds = fds();
-    if let Some(i) = fds.iter().position(|e| e.is_none()) {
+    let fd = if let Some(i) = fds.iter().position(|e| e.is_none()) {
         fds[i] = Some(entry);
-        return i as i32;
-    }
-    fds.push(Some(entry));
-    (fds.len() - 1) as i32
+        i as i32
+    } else {
+        fds.push(Some(entry));
+        (fds.len() - 1) as i32
+    };
+    *listing_slot(fd) = None;
+    fd
 }
 
 fn entry(fd: i32) -> Option<&'static mut Entry> {
@@ -414,6 +432,7 @@ pub unsafe extern "C" fn __imported_wasi_snapshot_preview1_fd_close(fd: i32) -> 
     match fds().get_mut(fd as usize) {
         Some(slot @ Some(_)) if fd > 2 => {
             *slot = None;
+            *listing_slot(fd) = None;
             SUCCESS
         }
         Some(Some(_)) => SUCCESS,
@@ -719,23 +738,36 @@ pub unsafe extern "C" fn __imported_wasi_snapshot_preview1_fd_readdir(
     let Some(Entry::Dir(path)) = entry(fd) else {
         return EBADF;
     };
-    let names = match files::list(krate_path(path)) {
-        Ok(n) => n,
-        Err(err) => return errno(&err),
-    };
-    let base = path.clone();
+    // Starting over (cookie 0, as rewinddir does) reads the folder afresh.
+    let slot = listing_slot(fd);
+    if cookie == 0 || slot.is_none() {
+        let names = match files::list(krate_path(path)) {
+            Ok(n) => n,
+            Err(err) => return errno(&err),
+        };
+        let base = path.clone();
+        let typed = names
+            .into_iter()
+            .map(|name| {
+                let full = if base.is_empty() {
+                    name.clone()
+                } else {
+                    alloc::format!("{base}/{name}")
+                };
+                let ft = match files::stat(&full) {
+                    Ok(st) if st.is_dir => FT_DIR,
+                    _ => FT_FILE,
+                };
+                (name, ft)
+            })
+            .collect();
+        *slot = Some(typed);
+    }
+    let names = slot.as_ref().expect("listing read above");
     let out = bytes_mut(buf, len);
     let mut at = 0usize;
-    for (i, name) in names.iter().enumerate().skip(cookie as usize) {
-        let full = if base.is_empty() {
-            name.clone()
-        } else {
-            alloc::format!("{base}/{name}")
-        };
-        let ft = match files::stat(&full) {
-            Ok(st) if st.is_dir => FT_DIR,
-            _ => FT_FILE,
-        };
+    for (i, (name, ft)) in names.iter().enumerate().skip(cookie as usize) {
+        let ft = *ft;
         let mut head = [0u8; 24];
         head[0..8].copy_from_slice(&((i + 1) as u64).to_le_bytes());
         head[8..16].copy_from_slice(&((i + 1) as u64).to_le_bytes());

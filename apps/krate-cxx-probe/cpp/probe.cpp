@@ -57,6 +57,19 @@ extern "C" int probe_main(int argc, char **argv) {
     if (d) { errno = 0; struct dirent *e; while ((e = readdir(d))) { entries++; printf("  entry: %s\n", e->d_name); } if (errno) printf("readdir errno: %d %s\n", errno, strerror(errno)); closedir(d); }
     else printf("opendir errno: %d %s\n", errno, strerror(errno));
     printf("readdir: %d\n", entries);
+    // A folder bigger than one readdir buffer: libc reads it in several
+    // calls, each resuming where the last stopped. Every name exactly once.
+    mkdir("probe-dir/many", 0755);
+    for (int i = 0; i < 300; i++) {
+        char name[64];
+        snprintf(name, sizeof name, "probe-dir/many/file-%03d.txt", i);
+        FILE *m = fopen(name, "w");
+        if (m) fclose(m);
+    }
+    int many = 0;
+    DIR *md = opendir("probe-dir/many");
+    if (md) { struct dirent *e; while ((e = readdir(md))) if (strncmp(e->d_name, "file-", 5) == 0) many++; closedir(md); }
+    printf("many: %d\n", many);
 
     auto t0 = std::chrono::steady_clock::now();
     volatile double x = 0; for (int i = 0; i < 2000000; i++) x += i * 0.5;

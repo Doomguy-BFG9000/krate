@@ -1741,6 +1741,11 @@ struct LocalPhase2Adapter {
     app_args: Vec<String>,
     max_http_response_bytes: usize,
     sandbox_root: PathBuf,
+    /// The sandbox root as the file system spells it, found once per run.
+    /// Asking on every call was one of the costs that made a file lookup
+    /// take 0.86 ms on an iPhone, where each path syscall passes the app
+    /// sandbox's checks.
+    canonical_root: std::cell::OnceCell<PathBuf>,
     /// Folders the person picked in a dialog this run, shared with the
     /// dialog host. `picked/<token>/...` paths resolve against these roots
     /// with the same symlink and containment discipline as the sandbox.
@@ -1771,6 +1776,7 @@ impl LocalPhase2Adapter {
             app_args,
             max_http_response_bytes,
             sandbox_root,
+            canonical_root: std::cell::OnceCell::new(),
             chosen,
         }
     }
@@ -1861,10 +1867,25 @@ impl LocalPhase2Adapter {
                 Err(err) => Err(map_io_error(err)),
             };
         }
-        let root = canonicalize_path_on_host(self.sandbox_root.as_path()).map_err(map_io_error)?;
+        let root = match self.canonical_root.get() {
+            Some(root) => root.clone(),
+            None => {
+                let root =
+                    canonicalize_path_on_host(self.sandbox_root.as_path()).map_err(map_io_error)?;
+                self.canonical_root.get_or_init(|| root).clone()
+            }
+        };
         let sandbox_relative = logical_path_to_sandbox_relative(path);
         let host_path = root.join(sandbox_relative);
-        ensure_no_symlink_segments(&root, &host_path, missing_leaf)?;
+        // Every segment below the root, checked: it exists and is no link.
+        // The logical path is normalized (no `..`, no root), so a path whose
+        // every segment is a real directory or file under a canonical root
+        // IS its own real path -- canonicalizing it again proves nothing
+        // more, and on an iPhone it was most of a lookup's 0.86 ms. Only a
+        // path with a missing tail goes on to the checks below.
+        if ensure_no_symlink_segments(&root, &host_path, missing_leaf)?.all_exist {
+            return Ok(host_path);
+        }
 
         match canonicalize_path_on_host(host_path.as_path()) {
             Ok(real_path) => {
@@ -2120,13 +2141,13 @@ fn ensure_no_symlink_segments(
     root: &Path,
     host_path: &Path,
     missing_leaf: MissingLeaf,
-) -> std::result::Result<(), AdapterError> {
+) -> std::result::Result<Segments, AdapterError> {
     let relative = host_path
         .strip_prefix(root)
         .map_err(|_| AdapterError::PermissionDenied)?;
     let segments: Vec<_> = relative.components().collect();
     if segments.is_empty() {
-        return Ok(());
+        return Ok(Segments { all_exist: true });
     }
 
     let mut current = root.to_path_buf();
@@ -2145,7 +2166,7 @@ fn ensure_no_symlink_segments(
                 // fine: every existing segment above was already vetted, and
                 // the write path materializes the rest as real directories.
                 if missing_leaf == MissingLeaf::Allow {
-                    return Ok(());
+                    return Ok(Segments { all_exist: false });
                 }
                 return Err(map_io_error(err));
             }
@@ -2153,7 +2174,14 @@ fn ensure_no_symlink_segments(
         }
     }
 
-    Ok(())
+    Ok(Segments { all_exist: true })
+}
+
+/// What [`ensure_no_symlink_segments`] found besides "no links".
+#[cfg(feature = "phase2-bindings")]
+struct Segments {
+    /// Every segment exists: the path is real all the way down.
+    all_exist: bool,
 }
 
 #[cfg(feature = "phase2-bindings")]
