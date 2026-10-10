@@ -99,3 +99,90 @@ test("a nameless sign-up is greeted as 'there', and an old account is never mail
   assert.ok(latest.text.startsWith("Hi there,\n"), latest.text.slice(0, 30));
   assert.ok(!mailed.some((m) => m.to.includes("old@example.com")), "no mail to a person from before");
 });
+
+/// A stand-in for Gmail's SMTP server: answers each command as Gmail does
+/// and keeps what was said, as cloudflare:sockets' connect would hand back.
+function fakeGmail(seen) {
+  return () => {
+    const enc = new TextEncoder();
+    const dec = new TextDecoder();
+    let toClient;
+    let inData = false;
+    let data = "";
+    const readable = new ReadableStream({
+      start(c) {
+        toClient = c;
+        c.enqueue(enc.encode("220 smtp.gmail.com ESMTP ready\r\n"));
+      },
+    });
+    const answer = (line) => toClient.enqueue(enc.encode(`${line}\r\n`));
+    const writable = new WritableStream({
+      write(chunk) {
+        const text = dec.decode(chunk);
+        if (inData) {
+          data += text;
+          if (data.endsWith("\r\n.\r\n") || data.endsWith("\r\n.")) {
+            inData = false;
+            seen.data = data;
+            answer("250 2.0.0 OK queued");
+          }
+          return;
+        }
+        const line = text.replace(/\r\n$/, "");
+        seen.commands.push(line);
+        if (line.startsWith("EHLO")) answer("250-smtp.gmail.com at your service\r\n250 AUTH LOGIN PLAIN");
+        else if (line.startsWith("AUTH PLAIN")) answer(seen.wrongPassword ? "535 5.7.8 Username and Password not accepted" : "235 2.7.0 Accepted");
+        else if (line.startsWith("MAIL FROM") || line.startsWith("RCPT TO")) answer("250 2.1.0 OK");
+        else if (line === "DATA") {
+          inData = true;
+          answer("354 Go ahead");
+        } else if (line === "QUIT") answer("221 2.0.0 closing");
+      },
+    });
+    return { readable, writable, close: async () => {} };
+  };
+}
+
+test("with the founder's app password, the welcome goes through Gmail itself, cc krate.tech", async () => {
+  const seen = { commands: [], data: "" };
+  const gmailEnv = { ...env, GMAIL_APP_PASSWORD: "abcd efgh ijkl mnop", SMTP_CONNECT: fakeGmail(seen) };
+  githubUser = { id: 43, login: "grace", name: "Grace Hopper", email: "grace@example.com" };
+  const ctx = { waitUntil() {} };
+  const start = await worker.fetch(new Request("https://hub.test/login/start"), gmailEnv, ctx);
+  const state = new URL(start.headers.get("location")).searchParams.get("state");
+  await worker.fetch(new Request(`https://hub.test/login/callback?state=${state}&code=abc`), gmailEnv, ctx);
+  const before = mailed.length;
+  const real = Date.now;
+  const later = Date.now() + 11 * 60 * 1000;
+  Date.now = () => later;
+  await worker.scheduled({ cron: "*/10 * * * *" }, gmailEnv).finally(() => {
+    Date.now = real;
+  });
+  assert.equal(mailed.length, before, "not through Resend");
+  const auth = seen.commands.find((c) => c.startsWith("AUTH PLAIN "));
+  assert.equal(
+    Buffer.from(auth.slice("AUTH PLAIN ".length), "base64").toString(),
+    "\0incyashraj@gmail.com\0abcd efgh ijkl mnop",
+    "signed in as the founder with his app password",
+  );
+  assert.ok(seen.commands.includes("MAIL FROM:<incyashraj@gmail.com>"));
+  assert.ok(seen.commands.includes("RCPT TO:<grace@example.com>"));
+  assert.ok(seen.commands.includes("RCPT TO:<yashraj@krate.tech>"), "the krate.tech copy");
+  assert.ok(seen.data.includes("From: Yashraj Pardeshi <incyashraj@gmail.com>\r\n"));
+  assert.ok(seen.data.includes("Cc: <yashraj@krate.tech>\r\n"));
+  assert.ok(seen.data.includes("Content-Type: text/plain; charset=UTF-8"));
+  const subject = seen.data.match(/Subject: =\?UTF-8\?B\?([^?]+)\?=/)[1];
+  assert.equal(Buffer.from(subject, "base64").toString(), "You’re in. One question from me");
+  const body = seen.data.split("\r\n\r\n")[1].replace(/\r\n\.?$/, "").replace(/\r\n/g, "");
+  assert.ok(Buffer.from(body, "base64").toString().startsWith("Hi Grace,\n"));
+});
+
+test("a wrong app password leaves the welcome due, to try again", async () => {
+  const seen = { commands: [], data: "", wrongPassword: true };
+  const gmailEnv = { ...env, GMAIL_APP_PASSWORD: "wrong", SMTP_CONNECT: fakeGmail(seen) };
+  KV.set("user:due-person", JSON.stringify({ id: "due-person", created: 1000, email: "due@example.com" }));
+  KV.set("welcome-due:due-person", "1000");
+  await worker.scheduled({ cron: "*/10 * * * *" }, gmailEnv);
+  assert.equal(KV.get("welcome-due:due-person"), "1000", "still due");
+  assert.equal(JSON.parse(KV.get("user:due-person")).welcomed, undefined, "not marked welcomed");
+});

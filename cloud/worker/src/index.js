@@ -2501,7 +2501,7 @@ async function ensureUser(env, provider, stableId, profile) {
     // from now (the next ten-minute run after ten minutes have passed), so
     // it reads as a note, not a reflex. Only for an account made here, so
     // nobody who signed up before this existed is mailed.
-    if (record.email && env.RESEND_API_KEY) {
+    if (record.email && (env.RESEND_API_KEY || env.GMAIL_APP_PASSWORD)) {
       await env.APPS.put(`welcome-due:${userId}`, String(record.created), {
         expirationTtl: 7 * 24 * 3600,
       });
@@ -2571,13 +2571,132 @@ P.S. If you get stuck, here\u2019s a 3-minute demo of making an app from scratch
 `;
 }
 
+/// Send one welcome; null when it went, else why not.
+///
+/// Through Gmail itself when the founder's app password is set
+/// (GMAIL_APP_PASSWORD): From his own Gmail, Cc his krate.tech address.
+/// Sent through Resend, the same note was filed under Promotions -- the
+/// founder's friend found it there -- because a bulk sender's servers sent
+/// it; Gmail's own servers sending a person's own mail land it in Primary.
+/// Otherwise through Resend, from his krate.tech address (it cannot claim
+/// the Gmail address: Gmail's DMARC policy is reject).
+async function sendWelcome(env, user) {
+  const text = welcomeText(user.name);
+  if (env.GMAIL_APP_PASSWORD) {
+    const connect = env.SMTP_CONNECT || (await import("cloudflare:sockets")).connect;
+    return smtpSend(connect, {
+      user: WELCOME_GMAIL,
+      password: env.GMAIL_APP_PASSWORD,
+      from: `Yashraj Pardeshi <${WELCOME_GMAIL}>`,
+      to: user.email,
+      cc: WELCOME_CC,
+      subject: WELCOME_SUBJECT,
+      text,
+    });
+  }
+  const res = await fetch("https://api.resend.com/emails", {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${env.RESEND_API_KEY}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      from: WELCOME_FROM,
+      to: [user.email],
+      reply_to: WELCOME_REPLY_TO,
+      subject: WELCOME_SUBJECT,
+      text,
+    }),
+  });
+  if (res.ok) return null;
+  return `resend ${res.status} ${await res.text().catch(() => "")}`;
+}
+
+const WELCOME_GMAIL = "incyashraj@gmail.com";
+const WELCOME_CC = "yashraj@krate.tech";
+
+/// One message through Gmail's SMTP server (smtp.gmail.com:465, TLS from
+/// the first byte), AUTH PLAIN with an app password; null when Gmail took
+/// it, else the step and Gmail's words. `connect` is cloudflare:sockets'
+/// (a test passes its own).
+async function smtpSend(connect, msg) {
+  const socket = connect({ hostname: "smtp.gmail.com", port: 465 }, { secureTransport: "on" });
+  const writer = socket.writable.getWriter();
+  const reader = socket.readable.getReader();
+  const encoder = new TextEncoder();
+  const decoder = new TextDecoder();
+  let buffered = "";
+  // One reply: lines until one whose fourth character is a space.
+  const reply = async () => {
+    for (;;) {
+      const lines = buffered.split("\r\n");
+      for (let i = 0; i < lines.length - 1; i++) {
+        if (/^\d{3} /.test(lines[i])) {
+          const code = Number(lines[i].slice(0, 3));
+          const said = lines.slice(0, i + 1).join(" ");
+          buffered = lines.slice(i + 1).join("\r\n");
+          return { code, said };
+        }
+      }
+      const { value, done } = await reader.read();
+      if (done) return { code: 0, said: "the connection closed" };
+      buffered += decoder.decode(value, { stream: true });
+    }
+  };
+  const say = (line) => writer.write(encoder.encode(`${line}\r\n`));
+  const step = async (line, want, name) => {
+    if (line !== null) await say(line);
+    const r = await reply();
+    if (r.code !== want) throw new Error(`${name}: ${r.said}`);
+  };
+  const b64 = (t) => btoa(String.fromCharCode(...encoder.encode(t)));
+  try {
+    await step(null, 220, "greeting");
+    await step("EHLO hub.krate.tech", 250, "hello");
+    await step(`AUTH PLAIN ${b64(`\0${msg.user}\0${msg.password}`)}`, 235, "sign-in");
+    await step(`MAIL FROM:<${msg.user}>`, 250, "sender");
+    await step(`RCPT TO:<${msg.to}>`, 250, "recipient");
+    if (msg.cc) await step(`RCPT TO:<${msg.cc}>`, 250, "copy");
+    await step("DATA", 354, "data");
+    // Base64 body lines of 76: the note has curly quotes, and 8-bit text
+    // over SMTP is not something to count on.
+    const body = b64(msg.text).replace(/.{1,76}/g, (m) => `${m}\r\n`);
+    const date = new Date().toUTCString().replace("GMT", "+0000");
+    const id = `<${crypto.randomUUID()}@hub.krate.tech>`;
+    const headers = [
+      `From: ${msg.from}`,
+      `To: <${msg.to}>`,
+      msg.cc ? `Cc: <${msg.cc}>` : null,
+      `Subject: =?UTF-8?B?${b64(msg.subject)}?=`,
+      `Date: ${date}`,
+      `Message-ID: ${id}`,
+      "MIME-Version: 1.0",
+      "Content-Type: text/plain; charset=UTF-8",
+      "Content-Transfer-Encoding: base64",
+    ].filter(Boolean);
+    await say(`${headers.join("\r\n")}\r\n\r\n${body}.`);
+    const accepted = await reply();
+    if (accepted.code !== 250) throw new Error(`send: ${accepted.said}`);
+    await say("QUIT");
+    return null;
+  } catch (error) {
+    return `gmail ${error.message}`;
+  } finally {
+    try {
+      await socket.close();
+    } catch {
+      // Already closed by the server.
+    }
+  }
+}
+
 // For scripts/send-welcome-test.mjs: the exact note, sent by hand.
-export { welcomeText, WELCOME_FROM, WELCOME_REPLY_TO, WELCOME_SUBJECT };
+export { welcomeText, sendWelcome, WELCOME_FROM, WELCOME_REPLY_TO, WELCOME_SUBJECT };
 
 /// Send the welcomes that are due: each at most once (the account records
 /// that it was welcomed before the due mark is dropped), twenty a run.
 async function sendDueWelcomes(env, now = Date.now()) {
-  if (!env.RESEND_API_KEY) return { sent: 0 };
+  if (!env.RESEND_API_KEY && !env.GMAIL_APP_PASSWORD) return { sent: 0 };
   const listed = await env.APPS.list({ prefix: "welcome-due:" });
   let sent = 0;
   for (const { name: key } of listed.keys || []) {
@@ -2590,24 +2709,10 @@ async function sendDueWelcomes(env, now = Date.now()) {
       await env.APPS.delete(key);
       continue;
     }
-    const res = await fetch("https://api.resend.com/emails", {
-      method: "POST",
-      headers: {
-        authorization: `Bearer ${env.RESEND_API_KEY}`,
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        from: WELCOME_FROM,
-        to: [user.email],
-        reply_to: WELCOME_REPLY_TO,
-        subject: WELCOME_SUBJECT,
-        text: welcomeText(user.name),
-      }),
-    });
-    if (!res.ok) {
+    const failed = await sendWelcome(env, user);
+    if (failed) {
       // Left due: the next run tries again, until the mark expires in a week.
-      const why = await res.text().catch(() => "");
-      console.error(`resend refused the welcome: ${res.status} ${why}`);
+      console.error(`the welcome to a new account did not go: ${failed}`);
       continue;
     }
     user.welcomed = now;
