@@ -7,7 +7,7 @@
 
 #![allow(clippy::too_many_arguments)]
 
-/// `krate:ui`: bluetooth, clipboard, dialog, events, haptics, image, launcher, location, menu, motion, notify, pointer, print, screen, text_entry, touch, tree, window.
+/// `krate:ui`: bluetooth, clipboard, dialog, events, haptics, image, launcher, location, menu, motion, notify, photos, pointer, print, screen, share, text_entry, touch, tree, window.
 pub mod ui {
     /// `krate:ui/bluetooth`.
     pub mod bluetooth {
@@ -347,6 +347,22 @@ pub mod ui {
             crate::bindings::krate::ui::notify::show(title, body)
         }
     }
+    /// `krate:ui/photos`.
+    pub mod photos {
+        pub use crate::bindings::krate::ui::photos::{ChosenFile, PhotosError};
+
+        /// Show the photo picker for up to `limit` photos (1 to 20). The photos
+        /// picked, as JPEG files; empty when the person cancelled. On a computer,
+        /// the system's file picker for pictures.
+        pub fn pick(window: u64, limit: u32) -> Result<alloc::vec::Vec<ChosenFile>, PhotosError> {
+            crate::bindings::krate::ui::photos::pick(window, limit)
+        }
+
+        /// Add a picture -- PNG or JPEG bytes -- to the photo library.
+        pub fn save(window: u64, data: &[u8]) -> Result<(), PhotosError> {
+            crate::bindings::krate::ui::photos::save(window, data)
+        }
+    }
     /// `krate:ui/pointer`.
     pub mod pointer {
         pub use crate::bindings::krate::ui::pointer::{PointerButton, UiError};
@@ -424,6 +440,21 @@ pub mod ui {
         /// answers as a desktop window of no size.
         pub fn facts(window: u64) -> ScreenFacts {
             crate::bindings::krate::ui::screen::facts(window)
+        }
+    }
+    /// `krate:ui/share`.
+    pub mod share {
+        pub use crate::bindings::krate::ui::share::{ShareError, SharedFile};
+
+        /// Open the share sheet with any of a text, a link and files. True when
+        /// the person sent it somewhere, false when they cancelled.
+        pub fn share(
+            window: u64,
+            text: Option<&str>,
+            url: Option<&str>,
+            files: &[SharedFile],
+        ) -> Result<bool, ShareError> {
+            crate::bindings::krate::ui::share::share(window, text, url, files)
         }
     }
     /// `krate:ui/text_entry`.

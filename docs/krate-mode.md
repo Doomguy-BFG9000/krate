@@ -560,6 +560,7 @@ to exactly what the app needs, e.g. `fs.read:notes/**`.
 | `camera.capture` | no | see through the camera |
 | `location.read` | no | where the phone is; the person is asked on Krate's sheet and by the phone itself |
 | `bluetooth.connect` | no | Bluetooth devices the person picks in Krate's own list; only the picked one is reachable |
+| `photos.add` | no | add pictures to the person's photo library (add-only: the app never sees the library) |
 
 Mark `required = true` on a capability the app cannot begin without -- the verification run withholds it and the app must refuse to start (exit 5). A saving app marks `fs.write` required. `ui.window:create` is declared `required = true` by convention, but withholding a window just closes the app, so it is not the withheld gate; a GUI app whose only non-default capability is its window has nothing to withhold, which is fine. Do not mark required a capability the `quick` verification path never reaches, or the app fails its own wall test after building cleanly.
 
@@ -702,6 +703,9 @@ takes this path, so any of them is a model for the wiring.
 - `clipboard::write-text: func(text: string) -> result<_, ui-error>`
 - `menu::set-items: func(window: u64, items: list<menu-item>) -> result<_, ui-error>`
 - `launcher::open-url: func(url: string) -> result<_, launch-error>`
+- `photos::pick: func(window: u64, limit: u32) -> result<list<chosen-file>, photos-error>`
+- `photos::save: func(window: u64, data: list<u8>) -> result<_, photos-error>`
+- `share::share: func(window: u64, text: option<string>, url: option<string>, files: list<shared-file>) -> result<bool, share-error>`
 - `notify::show: func(title: string, body: string) -> result<_, notify-error>`
 - `print::window: func(window: u64, title: string) -> result<print-outcome, ui-error>`
 - `print::add-page: func(window: u64) -> result<u32, ui-error>`

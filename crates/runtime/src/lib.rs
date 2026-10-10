@@ -37,7 +37,8 @@ mod async_ws;
 mod audio_capture;
 mod audio_playback;
 pub mod camera_capture;
-#[cfg(target_os = "macos")]
+// AVFoundation's capture classes are the same on an iPhone (IC-918).
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 mod camera_macos;
 #[cfg(any(target_os = "windows", target_os = "linux"))]
 mod camera_nokhwa;
@@ -1446,6 +1447,10 @@ impl Runtime {
         link_gui!(ui4::location);
         // Phase 4 only: Bluetooth devices the person picks (IC-917).
         link_gui!(ui4::bluetooth);
+        // Phase 4 only: the system's share sheet (IC-919).
+        link_gui!(ui4::share);
+        // Phase 4 only: the photo library (IC-920).
+        link_gui!(ui4::photos);
         // Phase 4 only: pictures a canvas keeps and draws by handle.
         link_gui!(phase4_gui_bindings::krate::gfx::canvas_images);
 

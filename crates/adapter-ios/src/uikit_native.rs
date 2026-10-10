@@ -734,6 +734,12 @@ mod real {
     /// the last layout so a reading can be turned into the screen's frame.
     static INTERFACE_TURN: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(1);
 
+    /// The way the interface is turned now, as UIKit numbers it (1 upright,
+    /// 2 upside down, 3 home button right, 4 home button left).
+    pub fn interface_turn() -> u8 {
+        INTERFACE_TURN.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
     fn motion_class() -> Option<&'static objc2::runtime::AnyClass> {
         objc2::runtime::AnyClass::get(c"CMMotionManager")
     }
@@ -944,6 +950,484 @@ mod real {
                 age_ms: (age.max(0.0) * 1000.0) as u64,
             })
         }
+    }
+
+    // PhotosUI and Photos, through the Objective-C runtime.
+    #[link(name = "PhotosUI", kind = "framework")]
+    unsafe extern "C" {}
+    #[link(name = "Photos", kind = "framework")]
+    unsafe extern "C" {}
+
+    /// Where the photos picked are copied, and who waits for them.
+    struct PhotoPick {
+        tx: std::cell::RefCell<
+            Option<std::sync::mpsc::Sender<Result<Vec<std::path::PathBuf>, String>>>,
+        >,
+    }
+
+    define_class!(
+        // SAFETY:
+        // - NSObject has no subclassing requirements for a delegate.
+        // - PhotosUI calls a picker's delegate on the main thread.
+        #[unsafe(super = objc2_foundation::NSObject)]
+        #[thread_kind = MainThreadOnly]
+        #[ivars = PhotoPick]
+        struct KratePhotoDelegate;
+
+        // SAFETY: NSObjectProtocol has no additional requirements.
+        unsafe impl NSObjectProtocol for KratePhotoDelegate {}
+
+        // PHPickerViewControllerDelegate, by selector.
+        impl KratePhotoDelegate {
+            #[unsafe(method(picker:didFinishPicking:))]
+            fn finished(&self, picker: &objc2::runtime::AnyObject, results: &objc2::runtime::AnyObject) {
+                // SAFETY: dismiss the picker PhotosUI handed us.
+                let _: () = unsafe { msg_send![picker, dismissViewControllerAnimated: true, completion: Option::<&objc2::runtime::AnyObject>::None] };
+                let Some(tx) = self.ivars().tx.borrow_mut().take() else {
+                    return;
+                };
+                PHOTO_DELEGATE.with(|slot| slot.borrow_mut().take());
+                // SAFETY: an NSArray of PHPickerResult.
+                let count: usize = unsafe { msg_send![results, count] };
+                if count == 0 {
+                    let _ = tx.send(Ok(Vec::new()));
+                    return;
+                }
+                static PICKS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+                let dir = std::env::temp_dir().join("krate-photos").join(format!(
+                    "{}-{}",
+                    std::process::id(),
+                    PICKS.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                ));
+                let _ = std::fs::create_dir_all(&dir);
+                let gathered = std::sync::Arc::new(std::sync::Mutex::new((count, vec![None; count], Some(tx))));
+                for index in 0..count {
+                    // SAFETY: each result's itemProvider.
+                    let provider: Retained<objc2::runtime::AnyObject> = unsafe {
+                        let result: Retained<objc2::runtime::AnyObject> = msg_send![results, objectAtIndex: index];
+                        msg_send![&*result, itemProvider]
+                    };
+                    load_photo(provider, index, dir.clone(), gathered.clone(), true);
+                }
+            }
+        }
+    );
+
+    /// What a pick gathers: photos still to come, each one's copy, and who
+    /// waits for the lot.
+    type Gathered = std::sync::Arc<
+        std::sync::Mutex<(
+            usize,
+            Vec<Option<std::path::PathBuf>>,
+            Option<std::sync::mpsc::Sender<Result<Vec<std::path::PathBuf>, String>>>,
+        )>,
+    >;
+
+    /// Copy one picked photo out: first as a JPEG (iOS converts a HEIC),
+    /// and if that is refused, in its own format. The file iOS lends is
+    /// gone once the block returns, so it is copied inside it. When the
+    /// last one is in, the pick is answered: an error if none could be
+    /// read -- never an empty list, which reads as a cancel.
+    fn load_photo(
+        provider: Retained<objc2::runtime::AnyObject>,
+        index: usize,
+        dir: std::path::PathBuf,
+        gathered: Gathered,
+        jpeg_first: bool,
+    ) {
+        let kind = if jpeg_first {
+            "public.jpeg"
+        } else {
+            "public.image"
+        };
+        let retry = provider.clone();
+        let got = block2::RcBlock::new(
+            move |file: *mut objc2::runtime::AnyObject, _error: *mut objc2::runtime::AnyObject| {
+                // SAFETY: the NSURL iOS lends for the duration of this block.
+                let source: Option<String> = (!file.is_null())
+                    .then(|| unsafe {
+                        let path: Option<Retained<objc2_foundation::NSString>> =
+                            msg_send![&*file, path];
+                        path.map(|p| p.to_string())
+                    })
+                    .flatten();
+                let Some(source) = source else {
+                    if jpeg_first {
+                        load_photo(retry.clone(), index, dir.clone(), gathered.clone(), false);
+                        return;
+                    }
+                    finish_photo(&gathered, index, None);
+                    return;
+                };
+                let extension = std::path::Path::new(&source)
+                    .extension()
+                    .map(|e| e.to_string_lossy().to_ascii_lowercase())
+                    .unwrap_or_else(|| "jpg".to_string());
+                let to = dir.join(format!("photo-{}.{extension}", index + 1));
+                let copied = std::fs::copy(&source, &to).ok().map(|_| to);
+                finish_photo(&gathered, index, copied);
+            },
+        );
+        let kind = objc2_foundation::NSString::from_str(kind);
+        // SAFETY: NSItemProvider's loadFileRepresentationForTypeIdentifier:.
+        let _: Option<Retained<objc2::runtime::AnyObject>> = unsafe {
+            msg_send![&*provider, loadFileRepresentationForTypeIdentifier: &*kind, completionHandler: &*got]
+        };
+    }
+
+    fn finish_photo(gathered: &Gathered, index: usize, copied: Option<std::path::PathBuf>) {
+        let mut g = gathered.lock().expect("photos lock");
+        g.1[index] = copied;
+        g.0 -= 1;
+        if g.0 == 0 {
+            let picked: Vec<std::path::PathBuf> = g.1.iter().flatten().cloned().collect();
+            if let Some(tx) = g.2.take() {
+                let _ = tx.send(if picked.is_empty() {
+                    Err("iOS would not hand over the photos picked".to_string())
+                } else {
+                    Ok(picked)
+                });
+            }
+        }
+    }
+
+    thread_local! {
+        static PHOTO_DELEGATE: std::cell::RefCell<Option<Retained<KratePhotoDelegate>>> =
+            const { std::cell::RefCell::new(None) };
+    }
+
+    /// The system's photo picker for up to `limit` photos (IC-920): the
+    /// picks copied out as JPEGs, empty when cancelled. No permission: the
+    /// picker runs outside Krate, and only what is picked comes back.
+    pub fn pick_photos(limit: u32) -> Result<Vec<std::path::PathBuf>, String> {
+        let (tx, rx) = std::sync::mpsc::channel();
+        DispatchQueue::main().exec_async(move || {
+            let (Some(mtm), Some(controller)) = (MainThreadMarker::new(), main_controller()) else {
+                let _ = tx.send(Err("no screen to pick from".to_string()));
+                return;
+            };
+            let (Some(config_class), Some(picker_class), Some(filter_class)) = (
+                objc2::runtime::AnyClass::get(c"PHPickerConfiguration"),
+                objc2::runtime::AnyClass::get(c"PHPickerViewController"),
+                objc2::runtime::AnyClass::get(c"PHPickerFilter"),
+            ) else {
+                let _ = tx.send(Err("this iOS has no photo picker".to_string()));
+                return;
+            };
+            // SAFETY: a PHPickerConfiguration limited to images and to
+            // `limit`, a picker over it, Krate's delegate held while it shows.
+            unsafe {
+                let config: Retained<objc2::runtime::AnyObject> = msg_send![config_class, new];
+                let _: () = msg_send![&*config, setSelectionLimit: limit as isize];
+                let images: Option<Retained<objc2::runtime::AnyObject>> = msg_send![filter_class, imagesFilter];
+                if let Some(images) = images {
+                    let _: () = msg_send![&*config, setFilter: &*images];
+                }
+                let made: objc2::rc::Allocated<objc2::runtime::AnyObject> = msg_send![picker_class, alloc];
+                let picker: Option<Retained<objc2::runtime::AnyObject>> = msg_send![made, initWithConfiguration: &*config];
+                let Some(picker) = picker else {
+                    let _ = tx.send(Err("the photo picker would not open".to_string()));
+                    return;
+                };
+                let delegate: Retained<KratePhotoDelegate> = {
+                    let this = KratePhotoDelegate::alloc(mtm).set_ivars(PhotoPick {
+                        tx: std::cell::RefCell::new(Some(tx)),
+                    });
+                    msg_send![super(this), init]
+                };
+                let _: () = msg_send![&*picker, setDelegate: &*delegate];
+                PHOTO_DELEGATE.with(|slot| *slot.borrow_mut() = Some(delegate));
+                let _: () = msg_send![&*controller, presentViewController: &*picker, animated: true, completion: Option::<&objc2::runtime::AnyObject>::None];
+            }
+        });
+        rx.recv_timeout(std::time::Duration::from_secs(900))
+            .unwrap_or_else(|_| Ok(Vec::new()))
+    }
+
+    /// Add a PNG or JPEG to Photos (IC-920): add-only access asked first
+    /// (the phone's own prompt), then one asset created from the picture.
+    pub fn save_photo(data: &[u8]) -> Result<(), Option<String>> {
+        let (Some(library), Some(image_class), Some(request_class)) = (
+            objc2::runtime::AnyClass::get(c"PHPhotoLibrary"),
+            objc2::runtime::AnyClass::get(c"UIImage"),
+            objc2::runtime::AnyClass::get(c"PHAssetChangeRequest"),
+        ) else {
+            return Err(Some("this iOS has no photo library".to_string()));
+        };
+        let (tx, rx) = std::sync::mpsc::channel::<Result<(), Option<String>>>();
+        let bytes = data.to_vec();
+        // SAFETY: requestAuthorizationForAccessLevel: with add-only (1); its
+        // handler, on success, decodes the picture as a UIImage and creates
+        // an asset from it in performChanges:, whose completion answers.
+        unsafe {
+            let tx_auth = tx.clone();
+            let asked = block2::RcBlock::new(move |status: isize| {
+                // Authorized (3) or limited (4).
+                if status != 3 && status != 4 {
+                    let _ = tx_auth.send(Err(None));
+                    return;
+                }
+                let Some(data_class) = objc2::runtime::AnyClass::get(c"NSData") else {
+                    let _ = tx_auth.send(Err(Some("no NSData".to_string())));
+                    return;
+                };
+                let ns_data: Option<Retained<objc2::runtime::AnyObject>> = msg_send![data_class, dataWithBytes: bytes.as_ptr() as *const std::ffi::c_void, length: bytes.len()];
+                let image: Option<Retained<objc2::runtime::AnyObject>> =
+                    ns_data.and_then(|d| msg_send![image_class, imageWithData: &*d]);
+                let Some(image) = image else {
+                    let _ = tx_auth.send(Err(Some("iOS could not read that picture".to_string())));
+                    return;
+                };
+                let change = block2::RcBlock::new(move || {
+                    let _: Option<Retained<objc2::runtime::AnyObject>> =
+                        msg_send![request_class, creationRequestForAssetFromImage: &*image];
+                });
+                let tx_done = tx_auth.clone();
+                let done = block2::RcBlock::new(
+                    move |ok: objc2::runtime::Bool, error: *mut objc2::runtime::AnyObject| {
+                        let _ = tx_done.send(if ok.as_bool() {
+                            Ok(())
+                        } else if error.is_null() {
+                            Err(Some("Photos refused the picture".to_string()))
+                        } else {
+                            let text: Option<Retained<objc2_foundation::NSString>> =
+                                msg_send![&*error, localizedDescription];
+                            Err(Some(text.map(|t| t.to_string()).unwrap_or_default()))
+                        });
+                    },
+                );
+                let shared: Retained<objc2::runtime::AnyObject> =
+                    msg_send![library, sharedPhotoLibrary];
+                let _: () =
+                    msg_send![&*shared, performChanges: &*change, completionHandler: &*done];
+            });
+            let _: () =
+                msg_send![library, requestAuthorizationForAccessLevel: 1isize, handler: &*asked];
+        }
+        rx.recv_timeout(std::time::Duration::from_secs(120))
+            .unwrap_or(Err(Some("Photos did not answer".to_string())))
+    }
+
+    /// The system's share sheet with a text, a link and files (IC-919). Files
+    /// are written to a fresh folder in the temporary space first: the sheet
+    /// shares URLs, not bytes. Waits for the person: true when they sent it.
+    pub fn share(
+        text: Option<&str>,
+        url: Option<&str>,
+        files: &[(String, Vec<u8>)],
+    ) -> Result<bool, String> {
+        static SHARES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let dir = std::env::temp_dir().join("krate-share").join(format!(
+            "{}-{}",
+            std::process::id(),
+            SHARES.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        let mut paths = Vec::new();
+        if !files.is_empty() {
+            std::fs::create_dir_all(&dir).map_err(|e| format!("could not stage the files: {e}"))?;
+            for (name, data) in files {
+                let path = dir.join(name);
+                std::fs::write(&path, data).map_err(|e| format!("could not stage {name}: {e}"))?;
+                paths.push(path);
+            }
+        }
+        let (text, url) = (text.map(str::to_string), url.map(str::to_string));
+        let staged = !paths.is_empty();
+        let (tx, rx) = std::sync::mpsc::channel();
+        DispatchQueue::main().exec_async(move || {
+            let (Some(_mtm), Some(controller)) = (MainThreadMarker::new(), main_controller()) else {
+                let _ = tx.send(Err("no screen to share from".to_string()));
+                return;
+            };
+            let (Some(sheet_class), Some(url_class)) = (
+                objc2::runtime::AnyClass::get(c"UIActivityViewController"),
+                objc2::runtime::AnyClass::get(c"NSURL"),
+            ) else {
+                let _ = tx.send(Err("this iOS has no share sheet".to_string()));
+                return;
+            };
+            // SAFETY: the items as NSString and NSURL objects in an NSArray,
+            // a UIActivityViewController over them, its completion block
+            // answering on the channel, presented from Krate's controller.
+            unsafe {
+                let mut items: Vec<Retained<objc2::runtime::AnyObject>> = Vec::new();
+                if let Some(text) = text.filter(|t| !t.is_empty()) {
+                    items.push(Retained::cast_unchecked(objc2_foundation::NSString::from_str(&text)));
+                }
+                if let Some(url) = url.filter(|u| !u.is_empty()) {
+                    let link: Option<Retained<objc2::runtime::AnyObject>> =
+                        msg_send![url_class, URLWithString: &*objc2_foundation::NSString::from_str(&url)];
+                    if let Some(link) = link {
+                        items.push(link);
+                    }
+                }
+                for path in &paths {
+                    let file: Option<Retained<objc2::runtime::AnyObject>> = msg_send![
+                        url_class,
+                        fileURLWithPath: &*objc2_foundation::NSString::from_str(&path.to_string_lossy())
+                    ];
+                    if let Some(file) = file {
+                        items.push(file);
+                    }
+                }
+                let items = objc2_foundation::NSArray::from_retained_slice(&items);
+                let made: objc2::rc::Allocated<objc2::runtime::AnyObject> = msg_send![sheet_class, alloc];
+                let sheet: Option<Retained<objc2::runtime::AnyObject>> = msg_send![
+                    made,
+                    initWithActivityItems: &*items,
+                    applicationActivities: Option::<&objc2::runtime::AnyObject>::None
+                ];
+                let Some(sheet) = sheet else {
+                    let _ = tx.send(Err("the share sheet would not open".to_string()));
+                    return;
+                };
+                let tx = std::sync::Mutex::new(Some(tx));
+                let done = block2::RcBlock::new(
+                    move |_kind: *mut objc2::runtime::AnyObject,
+                          completed: objc2::runtime::Bool,
+                          _returned: *mut objc2::runtime::AnyObject,
+                          _error: *mut objc2::runtime::AnyObject| {
+                        if let Some(tx) = tx.lock().expect("share lock").take() {
+                            let _ = tx.send(Ok(completed.as_bool()));
+                        }
+                    },
+                );
+                let _: () = msg_send![&*sheet, setCompletionWithItemsHandler: &*done];
+                let _: () = msg_send![&*controller, presentViewController: &*sheet, animated: true, completion: Option::<&objc2::runtime::AnyObject>::None];
+            }
+        });
+        let answer = rx
+            .recv_timeout(std::time::Duration::from_secs(600))
+            .unwrap_or(Ok(false));
+        if staged {
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+        answer
+    }
+
+    /// Open a link that has passed the runtime's checks (IC-918): iOS hands
+    /// it to Safari, Mail or the app that owns it.
+    pub fn open_url(url: &str) -> Result<(), String> {
+        let text = url.to_string();
+        let (tx, rx) = std::sync::mpsc::channel();
+        DispatchQueue::main().exec_async(move || {
+            let answer = (|| {
+                let class = objc2::runtime::AnyClass::get(c"NSURL").ok_or("no NSURL")?;
+                // SAFETY: +[NSURL URLWithString:] (nil for a malformed one),
+                // then UIApplication's openURL:options:completionHandler:.
+                unsafe {
+                    let link: Option<Retained<objc2::runtime::AnyObject>> =
+                        msg_send![class, URLWithString: &*objc2_foundation::NSString::from_str(&text)];
+                    let link = link.ok_or("iOS could not read that link")?;
+                    let app = UIApplication::sharedApplication(MainThreadMarker::new().ok_or("not on the main thread")?);
+                    let options = objc2_foundation::NSDictionary::<objc2::runtime::AnyObject, objc2::runtime::AnyObject>::new();
+                    let _: () = msg_send![&*app, openURL: &*link, options: &*options, completionHandler: Option::<&objc2::runtime::AnyObject>::None];
+                }
+                Ok::<(), &'static str>(())
+            })();
+            let _ = tx.send(answer.map_err(str::to_string));
+        });
+        rx.recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap_or_else(|_| Err("iOS did not answer".to_string()))
+    }
+
+    // UserNotifications, through the Objective-C runtime.
+    #[link(name = "UserNotifications", kind = "framework")]
+    unsafe extern "C" {}
+
+    define_class!(
+        // SAFETY:
+        // - NSObject has no subclassing requirements for a delegate.
+        // - UserNotifications calls it on the main thread.
+        #[unsafe(super = objc2_foundation::NSObject)]
+        #[thread_kind = MainThreadOnly]
+        struct KrateNoticeDelegate;
+
+        // SAFETY: NSObjectProtocol has no additional requirements.
+        unsafe impl NSObjectProtocol for KrateNoticeDelegate {}
+
+        // UNUserNotificationCenterDelegate, by selector.
+        impl KrateNoticeDelegate {
+            /// Show an app's notification while Krate is in front: by
+            /// default iOS shows nothing for the app on screen, and the
+            /// app on screen is the one posting.
+            #[unsafe(method(userNotificationCenter:willPresentNotification:withCompletionHandler:))]
+            fn will_present(
+                &self,
+                _center: &objc2::runtime::AnyObject,
+                _notification: &objc2::runtime::AnyObject,
+                done: &block2::DynBlock<dyn Fn(usize)>,
+            ) {
+                // Banner (16) | list (8) | sound (2).
+                done.call((16 | 8 | 2,));
+            }
+        }
+    );
+
+    thread_local! {
+        static NOTICE_DELEGATE: std::cell::OnceCell<Retained<KrateNoticeDelegate>> =
+            const { std::cell::OnceCell::new() };
+    }
+
+    /// Post a notification now (IC-918): `sender` -- the app's consented
+    /// name, never its own words -- on the title line, the app's title
+    /// under it. iOS asks the person once whether Krate may notify.
+    pub fn notify(sender: &str, title: &str, body: &str) -> Result<(), String> {
+        let (sender, title, body) = (sender.to_string(), title.to_string(), body.to_string());
+        DispatchQueue::main().exec_async(move || {
+            let Some(mtm) = MainThreadMarker::new() else {
+                return;
+            };
+            let Some(center_class) = objc2::runtime::AnyClass::get(c"UNUserNotificationCenter") else {
+                return;
+            };
+            // SAFETY: the current notification center, its delegate held by
+            // Krate (it holds delegates weakly), and an authorization request
+            // whose completion posts the notification.
+            unsafe {
+                let center: Retained<objc2::runtime::AnyObject> = msg_send![center_class, currentNotificationCenter];
+                NOTICE_DELEGATE.with(|cell| {
+                    let delegate = cell.get_or_init(|| {
+                        let this = KrateNoticeDelegate::alloc(mtm).set_ivars(());
+                        msg_send![super(this), init]
+                    });
+                    let _: () = msg_send![&*center, setDelegate: &**delegate];
+                });
+                let center_for_post = center.clone();
+                let granted = block2::RcBlock::new(move |ok: objc2::runtime::Bool, _error: *mut objc2::runtime::AnyObject| {
+                    if !ok.as_bool() {
+                        return;
+                    }
+                    let (Some(content_class), Some(request_class)) = (
+                        objc2::runtime::AnyClass::get(c"UNMutableNotificationContent"),
+                        objc2::runtime::AnyClass::get(c"UNNotificationRequest"),
+                    ) else {
+                        return;
+                    };
+                    let ns = |t: &str| objc2_foundation::NSString::from_str(t);
+                    let content: Retained<objc2::runtime::AnyObject> = msg_send![content_class, new];
+                    let _: () = msg_send![&*content, setTitle: &*ns(&sender)];
+                    let _: () = msg_send![&*content, setSubtitle: &*ns(&title)];
+                    let _: () = msg_send![&*content, setBody: &*ns(&body)];
+                    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+                    let id = format!("krate-{}", NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
+                    let request: Retained<objc2::runtime::AnyObject> = msg_send![
+                        request_class,
+                        requestWithIdentifier: &*ns(&id),
+                        content: &*content,
+                        trigger: Option::<&objc2::runtime::AnyObject>::None
+                    ];
+                    let _: () = msg_send![
+                        &*center_for_post,
+                        addNotificationRequest: &*request,
+                        withCompletionHandler: Option::<&objc2::runtime::AnyObject>::None
+                    ];
+                });
+                // Alert (4) | sound (2) | badge (1).
+                let _: () = msg_send![&*center, requestAuthorizationWithOptions: 7usize, completionHandler: &*granted];
+            }
+        });
+        Ok(())
     }
 
     /// The controller Krate's own sheets are shown from.
@@ -2417,6 +2901,30 @@ mod stub {
 
     pub fn export_file(_path: &std::path::Path) -> bool {
         false
+    }
+
+    pub fn open_url(_url: &str) -> Result<(), String> {
+        Err("links open from the iOS player only".to_string())
+    }
+
+    pub fn share(
+        _text: Option<&str>,
+        _url: Option<&str>,
+        _files: &[(String, Vec<u8>)],
+    ) -> Result<bool, String> {
+        Err("the share sheet is on the iOS player only".to_string())
+    }
+
+    pub fn pick_photos(_limit: u32) -> Result<Vec<std::path::PathBuf>, String> {
+        Err("the photo picker is on the iOS player only".to_string())
+    }
+
+    pub fn save_photo(_data: &[u8]) -> Result<(), Option<String>> {
+        Err(Some("Photos is on the iOS player only".to_string()))
+    }
+
+    pub fn notify(_sender: &str, _title: &str, _body: &str) -> Result<(), String> {
+        Err("notifications post from the iOS player only".to_string())
     }
 
     pub fn haptic(_feel: Option<krate_adapter_common::ui::HapticFeel>, _strength: f32) -> bool {

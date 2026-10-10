@@ -24,6 +24,8 @@ pub enum UapiCall {
     Location(LocationCall),
     /// Bluetooth devices the person picks (IC-917).
     Bluetooth(BluetoothCall),
+    /// The photo library (IC-920).
+    Photos(PhotosCall),
     Store(StoreCall),
     Random(RandomCall),
     /// Asking for more than the default memory (K-416). Not a call a guest
@@ -62,6 +64,7 @@ impl UapiCall {
             Self::Camera(call) => format!("camera.{call}"),
             Self::Location(call) => format!("location.{call}"),
             Self::Bluetooth(call) => format!("bluetooth.{call}"),
+            Self::Photos(call) => format!("photos.{call}"),
             Self::Store(call) => format!("store.{call}"),
             Self::Random(call) => format!("random.{call}"),
             Self::Memory(call) => format!("memory.{call}"),
@@ -154,6 +157,21 @@ impl fmt::Display for LocationCall {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
             Self::Read => "read",
+        })
+    }
+}
+
+/// The photo library. One call kind behind a grant: adding a picture
+/// (picking is the person's own act, like open-file).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PhotosCall {
+    Add,
+}
+
+impl fmt::Display for PhotosCall {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Add => "add",
         })
     }
 }

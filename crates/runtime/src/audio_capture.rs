@@ -29,6 +29,50 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 const MAX_CAPTURE_BUFFER_BYTES: usize = 8 * 1024 * 1024;
 #[cfg(not(target_arch = "wasm32"))]
 const MAX_READ_BYTES: usize = 1024 * 1024;
+/// The phone's own microphone question, asked before the first recording
+/// and waited for (IC-918). iOS shows an input with no channels until the
+/// person has said yes, so opening without asking failed with "channel
+/// count must be at least 1" -- the prompt had never been shown.
+#[cfg(target_os = "ios")]
+fn ios_microphone() -> Result<(), CaptureError> {
+    use objc2::msg_send;
+    use objc2::rc::Retained;
+    use objc2::runtime::{AnyClass, AnyObject, Bool};
+    const GRANTED: usize = u32::from_be_bytes(*b"grnt") as usize;
+    const DENIED: usize = u32::from_be_bytes(*b"deny") as usize;
+    let session_class = AnyClass::get(c"AVAudioSession").ok_or(CaptureError::DeviceUnavailable)?;
+    // SAFETY: the shared session, its recordPermission, and a request whose
+    // completion block reports the answer on a channel.
+    unsafe {
+        let session: Retained<AnyObject> = msg_send![session_class, sharedInstance];
+        let status: usize = msg_send![&*session, recordPermission];
+        if status == DENIED {
+            return Err(CaptureError::Platform(
+                "the microphone is switched off for Krate: Settings > Krate > Microphone"
+                    .to_string(),
+            ));
+        }
+        if status != GRANTED {
+            let (tx, rx) = std::sync::mpsc::channel();
+            let answer = block2::RcBlock::new(move |granted: Bool| {
+                let _ = tx.send(granted.as_bool());
+            });
+            let _: () = msg_send![&*session, requestRecordPermission: &*answer];
+            if !rx
+                .recv_timeout(std::time::Duration::from_secs(120))
+                .unwrap_or(false)
+            {
+                return Err(CaptureError::Platform(
+                    "the microphone was not allowed".to_string(),
+                ));
+            }
+        }
+        // The input appears once the session is active after the yes.
+        let _: Bool = msg_send![&*session, setActive: Bool::YES, error: std::ptr::null_mut::<*mut AnyObject>()];
+    }
+    Ok(())
+}
+
 const MIN_SAMPLE_RATE: u32 = 8_000;
 const MAX_SAMPLE_RATE: u32 = 192_000;
 const MAX_CHANNELS: u16 = 8;
@@ -94,6 +138,8 @@ impl Default for AudioCaptureRuntime {
 impl AudioCaptureRuntime {
     pub fn open(&mut self, config: CaptureConfig) -> Result<u64, CaptureError> {
         validate_config(config)?;
+        #[cfg(target_os = "ios")]
+        ios_microphone()?;
         let host = cpal::default_host();
         let device = host
             .default_input_device()

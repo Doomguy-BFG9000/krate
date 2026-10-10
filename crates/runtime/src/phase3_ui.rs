@@ -611,6 +611,31 @@ impl<'a> Phase3UiDispatcher<'a> {
         self.adapter.haptic(feel, strength)
     }
 
+    /// The photo picker (IC-920).
+    pub fn pick_photos(
+        &self,
+        id: WindowId,
+        limit: u32,
+    ) -> Option<Result<Vec<std::path::PathBuf>, String>> {
+        self.adapter.pick_photos(id, limit)
+    }
+
+    /// Add a picture to the photo library (IC-920).
+    pub fn save_photo(&self, data: &[u8]) -> Result<(), Option<String>> {
+        self.adapter.save_photo(data)
+    }
+
+    /// Open the share sheet (IC-919).
+    pub fn share(
+        &self,
+        id: WindowId,
+        text: Option<&str>,
+        url: Option<&str>,
+        files: &[(String, Vec<u8>)],
+    ) -> Result<bool, String> {
+        self.adapter.share(id, text, url, files)
+    }
+
     /// The adapter, for the Bluetooth calls (IC-917), which pass through
     /// as they are.
     pub fn bluetooth(&self) -> &dyn krate_adapter_common::ui::UiAdapter {

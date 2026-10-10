@@ -336,11 +336,11 @@ fn validate_config(config: CameraConfig) -> Result<(), CameraError> {
 /// exists so a probe can tell "the person has not been asked yet" apart from
 /// "the person said no", which look identical from the guest side.
 pub fn system_status() -> &'static str {
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
     {
         crate::camera_macos::system_status()
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", target_os = "ios")))]
     {
         "unknown"
     }
@@ -351,7 +351,7 @@ pub fn system_status() -> &'static str {
 /// `None` is an honest answer that reaches the app as `unsupported` with a
 /// sentence naming the system, rather than a silent failure or a fake frame.
 fn platform_backend() -> Option<Box<dyn CameraBackend>> {
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
     {
         Some(Box::new(crate::camera_macos::MacosCameraBackend))
     }
@@ -359,7 +359,12 @@ fn platform_backend() -> Option<Box<dyn CameraBackend>> {
     {
         Some(Box::new(crate::camera_nokhwa::NokhwaCameraBackend))
     }
-    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+    #[cfg(not(any(
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "windows",
+        target_os = "linux"
+    )))]
     {
         None
     }

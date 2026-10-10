@@ -423,6 +423,35 @@ impl CameraBackend for MacosCameraBackend {
             }
             session.addOutput(&output);
         }
+        // A phone's camera sensor lies sideways: its frames are landscape
+        // whichever way the phone is held, so a portrait preview came out a
+        // quarter turn anticlockwise. Turn them to the screen (IC-918).
+        #[cfg(target_os = "ios")]
+        // SAFETY: the output's video connection and its rotation (iOS 17's
+        // videoRotationAngle, else the older videoOrientation).
+        unsafe {
+            let connection: Option<Retained<NSObject>> =
+                msg_send![&*output, connectionWithMediaType: AVMediaTypeVideo.unwrap()];
+            if let Some(connection) = connection {
+                let (angle, orientation): (f64, isize) =
+                    match krate_adapter_ios::uikit_native::interface_turn() {
+                        2 => (270.0, 2),
+                        3 => (0.0, 3),
+                        4 => (180.0, 4),
+                        _ => (90.0, 1),
+                    };
+                let modern: bool = msg_send![&*connection, respondsToSelector: objc2::sel!(setVideoRotationAngle:)];
+                if modern {
+                    let supported: bool =
+                        msg_send![&*connection, isVideoRotationAngleSupported: angle];
+                    if supported {
+                        let _: () = msg_send![&*connection, setVideoRotationAngle: angle];
+                    }
+                } else {
+                    let _: () = msg_send![&*connection, setVideoOrientation: orientation];
+                }
+            }
+        }
 
         // What was asked for, until a frame proves otherwise. `info` is read
         // again by the app after the first frame, which is why the WIT tells

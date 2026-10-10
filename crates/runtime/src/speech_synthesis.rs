@@ -205,7 +205,8 @@ fn serve(commands: mpsc::Receiver<Command>) {
     }
 }
 
-#[cfg(target_os = "macos")]
+// AVSpeechSynthesizer is the same on an iPhone (IC-918).
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 fn platform_backend() -> Result<Box<dyn Backend>, SayError> {
     macos::AvSpeech::new().map(|b| Box::new(b) as Box<dyn Backend>)
 }
@@ -215,14 +216,19 @@ fn platform_backend() -> Result<Box<dyn Backend>, SayError> {
     Ok(Box::new(helper::Helper::default()))
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+#[cfg(not(any(
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "linux",
+    target_os = "windows"
+)))]
 fn platform_backend() -> Result<Box<dyn Backend>, SayError> {
     Err(SayError::Unsupported(
         "speaking aloud is not available on this system yet".into(),
     ))
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 mod macos {
     use super::{Backend, SayError, Voice};
     use objc2::msg_send;
@@ -253,7 +259,7 @@ mod macos {
             let class = |name: &core::ffi::CStr| {
                 AnyClass::get(name).ok_or_else(|| {
                     SayError::Unsupported(format!(
-                        "this Mac has no {} (AVFAudio)",
+                        "this device has no {} (AVFAudio)",
                         name.to_string_lossy()
                     ))
                 })

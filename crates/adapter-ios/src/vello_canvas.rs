@@ -51,7 +51,18 @@ pub struct GpuCanvas {
     /// Uploaded images keyed by the source Arc's address: gram's photos
     /// are generated once and drawn every frame, and re-uploading 429 KB
     /// per photo per frame would waste the bus the GPU just freed.
-    images: HashMap<usize, ImageBrush>,
+    /// Pictures on the GPU, by the address of the picture they came from --
+    /// which the cache holds, so the address cannot be reused while the
+    /// entry exists. Without the hold, an app that replaced a picture each
+    /// frame (a camera preview) got its new frame at the old frame's freed
+    /// address and was shown the FIRST frame for ever.
+    images: HashMap<
+        usize,
+        (
+            std::sync::Arc<krate_adapter_common::ui::ImagePixels>,
+            ImageBrush,
+        ),
+    >,
     /// The texture a whole-frame picture is written into, at its own size.
     picture: Option<(wgpu::Texture, wgpu::TextureView)>,
 }
@@ -746,7 +757,7 @@ impl GpuCanvas {
         image: &std::sync::Arc<krate_adapter_common::ui::ImagePixels>,
     ) -> ImageBrush {
         let key = std::sync::Arc::as_ptr(image) as usize;
-        if let Some(cached) = self.images.get(&key) {
+        if let Some((_, cached)) = self.images.get(&key) {
             return cached.clone();
         }
         let gpu_image = ImageBrush::new(ImageData {
@@ -756,10 +767,14 @@ impl GpuCanvas {
             width: image.width,
             height: image.height,
         });
+        // Let go of pictures nobody holds any more (the cache's own hold is
+        // the only one left), then cap what remains.
+        self.images
+            .retain(|_, (held, _)| std::sync::Arc::strong_count(held) > 1);
         if self.images.len() >= 64 {
             self.images.clear();
         }
-        self.images.insert(key, gpu_image.clone());
+        self.images.insert(key, (image.clone(), gpu_image.clone()));
         gpu_image
     }
 }

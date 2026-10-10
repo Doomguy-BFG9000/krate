@@ -619,6 +619,28 @@ impl UiAdapter for IosUikitPrototypeUiAdapter {
         uikit_native::motion_read()
     }
 
+    fn pick_photos(
+        &self,
+        _window: WindowId,
+        limit: u32,
+    ) -> Option<Result<Vec<std::path::PathBuf>, String>> {
+        Some(uikit_native::pick_photos(limit))
+    }
+
+    fn save_photo(&self, data: &[u8]) -> Result<(), Option<String>> {
+        uikit_native::save_photo(data)
+    }
+
+    fn share(
+        &self,
+        _window: WindowId,
+        text: Option<&str>,
+        url: Option<&str>,
+        files: &[(String, Vec<u8>)],
+    ) -> Result<bool, String> {
+        uikit_native::share(text, url, files)
+    }
+
     fn haptics_available(&self) -> bool {
         true
     }
