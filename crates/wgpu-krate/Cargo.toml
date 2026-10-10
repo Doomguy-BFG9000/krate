@@ -21,3 +21,12 @@ wgpu = { version = "29.0.4", default-features = false, features = ["custom", "st
 naga = { version = "29.0.3", default-features = false, features = ["wgsl-out"] }
 krate = { path = "../bindings-rust", features = ["gui", "std"] }
 krate-gpu-names = { path = "../gpu-names" }
+
+[features]
+# Shaders written in GLSL or SPIR-V: parsed by naga inside the app, then sent
+# to the host as WGSL like any other (krate:gpu takes WGSL only).
+glsl = ["wgpu/glsl", "naga/glsl-in"]
+spirv = ["wgpu/spirv", "naga/spv-in"]
+
+[dev-dependencies]
+naga = { version = "29.0.3", features = ["glsl-in", "wgsl-in", "wgsl-out"] }

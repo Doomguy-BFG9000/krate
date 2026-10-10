@@ -30,6 +30,15 @@ use std::sync::{Arc, Mutex};
 use krate::bindings::krate::gpu::types as t;
 use krate::gpu::gpu as g;
 use krate_gpu_names as names;
+
+mod lower;
+
+/// SPIR-V words as the bytes naga's reader takes.
+#[cfg(feature = "spirv")]
+fn bytemuck_words(words: &[u32]) -> &[u8] {
+    // SAFETY: u32 has no padding and u8 has alignment 1.
+    unsafe { std::slice::from_raw_parts(words.as_ptr().cast::<u8>(), words.len() * 4) }
+}
 use wgpu::custom::*;
 use wgpu::rwh;
 
@@ -976,8 +985,12 @@ fn message(
     }
 }
 
-/// A naga module (what Bevy composes its shaders into) as WGSL source.
+/// A naga module (what Bevy composes its shaders into, and what a GLSL or
+/// SPIR-V shader parses into) as WGSL source.
 fn naga_to_wgsl(module: &naga::Module) -> Result<String, String> {
+    let mut module = module.clone();
+    lower::lower_for_wgsl(&mut module)?;
+    let module = &module;
     let info = naga::valid::Validator::new(
         naga::valid::ValidationFlags::all(),
         naga::valid::Capabilities::all(),
@@ -1131,7 +1144,34 @@ impl DeviceInterface for KDevice {
         let code: Result<Cow<'_, str>, String> = match &desc.source {
             wgpu::ShaderSource::Wgsl(code) => Ok(code.clone()),
             wgpu::ShaderSource::Naga(module) => naga_to_wgsl(module).map(Cow::Owned),
-            _ => Err("only WGSL (or a naga module) reaches krate:gpu".to_string()),
+            #[cfg(feature = "glsl")]
+            wgpu::ShaderSource::Glsl {
+                shader,
+                stage,
+                defines,
+            } => {
+                let mut options = naga::front::glsl::Options::from(*stage);
+                options.defines = defines
+                    .iter()
+                    .map(|(k, v)| (k.to_string(), v.to_string()))
+                    .collect();
+                naga::front::glsl::Frontend::default()
+                    .parse(&options, shader)
+                    .map_err(|e| e.emit_to_string(shader))
+                    .and_then(|m| naga_to_wgsl(&m))
+                    .map(Cow::Owned)
+            }
+            #[cfg(feature = "spirv")]
+            wgpu::ShaderSource::SpirV(words) => {
+                naga::front::spv::parse_u8_slice(
+                    bytemuck_words(words),
+                    &naga::front::spv::Options::default(),
+                )
+                .map_err(|e| e.to_string())
+                .and_then(|m| naga_to_wgsl(&m))
+                .map(Cow::Owned)
+            }
+            _ => Err("only WGSL, a naga module, GLSL (feature glsl) or SPIR-V (feature spirv) reaches krate:gpu".to_string()),
         };
         let code = match code {
             Ok(code) => code,
