@@ -11453,3 +11453,100 @@ fn sdk_reference_lists_functions_capabilities_and_leaks() {
     let leaks = v["leaks"].as_array().unwrap();
     assert!(leaks.iter().any(|l| l["pattern"] == "std::fs"));
 }
+
+/// An app plays a video from its own assets and the platform decodes it
+/// (krate:gfx/video, IC-922).
+///
+/// `video-probe.wasm` is apps/krate-video-probe built ("Clip");
+/// `video-sample.mp4` is a 4 s, 320x180 H.264 clip with sound. Packed with
+/// the clip, a Mac plays it headless: it loads, reports its own length and
+/// size, and its clock moves while the app draws it. Packed without the
+/// clip, the app is told the file is not there instead of being shown
+/// black. Another system says it cannot play video yet.
+#[test]
+fn an_app_plays_a_video_from_its_assets() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let app = |name: &str, with_clip: bool| -> std::path::PathBuf {
+        let src = dir.path().join(name);
+        std::fs::create_dir_all(&src).expect("app dir");
+        std::fs::write(
+            src.join("code.wasm"),
+            include_bytes!("fixtures/video-probe.wasm"),
+        )
+        .expect("probe");
+        std::fs::write(
+            src.join("manifest.toml"),
+            "[app]\nid = \"dev.krate.video-probe\"\nname = \"Clip\"\nversion = \"1.0.0\"\n\
+             entry = \"code.wasm\"\nworld = \"krate:app/gui@0.2.0\"\n\n\
+             [[capabilities]]\ncap = \"ui.window:create\"\nrationale = \"window\"\nrequired = true\n\n\
+             [[capabilities]]\ncap = \"io.stdout\"\nrationale = \"print\"\nrequired = true\n\n\
+             [[capabilities]]\ncap = \"io.args\"\nrationale = \"args\"\nrequired = true\n",
+        )
+        .expect("manifest");
+        let clips = src.join("assets").join("clips");
+        std::fs::create_dir_all(&clips).expect("assets");
+        if with_clip {
+            std::fs::write(
+                clips.join("sample.mp4"),
+                include_bytes!("fixtures/video-sample.mp4"),
+            )
+            .expect("clip");
+        } else {
+            std::fs::write(clips.join("readme.txt"), "no clip here").expect("other asset");
+        }
+        let bundle = dir.path().join(format!("{name}.krate"));
+        let packed = krate()
+            .arg("pack")
+            .arg(src.join("code.wasm"))
+            .arg("--manifest")
+            .arg(src.join("manifest.toml"))
+            .arg("-o")
+            .arg(&bundle)
+            .output()
+            .expect("pack");
+        assert!(
+            packed.status.success(),
+            "{}",
+            String::from_utf8_lossy(&packed.stderr)
+        );
+        bundle
+    };
+    let run = |bundle: &std::path::Path| -> String {
+        let out = krate()
+            .arg("run")
+            .arg("--headless")
+            .arg(bundle)
+            .arg("--auto-grant")
+            .arg("--")
+            .arg("quick")
+            .output()
+            .expect("run");
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+
+    let missing = run(&app("without", false));
+    assert!(
+        missing.contains("video:problem=") && missing.contains("there is no clips/sample.mp4"),
+        "a clip the app does not carry is named, not shown black: {missing}"
+    );
+
+    let played = run(&app("with", true));
+    if cfg!(target_os = "macos") {
+        assert!(
+            played
+                .lines()
+                .any(|l| l.starts_with("video:ready=yes duration=4000 size=320x180 moved=yes")),
+            "a Mac loads the clip, knows its length and size, and plays it: {played}"
+        );
+    } else {
+        assert!(
+            played.contains("video playback is not on this system yet"),
+            "another system says it cannot play video yet: {played}"
+        );
+    }
+}

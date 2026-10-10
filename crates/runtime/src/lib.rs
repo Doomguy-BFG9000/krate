@@ -43,6 +43,9 @@ mod camera_macos;
 #[cfg(any(target_os = "windows", target_os = "linux"))]
 mod camera_nokhwa;
 mod canvas_raster;
+mod video;
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+mod video_apple;
 pub use krate_adapter_common::canvas_list;
 pub mod chosen_files;
 pub mod dead_space;
@@ -1455,6 +1458,7 @@ impl Runtime {
         link_gui!(ui4::reminders);
         // Phase 4 only: pictures a canvas keeps and draws by handle.
         link_gui!(phase4_gui_bindings::krate::gfx::canvas_images);
+        link_gui!(phase4_gui_bindings::krate::gfx::video);
 
         link_gui!(ui::window);
         link_gui!(ui::image);

@@ -162,6 +162,13 @@ pub struct Phase3GuiHost {
     /// and the next handle. One Arc per picture, so every frame that draws
     /// it hands the adapters the same picture and they upload it once.
     kept_images: std::cell::RefCell<std::collections::BTreeMap<(u64, u64), Arc<ImagePixels>>>,
+    /// The videos this run opened (krate:gfx/video, IC-922) and the frame
+    /// each last showed, so a draw between new frames hands the adapters the
+    /// same picture and they upload it once.
+    pub(crate) videos: std::cell::RefCell<crate::video::Videos>,
+    pub(crate) video_frames: std::cell::RefCell<std::collections::BTreeMap<u64, Arc<ImagePixels>>>,
+    /// Where the app's bundled assets are, for a video named by path.
+    pub(crate) asset_root: Option<std::path::PathBuf>,
     /// The size each window was asked for, and the canvases whose apps have
     /// asked how big they are (`canvas-size`). A canvas app that never asks
     /// can only be drawing for the size it requested; where the window is
@@ -484,6 +491,9 @@ impl Phase3GuiHost {
             images: std::cell::RefCell::new(std::collections::BTreeMap::new()),
             canvases: std::cell::RefCell::new(std::collections::BTreeMap::new()),
             kept_images: std::cell::RefCell::new(std::collections::BTreeMap::new()),
+            videos: std::cell::RefCell::new(crate::video::Videos::default()),
+            video_frames: std::cell::RefCell::new(std::collections::BTreeMap::new()),
+            asset_root: None,
             requested_sizes: std::cell::RefCell::new(std::collections::BTreeMap::new()),
             canvases_that_asked: std::cell::RefCell::new(std::collections::BTreeSet::new()),
             screen_windows: std::cell::RefCell::new(Vec::new()),
@@ -585,6 +595,7 @@ impl Phase3GuiHost {
     }
 
     pub fn with_asset_root(mut self, root: Option<std::path::PathBuf>) -> Self {
+        self.asset_root = root.clone();
         self.speech = LocalSpeechRuntime::default().with_asset_root(root);
         self
     }
@@ -3565,6 +3576,23 @@ impl Phase3GuiHost {
         let Some(image) = self.kept_images.borrow().get(&(canvas, handle)).cloned() else {
             return Err(gfx::types::GfxError::InvalidTarget);
         };
+        self.draw_image(canvas, image, area, radii)
+    }
+
+    /// Whether a canvas exists.
+    pub(crate) fn canvases_contains(&self, canvas: u64) -> bool {
+        self.canvases.borrow().contains_key(&canvas)
+    }
+
+    /// Draw a picture the host holds -- a kept picture, a video's frame --
+    /// as draw-pixels (no radii) or draw-pixels-round.
+    pub(crate) fn draw_image(
+        &self,
+        canvas: u64,
+        image: Arc<ImagePixels>,
+        area: gfx::types::Rect,
+        radii: Option<gfx::types::CornerRadii>,
+    ) -> Result<(), gfx::types::GfxError> {
         let rect = (area.x, area.y, area.width, area.height);
         let radii = radii.map(|r| (r.top_left, r.top_right, r.bottom_right, r.bottom_left));
         if self.lists_enabled() || self.inspect_layout.get() {
@@ -6923,6 +6951,21 @@ impl Phase3GuiHost {
             .guard()
             .check(&UapiCall::Camera(CameraCall::Capture))
             .is_err()
+    }
+
+    /// Whether the person granted `net.connect` to the host an address
+    /// names: the judgment a fetch gets, for a video streamed from it.
+    pub(crate) fn may_reach(&self, address: &str) -> bool {
+        let Ok(endpoint) = krate_adapter_common::net::parse_url_endpoint(address) else {
+            return false;
+        };
+        self.runtime
+            .guard()
+            .check(&UapiCall::Net(crate::uapi::NetCall::Connect {
+                host: endpoint.host,
+                port: endpoint.port,
+            }))
+            .is_ok()
     }
 }
 

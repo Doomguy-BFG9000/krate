@@ -15,8 +15,8 @@ Developer ownership and control is the default (IC-175, IC-176). Krate enforces 
 
 ## Summary
 
-- 67 boundaries reviewed, 58 of them WIT interfaces (58 declared under wit/krate).
-- 35 compulsory, each with a justification or a recorded gap; 32 optional.
+- 68 boundaries reviewed, 59 of them WIT interfaces (59 declared under wit/krate).
+- 35 compulsory, each with a justification or a recorded gap; 33 optional.
 - 7 recorded gaps where the escape hatch does not yet exist or the boundary is narrower than a developer would want.
 
 ## Every boundary
@@ -36,6 +36,7 @@ Developer ownership and control is the default (IC-175, IC-176). Krate enforces 
 | `krate:gfx@0.1.0/canvas2d` | wit | the handoff of drawn pixels and draw operations to the host painter, which is the only way onto the screen | any rasterizer, layout engine, text shaper or scene graph the app brings; Krate's draw calls are a convenience, not a requirement | set-pixels on a canvas or an image widget: the app renders with anything and hands over the pixels | yes | os-safety |
 | `krate:gfx@0.1.0/scene3d` | wit | nothing: an optional software 3D helper | any 3D approach; the app may ignore this entirely | canvas pixels from the app's own renderer | no | -- |
 | `krate:gfx@0.1.0/types` | wit | colour, rectangle and error shapes every host lowers to | everything drawn with them | none needed: a type carries no authority | yes | portability |
+| `krate:gfx@0.1.0/video` | wit | playing a bundled or granted-host video with the platform decoder and drawing its current frame into a canvas by handle | which video, its controls and their look, where and how big to draw it, when to play, pause, seek, loop or mute | decode frames in the app and draw them with draw-pixels | no | -- |
 | `krate:io@0.1.0/args` | wit | how launch arguments reach the app | parsing and meaning of the arguments | raw strings | yes | platform |
 | `krate:io@0.1.0/log` | wit | nothing: an optional structured log the host can show | any logging scheme, or stderr | stdio | no | -- |
 | `krate:io@0.1.0/stdio` | wit | that a CLI app's standard streams are the host process's | what is written and read, in any format | raw bytes on streams | yes | platform |

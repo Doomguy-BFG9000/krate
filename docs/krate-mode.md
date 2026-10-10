@@ -645,6 +645,16 @@ takes this path, so any of them is a model for the wiring.
 - `scene3d::unlit: func(scene: u64, vertices: list<f32>, uvs: list<f32>, texture: u64, tint: color) -> result<_, gfx-error>`
 - `scene3d::cull-back-faces: func(scene: u64, enabled: bool) -> result<_, gfx-error>`
 - `scene3d::present: func(scene: u64) -> result<_, gfx-error>`
+- `video::open: func(source: string) -> result<u64, gfx-error>`
+- `video::play: func(video: u64) -> result<_, gfx-error>`
+- `video::pause: func(video: u64) -> result<_, gfx-error>`
+- `video::seek: func(video: u64, millis: u64) -> result<_, gfx-error>`
+- `video::set-looping: func(video: u64, looping: bool) -> result<_, gfx-error>`
+- `video::set-muted: func(video: u64, muted: bool) -> result<_, gfx-error>`
+- `video::state: func(video: u64) -> result<video-state, gfx-error>`
+- `video::draw: func(canvas: u64, video: u64, area: rect) -> result<_, gfx-error>`
+- `video::draw-round: func(canvas: u64, video: u64, area: rect, radii: corner-radii) -> result<_, gfx-error>`
+- `video::close: func(video: u64)`
 
 ## `ui`
 

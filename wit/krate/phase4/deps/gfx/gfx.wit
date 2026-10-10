@@ -584,3 +584,64 @@ interface scene3d {
   /// Publish the frame to the widget. Until this, nothing is shown.
   present: func(scene: u64) -> result<_, gfx-error>;
 }
+
+/// Videos an app plays inside its own layout (IC-922).
+///
+/// The platform decodes -- AVFoundation on a Mac and an iPhone -- with its
+/// hardware, and plays the sound itself. The app never touches a frame's
+/// bytes: it draws the video into a canvas by handle, each frame, the way it
+/// draws a kept picture, so a film costs the app no more than a rectangle.
+/// Its own controls (play, pause, a scrubber) are ordinary widgets or canvas
+/// drawing that call the functions below.
+interface video {
+  use types.{rect, corner-radii, gfx-error};
+
+  /// Where a video is and what it is doing, read as often as the app likes.
+  record video-state {
+    /// Where playback is, in milliseconds from the start.
+    position-millis: u64,
+    /// How long the video runs, in milliseconds; 0 until it has loaded, and
+    /// 0 for a live stream that has no end.
+    duration-millis: u64,
+    /// The picture's own width in pixels; 0 until it has loaded.
+    width: u32,
+    /// The picture's own height in pixels; 0 until it has loaded.
+    height: u32,
+    /// True once the first frame can be shown.
+    ready: bool,
+    /// True while it is playing.
+    playing: bool,
+    /// True when it reached the end and is not looping.
+    ended: bool,
+    /// Why it cannot play, when it cannot: a file that is not a video, a
+    /// stream that went away. Empty while all is well.
+    problem: string,
+  }
+
+  /// Open a video, paused at the start. `source` is a path inside the app's
+  /// bundled assets ("clips/intro.mp4") or an `https://` address the app
+  /// was granted `net.connect` to. Loading continues after this returns:
+  /// read `state` for `ready`.
+  open: func(source: string) -> result<u64, gfx-error>;
+  /// Start or carry on playing.
+  play: func(video: u64) -> result<_, gfx-error>;
+  /// Stop where it is.
+  pause: func(video: u64) -> result<_, gfx-error>;
+  /// Jump to `millis` from the start, exactly, playing or paused.
+  seek: func(video: u64, millis: u64) -> result<_, gfx-error>;
+  /// Start again from the beginning on reaching the end.
+  set-looping: func(video: u64, looping: bool) -> result<_, gfx-error>;
+  /// Silence it, or let it be heard.
+  set-muted: func(video: u64, muted: bool) -> result<_, gfx-error>;
+  /// Where it is and what it is doing.
+  state: func(video: u64) -> result<video-state, gfx-error>;
+  /// Draw the current frame into `area` of a canvas, stretched to fill it.
+  /// Draws nothing until the first frame is ready. Call it every frame the
+  /// canvas is drawn; keep `area` to the video's shape (`width`/`height`)
+  /// to avoid stretching it.
+  draw: func(canvas: u64, video: u64, area: rect) -> result<_, gfx-error>;
+  /// The same, with rounded corners.
+  draw-round: func(canvas: u64, video: u64, area: rect, radii: corner-radii) -> result<_, gfx-error>;
+  /// Stop it and let it go.
+  close: func(video: u64);
+}

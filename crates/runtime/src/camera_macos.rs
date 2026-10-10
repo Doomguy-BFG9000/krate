@@ -96,22 +96,29 @@ fn rgba_from_sample_buffer(sample: &CMSampleBuffer) -> Option<(Vec<u8>, u32, u32
     // SAFETY: called on AVFoundation's delivery queue with a live sample
     // buffer, which owns the image buffer for the duration of this call.
     let image = unsafe { sample.image_buffer() }?;
+    rgba_from_pixel_buffer(&image)
+}
 
+/// Convert one 32BGRA pixel buffer to straight-alpha RGBA: the camera's
+/// frames and a video's (IC-922) alike.
+pub(crate) fn rgba_from_pixel_buffer(
+    image: &objc2_core_video::CVPixelBuffer,
+) -> Option<(Vec<u8>, u32, u32)> {
     // SAFETY: the lock/unlock pair brackets every read below, which is what
     // makes the base address valid to dereference.
     unsafe {
-        if CVPixelBufferLockBaseAddress(&image, CVPixelBufferLockFlags::ReadOnly) != 0 {
+        if CVPixelBufferLockBaseAddress(image, CVPixelBufferLockFlags::ReadOnly) != 0 {
             return None;
         }
     }
     let result = (|| {
-        let width = CVPixelBufferGetWidth(&image) as u32;
-        let height = CVPixelBufferGetHeight(&image) as u32;
+        let width = CVPixelBufferGetWidth(image) as u32;
+        let height = CVPixelBufferGetHeight(image) as u32;
         if width == 0 || height == 0 {
             return None;
         }
-        let stride = CVPixelBufferGetBytesPerRow(&image);
-        let base = CVPixelBufferGetBaseAddress(&image) as *const u8;
+        let stride = CVPixelBufferGetBytesPerRow(image);
+        let base = CVPixelBufferGetBaseAddress(image) as *const u8;
         if base.is_null() {
             return None;
         }
@@ -139,7 +146,7 @@ fn rgba_from_sample_buffer(sample: &CMSampleBuffer) -> Option<(Vec<u8>, u32, u32
     })();
     // SAFETY: pairs with the lock above; runs on every path out.
     unsafe {
-        CVPixelBufferUnlockBaseAddress(&image, CVPixelBufferLockFlags::ReadOnly);
+        CVPixelBufferUnlockBaseAddress(image, CVPixelBufferLockFlags::ReadOnly);
     }
     result
 }

@@ -368,6 +368,175 @@ impl crate::phase4_gui_bindings::krate::gfx::canvas_images::Host for Phase3GuiHo
     }
 }
 
+/// Videos played in the app's own layout (IC-922). Phase 4 only. A bundled
+/// clip needs no capability, as a bundled picture needs none; a stream needs
+/// `net.connect` to its host, judged as a fetch is.
+impl crate::phase4_gui_bindings::krate::gfx::video::Host for Phase3GuiHost {
+    fn open(&mut self, source: String) -> wasmtime::Result<Result<u64, gfx3::types::GfxError>> {
+        use gfx3::types::GfxError;
+        let source = if source.starts_with("https://") || source.starts_with("http://") {
+            if !self.may_reach(&source) {
+                return Ok(Err(GfxError::PermissionDenied));
+            }
+            crate::video::Source::Url(source)
+        } else {
+            let Some(root) = self.asset_root.as_deref() else {
+                return Ok(Err(GfxError::Unsupported(
+                    "the app does not carry bundled assets".to_string(),
+                )));
+            };
+            let path = match crate::phase2_host::bundled_resource_path(root, &source) {
+                Ok(path) if path.is_file() => path,
+                Ok(_) => {
+                    return Ok(Err(GfxError::Unsupported(format!(
+                        "there is no {source} in the app's assets"
+                    ))))
+                }
+                Err(_) => {
+                    return Ok(Err(GfxError::Unsupported(format!(
+                        "{source} is not a path inside the app's assets"
+                    ))))
+                }
+            };
+            crate::video::Source::File(path)
+        };
+        Ok(match crate::video::open(source) {
+            Ok(video) => {
+                self.videos.borrow_mut().add(video);
+                Ok(video)
+            }
+            Err(problem) => Err(GfxError::Platform(problem)),
+        })
+    }
+
+    fn play(&mut self, video: u64) -> wasmtime::Result<Result<(), gfx3::types::GfxError>> {
+        Ok(self.control_video(video, crate::video::Control::Play))
+    }
+
+    fn pause(&mut self, video: u64) -> wasmtime::Result<Result<(), gfx3::types::GfxError>> {
+        Ok(self.control_video(video, crate::video::Control::Pause))
+    }
+
+    fn seek(
+        &mut self,
+        video: u64,
+        millis: u64,
+    ) -> wasmtime::Result<Result<(), gfx3::types::GfxError>> {
+        Ok(self.control_video(video, crate::video::Control::Seek(millis)))
+    }
+
+    fn set_looping(
+        &mut self,
+        video: u64,
+        looping: bool,
+    ) -> wasmtime::Result<Result<(), gfx3::types::GfxError>> {
+        Ok(self.control_video(video, crate::video::Control::Looping(looping)))
+    }
+
+    fn set_muted(
+        &mut self,
+        video: u64,
+        muted: bool,
+    ) -> wasmtime::Result<Result<(), gfx3::types::GfxError>> {
+        Ok(self.control_video(video, crate::video::Control::Muted(muted)))
+    }
+
+    fn state(
+        &mut self,
+        video: u64,
+    ) -> wasmtime::Result<
+        Result<crate::phase4_gui_bindings::krate::gfx::video::VideoState, gfx3::types::GfxError>,
+    > {
+        if !self.videos.borrow().owns(video) {
+            return Ok(Err(gfx3::types::GfxError::InvalidTarget));
+        }
+        Ok(crate::video::state(video)
+            .map(
+                |state| crate::phase4_gui_bindings::krate::gfx::video::VideoState {
+                    position_millis: state.position_millis,
+                    duration_millis: state.duration_millis,
+                    width: state.width,
+                    height: state.height,
+                    ready: state.ready,
+                    playing: state.playing,
+                    ended: state.ended,
+                    problem: state.problem,
+                },
+            )
+            .map_err(gfx3::types::GfxError::Platform))
+    }
+
+    fn draw(
+        &mut self,
+        canvas: u64,
+        video: u64,
+        area: gfx3::types::Rect,
+    ) -> wasmtime::Result<Result<(), gfx3::types::GfxError>> {
+        Ok(self.draw_video(canvas, video, area, None))
+    }
+
+    fn draw_round(
+        &mut self,
+        canvas: u64,
+        video: u64,
+        area: gfx3::types::Rect,
+        radii: gfx3::types::CornerRadii,
+    ) -> wasmtime::Result<Result<(), gfx3::types::GfxError>> {
+        Ok(self.draw_video(canvas, video, area, Some(radii)))
+    }
+
+    fn close(&mut self, video: u64) -> wasmtime::Result<()> {
+        if self.videos.borrow_mut().remove(video) {
+            crate::video::close(video);
+            self.video_frames.borrow_mut().remove(&video);
+        }
+        Ok(())
+    }
+}
+
+impl Phase3GuiHost {
+    fn control_video(
+        &self,
+        video: u64,
+        control: crate::video::Control,
+    ) -> Result<(), gfx3::types::GfxError> {
+        if !self.videos.borrow().owns(video) {
+            return Err(gfx3::types::GfxError::InvalidTarget);
+        }
+        crate::video::control(video, control).map_err(gfx3::types::GfxError::Platform)
+    }
+
+    /// Draw a video's newest frame, or the one it showed last when no newer
+    /// one has arrived; nothing before the first.
+    fn draw_video(
+        &self,
+        canvas: u64,
+        video: u64,
+        area: gfx3::types::Rect,
+        radii: Option<gfx3::types::CornerRadii>,
+    ) -> Result<(), gfx3::types::GfxError> {
+        if !self.videos.borrow().owns(video) {
+            return Err(gfx3::types::GfxError::InvalidTarget);
+        }
+        if !self.canvases_contains(canvas) {
+            return Err(gfx3::types::GfxError::InvalidTarget);
+        }
+        match crate::video::frame(video) {
+            Ok(Some(frame)) => {
+                self.video_frames
+                    .borrow_mut()
+                    .insert(video, std::sync::Arc::new(frame));
+            }
+            Ok(None) => {}
+            Err(problem) => return Err(gfx3::types::GfxError::Platform(problem)),
+        }
+        let Some(frame) = self.video_frames.borrow().get(&video).cloned() else {
+            return Ok(());
+        };
+        self.draw_image(canvas, frame, area, radii)
+    }
+}
+
 /// The phone tapping back (IC-917). Phase 4 only. No capability: a tap is
 /// felt by the person holding the phone and reaches nothing else, as on the
 /// phones themselves.
