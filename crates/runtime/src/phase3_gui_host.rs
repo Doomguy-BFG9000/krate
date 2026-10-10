@@ -174,6 +174,19 @@ pub struct Phase3GuiHost {
     /// app that lays out from the screen's numbers is as responsive as one
     /// that asks `canvas_size`, and must not be given a design to shrink.
     screen_windows: std::cell::RefCell<Vec<WindowId>>,
+    /// The phone profile's cost measure (IC-915). `KRATE_DRIVE_SCROLL=N`
+    /// (headless only) feeds the app N scroll steps through its own wait,
+    /// then closes it; each step's cost is the time from handing the app
+    /// its event to the app presenting the frame that answers it -- the
+    /// app's own work, which a phone runs under the interpreter.
+    drive_scroll_left: std::cell::Cell<Option<u32>>,
+    drive_scroll_total: u32,
+    guest_since: std::cell::Cell<Option<std::time::Instant>>,
+    frame_costs: std::cell::RefCell<Vec<f32>>,
+    /// When the host was made, and how long the app took from then to
+    /// waiting for its first input with a frame drawn (IC-915).
+    born: std::time::Instant,
+    first_wait_ms: std::cell::Cell<Option<f32>>,
     implicit_designs: std::cell::RefCell<std::collections::BTreeSet<u64>>,
     next_kept_image: std::cell::Cell<u64>,
     /// Connected gamepads, polled on demand.
@@ -461,6 +474,19 @@ impl Phase3GuiHost {
             requested_sizes: std::cell::RefCell::new(std::collections::BTreeMap::new()),
             canvases_that_asked: std::cell::RefCell::new(std::collections::BTreeSet::new()),
             screen_windows: std::cell::RefCell::new(Vec::new()),
+            drive_scroll_left: std::cell::Cell::new(
+                std::env::var("KRATE_DRIVE_SCROLL")
+                    .ok()
+                    .and_then(|n| n.trim().parse().ok()),
+            ),
+            drive_scroll_total: std::env::var("KRATE_DRIVE_SCROLL")
+                .ok()
+                .and_then(|n| n.trim().parse().ok())
+                .unwrap_or(0),
+            guest_since: std::cell::Cell::new(None),
+            frame_costs: std::cell::RefCell::new(Vec::new()),
+            born: std::time::Instant::now(),
+            first_wait_ms: std::cell::Cell::new(None),
             implicit_designs: std::cell::RefCell::new(std::collections::BTreeSet::new()),
             next_kept_image: std::cell::Cell::new(1),
             gamepads: std::cell::RefCell::new(crate::gamepad::Gamepads::new()),
@@ -3114,6 +3140,69 @@ impl Phase3GuiHost {
         self.dispatcher().set_adapts(adapts);
     }
 
+    /// One step of the scroll drive (`KRATE_DRIVE_SCROLL`): a scroll event
+    /// at the middle of the first window, down for the first half of the
+    /// steps and back up for the second; when the steps are done, the cost
+    /// report is written (`KRATE_COST_REPORT`) and the window asked to
+    /// close. None when no drive was asked for, or not headless.
+    fn drive_scroll_step(&self) -> Option<ui::types::Event> {
+        if !self.headless {
+            return None;
+        }
+        let left = self.drive_scroll_left.get()?;
+        let window = *self.windows.first()?;
+        if left == 0 {
+            self.drive_scroll_left.set(None);
+            self.write_cost_report();
+            return Some(ui::types::Event::CloseRequested(window.get()));
+        }
+        self.drive_scroll_left.set(Some(left - 1));
+        let (w, h) = self
+            .dispatcher()
+            .window(window)
+            .ok()
+            .flatten()
+            .map(|record| (record.size.width as f32, record.size.height as f32))
+            .unwrap_or((400.0, 800.0));
+        let down = left > self.drive_scroll_total / 2;
+        self.guest_since.set(Some(std::time::Instant::now()));
+        Some(ui::types::Event::Wheel(ui::types::WheelEvent {
+            window: window.get(),
+            widget: None,
+            x: w / 2.0,
+            y: h / 2.0,
+            dx: 0.0,
+            dy: if down { 24.0 } else { -24.0 },
+            modifiers: modifiers_to_wit(Modifiers::default()),
+        }))
+    }
+
+    /// The frame costs the scroll drive measured, as JSON: how many frames
+    /// answered, and the median, 95th percentile and worst, in ms.
+    fn write_cost_report(&self) {
+        let Some(path) = std::env::var_os("KRATE_COST_REPORT") else {
+            return;
+        };
+        let mut costs = self.frame_costs.borrow().clone();
+        costs.sort_by(|a, b| a.total_cmp(b));
+        let at = |q: f32| -> f32 {
+            if costs.is_empty() {
+                0.0
+            } else {
+                costs[((costs.len() - 1) as f32 * q).round() as usize]
+            }
+        };
+        let report = serde_json::json!({
+            "steps": self.drive_scroll_total,
+            "frames": costs.len(),
+            "p50_ms": at(0.5),
+            "p95_ms": at(0.95),
+            "max_ms": costs.last().copied().unwrap_or(0.0),
+            "first_frame_ms": self.first_wait_ms.get(),
+        });
+        let _ = std::fs::write(path, report.to_string());
+    }
+
     /// A window's screen (krate:ui/screen, IC-912): width and height in
     /// points, a finger or a mouse, and the edges something else covers
     /// (top, right, bottom, left). None for a window the app does not own.
@@ -4073,6 +4162,14 @@ impl ui::events::Host for Phase3GuiHost {
         // stable, fully-drawn frame. Capture here, before any budget check
         // that might end the run.
         self.maybe_take_screenshot();
+        if self.first_wait_ms.get().is_none() {
+            self.first_wait_ms
+                .set(Some(self.born.elapsed().as_secs_f32() * 1000.0));
+        }
+
+        if let Some(event) = self.drive_scroll_step() {
+            return Ok(Some(event));
+        }
 
         let deadline = timeout_millis
             .map(|ms| std::time::Instant::now() + std::time::Duration::from_millis(u64::from(ms)));
@@ -5410,6 +5507,12 @@ impl gfx::canvas2d::Host for Phase3GuiHost {
     }
 
     fn present(&mut self, canvas: u64) -> wasmtime::Result<Result<(), gfx::types::GfxError>> {
+        // The app's work for the event it was handed ends here (IC-915).
+        if let Some(since) = self.guest_since.take() {
+            self.frame_costs
+                .borrow_mut()
+                .push(since.elapsed().as_secs_f32() * 1000.0);
+        }
         self.fit_unasked_canvas(canvas);
         // The one call that reaches the widget. Draw calls mutate the raster;
         // this publishes it, so a hundred fills cost one render.

@@ -6271,6 +6271,67 @@ fn a_cpp_program_runs_and_its_constructors_run_once() {
     }
 }
 
+/// The binary a person runs times an app the way a phone runs it (IC-915).
+///
+/// `KRATE_DRIVE_SCROLL` feeds the app scroll steps through its own wait and
+/// then closes it; `KRATE_COST_REPORT` says how long it took to reach its
+/// first frame and how long each answered step took. `shelf.wasm`
+/// (apps/krate-shelf) scrolls its Listen Now page, so every step down and
+/// back up is answered with a frame and timed. A drive that never ran, or a
+/// report without the first frame, would leave check-app's phone stage
+/// judging nothing.
+#[test]
+fn a_scroll_drive_times_the_app_and_closes_it() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let wasm = dir.path().join("code.wasm");
+    std::fs::write(&wasm, include_bytes!("fixtures/shelf.wasm")).expect("component");
+    let manifest = dir.path().join("manifest.toml");
+    std::fs::write(
+        &manifest,
+        "[app]\nid = \"com.acme.shelf\"\nname = \"shelf\"\nversion = \"1.0.0\"\n\
+         entry = \"code.wasm\"\nworld = \"krate:app/gui@0.2.0\"\n\n\
+         [[capabilities]]\ncap = \"ui.window:create\"\nrationale = \"window\"\nrequired = true\n\n\
+         [[capabilities]]\ncap = \"io.args\"\nrationale = \"args\"\nrequired = true\n\n\
+         [[capabilities]]\ncap = \"audio.playback\"\nrationale = \"play\"\nrequired = true\n",
+    )
+    .expect("manifest");
+    let report = dir.path().join("cost.json");
+    let started = std::time::Instant::now();
+    let out = krate()
+        .arg("run")
+        .arg(&wasm)
+        .arg("--manifest")
+        .arg(&manifest)
+        .args(["--auto-grant", "--headless"])
+        .env("KRATE_SCREEN", "390x844")
+        .env("KRATE_DRIVE_SCROLL", "12")
+        .env("KRATE_COST_REPORT", &report)
+        .output()
+        .expect("run");
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(20),
+        "the drive closes the app when its steps are done"
+    );
+    let cost: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&report).expect("a cost report"))
+            .expect("json");
+    assert_eq!(cost["steps"], serde_json::json!(12), "{cost}");
+    assert!(
+        cost["first_frame_ms"].as_f64().unwrap_or(0.0) > 0.0,
+        "{cost}"
+    );
+    assert_eq!(
+        cost["frames"],
+        serde_json::json!(12),
+        "each step down and back up is answered with a frame, and each is timed: {cost}"
+    );
+}
+
 /// An app learns what kind of screen it is on (krate:ui/screen, IC-912).
 ///
 /// `pointer-probe.wasm` prints what `krate::layout::Screen::of` reads. A

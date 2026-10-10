@@ -18545,6 +18545,10 @@ enum CheckStage {
     /// Running the app on a phone, a tablet and a desktop window and reading
     /// how each frame lands there (IC-911).
     Screens,
+    /// Running the app the way a phone runs it -- the interpreter iOS
+    /// requires, a phone's screen -- and timing its first frame and its
+    /// frames while scrolling (IC-915).
+    Phone,
 }
 
 impl CheckStage {
@@ -18560,6 +18564,7 @@ impl CheckStage {
             CheckStage::Shoot => 15,
             CheckStage::Usability => 16,
             CheckStage::Screens => 17,
+            CheckStage::Phone => 18,
         }
     }
 
@@ -18573,6 +18578,7 @@ impl CheckStage {
             CheckStage::Shoot => "shoot",
             CheckStage::Usability => "usability",
             CheckStage::Screens => "screens",
+            CheckStage::Phone => "phone",
         }
     }
 }
@@ -19500,6 +19506,11 @@ fn run_check_app(
         // or answer a press is told that first.
         run_screens_stage(dir, &wasm_str, &manifest_str, shoot)?;
         passed.push("screens");
+
+        // Stage: phone. On an iPhone every app runs on the interpreter, so
+        // a frame the desktop draws in time can miss a phone's (IC-915).
+        run_phone_stage(dir, &wasm_str, &manifest_str)?;
+        passed.push("phone");
     }
 
     Ok(CheckSummary {
@@ -19508,6 +19519,100 @@ fn run_check_app(
         shoot: shot,
         usability_notes,
         source_changes,
+    })
+}
+
+/// The longest a phone may wait for an app's first frame, measured on a Mac
+/// under the interpreter. An iPhone 13 Pro is somewhat slower; the margin
+/// keeps an app that passes here inside two seconds there.
+const PHONE_FIRST_FRAME_MS: f32 = 1200.0;
+/// The most an app may spend answering one scroll step (95th percentile),
+/// on the same terms: a 60 Hz frame is 16.7 ms, and the host's own drawing
+/// needs the rest.
+const PHONE_FRAME_MS: f32 = 10.0;
+
+/// Run the app as a phone runs it -- the interpreter iOS allows, a phone's
+/// screen -- scroll it 40 steps, and fail when its first frame or its
+/// frames take longer than a phone can spare (IC-915).
+///
+/// Measured on 2026-10-10 under the interpreter on this kind of machine:
+/// Studio-made recipe, kanban, budget, music and sketch apps reach their
+/// first frame in 26-170 ms and answer a scroll step in at most 5 ms (95th
+/// percentile); an app's per-frame cost is mostly the host's native
+/// drawing, which the interpreter does not slow down.
+fn run_phone_stage(
+    dir: &Path,
+    wasm_str: &str,
+    manifest_str: &str,
+) -> std::result::Result<(), CheckFailure> {
+    let scratch = tempfile::tempdir().map_err(|error| CheckFailure {
+        stage: CheckStage::Phone,
+        detail: format!("could not create a scratch dir for the phone run: {error}"),
+        fix: String::new(),
+    })?;
+    let report = scratch.path().join("cost.json");
+    let args: Vec<String> = vec![
+        "run".into(),
+        "--profile".into(),
+        "analysis".into(),
+        wasm_str.to_string(),
+        "--manifest".into(),
+        manifest_str.to_string(),
+        "--auto-grant".into(),
+        "--headless".into(),
+    ];
+    // SAFETY: single-threaded at this point in check-app.
+    unsafe {
+        std::env::set_var("KRATE_PULLEY", "1");
+        std::env::set_var("KRATE_SCREEN", "390x844");
+        std::env::set_var("KRATE_DRIVE_SCROLL", "40");
+        std::env::set_var("KRATE_COST_REPORT", &report);
+    }
+    let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    let _ = run_self(dir, &refs);
+    unsafe {
+        for name in [
+            "KRATE_PULLEY",
+            "KRATE_SCREEN",
+            "KRATE_DRIVE_SCROLL",
+            "KRATE_COST_REPORT",
+        ] {
+            std::env::remove_var(name);
+        }
+    }
+    // Nothing measured is not a failure: an app that never waits for input
+    // has no frames to time.
+    let Some(cost) = fs::read_to_string(&report)
+        .ok()
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+    else {
+        return Ok(());
+    };
+    let first = cost["first_frame_ms"].as_f64().unwrap_or(0.0) as f32;
+    let p95 = cost["p95_ms"].as_f64().unwrap_or(0.0) as f32;
+    let mut faults = Vec::new();
+    if first > PHONE_FIRST_FRAME_MS {
+        faults.push(format!(
+            "its first frame takes {first:.0} ms on a phone's interpreter (most a phone should wait: {PHONE_FIRST_FRAME_MS:.0} ms)"
+        ));
+    }
+    if p95 > PHONE_FRAME_MS {
+        faults.push(format!(
+            "answering a scroll takes {p95:.1} ms of the app's own work (95th percentile; at most {PHONE_FRAME_MS:.0} ms leaves a phone time to draw at 60 fps)"
+        ));
+    }
+    if faults.is_empty() {
+        return Ok(());
+    }
+    Err(CheckFailure {
+        stage: CheckStage::Phone,
+        detail: format!("on a phone {}", faults.join(", and ")),
+        fix: "On a phone the app's own code runs on an interpreter, several times slower than a \
+              desktop's. Do heavy work once, not every frame: compute layouts, pictures and \
+              tables when the data changes and keep them; draw only what is on screen; leave \
+              decoding, text and drawing to Krate's calls, which run native. Work at start-up \
+              (generating pictures, parsing big data) belongs after the first frame is shown."
+            .to_string(),
     })
 }
 
