@@ -32,6 +32,7 @@ pub const HOST_FAMILY: &str = "android";
 /// the same UI contract as macOS and Windows before the winit bridge lands.
 pub mod winit_native;
 
+mod bluetooth;
 mod clipboard;
 mod documents;
 mod haptics;
@@ -428,6 +429,8 @@ impl WindowAdapter for AndroidWinitPrototypeUiAdapter {
         // Sensors stop with the app, so they cost nothing after it.
         motion::stop();
         location::stop();
+        // Nothing stays connected after the app.
+        bluetooth::disconnect_all();
         self.remove_session(id);
         WindowAdapter::close_window(&self.headless, id)
     }
@@ -619,6 +622,74 @@ impl UiAdapter for AndroidWinitPrototypeUiAdapter {
         filter: &str,
     ) -> Option<std::path::PathBuf> {
         documents::choose(folder, filter)
+    }
+
+    /// Whether the phone has Bluetooth (IC-917).
+    #[cfg(target_os = "android")]
+    fn bluetooth_available(&self) -> bool {
+        bluetooth::available()
+    }
+
+    /// Krate's own list of nearby devices offering `service`, and the one
+    /// the person picks, connected; the runtime has checked the grant.
+    #[cfg(target_os = "android")]
+    fn bluetooth_choose(
+        &self,
+        _window: WindowId,
+        service: &str,
+        title: &str,
+    ) -> Result<Option<krate_adapter_common::ui::BtDevice>, krate_adapter_common::ui::BtError> {
+        bluetooth::choose(service, title)
+    }
+
+    #[cfg(target_os = "android")]
+    fn bluetooth_read(
+        &self,
+        device: u64,
+        service: &str,
+        characteristic: &str,
+    ) -> Result<Vec<u8>, krate_adapter_common::ui::BtError> {
+        bluetooth::read(device, service, characteristic)
+    }
+
+    #[cfg(target_os = "android")]
+    fn bluetooth_write(
+        &self,
+        device: u64,
+        service: &str,
+        characteristic: &str,
+        data: &[u8],
+        with_response: bool,
+    ) -> Result<(), krate_adapter_common::ui::BtError> {
+        bluetooth::write(device, service, characteristic, data, with_response)
+    }
+
+    #[cfg(target_os = "android")]
+    fn bluetooth_subscribe(
+        &self,
+        device: u64,
+        service: &str,
+        characteristic: &str,
+    ) -> Result<(), krate_adapter_common::ui::BtError> {
+        bluetooth::subscribe(device, service, characteristic)
+    }
+
+    #[cfg(target_os = "android")]
+    fn bluetooth_notifications(
+        &self,
+        device: u64,
+    ) -> Vec<krate_adapter_common::ui::BtNotification> {
+        bluetooth::notifications(device)
+    }
+
+    #[cfg(target_os = "android")]
+    fn bluetooth_connected(&self, device: u64) -> bool {
+        bluetooth::connected(device)
+    }
+
+    #[cfg(target_os = "android")]
+    fn bluetooth_disconnect(&self, device: u64) {
+        bluetooth::disconnect(device)
     }
 
     /// Whether the phone can tell where it is (IC-917).

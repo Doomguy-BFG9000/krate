@@ -203,6 +203,52 @@ public class KrateActivity extends NativeActivity {
         Where.stop();
     }
 
+    /** Whether the phone has Bluetooth (krate:ui/bluetooth). */
+    public boolean krateBtAvailable() {
+        return Ble.available(this);
+    }
+
+    /** Start Krate's device list; see Ble.choose. */
+    public byte[] krateBtChoose(String service, String title) {
+        return Ble.choose(this, service, title);
+    }
+
+    /** Null while the person is choosing; then the pick; see Ble.chooseAnswer. */
+    public byte[] krateBtChooseAnswer() {
+        return Ble.chooseAnswer();
+    }
+
+    /** Start a read (0), write (1) or subscribe (2) on a picked device. */
+    public void krateBtOp(long device, int kind, String service, String characteristic,
+            byte[] data, boolean withResponse) {
+        Ble.op(device, kind, service, characteristic, data, withResponse);
+    }
+
+    /** Null while the exchange runs; then its answer. */
+    public byte[] krateBtOpAnswer() {
+        return Ble.opAnswer();
+    }
+
+    /** Values a device sent since the last ask. */
+    public byte[][] krateBtNotifications(long device) {
+        return Ble.notifications(device);
+    }
+
+    /** Whether a picked device is still connected. */
+    public boolean krateBtConnected(long device) {
+        return Ble.connected(device);
+    }
+
+    /** Let a picked device go. */
+    public void krateBtDisconnect(long device) {
+        Ble.disconnect(device);
+    }
+
+    /** The app closed: let every device go. */
+    public void krateBtDisconnectAll() {
+        Ble.disconnectAll();
+    }
+
     /** Write the file at path into the document at uri; true when it all went. */
     public boolean krateCopyOut(String path, String uri) {
         return Documents.copyOut(this, path, Uri.parse(uri));
