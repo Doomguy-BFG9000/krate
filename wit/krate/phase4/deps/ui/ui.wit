@@ -745,6 +745,45 @@ interface screen {
   facts: func(window: u64) -> screen-facts;
 }
 
+/// The phone tapping back under the finger: a button pressed, a picker's
+/// tick, a game's hit (IC-917).
+///
+/// No permission, as on the phones themselves: any app on screen may tap
+/// back. A computer has nothing to tap with, so `available` answers false
+/// there and every call does nothing -- call it everywhere, and never make
+/// a tap the only sign that something happened.
+interface haptics {
+  /// What a tap means. The phone plays its own feel for each, the one its
+  /// own apps use.
+  enum feel {
+    /// A light tap: a button pressed, a card set down.
+    light,
+    /// A firmer tap: a switch flipped, a piece placed.
+    medium,
+    /// A heavy thud: a landing, a collision.
+    heavy,
+    /// A tick each time a choice changes: a picker wheel, a slider's step.
+    selection,
+    /// Something worked: saved, solved, sent.
+    success,
+    /// Something needs a look.
+    warning,
+    /// Something failed.
+    error,
+  }
+
+  /// Whether this device can tap back at all.
+  available: func() -> bool;
+
+  /// Tap back now. Taps closer together than the phone can play are
+  /// dropped, so a game may call this every frame something is hit.
+  play: func(feel: feel);
+
+  /// A game's impact at `strength`, from 0 (barely felt) to 1 (as hard as
+  /// the phone can); outside that range is held to it.
+  impact: func(strength: f32);
+}
+
 /// The system's own text entry, for an app that draws its own text fields:
 /// a game's name box, an emulator, a canvas editor.
 ///

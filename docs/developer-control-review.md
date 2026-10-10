@@ -15,8 +15,8 @@ Developer ownership and control is the default (IC-175, IC-176). Krate enforces 
 
 ## Summary
 
-- 60 boundaries reviewed, 51 of them WIT interfaces (51 declared under wit/krate).
-- 35 compulsory, each with a justification or a recorded gap; 25 optional.
+- 61 boundaries reviewed, 52 of them WIT interfaces (52 declared under wit/krate).
+- 35 compulsory, each with a justification or a recorded gap; 26 optional.
 - 7 recorded gaps where the escape hatch does not yet exist or the boundary is narrower than a developer would want.
 
 ## Every boundary
@@ -62,6 +62,7 @@ Developer ownership and control is the default (IC-175, IC-176). Krate enforces 
 | `krate:ui@0.1.0/clipboard` | wit | that the clipboard is the person's and reached through a grant | what is put on it | none: the clipboard is the host's | yes | recipient-permission |
 | `krate:ui@0.1.0/dialog` | wit | that a path outside the grants is chosen by the person in a system dialog, never named by the app | when to ask, what to do with the answer | none: this is how the person's authority reaches the app | yes | recipient-permission |
 | `krate:ui@0.1.0/events` | wit | that input arrives from the host, one event at a time, in the person's own order | what every event means | none: input is the host's to deliver | yes | platform |
+| `krate:ui@0.1.0/haptics` | wit | the seven feels a phone taps back with and an impact's strength from 0 to 1, each played as the platform's own | when to tap and which feel; whether to tap at all | none needed: no capability, and a device with nothing to tap answers available() false | no | -- |
 | `krate:ui@0.1.0/image` | wit | the pixel handoff: an image widget shows what the app hands it | any renderer, any format decoded by the app | this is the escape hatch for drawing | no | -- |
 | `krate:ui@0.1.0/launcher` | wit | that opening a link goes through the person's browser and is a grant, not a process capability | which links | show the URL and let the person copy it | yes | recipient-permission |
 | `krate:ui@0.1.0/menu` | wit | nothing yet: menu calls are declared and answer unsupported | any command scheme drawn in the app | the app's own drawn menus and key handling | no | -- |

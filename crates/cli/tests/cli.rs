@@ -6332,6 +6332,52 @@ fn a_scroll_drive_times_the_app_and_closes_it() {
     );
 }
 
+/// An app can tap back on a phone, and a computer says plainly it cannot
+/// (krate:ui/haptics, IC-917).
+///
+/// `haptics-probe.wasm` is apps/krate-haptics-probe built. Its quick mode
+/// plays every feel and three impacts -- one in range, one far over, one
+/// NaN -- and reports `available`. On a computer every call must answer
+/// and do nothing, and `available` must be false: an app told a desktop
+/// can tap back would make a tap its only sign that something happened.
+#[test]
+fn an_app_taps_back_on_a_phone_and_a_computer_says_it_cannot() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let wasm = dir.path().join("code.wasm");
+    std::fs::write(&wasm, include_bytes!("fixtures/haptics-probe.wasm")).expect("probe");
+    let manifest = dir.path().join("manifest.toml");
+    std::fs::write(
+        &manifest,
+        "[app]\nid = \"dev.krate.haptics-probe\"\nname = \"Tap Back\"\nversion = \"1.0.0\"\n\
+         entry = \"code.wasm\"\nworld = \"krate:app/gui@0.2.0\"\n\n\
+         [[capabilities]]\ncap = \"ui.window:create\"\nrationale = \"window\"\nrequired = true\n\n\
+         [[capabilities]]\ncap = \"io.stdout\"\nrationale = \"print\"\nrequired = true\n\n\
+         [[capabilities]]\ncap = \"io.args\"\nrationale = \"args\"\nrequired = true\n",
+    )
+    .expect("manifest");
+    let out = krate()
+        .arg("run")
+        .arg("--headless")
+        .arg(&wasm)
+        .arg("--manifest")
+        .arg(&manifest)
+        .arg("--auto-grant")
+        .arg("--")
+        .arg("quick")
+        .output()
+        .expect("run");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success(),
+        "every haptics call answers on a computer: {stdout}\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        stdout.lines().any(|l| l == "haptics:available=no"),
+        "a computer has nothing to tap with and says so: {stdout}"
+    );
+}
+
 /// An app learns what kind of screen it is on (krate:ui/screen, IC-912).
 ///
 /// `pointer-probe.wasm` prints what `krate::layout::Screen::of` reads. A

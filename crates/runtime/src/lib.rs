@@ -1438,6 +1438,8 @@ impl Runtime {
         link_gui!(ui4::text_entry);
         // Phase 4 only: what kind of screen a window is on (IC-912).
         link_gui!(ui4::screen);
+        // Phase 4 only: the phone tapping back (IC-917).
+        link_gui!(ui4::haptics);
         // Phase 4 only: pictures a canvas keeps and draws by handle.
         link_gui!(phase4_gui_bindings::krate::gfx::canvas_images);
 

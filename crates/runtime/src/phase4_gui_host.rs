@@ -368,6 +368,41 @@ impl crate::phase4_gui_bindings::krate::gfx::canvas_images::Host for Phase3GuiHo
     }
 }
 
+/// The phone tapping back (IC-917). Phase 4 only. No capability: a tap is
+/// felt by the person holding the phone and reaches nothing else, as on the
+/// phones themselves.
+impl ui4::haptics::Host for Phase3GuiHost {
+    fn available(&mut self) -> wasmtime::Result<bool> {
+        Ok(self.haptics_available())
+    }
+
+    fn play(&mut self, feel: ui4::haptics::Feel) -> wasmtime::Result<()> {
+        use krate_adapter_common::ui::HapticFeel;
+        use ui4::haptics::Feel;
+        let feel = match feel {
+            Feel::Light => HapticFeel::Light,
+            Feel::Medium => HapticFeel::Medium,
+            Feel::Heavy => HapticFeel::Heavy,
+            Feel::Selection => HapticFeel::Selection,
+            Feel::Success => HapticFeel::Success,
+            Feel::Warning => HapticFeel::Warning,
+            Feel::Error => HapticFeel::Error,
+        };
+        self.haptic(Some(feel), 1.0);
+        Ok(())
+    }
+
+    fn impact(&mut self, strength: f32) -> wasmtime::Result<()> {
+        let strength = if strength.is_finite() {
+            strength.clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        self.haptic(None, strength);
+        Ok(())
+    }
+}
+
 /// What kind of screen a window is on (IC-912). Phase 4 only.
 impl ui4::screen::Host for Phase3GuiHost {
     fn facts(&mut self, window: u64) -> wasmtime::Result<ui4::screen::ScreenFacts> {

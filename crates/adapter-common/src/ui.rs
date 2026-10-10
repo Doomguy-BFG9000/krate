@@ -1663,6 +1663,19 @@ impl PointerTracker {
 /// renderer consumes it, and this crate only carries it between them.
 pub type CanvasListHandle = std::sync::Arc<dyn std::any::Any + Send + Sync>;
 
+/// What a phone's tap back means (IC-917): the platform plays its own feel
+/// for each.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HapticFeel {
+    Light,
+    Medium,
+    Heavy,
+    Selection,
+    Success,
+    Warning,
+    Error,
+}
+
 /// A screen beyond its size (IC-912): touched or pointed at, and the
 /// space at each edge something else covers, in points (top, right,
 /// bottom, left).
@@ -1835,6 +1848,17 @@ pub trait UiAdapter: WindowAdapter {
         _filter: &str,
     ) -> Option<std::path::PathBuf> {
         None
+    }
+
+    /// Whether this device can tap back (IC-917). Desktops cannot.
+    fn haptics_available(&self) -> bool {
+        false
+    }
+
+    /// Tap back with `feel`, or an impact at `strength` (0 to 1) when
+    /// `feel` is None. False when there is nothing to tap with.
+    fn haptic(&self, _feel: Option<HapticFeel>, _strength: f32) -> bool {
+        false
     }
 
     /// Hand a file the app has written to the platform's own save sheet,

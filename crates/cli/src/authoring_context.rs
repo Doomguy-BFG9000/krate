@@ -424,7 +424,15 @@ A window wider than tall plays in landscape on a phone. A text field \
 the app draws itself (a name box in a game, a canvas editor) calls \
 `krate::ui::text_entry::start(win)` when it takes focus and `stop(win)` \
 when it loses it: a phone shows its keyboard, and the typing arrives as \
-the usual `TextInput` and key events. A picture that does not change \
+the usual `TextInput` and key events. A game that reads keys and never \
+reads touch gets an on-screen pad on a phone by itself, built from the \
+keys it asks `key_held` about (Space or Enter is the big button): do not \
+draw one too. On a phone the game should also tap back: \
+`krate::ui::haptics::play(Feel::Light)` on a button press, `Selection` as \
+a choice changes, `Success`/`Warning`/`Error` for outcomes, and \
+`impact(strength)` (0 to 1) for a hit or a landing. No capability; a \
+computer answers `available()` false and ignores the calls, so call them \
+everywhere and never make a tap the only sign something happened. A picture that does not change \
 between frames (a screenshot, an avatar, a sprite sheet) is kept once \
 with `krate::gfx::canvas_images::keep(canvas, w, h, &rgba)` and drawn \
 by handle with `draw`/`draw_round` each frame: `draw_pixels` sends \

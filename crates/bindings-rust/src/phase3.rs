@@ -7,7 +7,7 @@
 
 #![allow(clippy::too_many_arguments)]
 
-/// `krate:ui`: clipboard, dialog, events, image, launcher, menu, notify, pointer, print, screen, text_entry, touch, tree, window.
+/// `krate:ui`: clipboard, dialog, events, haptics, image, launcher, menu, notify, pointer, print, screen, text_entry, touch, tree, window.
 pub mod ui {
     /// `krate:ui/clipboard`.
     pub mod clipboard {
@@ -173,6 +173,27 @@ pub mod ui {
         /// behaves as though the sticks are centred rather than drifting.
         pub fn gamepad_axis(axis: &str) -> f32 {
             crate::bindings::krate::ui::events::gamepad_axis(axis)
+        }
+    }
+    /// `krate:ui/haptics`.
+    pub mod haptics {
+        pub use crate::bindings::krate::ui::haptics::Feel;
+
+        /// Whether this device can tap back at all.
+        pub fn available() -> bool {
+            crate::bindings::krate::ui::haptics::available()
+        }
+
+        /// Tap back now. Taps closer together than the phone can play are
+        /// dropped, so a game may call this every frame something is hit.
+        pub fn play(feel: Feel) {
+            crate::bindings::krate::ui::haptics::play(feel)
+        }
+
+        /// A game's impact at `strength`, from 0 (barely felt) to 1 (as hard as
+        /// the phone can); outside that range is held to it.
+        pub fn impact(strength: f32) {
+            crate::bindings::krate::ui::haptics::impact(strength)
         }
     }
     /// `krate:ui/image`.

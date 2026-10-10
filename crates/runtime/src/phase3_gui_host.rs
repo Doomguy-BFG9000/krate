@@ -723,6 +723,19 @@ impl Phase3GuiHost {
         self.runtime.dispatcher()
     }
 
+    /// Whether the device can tap back (IC-917); never headless.
+    pub(crate) fn haptics_available(&self) -> bool {
+        !self.headless && self.dispatcher().haptics_available()
+    }
+
+    /// Tap back (IC-917): a feel, or an impact at `strength` when `feel` is
+    /// None. Headless runs have no one holding anything.
+    pub(crate) fn haptic(&self, feel: Option<krate_adapter_common::ui::HapticFeel>, strength: f32) {
+        if !self.headless {
+            self.dispatcher().haptic(feel, strength);
+        }
+    }
+
     /// On a headless host, report a window close once the guest has waited
     /// [`HEADLESS_IDLE_WAIT_LIMIT`] times with nothing to show for it.
     ///

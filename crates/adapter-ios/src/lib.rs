@@ -536,6 +536,14 @@ impl UiAdapter for IosUikitPrototypeUiAdapter {
         uikit_native::choose_path(folder, filter)
     }
 
+    fn haptics_available(&self) -> bool {
+        true
+    }
+
+    fn haptic(&self, feel: Option<krate_adapter_common::ui::HapticFeel>, strength: f32) -> bool {
+        uikit_native::haptic(feel, strength)
+    }
+
     fn export_file(&self, _window: WindowId, path: &std::path::Path) -> bool {
         uikit_native::export_file(path)
     }

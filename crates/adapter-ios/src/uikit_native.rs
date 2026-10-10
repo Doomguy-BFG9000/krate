@@ -691,6 +691,88 @@ mod real {
             .presentViewController_animated_completion(&picker, true, None);
     }
 
+    /// The phone's own feedback generators, made once and kept warm on the
+    /// main thread, as Apple asks: a fresh one per tap starts late.
+    struct Haptics {
+        light: Retained<objc2_ui_kit::UIImpactFeedbackGenerator>,
+        medium: Retained<objc2_ui_kit::UIImpactFeedbackGenerator>,
+        heavy: Retained<objc2_ui_kit::UIImpactFeedbackGenerator>,
+        selection: Retained<objc2_ui_kit::UISelectionFeedbackGenerator>,
+        notice: Retained<objc2_ui_kit::UINotificationFeedbackGenerator>,
+    }
+
+    thread_local! {
+        static HAPTICS: std::cell::OnceCell<Haptics> = const { std::cell::OnceCell::new() };
+    }
+
+    /// When the last tap went out: taps closer than the Taptic Engine can
+    /// play are dropped, so a game may ask every frame.
+    static LAST_TAP: Mutex<Option<std::time::Instant>> = Mutex::new(None);
+
+    /// Tap back (IC-917): `feel`, or an impact at `strength` (0 to 1) when
+    /// `feel` is None.
+    pub fn haptic(feel: Option<krate_adapter_common::ui::HapticFeel>, strength: f32) -> bool {
+        {
+            let mut last = LAST_TAP.lock().expect("tap lock");
+            let now = std::time::Instant::now();
+            if last.is_some_and(|at| now.duration_since(at) < std::time::Duration::from_millis(30))
+            {
+                return true;
+            }
+            *last = Some(now);
+        }
+        DispatchQueue::main().exec_async(move || play_haptic(feel, strength));
+        true
+    }
+
+    fn play_haptic(feel: Option<krate_adapter_common::ui::HapticFeel>, strength: f32) {
+        use krate_adapter_common::ui::HapticFeel;
+        use objc2_ui_kit::{
+            UIImpactFeedbackGenerator, UIImpactFeedbackStyle, UINotificationFeedbackGenerator,
+            UINotificationFeedbackType, UISelectionFeedbackGenerator,
+        };
+        let Some(mtm) = MainThreadMarker::new() else {
+            return;
+        };
+        HAPTICS.with(|cell| {
+            let h = cell.get_or_init(|| {
+                let impact = |style| {
+                    UIImpactFeedbackGenerator::initWithStyle(
+                        UIImpactFeedbackGenerator::alloc(mtm),
+                        style,
+                    )
+                };
+                Haptics {
+                    light: impact(UIImpactFeedbackStyle::Light),
+                    medium: impact(UIImpactFeedbackStyle::Medium),
+                    heavy: impact(UIImpactFeedbackStyle::Heavy),
+                    selection: UISelectionFeedbackGenerator::new(mtm),
+                    notice: UINotificationFeedbackGenerator::new(mtm),
+                }
+            });
+            match feel {
+                Some(HapticFeel::Light) => h.light.impactOccurred(),
+                Some(HapticFeel::Medium) => h.medium.impactOccurred(),
+                Some(HapticFeel::Heavy) => h.heavy.impactOccurred(),
+                Some(HapticFeel::Selection) => h.selection.selectionChanged(),
+                Some(HapticFeel::Success) => h
+                    .notice
+                    .notificationOccurred(UINotificationFeedbackType::Success),
+                Some(HapticFeel::Warning) => h
+                    .notice
+                    .notificationOccurred(UINotificationFeedbackType::Warning),
+                Some(HapticFeel::Error) => h
+                    .notice
+                    .notificationOccurred(UINotificationFeedbackType::Error),
+                None => {
+                    if strength > 0.0 {
+                        h.heavy.impactOccurredWithIntensity(strength as f64);
+                    }
+                }
+            }
+        });
+    }
+
     /// Hand a file the app wrote to iOS's own "Save to Files" sheet: the
     /// person picks where it goes (iCloud Drive, On My iPhone, a folder of
     /// theirs) and the file is moved there. Saving on a phone is this two
@@ -2055,6 +2137,10 @@ mod stub {
     }
 
     pub fn export_file(_path: &std::path::Path) -> bool {
+        false
+    }
+
+    pub fn haptic(_feel: Option<krate_adapter_common::ui::HapticFeel>, _strength: f32) -> bool {
         false
     }
 

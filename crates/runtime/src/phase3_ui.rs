@@ -597,6 +597,20 @@ impl<'a> Phase3UiDispatcher<'a> {
         self.adapter.choose_path(id, folder, filter)
     }
 
+    /// Whether the device can tap back (IC-917).
+    pub fn haptics_available(&self) -> bool {
+        self.adapter.haptics_available()
+    }
+
+    /// Tap back: a feel, or an impact at a strength when `feel` is None.
+    pub fn haptic(
+        &self,
+        feel: Option<krate_adapter_common::ui::HapticFeel>,
+        strength: f32,
+    ) -> bool {
+        self.adapter.haptic(feel, strength)
+    }
+
     /// Hand a written file to the platform's save sheet (phones).
     pub fn export_file(&self, id: WindowId, path: &std::path::Path) -> bool {
         self.adapter.export_file(id, path)

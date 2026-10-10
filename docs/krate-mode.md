@@ -673,6 +673,9 @@ takes this path, so any of them is a model for the wiring.
 - `pointer::release: func(window: u64)`
 - `pointer::captured: func(window: u64) -> bool`
 - `screen::facts: func(window: u64) -> screen-facts`
+- `haptics::available: func() -> bool`
+- `haptics::play: func(feel: feel)`
+- `haptics::impact: func(strength: f32)`
 - `text-entry::start: func(window: u64) -> bool`
 - `text-entry::stop: func(window: u64)`
 - `touch::touches: func(window: u64) -> list<touch-point>`
