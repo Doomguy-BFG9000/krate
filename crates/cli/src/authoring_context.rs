@@ -455,7 +455,12 @@ answers the one they pick (`None` if they cancel). The app never scans. \
 Then `read`, `write` and `subscribe` by service and characteristic UUID, \
 and drain `notifications(device)` each frame; on `Err(Disconnected)` or \
 `connected()` false, offer to choose again. `Err(NotFound)` from choose \
-means nothing nearby offers the service: say so. A picture that does not change \
+means nothing nearby offers the service: say so. A Share button: \
+`krate::ui::share::share(win, Some(text), Some(url), &[SharedFile { name, \
+data }])` opens the system's share sheet (Messages, Mail, AirDrop, Notes) \
+and answers `Ok(true)` when sent, `Ok(false)` when cancelled; no \
+capability. A computer answers `Err(Unavailable)` for now: offer \
+save-file or Copy there instead. A picture that does not change \
 between frames (a screenshot, an avatar, a sprite sheet) is kept once \
 with `krate::gfx::canvas_images::keep(canvas, w, h, &rgba)` and drawn \
 by handle with `draw`/`draw_round` each frame: `draw_pixels` sends \

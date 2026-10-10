@@ -1115,6 +1115,35 @@ interface launcher {
   open-url: func(url: string) -> result<_, launch-error>;
 }
 
+/// Hand something to another app: a note to Messages, a picture to Photos
+/// or AirDrop, a file to Mail (IC-919).
+///
+/// The system's own share sheet opens with what the app gives it, and the
+/// person picks where it goes -- or cancels. The pick is the grant, so no
+/// capability: the app gives only what it already holds, and learns only
+/// whether it was sent.
+interface share {
+  /// A file to share: its name and its bytes.
+  record shared-file {
+    /// The name the other app sees ("sketch.png"), extension included.
+    name: string,
+    /// The file's bytes.
+    data: list<u8>,
+  }
+
+  /// Why the sheet did not open.
+  variant share-error {
+    /// This device has no share sheet (computers, for now).
+    unavailable(string),
+    /// Nothing to share, a name with a path in it, or more than 64 MB.
+    invalid(string),
+  }
+
+  /// Open the share sheet with any of a text, a link and files. True when
+  /// the person sent it somewhere, false when they cancelled.
+  share: func(window: u64, text: option<string>, url: option<string>, files: list<shared-file>) -> result<bool, share-error>;
+}
+
 /// Desktop notifications.
 ///
 /// An app that finishes a long task, receives a message, or hits a timer needs

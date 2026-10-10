@@ -12,9 +12,9 @@ use krate::camera::capture as camera;
 use krate::gfx::{canvas2d, canvas_images, types as gfx};
 use krate::layout::{Rect, Screen};
 use krate::speech::synthesis;
-use krate::ui::{clipboard, launcher, notify};
+use krate::ui::{clipboard, launcher, notify, share};
 use krate::{
-    io::stdio,
+    io::{args, stdio},
     time::clock,
     ui::{
         events, tree,
@@ -76,9 +76,10 @@ enum Check {
     Camera,
     Notify,
     Link,
+    Share,
 }
 
-const CHECKS: [(Check, &str); 7] = [
+const CHECKS: [(Check, &str); 8] = [
     (Check::Copy, "Copy a line"),
     (Check::Paste, "Paste"),
     (Check::Record, "Record 3 s and play back"),
@@ -86,11 +87,12 @@ const CHECKS: [(Check, &str); 7] = [
     (Check::Camera, "Camera"),
     (Check::Notify, "Post a notification"),
     (Check::Link, "Open krate.tech"),
+    (Check::Share, "Share a note and a file"),
 ];
 
 struct Page {
     rows: Vec<Rect>,
-    results: [String; 7],
+    results: [String; 8],
     /// A recording in progress: the stream, when it started, the bytes so far.
     recording: Option<(u64, u64, Vec<u8>)>,
     camera: Option<u64>,
@@ -117,7 +119,7 @@ fn draw(canvas: u64, screen: &Screen, page: &mut Page) -> Result<(), gfx::GfxErr
         y += ph + 10.0;
     }
     page.rows.clear();
-    let row_h = ((area.y + area.h - y) / 7.0).clamp(48.0, 64.0);
+    let row_h = ((area.y + area.h - y) / CHECKS.len() as f32).clamp(46.0, 64.0);
     for (i, (_, label)) in CHECKS.iter().enumerate() {
         let r = Rect::new(area.x, y, area.w, row_h - 8.0);
         page.rows.push(r);
@@ -131,7 +133,7 @@ fn draw(canvas: u64, screen: &Screen, page: &mut Page) -> Result<(), gfx::GfxErr
     canvas2d::present(canvas)
 }
 
-fn run_check(check: Check, page: &mut Page, now: u64) {
+fn run_check(win: u64, check: Check, page: &mut Page, now: u64) {
     let slot = index(check);
     page.results[slot] = match check {
         Check::Copy => match clipboard::write_text("Copied by Phone Check, a Krate app") {
@@ -185,6 +187,17 @@ fn run_check(check: Check, page: &mut Page, now: u64) {
             Ok(()) => String::from("ok: opened"),
             Err(e) => format!("failed: {e:?}"),
         },
+        Check::Share => {
+            let note = share::SharedFile {
+                name: String::from("phone-check.txt"),
+                data: b"Every check passed on this phone.\n".to_vec(),
+            };
+            match share::share(win, Some("Shared from Phone Check, a Krate app"), Some("https://krate.tech"), &[note]) {
+                Ok(true) => String::from("ok: sent"),
+                Ok(false) => String::from("ok: the sheet opened, and you cancelled"),
+                Err(e) => format!("failed: {e:?}"),
+            }
+        }
     };
     say_line(&format!("check:{} {}", CHECKS[slot].1, page.results[slot]));
 }
@@ -265,6 +278,23 @@ impl Guest for Component {
         let Ok(canvas) = canvas2d::bind(win, 2) else {
             return 1;
         };
+        if args::raw().split('\n').any(|a| a == "quick-share") {
+            // What the share sheet refuses before it opens, then whether it
+            // opens at all here.
+            let word = |r: Result<bool, share::ShareError>| match r {
+                Ok(sent) => format!("ok:{sent}"),
+                Err(share::ShareError::Invalid(_)) => String::from("invalid"),
+                Err(share::ShareError::Unavailable(_)) => String::from("unavailable"),
+            };
+            let pathy = share::SharedFile { name: String::from("../escape.txt"), data: b"x".to_vec() };
+            say_line(&format!(
+                "share:empty={} path={} note={}",
+                word(share::share(win, None, None, &[])),
+                word(share::share(win, None, None, &[pathy])),
+                word(share::share(win, Some("hello"), None, &[])),
+            ));
+            return 0;
+        }
         let mut page = Page {
             rows: Vec::new(),
             results: Default::default(),
@@ -299,7 +329,7 @@ impl Guest for Component {
                 next = events::poll();
             }
             if let Some(i) = tapped {
-                run_check(CHECKS[i].0, &mut page, now);
+                run_check(win, CHECKS[i].0, &mut page, now);
             }
         }
     }

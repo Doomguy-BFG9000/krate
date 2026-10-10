@@ -723,6 +723,48 @@ impl Phase3GuiHost {
         self.runtime.dispatcher()
     }
 
+    /// Open the share sheet (IC-919), after checking what is offered: at
+    /// least one thing, file names without a path, 64 MB in all.
+    pub(crate) fn share(
+        &self,
+        window: u64,
+        text: Option<String>,
+        url: Option<String>,
+        files: Vec<(String, Vec<u8>)>,
+    ) -> Result<bool, (bool, String)> {
+        const MAX_BYTES: usize = 64 * 1024 * 1024;
+        let empty = |s: &Option<String>| s.as_deref().is_none_or(|t| t.trim().is_empty());
+        if empty(&text) && empty(&url) && files.is_empty() {
+            return Err((false, "nothing to share".to_string()));
+        }
+        for (name, _) in &files {
+            let bare = std::path::Path::new(name)
+                .file_name()
+                .is_some_and(|leaf| leaf == std::ffi::OsStr::new(name));
+            if name.trim().is_empty() || !bare || name.starts_with('.') {
+                return Err((
+                    false,
+                    format!("a file name must be a plain name, not {name:?}"),
+                ));
+            }
+        }
+        let total: usize = files.iter().map(|(_, data)| data.len()).sum::<usize>()
+            + text.as_ref().map_or(0, String::len)
+            + url.as_ref().map_or(0, String::len);
+        if total > MAX_BYTES {
+            return Err((false, "more than 64 MB to share".to_string()));
+        }
+        if self.headless {
+            return Err((true, "no share sheet when nothing is on screen".to_string()));
+        }
+        let id = self
+            .window_id(window)
+            .map_err(|_| (false, "no such window".to_string()))?;
+        self.dispatcher()
+            .share(id, text.as_deref(), url.as_deref(), &files)
+            .map_err(|why| (true, why))
+    }
+
     /// Whether `bluetooth.connect` was granted (IC-917).
     fn bluetooth_granted(&self) -> bool {
         self.runtime

@@ -619,6 +619,16 @@ impl UiAdapter for IosUikitPrototypeUiAdapter {
         uikit_native::motion_read()
     }
 
+    fn share(
+        &self,
+        _window: WindowId,
+        text: Option<&str>,
+        url: Option<&str>,
+        files: &[(String, Vec<u8>)],
+    ) -> Result<bool, String> {
+        uikit_native::share(text, url, files)
+    }
+
     fn haptics_available(&self) -> bool {
         true
     }

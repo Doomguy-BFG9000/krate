@@ -403,6 +403,29 @@ impl ui4::haptics::Host for Phase3GuiHost {
     }
 }
 
+/// The system's share sheet (IC-919). Phase 4 only; no capability, the
+/// person's pick in the sheet is the grant.
+impl ui4::share::Host for Phase3GuiHost {
+    fn share(
+        &mut self,
+        window: u64,
+        text: Option<String>,
+        url: Option<String>,
+        files: Vec<ui4::share::SharedFile>,
+    ) -> wasmtime::Result<Result<bool, ui4::share::ShareError>> {
+        let files = files.into_iter().map(|f| (f.name, f.data)).collect();
+        Ok(
+            Phase3GuiHost::share(self, window, text, url, files).map_err(|(platform, why)| {
+                if platform {
+                    ui4::share::ShareError::Unavailable(why)
+                } else {
+                    ui4::share::ShareError::Invalid(why)
+                }
+            }),
+        )
+    }
+}
+
 /// Bluetooth devices the person picks (IC-917). Phase 4 only, behind
 /// `bluetooth.connect`.
 impl ui4::bluetooth::Host for Phase3GuiHost {

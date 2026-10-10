@@ -611,6 +611,17 @@ impl<'a> Phase3UiDispatcher<'a> {
         self.adapter.haptic(feel, strength)
     }
 
+    /// Open the share sheet (IC-919).
+    pub fn share(
+        &self,
+        id: WindowId,
+        text: Option<&str>,
+        url: Option<&str>,
+        files: &[(String, Vec<u8>)],
+    ) -> Result<bool, String> {
+        self.adapter.share(id, text, url, files)
+    }
+
     /// The adapter, for the Bluetooth calls (IC-917), which pass through
     /// as they are.
     pub fn bluetooth(&self) -> &dyn krate_adapter_common::ui::UiAdapter {

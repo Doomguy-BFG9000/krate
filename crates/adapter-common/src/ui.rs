@@ -1999,6 +1999,18 @@ pub trait UiAdapter: WindowAdapter {
         false
     }
 
+    /// Open the platform's share sheet with a text, a link and files (name,
+    /// bytes); true when sent, false when cancelled (IC-919).
+    fn share(
+        &self,
+        _window: WindowId,
+        _text: Option<&str>,
+        _url: Option<&str>,
+        _files: &[(String, Vec<u8>)],
+    ) -> Result<bool, String> {
+        Err("this device has no share sheet yet".to_string())
+    }
+
     /// Whether this device has Bluetooth (IC-917).
     fn bluetooth_available(&self) -> bool {
         false

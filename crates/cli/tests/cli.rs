@@ -6378,6 +6378,54 @@ fn an_app_taps_back_on_a_phone_and_a_computer_says_it_cannot() {
     );
 }
 
+/// The share sheet refuses what it must before it opens, and a computer
+/// says plainly it has none (krate:ui/share, IC-919).
+///
+/// `phone-check.wasm` is apps/krate-phone-check built. Its quick-share mode
+/// asks to share nothing, a file named with a path, and a plain note. The
+/// first two are invalid wherever they run -- a path in a name would let an
+/// app write outside the staging folder -- and the note finds no sheet on a
+/// computer.
+#[test]
+fn the_share_sheet_refuses_nothing_and_paths_and_a_computer_has_none() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let wasm = dir.path().join("code.wasm");
+    std::fs::write(&wasm, include_bytes!("fixtures/phone-check.wasm")).expect("probe");
+    let manifest = dir.path().join("manifest.toml");
+    std::fs::write(
+        &manifest,
+        "[app]\nid = \"dev.krate.phone-check\"\nname = \"Phone Check\"\nversion = \"1.0.0\"\n\
+         entry = \"code.wasm\"\nworld = \"krate:app/gui@0.2.0\"\n\n\
+         [[capabilities]]\ncap = \"ui.window:create\"\nrationale = \"window\"\nrequired = true\n\n\
+         [[capabilities]]\ncap = \"io.stdout\"\nrationale = \"print\"\nrequired = true\n\n\
+         [[capabilities]]\ncap = \"io.args\"\nrationale = \"args\"\nrequired = true\n",
+    )
+    .expect("manifest");
+    let out = krate()
+        .arg("run")
+        .arg("--headless")
+        .arg(&wasm)
+        .arg("--manifest")
+        .arg(&manifest)
+        .arg("--auto-grant")
+        .arg("--")
+        .arg("quick-share")
+        .output()
+        .expect("run");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        stdout
+            .lines()
+            .any(|l| l == "share:empty=invalid path=invalid note=unavailable"),
+        "nothing and a path are refused; a computer has no sheet: {stdout}"
+    );
+}
+
 /// An app reaches a Bluetooth device only through the person's pick, and
 /// only when allowed (krate:ui/bluetooth behind bluetooth.connect, IC-917).
 ///

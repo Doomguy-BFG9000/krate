@@ -46,6 +46,11 @@ rationale = "Open krate.tech in the browser"
 required = true
 
 [[capabilities]]
+cap = "io.args"
+rationale = "Read the quick-run flag used by automated tests"
+required = true
+
+[[capabilities]]
 cap = "io.stdout"
 rationale = "Report each check, for automated runs"
 required = true

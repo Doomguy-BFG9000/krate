@@ -952,6 +952,103 @@ mod real {
         }
     }
 
+    /// The system's share sheet with a text, a link and files (IC-919). Files
+    /// are written to a fresh folder in the temporary space first: the sheet
+    /// shares URLs, not bytes. Waits for the person: true when they sent it.
+    pub fn share(
+        text: Option<&str>,
+        url: Option<&str>,
+        files: &[(String, Vec<u8>)],
+    ) -> Result<bool, String> {
+        static SHARES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let dir = std::env::temp_dir().join("krate-share").join(format!(
+            "{}-{}",
+            std::process::id(),
+            SHARES.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        let mut paths = Vec::new();
+        if !files.is_empty() {
+            std::fs::create_dir_all(&dir).map_err(|e| format!("could not stage the files: {e}"))?;
+            for (name, data) in files {
+                let path = dir.join(name);
+                std::fs::write(&path, data).map_err(|e| format!("could not stage {name}: {e}"))?;
+                paths.push(path);
+            }
+        }
+        let (text, url) = (text.map(str::to_string), url.map(str::to_string));
+        let staged = !paths.is_empty();
+        let (tx, rx) = std::sync::mpsc::channel();
+        DispatchQueue::main().exec_async(move || {
+            let (Some(_mtm), Some(controller)) = (MainThreadMarker::new(), main_controller()) else {
+                let _ = tx.send(Err("no screen to share from".to_string()));
+                return;
+            };
+            let (Some(sheet_class), Some(url_class)) = (
+                objc2::runtime::AnyClass::get(c"UIActivityViewController"),
+                objc2::runtime::AnyClass::get(c"NSURL"),
+            ) else {
+                let _ = tx.send(Err("this iOS has no share sheet".to_string()));
+                return;
+            };
+            // SAFETY: the items as NSString and NSURL objects in an NSArray,
+            // a UIActivityViewController over them, its completion block
+            // answering on the channel, presented from Krate's controller.
+            unsafe {
+                let mut items: Vec<Retained<objc2::runtime::AnyObject>> = Vec::new();
+                if let Some(text) = text.filter(|t| !t.is_empty()) {
+                    items.push(Retained::cast_unchecked(objc2_foundation::NSString::from_str(&text)));
+                }
+                if let Some(url) = url.filter(|u| !u.is_empty()) {
+                    let link: Option<Retained<objc2::runtime::AnyObject>> =
+                        msg_send![url_class, URLWithString: &*objc2_foundation::NSString::from_str(&url)];
+                    if let Some(link) = link {
+                        items.push(link);
+                    }
+                }
+                for path in &paths {
+                    let file: Option<Retained<objc2::runtime::AnyObject>> = msg_send![
+                        url_class,
+                        fileURLWithPath: &*objc2_foundation::NSString::from_str(&path.to_string_lossy())
+                    ];
+                    if let Some(file) = file {
+                        items.push(file);
+                    }
+                }
+                let items = objc2_foundation::NSArray::from_retained_slice(&items);
+                let made: objc2::rc::Allocated<objc2::runtime::AnyObject> = msg_send![sheet_class, alloc];
+                let sheet: Option<Retained<objc2::runtime::AnyObject>> = msg_send![
+                    made,
+                    initWithActivityItems: &*items,
+                    applicationActivities: Option::<&objc2::runtime::AnyObject>::None
+                ];
+                let Some(sheet) = sheet else {
+                    let _ = tx.send(Err("the share sheet would not open".to_string()));
+                    return;
+                };
+                let tx = std::sync::Mutex::new(Some(tx));
+                let done = block2::RcBlock::new(
+                    move |_kind: *mut objc2::runtime::AnyObject,
+                          completed: objc2::runtime::Bool,
+                          _returned: *mut objc2::runtime::AnyObject,
+                          _error: *mut objc2::runtime::AnyObject| {
+                        if let Some(tx) = tx.lock().expect("share lock").take() {
+                            let _ = tx.send(Ok(completed.as_bool()));
+                        }
+                    },
+                );
+                let _: () = msg_send![&*sheet, setCompletionWithItemsHandler: &*done];
+                let _: () = msg_send![&*controller, presentViewController: &*sheet, animated: true, completion: Option::<&objc2::runtime::AnyObject>::None];
+            }
+        });
+        let answer = rx
+            .recv_timeout(std::time::Duration::from_secs(600))
+            .unwrap_or(Ok(false));
+        if staged {
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+        answer
+    }
+
     /// Open a link that has passed the runtime's checks (IC-918): iOS hands
     /// it to Safari, Mail or the app that owns it.
     pub fn open_url(url: &str) -> Result<(), String> {
@@ -2552,6 +2649,14 @@ mod stub {
 
     pub fn open_url(_url: &str) -> Result<(), String> {
         Err("links open from the iOS player only".to_string())
+    }
+
+    pub fn share(
+        _text: Option<&str>,
+        _url: Option<&str>,
+        _files: &[(String, Vec<u8>)],
+    ) -> Result<bool, String> {
+        Err("the share sheet is on the iOS player only".to_string())
     }
 
     pub fn notify(_sender: &str, _title: &str, _body: &str) -> Result<(), String> {

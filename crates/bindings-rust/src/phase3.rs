@@ -7,7 +7,7 @@
 
 #![allow(clippy::too_many_arguments)]
 
-/// `krate:ui`: bluetooth, clipboard, dialog, events, haptics, image, launcher, location, menu, motion, notify, pointer, print, screen, text_entry, touch, tree, window.
+/// `krate:ui`: bluetooth, clipboard, dialog, events, haptics, image, launcher, location, menu, motion, notify, pointer, print, screen, share, text_entry, touch, tree, window.
 pub mod ui {
     /// `krate:ui/bluetooth`.
     pub mod bluetooth {
@@ -424,6 +424,21 @@ pub mod ui {
         /// answers as a desktop window of no size.
         pub fn facts(window: u64) -> ScreenFacts {
             crate::bindings::krate::ui::screen::facts(window)
+        }
+    }
+    /// `krate:ui/share`.
+    pub mod share {
+        pub use crate::bindings::krate::ui::share::{ShareError, SharedFile};
+
+        /// Open the share sheet with any of a text, a link and files. True when
+        /// the person sent it somewhere, false when they cancelled.
+        pub fn share(
+            window: u64,
+            text: Option<&str>,
+            url: Option<&str>,
+            files: &[SharedFile],
+        ) -> Result<bool, ShareError> {
+            crate::bindings::krate::ui::share::share(window, text, url, files)
         }
     }
     /// `krate:ui/text_entry`.

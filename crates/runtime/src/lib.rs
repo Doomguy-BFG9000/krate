@@ -1447,6 +1447,8 @@ impl Runtime {
         link_gui!(ui4::location);
         // Phase 4 only: Bluetooth devices the person picks (IC-917).
         link_gui!(ui4::bluetooth);
+        // Phase 4 only: the system's share sheet (IC-919).
+        link_gui!(ui4::share);
         // Phase 4 only: pictures a canvas keeps and draws by handle.
         link_gui!(phase4_gui_bindings::krate::gfx::canvas_images);
 
