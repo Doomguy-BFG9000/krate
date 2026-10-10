@@ -7810,24 +7810,6 @@ pub mod krate {
                 }
             }
         }
-        /// Software 3D: triangles with depth, lit and drawn on the CPU.
-        ///
-        /// Deliberately not a GPU abstraction. A real one means wgpu, shaders, and
-        /// three drivers agreeing about the same scene, which is weeks of work and a
-        /// dependency on every machine having a working GPU stack. The CPU rasterizer
-        /// already sustains roughly 400 million pixels a second on a laptop, which is
-        /// 640x480 at sixty frames with room to spare -- so this ships 3D on all three
-        /// systems now, and the GPU path can arrive later behind the same calls.
-        ///
-        /// One call per operation, and vertices as flat lists of floats rather than
-        /// records. Both are the lesson canvas2d taught: a `list<variant>` cannot be
-        /// lowered by current guest toolchains without dragging std's panic machinery,
-        /// and with it the entire `wasi:*` import surface, into an otherwise pure
-        /// component.
-        ///
-        /// Nothing appears until `present`. Draw calls mutate a host-side depth buffer
-        /// and colour buffer; presenting publishes them to the widget the way a canvas
-        /// does.
         #[allow(dead_code, async_fn_in_trait, unused_imports, clippy::all)]
         pub mod scene3d {
             #[used]
@@ -9828,6 +9810,449 @@ pub mod krate {
                         _ => _rt::invalid_enum_discriminant(),
                     };
                     result11
+                }
+            }
+        }
+        /// Software 3D: triangles with depth, lit and drawn on the CPU.
+        ///
+        /// Deliberately not a GPU abstraction. A real one means wgpu, shaders, and
+        /// three drivers agreeing about the same scene, which is weeks of work and a
+        /// dependency on every machine having a working GPU stack. The CPU rasterizer
+        /// already sustains roughly 400 million pixels a second on a laptop, which is
+        /// 640x480 at sixty frames with room to spare -- so this ships 3D on all three
+        /// systems now, and the GPU path can arrive later behind the same calls.
+        ///
+        /// One call per operation, and vertices as flat lists of floats rather than
+        /// records. Both are the lesson canvas2d taught: a `list<variant>` cannot be
+        /// lowered by current guest toolchains without dragging std's panic machinery,
+        /// and with it the entire `wasi:*` import surface, into an otherwise pure
+        /// component.
+        ///
+        /// Nothing appears until `present`. Draw calls mutate a host-side depth buffer
+        /// and colour buffer; presenting publishes them to the widget the way a canvas
+        /// does.
+        /// Pictures a canvas keeps: upload once, draw by handle every frame.
+        ///
+        /// `draw-pixels` sends every pixel on every call. For a frame that changes
+        /// every time (a game's framebuffer) that is right. For pictures that stay
+        /// the same -- a store's screenshots, a gallery, a sprite sheet -- it moved
+        /// megabytes across the sandbox each frame and made the host treat each
+        /// frame's copy as a new picture: a scrolling list of screenshots lagged
+        /// on an iPhone and pictures broke. A kept picture crosses once, and the
+        /// host recognises it every frame after.
+        #[allow(dead_code, async_fn_in_trait, unused_imports, clippy::all)]
+        pub mod canvas_images {
+            #[used]
+            #[doc(hidden)]
+            static __FORCE_SECTION_REF: fn() = super::super::super::__link_custom_section_describing_imports;
+            use super::super::super::_rt;
+            pub type Rect = super::super::super::krate::gfx::types::Rect;
+            pub type CornerRadii = super::super::super::krate::gfx::types::CornerRadii;
+            pub type GfxError = super::super::super::krate::gfx::types::GfxError;
+            #[allow(unused_unsafe, clippy::all)]
+            /// Keep a picture for a canvas: `rgba` is `width*height*4` straight-alpha
+            /// bytes. The handle draws it until `forget`, or until the canvas goes.
+            /// Fails when the canvas does not exist, the bytes do not match the size,
+            /// or the app already keeps more pictures than the host allows.
+            pub fn keep(
+                canvas: u64,
+                width: u32,
+                height: u32,
+                rgba: &[u8],
+            ) -> Result<u64, GfxError> {
+                unsafe {
+                    #[repr(align(8))]
+                    struct RetArea(
+                        [::core::mem::MaybeUninit<
+                            u8,
+                        >; 16 + 2 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let mut ret_area = RetArea(
+                        [::core::mem::MaybeUninit::uninit(); 16
+                            + 2 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let vec0 = rgba;
+                    let ptr0 = vec0.as_ptr().cast::<u8>();
+                    let len0 = vec0.len();
+                    let ptr1 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:gfx/canvas-images@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "keep"]
+                        fn wit_import2(
+                            _: i64,
+                            _: i32,
+                            _: i32,
+                            _: *mut u8,
+                            _: usize,
+                            _: *mut u8,
+                        );
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import2(
+                        _: i64,
+                        _: i32,
+                        _: i32,
+                        _: *mut u8,
+                        _: usize,
+                        _: *mut u8,
+                    ) {
+                        unreachable!()
+                    }
+                    unsafe {
+                        wit_import2(
+                            _rt::as_i64(&canvas),
+                            _rt::as_i32(&width),
+                            _rt::as_i32(&height),
+                            ptr0.cast_mut(),
+                            len0,
+                            ptr1,
+                        )
+                    };
+                    let l3 = i32::from(*ptr1.add(0).cast::<u8>());
+                    let result13 = match l3 {
+                        0 => {
+                            let e = {
+                                let l4 = *ptr1.add(8).cast::<i64>();
+                                l4 as u64
+                            };
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l5 = i32::from(*ptr1.add(8).cast::<u8>());
+                                use super::super::super::krate::gfx::types::GfxError as V12;
+                                let v12 = match l5 {
+                                    0 => V12::PermissionDenied,
+                                    1 => V12::InvalidTarget,
+                                    2 => {
+                                        let e12 = {
+                                            let l6 = *ptr1
+                                                .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l7 = *ptr1
+                                                .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len8 = l7;
+                                            let bytes8 = _rt::Vec::from_raw_parts(
+                                                l6.cast(),
+                                                len8,
+                                                len8,
+                                            );
+                                            _rt::string_lift(bytes8)
+                                        };
+                                        V12::Unsupported(e12)
+                                    }
+                                    n => {
+                                        debug_assert_eq!(n, 3, "invalid enum discriminant");
+                                        let e12 = {
+                                            let l9 = *ptr1
+                                                .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l10 = *ptr1
+                                                .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len11 = l10;
+                                            let bytes11 = _rt::Vec::from_raw_parts(
+                                                l9.cast(),
+                                                len11,
+                                                len11,
+                                            );
+                                            _rt::string_lift(bytes11)
+                                        };
+                                        V12::Platform(e12)
+                                    }
+                                };
+                                v12
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    };
+                    result13
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Draw a kept picture into `area`, exactly as `draw-pixels` would.
+            pub fn draw(canvas: u64, image: u64, area: Rect) -> Result<(), GfxError> {
+                unsafe {
+                    #[cfg_attr(target_pointer_width = "64", repr(align(8)))]
+                    #[cfg_attr(target_pointer_width = "32", repr(align(4)))]
+                    struct RetArea(
+                        [::core::mem::MaybeUninit<
+                            u8,
+                        >; 4 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let mut ret_area = RetArea(
+                        [::core::mem::MaybeUninit::uninit(); 4
+                            * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let super::super::super::krate::gfx::types::Rect {
+                        x: x0,
+                        y: y0,
+                        width: width0,
+                        height: height0,
+                    } = area;
+                    let ptr1 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:gfx/canvas-images@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "draw"]
+                        fn wit_import2(
+                            _: i64,
+                            _: i64,
+                            _: f32,
+                            _: f32,
+                            _: f32,
+                            _: f32,
+                            _: *mut u8,
+                        );
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import2(
+                        _: i64,
+                        _: i64,
+                        _: f32,
+                        _: f32,
+                        _: f32,
+                        _: f32,
+                        _: *mut u8,
+                    ) {
+                        unreachable!()
+                    }
+                    unsafe {
+                        wit_import2(
+                            _rt::as_i64(&canvas),
+                            _rt::as_i64(&image),
+                            _rt::as_f32(x0),
+                            _rt::as_f32(y0),
+                            _rt::as_f32(width0),
+                            _rt::as_f32(height0),
+                            ptr1,
+                        )
+                    };
+                    let l3 = i32::from(*ptr1.add(0).cast::<u8>());
+                    let result12 = match l3 {
+                        0 => {
+                            let e = ();
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l4 = i32::from(
+                                    *ptr1.add(::core::mem::size_of::<*const u8>()).cast::<u8>(),
+                                );
+                                use super::super::super::krate::gfx::types::GfxError as V11;
+                                let v11 = match l4 {
+                                    0 => V11::PermissionDenied,
+                                    1 => V11::InvalidTarget,
+                                    2 => {
+                                        let e11 = {
+                                            let l5 = *ptr1
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l6 = *ptr1
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len7 = l6;
+                                            let bytes7 = _rt::Vec::from_raw_parts(
+                                                l5.cast(),
+                                                len7,
+                                                len7,
+                                            );
+                                            _rt::string_lift(bytes7)
+                                        };
+                                        V11::Unsupported(e11)
+                                    }
+                                    n => {
+                                        debug_assert_eq!(n, 3, "invalid enum discriminant");
+                                        let e11 = {
+                                            let l8 = *ptr1
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l9 = *ptr1
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len10 = l9;
+                                            let bytes10 = _rt::Vec::from_raw_parts(
+                                                l8.cast(),
+                                                len10,
+                                                len10,
+                                            );
+                                            _rt::string_lift(bytes10)
+                                        };
+                                        V11::Platform(e11)
+                                    }
+                                };
+                                v11
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    };
+                    result12
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Draw a kept picture into `area` with rounded corners, exactly as
+            /// `draw-pixels-round` would.
+            pub fn draw_round(
+                canvas: u64,
+                image: u64,
+                area: Rect,
+                radii: CornerRadii,
+            ) -> Result<(), GfxError> {
+                unsafe {
+                    #[cfg_attr(target_pointer_width = "64", repr(align(8)))]
+                    #[cfg_attr(target_pointer_width = "32", repr(align(4)))]
+                    struct RetArea(
+                        [::core::mem::MaybeUninit<
+                            u8,
+                        >; 4 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let mut ret_area = RetArea(
+                        [::core::mem::MaybeUninit::uninit(); 4
+                            * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let super::super::super::krate::gfx::types::Rect {
+                        x: x0,
+                        y: y0,
+                        width: width0,
+                        height: height0,
+                    } = area;
+                    let super::super::super::krate::gfx::types::CornerRadii {
+                        top_left: top_left1,
+                        top_right: top_right1,
+                        bottom_right: bottom_right1,
+                        bottom_left: bottom_left1,
+                    } = radii;
+                    let ptr2 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:gfx/canvas-images@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "draw-round"]
+                        fn wit_import3(
+                            _: i64,
+                            _: i64,
+                            _: f32,
+                            _: f32,
+                            _: f32,
+                            _: f32,
+                            _: f32,
+                            _: f32,
+                            _: f32,
+                            _: f32,
+                            _: *mut u8,
+                        );
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import3(
+                        _: i64,
+                        _: i64,
+                        _: f32,
+                        _: f32,
+                        _: f32,
+                        _: f32,
+                        _: f32,
+                        _: f32,
+                        _: f32,
+                        _: f32,
+                        _: *mut u8,
+                    ) {
+                        unreachable!()
+                    }
+                    unsafe {
+                        wit_import3(
+                            _rt::as_i64(&canvas),
+                            _rt::as_i64(&image),
+                            _rt::as_f32(x0),
+                            _rt::as_f32(y0),
+                            _rt::as_f32(width0),
+                            _rt::as_f32(height0),
+                            _rt::as_f32(top_left1),
+                            _rt::as_f32(top_right1),
+                            _rt::as_f32(bottom_right1),
+                            _rt::as_f32(bottom_left1),
+                            ptr2,
+                        )
+                    };
+                    let l4 = i32::from(*ptr2.add(0).cast::<u8>());
+                    let result13 = match l4 {
+                        0 => {
+                            let e = ();
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l5 = i32::from(
+                                    *ptr2.add(::core::mem::size_of::<*const u8>()).cast::<u8>(),
+                                );
+                                use super::super::super::krate::gfx::types::GfxError as V12;
+                                let v12 = match l5 {
+                                    0 => V12::PermissionDenied,
+                                    1 => V12::InvalidTarget,
+                                    2 => {
+                                        let e12 = {
+                                            let l6 = *ptr2
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l7 = *ptr2
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len8 = l7;
+                                            let bytes8 = _rt::Vec::from_raw_parts(
+                                                l6.cast(),
+                                                len8,
+                                                len8,
+                                            );
+                                            _rt::string_lift(bytes8)
+                                        };
+                                        V12::Unsupported(e12)
+                                    }
+                                    n => {
+                                        debug_assert_eq!(n, 3, "invalid enum discriminant");
+                                        let e12 = {
+                                            let l9 = *ptr2
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l10 = *ptr2
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len11 = l10;
+                                            let bytes11 = _rt::Vec::from_raw_parts(
+                                                l9.cast(),
+                                                len11,
+                                                len11,
+                                            );
+                                            _rt::string_lift(bytes11)
+                                        };
+                                        V12::Platform(e12)
+                                    }
+                                };
+                                v12
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    };
+                    result13
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Let a kept picture go.
+            pub fn forget(canvas: u64, image: u64) -> () {
+                unsafe {
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:gfx/canvas-images@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "forget"]
+                        fn wit_import0(_: i64, _: i64);
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import0(_: i64, _: i64) {
+                        unreachable!()
+                    }
+                    unsafe { wit_import0(_rt::as_i64(&canvas), _rt::as_i64(&image)) };
                 }
             }
         }
@@ -24238,8 +24663,8 @@ pub(crate) use __export_gui_impl as export;
 )]
 #[doc(hidden)]
 #[allow(clippy::octal_escapes)]
-pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 14755] = *b"\
-\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\xa9r\x01A\x02\x01A\x89\
+pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 15021] = *b"\
+\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\xb3t\x01A\x02\x01A\x8b\
 \x01\x01B\x04\x01m\x05\x05trace\x05debug\x04info\x04warn\x05error\x04\0\x09log-l\
 evel\x03\0\0\x01q\x05\x06closed\0\0\x0binterrupted\0\0\x0eunexpected-eof\0\0\x0c\
 invalid-utf8\0\0\x05other\x01s\0\x04\0\x08io-error\x03\0\x02\x03\0\x14krate:io/t\
@@ -24520,63 +24945,70 @@ set-lighting\x01\x13\x01@\x08\x05scenew\x08vertices\x04\x07normals\x04\x08tangen
 ts\x04\x03uvs\x04\x07texturew\x0enormal-texturew\x04tint\x01\0\x09\x04\0\x0dnorm\
 al-mapped\x01\x14\x04\0\x05unlit\x01\x11\x01@\x02\x05scenew\x07enabled\x7f\0\x09\
 \x04\0\x0fcull-back-faces\x01\x15\x01@\x01\x05scenew\0\x09\x04\0\x07present\x01\x16\
-\x03\0\x17krate:gfx/scene3d@0.1.0\x05G\x01B\x06\x01m\x02\x07pcm-s16\x07float32\x04\
-\0\x0dsample-format\x03\0\0\x01r\x04\x0bsample-ratey\x08channels{\x06format\x01\x0d\
-buffer-framesy\x04\0\x0dstream-config\x03\0\x02\x01q\x05\x11permission-denied\0\0\
-\x0einvalid-stream\0\0\x12device-unavailable\0\0\x0bunsupported\x01s\0\x08platfo\
-rm\x01s\0\x04\0\x0baudio-error\x03\0\x04\x03\0\x17krate:audio/types@0.1.0\x05H\x02\
-\x03\0(\x0baudio-error\x02\x03\0(\x0dstream-config\x01B\x15\x02\x03\x02\x01I\x04\
-\0\x0baudio-error\x03\0\0\x02\x03\x02\x01J\x04\0\x0dstream-config\x03\0\x02\x01j\
-\x01w\x01\x01\x01@\x01\x06config\x03\0\x04\x04\0\x04open\x01\x05\x01j\0\x01\x01\x01\
-@\x01\x09stream-idw\0\x06\x04\0\x05start\x01\x07\x04\0\x04stop\x01\x07\x01p}\x01\
-j\x01y\x01\x01\x01@\x02\x09stream-idw\x05bytes\x08\0\x09\x04\0\x05write\x01\x0a\x01\
-@\x02\x09stream-idw\x05bytes\x08\0\x04\x04\0\x0aload-sound\x01\x0b\x01@\x03\x09s\
-tream-idw\x05soundw\x04gainv\0\x06\x04\0\x0aplay-sound\x01\x0c\x01@\x02\x09strea\
-m-idw\x05soundw\0\x06\x04\0\x0astop-sound\x01\x0d\x03\0\x1akrate:audio/playback@\
-0.1.0\x05K\x01B\x05\x02\x03\x02\x01I\x04\0\x0baudio-error\x03\0\0\x01j\x01y\x01\x01\
-\x01@\x01\x09stream-idw\0\x02\x04\0\x06queued\x01\x03\x03\0\x20krate:audio/playb\
-ack-queue@0.1.0\x05L\x01B\x0f\x02\x03\x02\x01I\x04\0\x0baudio-error\x03\0\0\x02\x03\
-\x02\x01J\x04\0\x0dstream-config\x03\0\x02\x01j\x01w\x01\x01\x01@\x01\x06config\x03\
-\0\x04\x04\0\x04open\x01\x05\x01j\0\x01\x01\x01@\x01\x09stream-idw\0\x06\x04\0\x05\
-start\x01\x07\x04\0\x04stop\x01\x07\x01p}\x01j\x01\x08\x01\x01\x01@\x02\x09strea\
-m-idw\x09max-bytesy\0\x09\x04\0\x04read\x01\x0a\x03\0\x19krate:audio/capture@0.1\
-.0\x05M\x01B\x0d\x01m\x01\x05rgba8\x04\0\x0cframe-format\x03\0\0\x01r\x04\x05wid\
-thy\x06heighty\x03fpsy\x06format\x01\x04\0\x0dstream-config\x03\0\x02\x01r\x04\x05\
-widthy\x06heighty\x03fpsy\x06format\x01\x04\0\x0aframe-info\x03\0\x04\x01r\x02\x02\
-ids\x05labels\x04\0\x0bdevice-info\x03\0\x06\x01p}\x01r\x04\x05bytes\x08\x05widt\
-hy\x06heighty\x0eelapsed-millisw\x04\0\x05frame\x03\0\x09\x01q\x06\x11permission\
--denied\0\0\x0einvalid-stream\0\0\x12device-unavailable\0\0\x0dsystem-denied\0\0\
-\x0bunsupported\x01s\0\x08platform\x01s\0\x04\0\x0ccamera-error\x03\0\x0b\x03\0\x18\
-krate:camera/types@0.1.0\x05N\x02\x03\0,\x0ccamera-error\x02\x03\0,\x0bdevice-in\
-fo\x02\x03\0,\x05frame\x02\x03\0,\x0aframe-info\x02\x03\0,\x0dstream-config\x01B\
-\x1d\x02\x03\x02\x01O\x04\0\x0ccamera-error\x03\0\0\x02\x03\x02\x01P\x04\0\x0bde\
-vice-info\x03\0\x02\x02\x03\x02\x01Q\x04\0\x05frame\x03\0\x04\x02\x03\x02\x01R\x04\
-\0\x0aframe-info\x03\0\x06\x02\x03\x02\x01S\x04\0\x0dstream-config\x03\0\x08\x01\
-p\x03\x01j\x01\x0a\x01\x01\x01@\0\0\x0b\x04\0\x07devices\x01\x0c\x01j\x01w\x01\x01\
-\x01@\x02\x06devices\x06config\x09\0\x0d\x04\0\x04open\x01\x0e\x01j\x01\x07\x01\x01\
-\x01@\x01\x09stream-idw\0\x0f\x04\0\x04info\x01\x10\x01j\0\x01\x01\x01@\x01\x09s\
-tream-idw\0\x11\x04\0\x05start\x01\x12\x04\0\x04stop\x01\x12\x01k\x05\x01j\x01\x13\
-\x01\x01\x01@\x01\x09stream-idw\0\x14\x04\0\x04read\x01\x15\x04\0\x05close\x01\x12\
-\x03\0\x1akrate:camera/capture@0.1.0\x05T\x01B\x12\x01r\x01\x04texts\x04\0\x0atr\
-anscript\x03\0\0\x01q\x05\x0finvalid-request\x01s\0\x0fmodel-not-found\0\0\x0dmo\
-del-invalid\x01s\0\x0bunsupported\x01s\0\x09inference\x01s\0\x04\0\x0cspeech-err\
-or\x03\0\x02\x01m\x05\x0finvalid-request\x0fmodel-not-found\x0dmodel-invalid\x0b\
-unsupported\x09inference\x04\0\x0bmatch-error\x03\0\x04\x01p}\x01ks\x01j\x01\x01\
-\x01\x03\x01@\x04\x0bmodel-assets\x0apcm-s16-le\x06\x0bsample-ratey\x08language\x07\
-\0\x08\x04\0\x0atranscribe\x01\x09\x01j\x01}\x01\x05\x01@\x05\x0bmodel-assets\x0a\
-pcm-s16-le\x06\x0bsample-ratey\x08language\x07\x08expecteds\0\x0a\x04\0\x0amatch\
--line\x01\x0b\x01k}\x01j\x01\x0c\x01\x05\x01@\x06\x0bmodel-assets\x0apcm-s16-le\x06\
-\x0bsample-ratey\x08language\x07\x08expecteds\x06finish\x7f\0\x0d\x04\0\x11match\
--line-stream\x01\x0e\x03\0\x20krate:speech/transcription@0.1.0\x05U\x01B\x12\x01\
-r\x03\x02ids\x04names\x08languages\x04\0\x05voice\x03\0\0\x01q\x04\x11permission\
--denied\0\0\x0finvalid-request\x01s\0\x0bunsupported\x01s\0\x08platform\x01s\0\x04\
-\0\x09say-error\x03\0\x02\x01p\x01\x01j\x01\x04\x01\x03\x01@\0\0\x05\x04\0\x06vo\
-ices\x01\x06\x01ks\x01kv\x01j\0\x01\x03\x01@\x03\x04texts\x05voice\x07\x04rate\x08\
-\0\x09\x04\0\x03say\x01\x0a\x01@\0\0\x09\x04\0\x04stop\x01\x0b\x01j\x01\x7f\x01\x03\
-\x01@\0\0\x0c\x04\0\x08speaking\x01\x0d\x03\0\x1ckrate:speech/synthesis@0.1.0\x05\
-V\x01@\0\0z\x04\0\x03run\x01W\x04\0\x13krate:app/gui@0.2.0\x04\0\x0b\x09\x01\0\x03\
-gui\x03\0\0\0G\x09producers\x01\x0cprocessed-by\x02\x0dwit-component\x070.227.1\x10\
-wit-bindgen-rust\x060.41.0";
+\x03\0\x17krate:gfx/scene3d@0.1.0\x05G\x01B\x11\x02\x03\x02\x01>\x04\0\x04rect\x03\
+\0\0\x02\x03\x02\x01C\x04\0\x0ccorner-radii\x03\0\x02\x02\x03\x02\x01A\x04\0\x09\
+gfx-error\x03\0\x04\x01p}\x01j\x01w\x01\x05\x01@\x04\x06canvasw\x05widthy\x06hei\
+ghty\x04rgba\x06\0\x07\x04\0\x04keep\x01\x08\x01j\0\x01\x05\x01@\x03\x06canvasw\x05\
+imagew\x04area\x01\0\x09\x04\0\x04draw\x01\x0a\x01@\x04\x06canvasw\x05imagew\x04\
+area\x01\x05radii\x03\0\x09\x04\0\x0adraw-round\x01\x0b\x01@\x02\x06canvasw\x05i\
+magew\x01\0\x04\0\x06forget\x01\x0c\x03\0\x1dkrate:gfx/canvas-images@0.1.0\x05H\x01\
+B\x06\x01m\x02\x07pcm-s16\x07float32\x04\0\x0dsample-format\x03\0\0\x01r\x04\x0b\
+sample-ratey\x08channels{\x06format\x01\x0dbuffer-framesy\x04\0\x0dstream-config\
+\x03\0\x02\x01q\x05\x11permission-denied\0\0\x0einvalid-stream\0\0\x12device-una\
+vailable\0\0\x0bunsupported\x01s\0\x08platform\x01s\0\x04\0\x0baudio-error\x03\0\
+\x04\x03\0\x17krate:audio/types@0.1.0\x05I\x02\x03\0)\x0baudio-error\x02\x03\0)\x0d\
+stream-config\x01B\x15\x02\x03\x02\x01J\x04\0\x0baudio-error\x03\0\0\x02\x03\x02\
+\x01K\x04\0\x0dstream-config\x03\0\x02\x01j\x01w\x01\x01\x01@\x01\x06config\x03\0\
+\x04\x04\0\x04open\x01\x05\x01j\0\x01\x01\x01@\x01\x09stream-idw\0\x06\x04\0\x05\
+start\x01\x07\x04\0\x04stop\x01\x07\x01p}\x01j\x01y\x01\x01\x01@\x02\x09stream-i\
+dw\x05bytes\x08\0\x09\x04\0\x05write\x01\x0a\x01@\x02\x09stream-idw\x05bytes\x08\
+\0\x04\x04\0\x0aload-sound\x01\x0b\x01@\x03\x09stream-idw\x05soundw\x04gainv\0\x06\
+\x04\0\x0aplay-sound\x01\x0c\x01@\x02\x09stream-idw\x05soundw\0\x06\x04\0\x0asto\
+p-sound\x01\x0d\x03\0\x1akrate:audio/playback@0.1.0\x05L\x01B\x05\x02\x03\x02\x01\
+J\x04\0\x0baudio-error\x03\0\0\x01j\x01y\x01\x01\x01@\x01\x09stream-idw\0\x02\x04\
+\0\x06queued\x01\x03\x03\0\x20krate:audio/playback-queue@0.1.0\x05M\x01B\x0f\x02\
+\x03\x02\x01J\x04\0\x0baudio-error\x03\0\0\x02\x03\x02\x01K\x04\0\x0dstream-conf\
+ig\x03\0\x02\x01j\x01w\x01\x01\x01@\x01\x06config\x03\0\x04\x04\0\x04open\x01\x05\
+\x01j\0\x01\x01\x01@\x01\x09stream-idw\0\x06\x04\0\x05start\x01\x07\x04\0\x04sto\
+p\x01\x07\x01p}\x01j\x01\x08\x01\x01\x01@\x02\x09stream-idw\x09max-bytesy\0\x09\x04\
+\0\x04read\x01\x0a\x03\0\x19krate:audio/capture@0.1.0\x05N\x01B\x0d\x01m\x01\x05\
+rgba8\x04\0\x0cframe-format\x03\0\0\x01r\x04\x05widthy\x06heighty\x03fpsy\x06for\
+mat\x01\x04\0\x0dstream-config\x03\0\x02\x01r\x04\x05widthy\x06heighty\x03fpsy\x06\
+format\x01\x04\0\x0aframe-info\x03\0\x04\x01r\x02\x02ids\x05labels\x04\0\x0bdevi\
+ce-info\x03\0\x06\x01p}\x01r\x04\x05bytes\x08\x05widthy\x06heighty\x0eelapsed-mi\
+llisw\x04\0\x05frame\x03\0\x09\x01q\x06\x11permission-denied\0\0\x0einvalid-stre\
+am\0\0\x12device-unavailable\0\0\x0dsystem-denied\0\0\x0bunsupported\x01s\0\x08p\
+latform\x01s\0\x04\0\x0ccamera-error\x03\0\x0b\x03\0\x18krate:camera/types@0.1.0\
+\x05O\x02\x03\0-\x0ccamera-error\x02\x03\0-\x0bdevice-info\x02\x03\0-\x05frame\x02\
+\x03\0-\x0aframe-info\x02\x03\0-\x0dstream-config\x01B\x1d\x02\x03\x02\x01P\x04\0\
+\x0ccamera-error\x03\0\0\x02\x03\x02\x01Q\x04\0\x0bdevice-info\x03\0\x02\x02\x03\
+\x02\x01R\x04\0\x05frame\x03\0\x04\x02\x03\x02\x01S\x04\0\x0aframe-info\x03\0\x06\
+\x02\x03\x02\x01T\x04\0\x0dstream-config\x03\0\x08\x01p\x03\x01j\x01\x0a\x01\x01\
+\x01@\0\0\x0b\x04\0\x07devices\x01\x0c\x01j\x01w\x01\x01\x01@\x02\x06devices\x06\
+config\x09\0\x0d\x04\0\x04open\x01\x0e\x01j\x01\x07\x01\x01\x01@\x01\x09stream-i\
+dw\0\x0f\x04\0\x04info\x01\x10\x01j\0\x01\x01\x01@\x01\x09stream-idw\0\x11\x04\0\
+\x05start\x01\x12\x04\0\x04stop\x01\x12\x01k\x05\x01j\x01\x13\x01\x01\x01@\x01\x09\
+stream-idw\0\x14\x04\0\x04read\x01\x15\x04\0\x05close\x01\x12\x03\0\x1akrate:cam\
+era/capture@0.1.0\x05U\x01B\x12\x01r\x01\x04texts\x04\0\x0atranscript\x03\0\0\x01\
+q\x05\x0finvalid-request\x01s\0\x0fmodel-not-found\0\0\x0dmodel-invalid\x01s\0\x0b\
+unsupported\x01s\0\x09inference\x01s\0\x04\0\x0cspeech-error\x03\0\x02\x01m\x05\x0f\
+invalid-request\x0fmodel-not-found\x0dmodel-invalid\x0bunsupported\x09inference\x04\
+\0\x0bmatch-error\x03\0\x04\x01p}\x01ks\x01j\x01\x01\x01\x03\x01@\x04\x0bmodel-a\
+ssets\x0apcm-s16-le\x06\x0bsample-ratey\x08language\x07\0\x08\x04\0\x0atranscrib\
+e\x01\x09\x01j\x01}\x01\x05\x01@\x05\x0bmodel-assets\x0apcm-s16-le\x06\x0bsample\
+-ratey\x08language\x07\x08expecteds\0\x0a\x04\0\x0amatch-line\x01\x0b\x01k}\x01j\
+\x01\x0c\x01\x05\x01@\x06\x0bmodel-assets\x0apcm-s16-le\x06\x0bsample-ratey\x08l\
+anguage\x07\x08expecteds\x06finish\x7f\0\x0d\x04\0\x11match-line-stream\x01\x0e\x03\
+\0\x20krate:speech/transcription@0.1.0\x05V\x01B\x12\x01r\x03\x02ids\x04names\x08\
+languages\x04\0\x05voice\x03\0\0\x01q\x04\x11permission-denied\0\0\x0finvalid-re\
+quest\x01s\0\x0bunsupported\x01s\0\x08platform\x01s\0\x04\0\x09say-error\x03\0\x02\
+\x01p\x01\x01j\x01\x04\x01\x03\x01@\0\0\x05\x04\0\x06voices\x01\x06\x01ks\x01kv\x01\
+j\0\x01\x03\x01@\x03\x04texts\x05voice\x07\x04rate\x08\0\x09\x04\0\x03say\x01\x0a\
+\x01@\0\0\x09\x04\0\x04stop\x01\x0b\x01j\x01\x7f\x01\x03\x01@\0\0\x0c\x04\0\x08s\
+peaking\x01\x0d\x03\0\x1ckrate:speech/synthesis@0.1.0\x05W\x01@\0\0z\x04\0\x03ru\
+n\x01X\x04\0\x13krate:app/gui@0.2.0\x04\0\x0b\x09\x01\0\x03gui\x03\0\0\0G\x09pro\
+ducers\x01\x0cprocessed-by\x02\x0dwit-component\x070.227.1\x10wit-bindgen-rust\x06\
+0.41.0";
 #[inline(never)]
 #[doc(hidden)]
 pub fn __link_custom_section_describing_imports() {
