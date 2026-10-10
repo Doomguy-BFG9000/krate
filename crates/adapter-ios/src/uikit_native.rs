@@ -51,6 +51,7 @@ mod real {
         CGImageAlphaInfo, CGImageByteOrderInfo,
     };
     use objc2_foundation::NSObjectProtocol;
+    use objc2_ui_kit::UIDocumentPickerDelegate;
     use objc2_ui_kit::{
         UIApplication, UIImage, UIImageView, UIScreen, UITouch, UITouchPhase, UIView,
         UIViewController, UIWindow, UIWindowScene,
@@ -506,11 +507,220 @@ mod real {
     /// laid out: the notch, the status bar, the home bar.
     static SAFE: Mutex<(f32, f32, f32, f32)> = Mutex::new((0.0, 0.0, 0.0, 0.0));
 
+    /// How much of the screen's bottom the on-screen keyboard covers, in
+    /// points; 0 while it is away (IC-915).
+    static KEYBOARD: Mutex<f32> = Mutex::new(0.0);
+    /// The covered edges changed without the screen changing size (the
+    /// keyboard came or went): the app is sent a resize so it asks again.
+    static INSETS_CHANGED: std::sync::atomic::AtomicBool =
+        std::sync::atomic::AtomicBool::new(false);
+
+    /// Follow the on-screen keyboard: while it shows, its height counts as a
+    /// covered bottom edge in `krate:ui/screen`, so an app keeps the field
+    /// being typed into above it. Without this a field near the bottom of a
+    /// phone was hidden by the keyboard typing into it.
+    fn observe_keyboard() {
+        use objc2_foundation::{NSNotification, NSNotificationCenter, NSOperationQueue};
+        let center = NSNotificationCenter::defaultCenter();
+        let queue = NSOperationQueue::mainQueue();
+        let changed = block2::RcBlock::new(|note: std::ptr::NonNull<NSNotification>| {
+            // SAFETY: UIKit hands a live notification to its observer.
+            let note = unsafe { note.as_ref() };
+            let frame = note.userInfo().and_then(|info| {
+                // SAFETY: the key is UIKit's own constant; the value under it
+                // is an NSValue holding a CGRect, per UIKit's documentation.
+                let key = unsafe { objc2_ui_kit::UIKeyboardFrameEndUserInfoKey };
+                let value = info.objectForKey(key)?;
+                let value = value.downcast::<objc2_foundation::NSValue>().ok()?;
+                use objc2_ui_kit::NSValueUIGeometryExtensions;
+                Some(unsafe { value.CGRectValue() })
+            });
+            let Some(frame) = frame else {
+                return;
+            };
+            let Some(main_side) = MAIN_SIDE.0.get() else {
+                return;
+            };
+            let bounds = main_side.window.bounds();
+            let covered =
+                (bounds.size.height - frame.origin.y).clamp(0.0, bounds.size.height) as f32;
+            set_keyboard(covered);
+        });
+        let hidden = block2::RcBlock::new(|_: std::ptr::NonNull<NSNotification>| {
+            set_keyboard(0.0);
+        });
+        // SAFETY: names are UIKit's constants; the blocks are 'static and run
+        // on the main queue, where they read main-thread state.
+        unsafe {
+            let _ = center.addObserverForName_object_queue_usingBlock(
+                Some(objc2_ui_kit::UIKeyboardWillChangeFrameNotification),
+                None,
+                Some(&queue),
+                &changed,
+            );
+            let _ = center.addObserverForName_object_queue_usingBlock(
+                Some(objc2_ui_kit::UIKeyboardWillHideNotification),
+                None,
+                Some(&queue),
+                &hidden,
+            );
+        }
+    }
+
+    /// The person's pick, waiting to be sent back to the app's thread.
+    pub struct PickState {
+        tx: std::cell::RefCell<Option<std::sync::mpsc::Sender<Option<std::path::PathBuf>>>>,
+        /// A folder is opened in place and needs its access started.
+        folder: bool,
+    }
+
+    define_class!(
+        // SAFETY:
+        // - NSObject has no subclassing requirements for a delegate.
+        // - UIKit calls a document picker's delegate on the main thread.
+        #[unsafe(super = objc2_foundation::NSObject)]
+        #[thread_kind = MainThreadOnly]
+        #[ivars = PickState]
+        struct KratePickDelegate;
+
+        // SAFETY: NSObjectProtocol has no additional requirements.
+        unsafe impl NSObjectProtocol for KratePickDelegate {}
+
+        // SAFETY: the methods match UIDocumentPickerDelegate's signatures.
+        unsafe impl UIDocumentPickerDelegate for KratePickDelegate {
+            #[unsafe(method(documentPicker:didPickDocumentsAtURLs:))]
+            fn picked(
+                &self,
+                _controller: &objc2_ui_kit::UIDocumentPickerViewController,
+                urls: &objc2_foundation::NSArray<objc2_foundation::NSURL>,
+            ) {
+                let path = urls.firstObject().and_then(|url| {
+                    if self.ivars().folder {
+                        // A folder outside Krate is reachable only while its
+                        // security scope is open; it stays open for the run.
+                        // SAFETY: an ordinary call on a URL UIKit handed us.
+                        unsafe { url.startAccessingSecurityScopedResource() };
+                    }
+                    url.path().map(|p| std::path::PathBuf::from(p.to_string()))
+                });
+                self.finish(path);
+            }
+
+            #[unsafe(method(documentPickerWasCancelled:))]
+            fn cancelled(&self, _controller: &objc2_ui_kit::UIDocumentPickerViewController) {
+                self.finish(None);
+            }
+        }
+    );
+
+    impl KratePickDelegate {
+        fn finish(&self, path: Option<std::path::PathBuf>) {
+            if let Some(tx) = self.ivars().tx.borrow_mut().take() {
+                let _ = tx.send(path);
+            }
+            PICK_DELEGATE.with(|slot| slot.borrow_mut().take());
+        }
+    }
+
+    thread_local! {
+        /// The live picker delegate: UIKit holds delegates weakly.
+        static PICK_DELEGATE: std::cell::RefCell<Option<objc2::rc::Retained<KratePickDelegate>>> =
+            const { std::cell::RefCell::new(None) };
+    }
+
+    /// Show the Files picker for a file or a folder and wait for the
+    /// person's pick (IC-915). A file comes back as a copy iOS makes for
+    /// Krate; a folder is opened in place. Runs the picker on the main
+    /// thread; the app's thread waits for the answer.
+    pub fn choose_path(folder: bool, filter: &str) -> Option<std::path::PathBuf> {
+        let filter = filter.to_ascii_lowercase();
+        let images = ["png", "jpg", "jpeg", "gif", "heic", "image", "photo"]
+            .iter()
+            .any(|word| filter.contains(word));
+        let (tx, rx) = std::sync::mpsc::channel();
+        DispatchQueue::main().exec_async(move || present_pick(folder, images, tx));
+        rx.recv().ok().flatten()
+    }
+
+    #[allow(deprecated)]
+    fn present_pick(
+        folder: bool,
+        images: bool,
+        tx: std::sync::mpsc::Sender<Option<std::path::PathBuf>>,
+    ) {
+        let (Some(mtm), Some(main_side)) = (MainThreadMarker::new(), MAIN_SIDE.0.get()) else {
+            let _ = tx.send(None);
+            return;
+        };
+        let kind = if folder {
+            "public.folder"
+        } else if images {
+            "public.image"
+        } else {
+            "public.item"
+        };
+        let types = objc2_foundation::NSArray::from_retained_slice(&[
+            objc2_foundation::NSString::from_str(kind),
+        ]);
+        let mode = if folder {
+            objc2_ui_kit::UIDocumentPickerMode::Open
+        } else {
+            objc2_ui_kit::UIDocumentPickerMode::Import
+        };
+        let picker = objc2_ui_kit::UIDocumentPickerViewController::initWithDocumentTypes_inMode(
+            objc2_ui_kit::UIDocumentPickerViewController::alloc(mtm),
+            &types,
+            mode,
+        );
+        let delegate: objc2::rc::Retained<KratePickDelegate> = {
+            let this = KratePickDelegate::alloc(mtm).set_ivars(PickState {
+                tx: std::cell::RefCell::new(Some(tx)),
+                folder,
+            });
+            unsafe { objc2::msg_send![super(this), init] }
+        };
+        picker.setDelegate(Some(objc2::runtime::ProtocolObject::from_ref(&*delegate)));
+        PICK_DELEGATE.with(|slot| *slot.borrow_mut() = Some(delegate));
+        main_side
+            .controller
+            .presentViewController_animated_completion(&picker, true, None);
+    }
+
+    /// Krate is in the background: nothing is drawn (iOS ends an app that
+    /// touches the GPU while it is not on screen), and the app keeps its
+    /// state until the person comes back (IC-915).
+    static BACKGROUND: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+    /// Krate went to the background, or came back. Coming back sends the app
+    /// a resize of its own size, so it draws its frame again.
+    pub fn set_background(on: bool) {
+        BACKGROUND.store(on, std::sync::atomic::Ordering::Relaxed);
+        if !on {
+            INSETS_CHANGED.store(true, std::sync::atomic::Ordering::Relaxed);
+            INPUT_ARRIVED.notify_all();
+        }
+    }
+
+    fn in_background() -> bool {
+        BACKGROUND.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    fn set_keyboard(covered: f32) {
+        let mut keyboard = KEYBOARD.lock().expect("keyboard lock");
+        if (*keyboard - covered).abs() > 0.5 {
+            *keyboard = covered;
+            INSETS_CHANGED.store(true, std::sync::atomic::Ordering::Relaxed);
+            INPUT_ARRIVED.notify_all();
+        }
+    }
+
     /// The edges an app should keep text and controls out of (IC-912): the
-    /// system's safe area and, while an app runs, the close button Krate
-    /// draws at the top right (placed in `view_laid_out`).
+    /// system's safe area, the on-screen keyboard while it shows, and, while
+    /// an app runs, the close button Krate draws at the top right (placed in
+    /// `view_laid_out`).
     pub fn screen_safe() -> (f32, f32, f32, f32) {
         let (top, right, bottom, left) = *SAFE.lock().expect("safe lock");
+        let bottom = bottom.max(*KEYBOARD.lock().expect("keyboard lock"));
         if APP_CHROME.load(std::sync::atomic::Ordering::Relaxed) {
             // The capsule's bottom edge, and a little air under it.
             (top.max(8.0) + 6.0 + 30.0 + 6.0, right, bottom, left)
@@ -849,6 +1059,8 @@ mod real {
                     );
                 }
 
+                observe_keyboard();
+
                 let metal_ptr = objc2::rc::Retained::as_ptr(&metal) as usize;
                 SHARED.lock().expect("shared state lock").panel_scale = screen.scale() as f32;
                 SHARED.lock().expect("shared state lock").metal_layer =
@@ -1127,6 +1339,10 @@ mod real {
     /// main queue, which only wraps them in a CGImage and sets the view.
     /// The autoreleasepool per frame is the macOS adapter's 46 GB lesson.
     fn blit(guest: &mut GuestSide) {
+        // Off screen: keep the frame owed (dirty) for when Krate comes back.
+        if in_background() {
+            return;
+        }
         diag("cpu-blit-start");
         let phys_w = (guest.logical.width as f32 * guest.scale) as usize;
         let phys_h = (guest.logical.height as f32 * guest.scale) as usize;
@@ -1268,6 +1484,15 @@ mod real {
             }
             let screen = SHARED.lock().expect("shared state lock").screen;
             if let (Some((logical, _)), Some(krate)) = (screen, guest.krate) {
+                // The keyboard came or went: same size, new covered edge.
+                if INSETS_CHANGED.swap(false, std::sync::atomic::Ordering::Relaxed)
+                    && logical == guest.logical
+                {
+                    guest.dirty = true;
+                    guest
+                        .events
+                        .push((krate, WinitWindowNativeEvent::Resized(logical)));
+                }
                 if logical != guest.logical {
                     guest.logical = logical;
                     guest.dirty = true;
@@ -1515,6 +1740,12 @@ mod real {
         if !guest_initialized() {
             return false;
         }
+        // Off screen: no GPU work (iOS ends an app that does it in the
+        // background). Claimed as shown so nothing falls back to pixels;
+        // the app draws again when Krate comes back.
+        if in_background() {
+            return true;
+        }
         let Some(list) = list.downcast_ref::<krate_adapter_common::canvas_list::CanvasList>()
         else {
             return false;
@@ -1690,6 +1921,12 @@ mod stub {
     }
 
     pub fn set_adapts(_adapts: bool) {}
+
+    pub fn set_background(_on: bool) {}
+
+    pub fn choose_path(_folder: bool, _filter: &str) -> Option<std::path::PathBuf> {
+        None
+    }
 
     pub fn show_loading(_title: &str, _status: &str) {}
 

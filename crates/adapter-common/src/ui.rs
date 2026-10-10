@@ -1823,6 +1823,20 @@ pub trait UiAdapter: WindowAdapter {
     /// Said once per run, before the app's first window.
     fn set_adapts(&self, _adapts: bool) {}
 
+    /// Show the platform's own picker for a file (`folder` false) or a folder
+    /// and return the path the person picked, or None when they cancelled
+    /// or the host has no picker. Hosts whose dialogs the runtime opens
+    /// itself (the desktops, through rfd) leave this as None. `filter` is the
+    /// app's filter string; a host may narrow the picker by it.
+    fn choose_path(
+        &self,
+        _window: WindowId,
+        _folder: bool,
+        _filter: &str,
+    ) -> Option<std::path::PathBuf> {
+        None
+    }
+
     /// What the screen a window is on is like, beyond its size: a finger
     /// or a mouse, and the edges something else covers (IC-912). Desktop
     /// hosts are pointer screens with nothing covering an edge.

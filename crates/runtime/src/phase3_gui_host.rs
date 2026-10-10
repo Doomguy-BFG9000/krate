@@ -4369,7 +4369,7 @@ impl ui::dialog::Host for Phase3GuiHost {
     /// location for a later run.
     fn open_file(
         &mut self,
-        _window: u64,
+        window: u64,
         title: String,
         filter: String,
     ) -> wasmtime::Result<Result<Option<ui::dialog::ChosenFile>, ui::types::UiError>> {
@@ -4392,16 +4392,31 @@ impl ui::dialog::Host for Phase3GuiHost {
         if self.headless {
             return Ok(Ok(None));
         }
-        // Android has no rfd backend; until M3 wires the platform document
-        // picker, a dialog there answers as cancelled -- the headless rule,
-        // for the same reason: there is no desktop dialog to show.
+        // Phones have no rfd backend: the adapter shows the platform's own
+        // picker (iOS: the Files picker). Every dialog there used to answer
+        // as cancelled, so a Studio-made recipe book's "Add photo" did
+        // nothing on an iPhone (IC-915). A host without a picker still
+        // answers cancelled.
         #[cfg(any(target_os = "android", target_os = "ios", target_arch = "wasm32"))]
         {
-            let _ = (&title, &filter);
-            Ok(Ok(None))
+            let _ = &title;
+            let Ok(id) = self.window_id(window) else {
+                return Ok(Ok(None));
+            };
+            let Some(chosen) = self.dispatcher().choose_path(id, false, &filter) else {
+                return Ok(Ok(None));
+            };
+            let name = crate::chosen_files::ChosenFiles::display_name(&chosen);
+            let Some(token) = self.chosen_files.borrow_mut().remember(chosen) else {
+                return Ok(Err(ui::types::UiError::Unsupported(
+                    "too many files chosen in one run".to_string(),
+                )));
+            };
+            Ok(Ok(Some(ui::dialog::ChosenFile { name, token })))
         }
         #[cfg(not(any(target_os = "android", target_os = "ios", target_arch = "wasm32")))]
         {
+            let _ = window;
             let chosen = match choose_file_on_host(&title, &filter) {
                 Ok(Some(path)) => path,
                 // Cancelling is a normal answer, not a failure.
@@ -4429,7 +4444,7 @@ impl ui::dialog::Host for Phase3GuiHost {
     /// the grant dies with the run.
     fn open_folder(
         &mut self,
-        _window: u64,
+        window: u64,
         title: String,
     ) -> wasmtime::Result<Result<Option<ui::dialog::ChosenFolder>, ui::types::UiError>> {
         if self
@@ -4445,15 +4460,29 @@ impl ui::dialog::Host for Phase3GuiHost {
         if self.headless {
             return Ok(Ok(None));
         }
-        // Android: cancelled until M3 wires the document picker (see
-        // open_file).
+        // Phones: the platform's own folder picker, through the adapter (see
+        // open_file). A music player made in Studio could not be given a
+        // folder of songs on an iPhone before this.
         #[cfg(any(target_os = "android", target_os = "ios", target_arch = "wasm32"))]
         {
             let _ = &title;
-            Ok(Ok(None))
+            let Ok(id) = self.window_id(window) else {
+                return Ok(Ok(None));
+            };
+            let Some(folder) = self.dispatcher().choose_path(id, true, "") else {
+                return Ok(Ok(None));
+            };
+            let name = crate::chosen_files::ChosenFiles::display_name(&folder);
+            let Some(token) = self.chosen_files.borrow_mut().remember_folder(folder) else {
+                return Ok(Err(ui::types::UiError::Unsupported(
+                    "too many files or folders chosen in one run".to_string(),
+                )));
+            };
+            Ok(Ok(Some(ui::dialog::ChosenFolder { name, token })))
         }
         #[cfg(not(any(target_os = "android", target_os = "ios", target_arch = "wasm32")))]
         {
+            let _ = window;
             let mut dialog = rfd::FileDialog::new();
             if !title.is_empty() {
                 dialog = dialog.set_title(title);

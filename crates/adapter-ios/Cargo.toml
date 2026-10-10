@@ -18,6 +18,7 @@ libc.workspace = true
 # contract is a non-blocking pump. Same objc2 family the macOS adapter
 # uses, so the patterns (define_class, autoreleasepool blits) carry over.
 objc2 = "0.6.4"
+block2 = "0.6"
 # Marshaling guest-thread UI work onto the main queue. The guest lives on
 # its own thread so UIKit's main run loop runs free -- nested run loops
 # starve the main dispatch queue, and iOS delivers parts of its own touch
@@ -32,6 +33,12 @@ pollster = "0.4"
 parley = "0.11"
 objc2-foundation = { version = "0.3.2", default-features = false, features = [
     "std",
+    "block2",
+    "NSDictionary",
+    "NSNotification",
+    "NSURL",
+    "NSOperation",
+    "NSValue",
     "NSArray",
     "NSDate",
     "NSEnumerator",
@@ -45,6 +52,7 @@ objc2-ui-kit = { version = "0.3.2", default-features = false, features = [
     "std",
     "UIApplication",
     "UIDevice",
+    "UIDocumentPickerViewController",
     "UIEvent",
     "UIImage",
     "UIImageView",

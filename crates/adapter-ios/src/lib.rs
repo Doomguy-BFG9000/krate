@@ -527,6 +527,15 @@ impl UiAdapter for IosUikitPrototypeUiAdapter {
         uikit_native::set_text_entry(window, on)
     }
 
+    fn choose_path(
+        &self,
+        _window: WindowId,
+        folder: bool,
+        filter: &str,
+    ) -> Option<std::path::PathBuf> {
+        uikit_native::choose_path(folder, filter)
+    }
+
     fn set_adapts(&self, adapts: bool) {
         uikit_native::set_adapts(adapts)
     }

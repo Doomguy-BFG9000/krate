@@ -342,7 +342,11 @@ let cards = nav.content.pad(16.0).grid(items.len(), 160.0, 200.0, 12.0);\n\
   points both ways, nothing that needs hover or a right click.\n\
 - `screen.safe_area()`: keep text and controls inside it; a background \
   fills `screen.area()`. On a phone Krate's close button sits at the top \
-  right inside the covered top edge.\n\
+  right inside the covered top edge, and while the on-screen keyboard is \
+  up its height is part of the covered bottom edge: the app gets a \
+  `Resized` when the keyboard comes or goes, asks `Screen::of` again, and \
+  keeps the field being typed into (and its Save button) above \
+  `safe_area().bottom()` -- scroll the form up, or move the field.\n\
 - Text: `screen.body()` (17 on a phone, 15 elsewhere) for what is read, 13 \
   the least for anything a person must read.\n\
 - A `Rect` is plain numbers: keep the rects you drew buttons in and hit-test \

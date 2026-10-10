@@ -110,13 +110,26 @@ mod player {
                 objc2::runtime::Bool::YES
             }
 
+            /// Leaving Krate (another app, the home screen, the lock) used
+            /// to end the process: whatever the person had open, playing or
+            /// half-typed was gone when they came back. Krate now waits in
+            /// the background as a phone's own apps do, drawing nothing.
             #[unsafe(method(applicationDidEnterBackground:))]
             fn did_enter_background(&self, _application: &UIApplication) {
-                std::process::exit(0);
+                krate_adapter_ios::uikit_native::set_background(true);
+            }
+
+            #[unsafe(method(applicationWillEnterForeground:))]
+            fn will_enter_foreground(&self, _application: &UIApplication) {
+                krate_adapter_ios::uikit_native::set_background(false);
             }
 
             #[unsafe(method(applicationDidBecomeActive:))]
             fn did_become_active(&self, _application: &UIApplication) {
+                // Back on screen, however it got there: iOS does not promise
+                // will-enter-foreground for every return, and a background
+                // flag left set draws nothing ever again.
+                krate_adapter_ios::uikit_native::set_background(false);
                 if self.ivars().started.replace(true) {
                     return;
                 }

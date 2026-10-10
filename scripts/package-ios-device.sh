@@ -89,6 +89,7 @@ cat > "$OUT/Info.plist" <<PLIST
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>MinimumOSVersion</key><string>15.0</string>
   <key>CADisableMinimumFrameDurationOnPhone</key><true/>
+  <key>UIBackgroundModes</key><array><string>audio</string></array>
   <key>UIDeviceFamily</key><array><integer>1</integer></array>
   <key>UILaunchScreen</key><dict/>
   $EXTRA

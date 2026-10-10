@@ -587,6 +587,16 @@ impl<'a> Phase3UiDispatcher<'a> {
         self.adapter.set_adapts(adapts)
     }
 
+    /// The platform's own file or folder picker (phones); None when cancelled.
+    pub fn choose_path(
+        &self,
+        id: WindowId,
+        folder: bool,
+        filter: &str,
+    ) -> Option<std::path::PathBuf> {
+        self.adapter.choose_path(id, folder, filter)
+    }
+
     /// Touch or pointer, and the covered edges, of a window's screen.
     pub fn screen_kind(&self, id: WindowId) -> krate_adapter_common::ui::ScreenKind {
         self.adapter.screen_kind(id)
