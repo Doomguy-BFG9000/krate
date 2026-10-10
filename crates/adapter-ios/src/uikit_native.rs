@@ -111,6 +111,22 @@ mod real {
     /// container, pulled over USB. Nothing else escapes a real iPhone.
     pub fn diag(line: &str) {
         use std::io::Write;
+        // Opt-in: only with Documents/krate-diag.on present. Writing a line
+        // per frame, forever, cost every frame a file write and grew the
+        // log without end.
+        static ON: OnceLock<bool> = OnceLock::new();
+        let on = *ON.get_or_init(|| {
+            std::env::var("HOME")
+                .map(|h| {
+                    std::path::Path::new(&h)
+                        .join("Documents/krate-diag.on")
+                        .exists()
+                })
+                .unwrap_or(false)
+        });
+        if !on {
+            return;
+        }
         static FILE: OnceLock<Mutex<std::fs::File>> = OnceLock::new();
         static EPOCH: OnceLock<std::time::Instant> = OnceLock::new();
         let epoch = EPOCH.get_or_init(std::time::Instant::now);
@@ -511,6 +527,10 @@ mod real {
                 };
                 unsafe {
                     view.setUserInteractionEnabled(true);
+                    // Every finger, not only the first: a game moves with one
+                    // thumb and aims with the other (krate:ui/touch). UIKit
+                    // delivers one touch per view unless told otherwise.
+                    view.setMultipleTouchEnabled(true);
                     let as_uiview: &UIView = &view;
                     controller.setView(Some(as_uiview));
                     let as_controller: &UIViewController = &controller;
