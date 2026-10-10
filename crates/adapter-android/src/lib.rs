@@ -42,6 +42,7 @@ mod java;
 mod location;
 mod motion;
 pub mod phone;
+mod photos;
 mod share;
 
 #[derive(Debug, Default)]
@@ -627,6 +628,22 @@ impl UiAdapter for AndroidWinitPrototypeUiAdapter {
         filter: &str,
     ) -> Option<std::path::PathBuf> {
         documents::choose(folder, filter)
+    }
+
+    /// The system's photo picker; the photos picked, copied in (IC-920).
+    #[cfg(target_os = "android")]
+    fn pick_photos(
+        &self,
+        _window: WindowId,
+        limit: u32,
+    ) -> Option<Result<Vec<std::path::PathBuf>, String>> {
+        Some(photos::pick(limit))
+    }
+
+    /// Add a PNG or JPEG to Pictures/Krate (IC-920).
+    #[cfg(target_os = "android")]
+    fn save_photo(&self, data: &[u8]) -> Result<(), Option<String>> {
+        photos::save(data)
     }
 
     /// The system's share sheet with the app's text, link and files; true

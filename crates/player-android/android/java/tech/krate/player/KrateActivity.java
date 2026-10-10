@@ -38,6 +38,12 @@ public class KrateActivity extends NativeActivity {
     private static final int ASK = 0x4b02;
     /** The request code of the share sheet. */
     private static final int SHARE = 0x4b03;
+    /** The request code of the photo picker. */
+    private static final int PHOTOS = 0x4b04;
+
+    /** The photo picker: up, and what it answered (URIs; empty for cancelled). */
+    private boolean pickingPhotos;
+    private String[] photosPicked = new String[0];
     /** What the share sheet tells Krate when the person picks a target. */
     private static final String SHARED = "tech.krate.player.SHARED";
 
@@ -64,6 +70,23 @@ public class KrateActivity extends NativeActivity {
     @Override
     protected void onActivityResult(int request, int result, Intent data) {
         super.onActivityResult(request, result, data);
+        if (request == PHOTOS) {
+            ArrayList<String> picked = new ArrayList<>();
+            if (result == RESULT_OK && data != null) {
+                if (data.getClipData() != null) {
+                    for (int i = 0; i < data.getClipData().getItemCount(); i++) {
+                        picked.add(data.getClipData().getItemAt(i).getUri().toString());
+                    }
+                } else if (data.getData() != null) {
+                    picked.add(data.getData().toString());
+                }
+            }
+            synchronized (lock) {
+                photosPicked = picked.toArray(new String[0]);
+                pickingPhotos = false;
+            }
+            return;
+        }
         if (request == SHARE) {
             synchronized (lock) {
                 sharing = false;
@@ -454,6 +477,70 @@ public class KrateActivity extends NativeActivity {
             }
             return SystemClock.elapsedRealtime() - shareClosedAt > 1500 ? 0 : -1;
         }
+    }
+
+    /**
+     * The system's photo picker for up to limit photos (krate:ui/photos):
+     * Android 13's own picker, which needs no permission, or the document
+     * picker narrowed to pictures before it. Answered by kratePhotosAnswer.
+     */
+    public void kratePickPhotos(final int limit) {
+        synchronized (lock) {
+            pickingPhotos = true;
+            photosPicked = new String[0];
+        }
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                Intent intent;
+                if (android.os.Build.VERSION.SDK_INT >= 33) {
+                    intent = new Intent(android.provider.MediaStore.ACTION_PICK_IMAGES);
+                    int most = Math.min(limit,
+                            android.provider.MediaStore.getPickImagesMaxLimit());
+                    if (most > 1) {
+                        intent.putExtra(android.provider.MediaStore.EXTRA_PICK_IMAGES_MAX, most);
+                    }
+                } else {
+                    intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+                    intent.addCategory(Intent.CATEGORY_OPENABLE);
+                    intent.setType("image/*");
+                    intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, limit > 1);
+                }
+                try {
+                    startActivityForResult(intent, PHOTOS);
+                } catch (ActivityNotFoundException e) {
+                    Log.w(TAG, "no photo picker on this phone: " + e);
+                    synchronized (lock) {
+                        pickingPhotos = false;
+                    }
+                }
+            }
+        });
+    }
+
+    /** Null while the photo picker is up; then the URIs picked (empty for cancelled). */
+    public String[] kratePhotosAnswer() {
+        synchronized (lock) {
+            return pickingPhotos ? null : photosPicked;
+        }
+    }
+
+    /** Copy a picked photo into dir (a HEIC as a JPEG); the path, or null. */
+    public String kratePhotoCopy(String uri, String dir) {
+        return Photos.copyIn(this, Uri.parse(uri), dir);
+    }
+
+    /** Android 9 and before need storage access to add to the library. */
+    public int krateSavePhotoAsk() {
+        if (android.os.Build.VERSION.SDK_INT >= 29) {
+            return GRANTED;
+        }
+        return krateAsk(new String[] {"android.permission.WRITE_EXTERNAL_STORAGE"}, true);
+    }
+
+    /** Add a PNG or JPEG to the library: null once added, else why not. */
+    public String krateSavePhoto(byte[] data) {
+        return Photos.save(this, data);
     }
 
     /** Write the file at path into the document at uri; true when it all went. */

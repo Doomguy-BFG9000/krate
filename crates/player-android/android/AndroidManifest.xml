@@ -37,6 +37,10 @@
   <uses-permission android:name="android.permission.CAMERA" />
   <uses-permission android:name="android.permission.RECORD_AUDIO" />
   <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+  <!-- krate:ui/photos save, for an app allowed photos.add: from Android 10
+       adding to Pictures needs no permission; before, it needs this. -->
+  <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+      android:maxSdkVersion="28" />
   <uses-feature android:name="android.hardware.camera" android:required="false" />
   <uses-feature android:name="android.hardware.microphone" android:required="false" />
   <!-- Which apps open a link, and which voices speak: Android 11 and up
