@@ -49,6 +49,8 @@ objc2-ui-kit = { version = "0.3.2", default-features = false, features = [
     "UIImage",
     "UIImageView",
     "UIResponder",
+    "UITextInput",
+    "UITextInputTraits",
     "UIScene",
     "UIScreen",
     "UIWindowScene",

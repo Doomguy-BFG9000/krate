@@ -55,6 +55,7 @@ mod real {
         UIApplication, UIImage, UIImageView, UIScreen, UITouch, UITouchPhase, UIView,
         UIViewController, UIWindow, UIWindowScene,
     };
+    use objc2_ui_kit::{UIKeyInput, UITextInputTraits};
 
     /// One raw touch, in logical points, straight from the main-thread
     /// callouts. The gesture logic runs on the guest thread.
@@ -68,8 +69,17 @@ mod real {
 
     /// State both threads touch, under one lock. Kept deliberately small:
     /// raw input in, screen geometry out.
+    /// What the on-screen keyboard typed, in order.
+    enum Typed {
+        Text(String),
+        Backspace,
+        Enter,
+    }
+
     struct Shared {
         touches: Vec<RawTouch>,
+        /// Typing from the on-screen keyboard, waiting for the guest.
+        typed: Vec<Typed>,
         /// Set once the main thread has built the window.
         screen: Option<(WindowSize, f32)>,
         /// The CAMetalLayer's raw pointer plus the FULL native scale --
@@ -80,6 +90,7 @@ mod real {
 
     static SHARED: Mutex<Shared> = Mutex::new(Shared {
         touches: Vec::new(),
+        typed: Vec::new(),
         screen: None,
         metal_layer: None,
     });
@@ -217,7 +228,60 @@ mod real {
         // SAFETY: NSObjectProtocol has no additional requirements.
         unsafe impl NSObjectProtocol for KrateSurfaceView {}
 
+        // The view takes the on-screen keyboard's typing when an app asks
+        // for text entry (krate:ui/text-entry). No autocorrection: a name in
+        // a game, a command in an emulator, is typed as meant.
+        unsafe impl UITextInputTraits for KrateSurfaceView {
+            #[unsafe(method(autocorrectionType))]
+            fn autocorrection_type(&self) -> objc2_ui_kit::UITextAutocorrectionType {
+                objc2_ui_kit::UITextAutocorrectionType::No
+            }
+
+            #[unsafe(method(autocapitalizationType))]
+            fn autocapitalization_type(&self) -> objc2_ui_kit::UITextAutocapitalizationType {
+                objc2_ui_kit::UITextAutocapitalizationType::None
+            }
+        }
+
+        unsafe impl UIKeyInput for KrateSurfaceView {
+            #[unsafe(method(hasText))]
+            fn has_text(&self) -> bool {
+                true
+            }
+
+            #[unsafe(method(insertText:))]
+            fn insert_text(&self, text: &objc2_foundation::NSString) {
+                let text = text.to_string();
+                let mut shared = SHARED.lock().expect("shared state lock");
+                for part in text.split_inclusive('\n') {
+                    match part.strip_suffix('\n') {
+                        Some(before) => {
+                            if !before.is_empty() {
+                                shared.typed.push(Typed::Text(before.to_string()));
+                            }
+                            shared.typed.push(Typed::Enter);
+                        }
+                        None => shared.typed.push(Typed::Text(part.to_string())),
+                    }
+                }
+                drop(shared);
+                INPUT_ARRIVED.notify_all();
+            }
+
+            #[unsafe(method(deleteBackward))]
+            fn delete_backward(&self) {
+                SHARED.lock().expect("shared state lock").typed.push(Typed::Backspace);
+                INPUT_ARRIVED.notify_all();
+            }
+        }
+
         impl KrateSurfaceView {
+            // Only a first responder gets the keyboard's typing.
+            #[unsafe(method(canBecomeFirstResponder))]
+            fn can_become_first_responder(&self) -> bool {
+                true
+            }
+
             // SAFETY: signature matches UIView's.
             #[unsafe(method(layoutSubviews))]
             fn layout_subviews(&self) {
@@ -870,7 +934,65 @@ mod real {
         if !guest_initialized() {
             return Vec::new();
         }
-        with_guest(|guest| Ok(std::mem::take(&mut guest.key_samples))).unwrap_or_default()
+        with_guest(|guest| {
+            let typed = std::mem::take(&mut SHARED.lock().expect("shared state lock").typed);
+            if let Some(window) = guest.krate {
+                for t in typed {
+                    let (key, text) = match t {
+                        Typed::Text(text) => {
+                            // One press per character, each carrying its text,
+                            // the way a physical keyboard delivers them.
+                            for c in text.chars() {
+                                let key = c.to_string();
+                                for pressed in [true, false] {
+                                    guest.key_samples.push(RawKeySample {
+                                        window,
+                                        key: key.clone(),
+                                        pressed,
+                                        modifiers: Default::default(),
+                                        text: pressed.then(|| key.clone()),
+                                    });
+                                }
+                            }
+                            continue;
+                        }
+                        Typed::Backspace => ("Backspace", None),
+                        Typed::Enter => ("Enter", None::<String>),
+                    };
+                    for pressed in [true, false] {
+                        guest.key_samples.push(RawKeySample {
+                            window,
+                            key: key.to_string(),
+                            pressed,
+                            modifiers: Default::default(),
+                            text: text.clone(),
+                        });
+                    }
+                }
+            }
+            Ok(std::mem::take(&mut guest.key_samples))
+        })
+        .unwrap_or_default()
+    }
+
+    /// Show or put away the on-screen keyboard. True when it is showing.
+    pub fn set_text_entry(_id: WindowId, on: bool) -> bool {
+        if !guest_initialized() {
+            return false;
+        }
+        let mut showing = false;
+        DispatchQueue::main().exec_sync(|| {
+            if let Some(main_side) = MAIN_SIDE.0.get() {
+                let view: &UIView = &main_side.view;
+                showing = if on {
+                    view.becomeFirstResponder()
+                } else {
+                    view.resignFirstResponder();
+                    false
+                };
+            }
+        });
+        showing
     }
 
     pub fn drain_wheel_samples() -> Vec<RawWheelSample> {
@@ -1113,6 +1235,10 @@ mod stub {
 
     pub fn drain_key_samples() -> Vec<RawKeySample> {
         Vec::new()
+    }
+
+    pub fn set_text_entry(_id: WindowId, _on: bool) -> bool {
+        false
     }
 
     pub fn drain_wheel_samples() -> Vec<RawWheelSample> {

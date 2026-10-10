@@ -1806,6 +1806,13 @@ pub trait UiAdapter: WindowAdapter {
         Vec::new()
     }
 
+    /// Show (`true`) or put away (`false`) the on-screen keyboard for a
+    /// window. True when a keyboard is now showing. Hosts whose keyboard is
+    /// a physical one have nothing to show.
+    fn set_text_entry(&self, _window: WindowId, _on: bool) -> bool {
+        false
+    }
+
     /// Hold the pointer in a window (`true`) or let it go (`false`).
     ///
     /// Default is honest refusal, so a host that has not wired capture says so

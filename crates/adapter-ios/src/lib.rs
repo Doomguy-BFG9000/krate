@@ -523,6 +523,10 @@ impl UiAdapter for IosUikitPrototypeUiAdapter {
         uikit_native::touches(window)
     }
 
+    fn set_text_entry(&self, window: WindowId, on: bool) -> bool {
+        uikit_native::set_text_entry(window, on)
+    }
+
     fn drain_raw_pointer_input(&self) -> Vec<RawPointerSample> {
         uikit_native::drain_pointer_samples()
     }

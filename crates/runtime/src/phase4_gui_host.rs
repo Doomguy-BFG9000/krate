@@ -330,6 +330,19 @@ impl ui4::touch::Host for Phase3GuiHost {
     }
 }
 
+/// The on-screen keyboard, for apps that draw their own text fields.
+/// Phase 4 only.
+impl ui4::text_entry::Host for Phase3GuiHost {
+    fn start(&mut self, window: u64) -> wasmtime::Result<bool> {
+        Ok(self.text_entry(window, true))
+    }
+
+    fn stop(&mut self, window: u64) -> wasmtime::Result<()> {
+        self.text_entry(window, false);
+        Ok(())
+    }
+}
+
 impl ui4::events::Host for Phase3GuiHost {
     fn poll(&mut self) -> wasmtime::Result<Option<ui4::types::Event>> {
         if let Some(notice) = self.take_drop_notice() {

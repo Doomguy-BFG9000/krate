@@ -375,7 +375,11 @@ apps always releases it -- check `captured(win)` each frame and show \
 \"click to play\" when it reads false. On a phone, \
 `krate::ui::touch::touches(win)` lists every finger (stable `id`, `x`, \
 `y`): a left thumb that moves, a right thumb that aims, a tap that fires. \
-A window wider than tall plays in landscape on a phone.\n\n\
+A window wider than tall plays in landscape on a phone. A text field \
+the app draws itself (a name box in a game, a canvas editor) calls \
+`krate::ui::text_entry::start(win)` when it takes focus and `stop(win)` \
+when it loses it: a phone shows its keyboard, and the typing arrives as \
+the usual `TextInput` and key events.\n\n\
 **3. Sprites.** Two ways, both real: `draw_pixels` blits a straight RGBA \
 buffer at a rect (fastest for tiles and unrotated sprites), and \
 `draw_sprite(canvas, center, dst, angle, w, h, rgba)` rotates one. For a \

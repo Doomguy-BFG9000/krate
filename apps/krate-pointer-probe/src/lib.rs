@@ -38,12 +38,18 @@ fn report(win: u64, capture: &str) -> String {
     let held = |b| if pointer::button_held(b) { "down" } else { "up" };
     let (dx, dy) = pointer::take_motion(win);
     format!(
-        "position={at} primary={} secondary={} middle={} motion={dx:.0},{dy:.0} captured={} touches={} capture={capture}",
+        "position={at} primary={} secondary={} middle={} motion={dx:.0},{dy:.0} captured={} touches={} keyboard={} capture={capture}",
         held(PointerButton::Primary),
         held(PointerButton::Secondary),
         held(PointerButton::Middle),
         pointer::captured(win),
         krate::ui::touch::touches(win).len(),
+        {
+            // A host with no on-screen keyboard says so; stop is always safe.
+            let shown = krate::ui::text_entry::start(win);
+            krate::ui::text_entry::stop(win);
+            shown
+        },
     )
 }
 

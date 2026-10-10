@@ -2893,6 +2893,15 @@ impl Phase3GuiHost {
         }
     }
 
+    /// The on-screen keyboard for a window the app owns; never for one it
+    /// does not.
+    pub(crate) fn text_entry(&self, window: u64, on: bool) -> bool {
+        match self.window_id(window) {
+            Ok(id) => self.dispatcher().set_text_entry(id, on),
+            Err(_) => false,
+        }
+    }
+
     pub(crate) fn pointer_take_motion(&self, window: u64) -> (f32, f32) {
         self.pump_for_query();
         match self.window_id(window) {

@@ -7,7 +7,7 @@
 
 #![allow(clippy::too_many_arguments)]
 
-/// `krate:ui`: clipboard, dialog, events, image, launcher, menu, notify, pointer, print, touch, tree, window.
+/// `krate:ui`: clipboard, dialog, events, image, launcher, menu, notify, pointer, print, text_entry, touch, tree, window.
 pub mod ui {
     /// `krate:ui/clipboard`.
     pub mod clipboard {
@@ -292,6 +292,21 @@ pub mod ui {
         /// Print the pages added so far, wait for the person, and start over.
         pub fn finish(window: u64, title: &str) -> Result<PrintOutcome, UiError> {
             crate::bindings::krate::ui::print::finish(window, title)
+        }
+    }
+    /// `krate:ui/text_entry`.
+    pub mod text_entry {
+
+        /// Ask for text entry in a window the app owns. True when the system is
+        /// now showing an on-screen keyboard; false where there is none to show,
+        /// which on a desktop means the physical keyboard is the way in.
+        pub fn start(window: u64) -> bool {
+            crate::bindings::krate::ui::text_entry::start(window)
+        }
+
+        /// Done typing: put the on-screen keyboard away.
+        pub fn stop(window: u64) {
+            crate::bindings::krate::ui::text_entry::stop(window)
         }
     }
     /// `krate:ui/touch`.

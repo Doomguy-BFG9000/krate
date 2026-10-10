@@ -582,6 +582,11 @@ impl<'a> Phase3UiDispatcher<'a> {
         self.adapter.touches(id)
     }
 
+    /// Show or put away the on-screen keyboard; true when one is showing.
+    pub fn set_text_entry(&self, id: WindowId, on: bool) -> bool {
+        self.adapter.set_text_entry(id, on)
+    }
+
     /// A window's pointer motion since the last call.
     pub fn take_pointer_motion(&self, id: WindowId) -> (f32, f32) {
         self.adapter.take_pointer_motion(id)
