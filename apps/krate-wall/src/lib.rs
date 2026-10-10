@@ -224,7 +224,7 @@ enum Target {
     Cancel,
     Close,
     Row(usize),
-    /// The dimmed screen around the sheet: a tap there is Not Now.
+    /// The dimmed screen around the sheet: a tap there does nothing.
     Outside,
     /// The sheet itself, away from anything that acts.
     Sheet,
@@ -498,7 +498,7 @@ impl Sheet {
             knobs,
             scroll: 0.0,
             max_scroll: 0.0,
-            entrance: Spring::rest_at(0.0, 18.0),
+            entrance: Spring::rest_at(0.0, 26.0),
             press: None,
             rows: Vec::new(),
             rows_area: zero,
@@ -1080,6 +1080,14 @@ impl Sheet {
                 None
             }
             types::Event::Pointer(p) if p.button.is_some() && p.pressed => {
+                // Nothing on a sheet still sliding in is where it will be: a
+                // quick tap where Open is about to arrive landed on the
+                // screen behind it, which read as Not Now, and the app
+                // seemed to bounce straight back to the Library.
+                if self.entrance.value < 0.97 {
+                    self.press = None;
+                    return None;
+                }
                 self.press = Some(Press {
                     target: self.target_at(p.x, p.y),
                     x: p.x,
@@ -1099,7 +1107,10 @@ impl Sheet {
                 }
                 match press.target {
                     Target::Open => Some(true),
-                    Target::Cancel | Target::Close | Target::Outside => Some(false),
+                    Target::Cancel | Target::Close => Some(false),
+                    // The screen around the sheet does nothing: whether an
+                    // app opens is a choice made on the sheet's own buttons.
+                    Target::Outside => None,
                     Target::Row(index) => {
                         let ask = &mut self.asks[index];
                         if !ask.required {
