@@ -234,7 +234,13 @@ export default {
   /// The nightly scrub (wrangler `[triggers] crons`): inventory and
   /// reconciliation without repairs, stored where /admin/scrub/last and
   /// /health read it (IC-852, tests 1886 and 1896).
-  async scheduled(_event, env) {
+  async scheduled(event, env) {
+    // Every ten minutes: the founder's welcome to people who signed up at
+    // least ten minutes ago. Nightly: the scrub.
+    if (event && event.cron === WELCOME_CRON) {
+      await sendDueWelcomes(env);
+      return;
+    }
     await runScrub(env, { repair: false });
   },
   async fetch(request, env) {
@@ -2491,6 +2497,15 @@ async function ensureUser(env, provider, stableId, profile) {
       providers: [provider],
     };
     await env.APPS.put(`user:${userId}`, JSON.stringify(record));
+    // A new person: the founder's welcome goes out ten to twenty minutes
+    // from now (the next ten-minute run after ten minutes have passed), so
+    // it reads as a note, not a reflex. Only for an account made here, so
+    // nobody who signed up before this existed is mailed.
+    if (record.email && env.RESEND_API_KEY) {
+      await env.APPS.put(`welcome-due:${userId}`, String(record.created), {
+        expirationTtl: 7 * 24 * 3600,
+      });
+    }
   } else {
     record = JSON.parse((await env.APPS.get(`user:${userId}`)) || "{}");
     const before = JSON.stringify(record);
@@ -2507,6 +2522,97 @@ async function ensureUser(env, provider, stableId, profile) {
   if (identHeld !== userId) await env.APPS.put(identKey, userId);
   if (emailKey && emailHeld !== userId) await env.APPS.put(emailKey, userId);
   return record;
+}
+
+// --------------------------------------------------------- founder welcome
+//
+// One plain-text note from the founder to each new person, ten to twenty
+// minutes after they sign up. Plain on purpose: a founder's note that looks
+// like a real email gets replies; a designed one reads as marketing.
+//
+// From Yashraj's own krate.tech address, which Resend can send for; replies
+// go to his Gmail. It cannot be sent "from" the Gmail address itself: Gmail
+// publishes a DMARC policy of reject, so mail claiming to be from gmail.com
+// that Gmail did not send is refused or binned.
+
+const WELCOME_CRON = "*/10 * * * *";
+const WELCOME_AFTER_MS = 10 * 60 * 1000;
+const WELCOME_FROM = "Yashraj Pardeshi <yashraj@krate.tech>";
+const WELCOME_REPLY_TO = "incyashraj@gmail.com";
+const WELCOME_SUBJECT = "You\u2019re in. One question from me";
+
+/// The note, in the founder's words. `name` is the first word of the name
+/// the provider gave; none (an email sign-in knows no name) is "there".
+function welcomeText(name) {
+  const first = (name || "").trim().split(/\s+/)[0] || "there";
+  return `Hi ${first},
+
+I\u2019m Yashraj, the person who builds Krate. Thanks for signing up.
+
+I\u2019ll keep this short. Krate exists for one reason: making an app and sharing it should be as easy as sending a document. If it doesn\u2019t feel that way to you yet, I want to know.
+
+So I have one question:
+
+What\u2019s the first thing you want to make with Krate?
+
+Just hit reply. It comes straight to me, not a support queue, and I read every reply myself.
+
+If something breaks, confuses you, or feels slower than it should, tell me that too. Even the small stuff. Krate is still early, and what you tell me now decides what I build next. Real changes have already come from people like you.
+
+If you\u2019d rather show me than write it, I\u2019m happy to jump on a quick call: https://calendly.com/incyashraj/30min
+
+Thanks for trying something new with me.
+
+Yashraj
+Founder, Krate
+krate.tech
+
+P.S. If you get stuck, here\u2019s a 3-minute demo of making an app from scratch: https://youtu.be/No0Cu8dAewg
+`;
+}
+
+/// Send the welcomes that are due: each at most once (the account records
+/// that it was welcomed before the due mark is dropped), twenty a run.
+async function sendDueWelcomes(env, now = Date.now()) {
+  if (!env.RESEND_API_KEY) return { sent: 0 };
+  const listed = await env.APPS.list({ prefix: "welcome-due:" });
+  let sent = 0;
+  for (const { name: key } of listed.keys || []) {
+    if (sent >= 20) break;
+    const created = Number((await env.APPS.get(key)) || "0");
+    if (!created || now - created < WELCOME_AFTER_MS) continue;
+    const userId = key.slice("welcome-due:".length);
+    const user = JSON.parse((await env.APPS.get(`user:${userId}`)) || "null");
+    if (!user || user.welcomed || !user.email) {
+      await env.APPS.delete(key);
+      continue;
+    }
+    const res = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${env.RESEND_API_KEY}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        from: WELCOME_FROM,
+        to: [user.email],
+        reply_to: WELCOME_REPLY_TO,
+        subject: WELCOME_SUBJECT,
+        text: welcomeText(user.name),
+      }),
+    });
+    if (!res.ok) {
+      // Left due: the next run tries again, until the mark expires in a week.
+      const why = await res.text().catch(() => "");
+      console.error(`resend refused the welcome: ${res.status} ${why}`);
+      continue;
+    }
+    user.welcomed = now;
+    await env.APPS.put(`user:${userId}`, JSON.stringify(user));
+    await env.APPS.delete(key);
+    sent++;
+  }
+  return { sent };
 }
 
 async function newSession(env, userId) {
