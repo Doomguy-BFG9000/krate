@@ -32,6 +32,7 @@ pub struct GpuCanvas {
     queue: wgpu::Queue,
     surface: wgpu::Surface<'static>,
     surface_format: wgpu::TextureFormat,
+    surface_config: wgpu::SurfaceConfiguration,
     renderer: vello::Renderer,
     target: wgpu::Texture,
     target_view: wgpu::TextureView,
@@ -48,6 +49,8 @@ pub struct GpuCanvas {
     /// are generated once and drawn every frame, and re-uploading 429 KB
     /// per photo per frame would waste the bus the GPU just freed.
     images: HashMap<usize, ImageBrush>,
+    /// The texture a whole-frame picture is written into, at its own size.
+    picture: Option<(wgpu::Texture, wgpu::TextureView)>,
 }
 
 impl GpuCanvas {
@@ -108,36 +111,34 @@ impl GpuCanvas {
             .copied()
             .find(|f| matches!(f, wgpu::TextureFormat::Bgra8Unorm))
             .unwrap_or(caps.formats[0]);
-        surface.configure(
-            &device,
-            &wgpu::SurfaceConfiguration {
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-                format: surface_format,
-                width: physical_width,
-                height: physical_height,
-                // FIFO, and it is the ONLY pacer: get_current_texture
-                // blocks until the panel is ready, which is exactly the
-                // wait a frame loop should do. Immediate was tried and made
-                // things worse (acquire 12 ms -> 27 ms, 60 fps -> 30):
-                // without vsync backpressure the queue filled and the wait
-                // moved rather than disappeared. The double-pacing this was
-                // meant to fix is removed on the other side -- the display
-                // link no longer gates the frame loop as well.
-                present_mode: wgpu::PresentMode::Fifo,
-                // Opaque when offered: a compositor blending our alpha
-                // with whatever sits beneath the layer reads as flicker.
-                alpha_mode: if caps.alpha_modes.contains(&wgpu::CompositeAlphaMode::Opaque) {
-                    wgpu::CompositeAlphaMode::Opaque
-                } else {
-                    caps.alpha_modes[0]
-                },
-                view_formats: vec![],
-                // One frame in flight: with FIFO as the single pacer, a
-                // second queued frame is a whole extra frame of latency
-                // between the finger and the glass.
-                desired_maximum_frame_latency: 1,
+        let surface_config = wgpu::SurfaceConfiguration {
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            format: surface_format,
+            width: physical_width,
+            height: physical_height,
+            // FIFO, and it is the ONLY pacer: get_current_texture
+            // blocks until the panel is ready, which is exactly the
+            // wait a frame loop should do. Immediate was tried and made
+            // things worse (acquire 12 ms -> 27 ms, 60 fps -> 30):
+            // without vsync backpressure the queue filled and the wait
+            // moved rather than disappeared. The double-pacing this was
+            // meant to fix is removed on the other side -- the display
+            // link no longer gates the frame loop as well.
+            present_mode: wgpu::PresentMode::Fifo,
+            // Opaque when offered: a compositor blending our alpha
+            // with whatever sits beneath the layer reads as flicker.
+            alpha_mode: if caps.alpha_modes.contains(&wgpu::CompositeAlphaMode::Opaque) {
+                wgpu::CompositeAlphaMode::Opaque
+            } else {
+                caps.alpha_modes[0]
             },
-        );
+            view_formats: vec![],
+            // One frame in flight: with FIFO as the single pacer, a
+            // second queued frame is a whole extra frame of latency
+            // between the finger and the glass.
+            desired_maximum_frame_latency: 1,
+        };
+        surface.configure(&device, &surface_config);
 
         let renderer = vello::Renderer::new(&device, vello::RendererOptions::default())
             .map_err(|e| format!("vello renderer: {e}"))?;
@@ -149,6 +150,7 @@ impl GpuCanvas {
             queue,
             surface,
             surface_format,
+            surface_config,
             renderer,
             target,
             target_view,
@@ -157,14 +159,37 @@ impl GpuCanvas {
             height: physical_height,
             scale,
             images: HashMap::new(),
+            picture: None,
             font_cx: parley::FontContext::new(),
             layout_cx: parley::LayoutContext::new(),
             glyph_cache: HashMap::new(),
         })
     }
 
+    /// Follow the screen to a new physical size (it turned).
+    pub fn resize(&mut self, width: u32, height: u32) {
+        if (width, height) == (self.width, self.height) || width == 0 || height == 0 {
+            return;
+        }
+        self.surface_config.width = width;
+        self.surface_config.height = height;
+        self.surface.configure(&self.device, &self.surface_config);
+        let (target, target_view) = make_target(&self.device, width, height);
+        self.target = target;
+        self.target_view = target_view;
+        self.width = width;
+        self.height = height;
+    }
+
     /// Render one recorded frame and present it.
     pub fn present(&mut self, list: &CanvasList) -> Result<(), String> {
+        if let Some(image) = whole_frame_picture(list) {
+            return self.present_picture(image);
+        }
+        if self.surface_config.desired_maximum_frame_latency != 1 {
+            self.surface_config.desired_maximum_frame_latency = 1;
+            self.surface.configure(&self.device, &self.surface_config);
+        }
         let t_scene = std::time::Instant::now();
         let mut scene = vello::Scene::new();
         let base = Affine::scale(self.scale as f64);
@@ -504,6 +529,94 @@ impl GpuCanvas {
         Ok(())
     }
 
+    /// A frame that is one picture covering the canvas -- a game's or an
+    /// emulator's framebuffer -- goes straight into a texture and is drawn
+    /// scaled to the screen in one pass. Through vello it went into the
+    /// image atlas again every frame (a new picture each time) and through
+    /// its compute passes: Counter-Strike on an iPhone 13 Pro was laggy.
+    fn present_picture(
+        &mut self,
+        image: &krate_adapter_common::ui::ImagePixels,
+    ) -> Result<(), String> {
+        let t = std::time::Instant::now();
+        let (w, h) = (image.width.max(1), image.height.max(1));
+        let stale = self
+            .picture
+            .as_ref()
+            .is_none_or(|(tex, _)| tex.width() != w || tex.height() != h);
+        if stale {
+            let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("krate-picture"),
+                size: wgpu::Extent3d {
+                    width: w,
+                    height: h,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            });
+            let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+            self.picture = Some((texture, view));
+        }
+        // Two frames in flight for pictures. With one, a game whose frame
+        // takes 13 ms waited for the panel to show the last frame before it
+        // could hand over the next, and landed every other refresh: 30 fps
+        // on an iPhone 13 Pro that could draw 70. Interface frames keep one
+        // (set back in `present`), for the shortest finger-to-glass time.
+        if self.surface_config.desired_maximum_frame_latency != 2 {
+            self.surface_config.desired_maximum_frame_latency = 2;
+            self.surface.configure(&self.device, &self.surface_config);
+        }
+        let (texture, view) = self.picture.as_ref().expect("picture texture made above");
+        let t_upload = std::time::Instant::now();
+        self.queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &image.rgba,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(4 * w),
+                rows_per_image: Some(h),
+            },
+            wgpu::Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            },
+        );
+        let upload_ms = t_upload.elapsed().as_secs_f64() * 1000.0;
+        let t_acquire = std::time::Instant::now();
+        let frame = match self.surface.get_current_texture() {
+            wgpu::CurrentSurfaceTexture::Success(frame)
+            | wgpu::CurrentSurfaceTexture::Suboptimal(frame) => frame,
+            other => return Err(format!("acquire: {other:?}")),
+        };
+        let acquire_ms = t_acquire.elapsed().as_secs_f64() * 1000.0;
+        let frame_view = frame
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        self.blit
+            .blit(&self.device, &mut encoder, view, &frame_view);
+        self.queue.submit([encoder.finish()]);
+        frame.present();
+        crate::uikit_native::diag(&format!(
+            "frame picture {w}x{h} {:.1}ms upload={upload_ms:.1} acquire={acquire_ms:.1}",
+            t.elapsed().as_secs_f64() * 1000.0
+        ));
+        Ok(())
+    }
+
     fn upload(
         &mut self,
         image: &std::sync::Arc<krate_adapter_common::ui::ImagePixels>,
@@ -774,7 +887,13 @@ fn fs(in: VsOut) -> @location(0) vec4<f32> {
             multiview_mask: None,
             cache: None,
         });
-        let sampler = device.create_sampler(&wgpu::SamplerDescriptor::default());
+        // Linear: a whole-frame picture is drawn scaled to the screen. At
+        // the same size (vello's own target) linear and nearest agree.
+        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
         BlitPipeline {
             pipeline,
             sampler,
@@ -823,4 +942,29 @@ fn fs(in: VsOut) -> @location(0) vec4<f32> {
         pass.set_bind_group(0, &bind, &[]);
         pass.draw(0..3, 0..1);
     }
+}
+
+/// The one picture a frame consists of, if that is all it is: an opaque
+/// image covering the whole canvas, after at most a clear.
+fn whole_frame_picture(list: &CanvasList) -> Option<&krate_adapter_common::ui::ImagePixels> {
+    let mut picture = None;
+    for op in &list.ops {
+        match op {
+            CanvasOp::Clear(_) | CanvasOp::SetClip(None) if picture.is_none() => {}
+            CanvasOp::Pixels { rect, image } if picture.is_none() => {
+                let (x, y, w, h) = *rect;
+                let (cw, ch) = (list.logical_width as f32, list.logical_height as f32);
+                let covers = x <= 0.5
+                    && y <= 0.5
+                    && (x + w - cw).abs() <= cw * 0.01 + 0.5
+                    && (y + h - ch).abs() <= ch * 0.01 + 0.5;
+                if !covers || image.rgba.chunks_exact(4).any(|p| p[3] != 255) {
+                    return None;
+                }
+                picture = Some(image.as_ref());
+            }
+            _ => return None,
+        }
+    }
+    picture
 }

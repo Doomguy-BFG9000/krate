@@ -11,6 +11,9 @@ publish = false
 name = "krate-player-ios"
 path = "src/main.rs"
 
+[build-dependencies]
+sha2 = "0.10"
+
 [dependencies]
 krate-manifest = { path = "../manifest" }
 krate-policy = { path = "../policy" }
@@ -25,13 +28,27 @@ krate-runtime = { path = "../runtime", default-features = false, features = [
 krate-adapter-ios = { path = "../adapter-ios" }
 objc2 = "0.6.4"
 libc = "0.2"
+block2 = "0.6"
+dispatch2 = "0.3"
 objc2-foundation = { version = "0.3.2", default-features = false, features = [
     "std",
     "NSObject",
     "NSString",
+    "NSURL",
+    "NSDictionary",
+    "NSArray",
+    "NSSet",
+    "NSEnumerator",
 ] }
 objc2-ui-kit = { version = "0.3.2", default-features = false, features = [
     "std",
     "UIApplication",
     "UIResponder",
+    "UIAlertController",
+    "UIViewController",
+    "UIWindow",
+    "UIWindowScene",
+    "UIScene",
+    "UIView",
+    "block2",
 ] }

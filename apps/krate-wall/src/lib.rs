@@ -29,6 +29,11 @@
 //! did not open (a missing file, a failed download, an app that stopped):
 //! one card and a Close button, answered with `wall:closed`. It never
 //! answers `wall:open`, so an app named "wall:notice" gains nothing.
+//!
+//! `wall:home`, then a name and a line about it for every app the person
+//! has, is the phone player's home screen: a tap answers `wall:pick:<n>`,
+//! leaving answers `wall:closed`. It too never answers `wall:open` -- the
+//! permission question is asked after the pick, every time.
 
 #![no_std]
 
@@ -51,6 +56,8 @@ const ARG_SEP: char = '\n';
 
 /// The first argument when the player has something to tell, not ask.
 const NOTICE: &str = "wall:notice";
+/// The first argument for the phone player's home screen.
+const HOME: &str = "wall:home";
 
 /// Name, then three fields per request.
 const FIELDS_PER_ASK: usize = 3;
@@ -407,6 +414,150 @@ impl Sheet {
     }
 }
 
+/// The home screen: every app the person has, in the order given. Returns
+/// the index tapped, or None when the window is dismissed.
+fn home(apps: &[(&str, &str)]) -> Option<usize> {
+    let win = window::create(
+        "Krate",
+        types::WindowSize {
+            width: 390,
+            height: 720,
+        },
+    )
+    .ok()?;
+    tree::set_root(win, &node(ROOT_ID, None, types::WidgetKind::Stack)).ok()?;
+    let _ = tree::upsert_node(
+        win,
+        &node(CANVAS_ID, Some(ROOT_ID), types::WidgetKind::Canvas),
+    );
+    let canvas = canvas2d::bind(win, CANVAS_ID).ok()?;
+    let mut scroll = 0.0f32;
+    loop {
+        let l = match canvas2d::canvas_size(canvas) {
+            Ok(size) => Layout::from_canvas(size.width.max(1.0), size.height.max(1.0)),
+            Err(_) => Layout::from_canvas(390.0, 720.0),
+        };
+        let rows = draw_home(canvas, &l, apps, scroll).ok()?;
+        let _ = window::request_redraw(win);
+        match events::wait(None) {
+            Some(types::Event::CloseRequested(_)) => return None,
+            Some(types::Event::Wheel(wheel)) => {
+                let content = rows.last().map(|r| r.y1 + scroll).unwrap_or(0.0);
+                let max = (content - l.h * 0.6).max(0.0);
+                scroll = (scroll + wheel.dy).clamp(0.0, max);
+            }
+            // A phone tap arrives as a press and a release at one point.
+            Some(types::Event::Pointer(p)) if p.pressed && p.button.is_some() => {
+                if let Some(row) = rows.iter().find(|r| p.y >= r.y0 && p.y <= r.y1) {
+                    return Some(row.index);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Draw the home screen; returns where each app's row is.
+fn draw_home(
+    canvas: u64,
+    l: &Layout,
+    apps: &[(&str, &str)],
+    scroll: f32,
+) -> Result<Vec<RowHit>, gfx::GfxError> {
+    canvas2d::clear(canvas, color(0.02, 0.024, 0.038, 1.0))?;
+    let x = l.col_x + 20.0;
+    let w = l.col_w - 40.0;
+    let top = 96.0 - scroll;
+    canvas2d::draw_text_styled(
+        canvas,
+        "Krate",
+        gfx::Point { x, y: top },
+        34.0,
+        color(1.0, 1.0, 1.0, 1.0),
+        style(750, -0.6),
+    )?;
+    canvas2d::draw_text(
+        canvas,
+        "Your apps",
+        gfx::Point { x, y: top + 28.0 },
+        15.0,
+        color(1.0, 1.0, 1.0, 0.5),
+    )?;
+    let mut rows = Vec::new();
+    let mut y = top + 52.0;
+    for (index, (name, line)) in apps.iter().enumerate() {
+        let h = 72.0;
+        canvas2d::fill_round_rect(
+            canvas,
+            rect(x, y, w, h),
+            radii(18.0),
+            color(0.086, 0.096, 0.13, 1.0),
+        )?;
+        // The app's initial on a tile, until apps carry icons.
+        let tile = rect(x + 14.0, y + 14.0, 44.0, 44.0);
+        canvas2d::fill_round_rect(canvas, tile, radii(11.0), color(0.24, 0.45, 0.98, 1.0))?;
+        let initial: String = name
+            .chars()
+            .next()
+            .map(|c| c.to_uppercase().collect())
+            .unwrap_or_default();
+        let m = canvas2d::measure_text_styled(canvas, &initial, 22.0, style(700, 0.0))?;
+        canvas2d::draw_text_styled(
+            canvas,
+            &initial,
+            gfx::Point {
+                x: tile.x + 22.0 - m.width / 2.0,
+                y: tile.y + 30.0,
+            },
+            22.0,
+            color(1.0, 1.0, 1.0, 1.0),
+            style(700, 0.0),
+        )?;
+        canvas2d::draw_text_styled(
+            canvas,
+            name,
+            gfx::Point {
+                x: x + 72.0,
+                y: y + 32.0,
+            },
+            17.0,
+            color(1.0, 1.0, 1.0, 0.95),
+            style(600, 0.0),
+        )?;
+        canvas2d::draw_text(
+            canvas,
+            line,
+            gfx::Point {
+                x: x + 72.0,
+                y: y + 52.0,
+            },
+            13.0,
+            color(1.0, 1.0, 1.0, 0.5),
+        )?;
+        rows.push(RowHit {
+            index,
+            y0: y,
+            y1: y + h,
+        });
+        y += h + 10.0;
+    }
+    // How apps arrive, always at the foot of the list.
+    let hint = "Open a .krate from Messages, Mail or Files and it appears here.";
+    let mut hy = y + 26.0;
+    for line in wrap_lines(canvas, hint, 14.0, w) {
+        canvas2d::draw_text(
+            canvas,
+            &line,
+            gfx::Point { x, y: hy },
+            14.0,
+            color(1.0, 1.0, 1.0, 0.45),
+        )?;
+        hy += 19.0;
+    }
+    canvas2d::present(canvas)?;
+    Ok(rows)
+}
+
 /// Show why something did not open, until Close is tapped or the window is
 /// dismissed.
 fn notice(title: &str, message: &str) {
@@ -536,6 +687,19 @@ struct Component;
 impl krate::Guest for Component {
     fn run() -> i32 {
         let raw = args::raw();
+        if raw.split(ARG_SEP).next() == Some(HOME) {
+            let rest: Vec<&str> = raw.split(ARG_SEP).skip(1).collect();
+            let apps: Vec<(&str, &str)> = rest
+                .chunks(2)
+                .filter(|pair| pair.len() == 2 && !pair[0].trim().is_empty())
+                .map(|pair| (pair[0].trim(), pair[1].trim()))
+                .collect();
+            match home(&apps) {
+                Some(index) => out(&format!("wall:pick:{index}")),
+                None => out("wall:closed"),
+            }
+            return 0;
+        }
         let mut parts = raw.splitn(3, ARG_SEP);
         if parts.next() == Some(NOTICE) {
             let title = parts.next().unwrap_or("").trim();

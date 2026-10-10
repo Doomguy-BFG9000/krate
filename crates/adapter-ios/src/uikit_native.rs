@@ -161,9 +161,9 @@ mod real {
 
     /// Main-thread-only UIKit objects, created on first use via dispatch.
     struct MainSide {
-        _window: Retained<UIWindow>,
-        _controller: Retained<UIViewController>,
-        _metal: Retained<objc2_quartz_core::CAMetalLayer>,
+        window: Retained<UIWindow>,
+        controller: Retained<KrateViewController>,
+        metal: Retained<objc2_quartz_core::CAMetalLayer>,
         /// Held so the link's target outlives the link that calls it.
         _link_target: Retained<KrateDisplayLinkTarget>,
         _display_link: Retained<objc2_quartz_core::CADisplayLink>,
@@ -218,6 +218,13 @@ mod real {
         unsafe impl NSObjectProtocol for KrateSurfaceView {}
 
         impl KrateSurfaceView {
+            // SAFETY: signature matches UIView's.
+            #[unsafe(method(layoutSubviews))]
+            fn layout_subviews(&self) {
+                let _: () = unsafe { msg_send![super(self), layoutSubviews] };
+                view_laid_out(self);
+            }
+
             // SAFETY: signatures match UIResponder's touch methods.
             #[unsafe(method(touchesBegan:withEvent:))]
             fn touches_began(
@@ -256,6 +263,122 @@ mod real {
             }
         }
     );
+
+    /// Which way up the app's window wants the screen: landscape when the
+    /// app asked for a window wider than tall (a game), portrait otherwise.
+    static LANDSCAPE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+    define_class!(
+        // SAFETY:
+        // - UIViewController has no extra subclassing requirements for
+        //   overriding its orientation query.
+        // - UIKit calls it on the main thread.
+        #[unsafe(super = UIViewController)]
+        #[thread_kind = MainThreadOnly]
+        #[ivars = ()]
+        struct KrateViewController;
+
+        // SAFETY: NSObjectProtocol has no additional requirements.
+        unsafe impl NSObjectProtocol for KrateViewController {}
+
+        impl KrateViewController {
+            // SAFETY: signature matches UIViewController's.
+            #[unsafe(method(supportedInterfaceOrientations))]
+            fn supported_interface_orientations(&self) -> objc2_ui_kit::UIInterfaceOrientationMask {
+                if LANDSCAPE.load(std::sync::atomic::Ordering::Relaxed) {
+                    objc2_ui_kit::UIInterfaceOrientationMask::Landscape
+                } else {
+                    objc2_ui_kit::UIInterfaceOrientationMask::Portrait
+                }
+            }
+
+            #[unsafe(method(prefersStatusBarHidden))]
+            fn prefers_status_bar_hidden(&self) -> bool {
+                LANDSCAPE.load(std::sync::atomic::Ordering::Relaxed)
+            }
+
+            #[unsafe(method(prefersHomeIndicatorAutoHidden))]
+            fn prefers_home_indicator_auto_hidden(&self) -> bool {
+                LANDSCAPE.load(std::sync::atomic::Ordering::Relaxed)
+            }
+        }
+    );
+
+    /// Turn the screen to suit a window of `size`: sideways for a window
+    /// wider than tall. iOS animates the turn; this waits for it (up to
+    /// 1.5 s), so the window an app gets already has the shape it asked
+    /// for -- Counter-Strike read 390x844 for its first frame otherwise and
+    /// sized its picture for a portrait screen.
+    fn request_orientation(size: WindowSize) {
+        let landscape = size.width > size.height;
+        if LANDSCAPE.swap(landscape, std::sync::atomic::Ordering::Relaxed) == landscape {
+            return;
+        }
+        let turned = |shared: &Shared| {
+            shared
+                .screen
+                .is_some_and(|(l, _)| (l.width > l.height) == landscape)
+        };
+        DispatchQueue::main().exec_async(move || {
+            let Some(main_side) = MAIN_SIDE.0.get() else {
+                return;
+            };
+            let mask = if landscape {
+                objc2_ui_kit::UIInterfaceOrientationMask::Landscape
+            } else {
+                objc2_ui_kit::UIInterfaceOrientationMask::Portrait
+            };
+            main_side.controller.setNeedsUpdateOfSupportedInterfaceOrientations();
+            main_side.controller.setNeedsStatusBarAppearanceUpdate();
+            if let Some(scene) = main_side.window.windowScene() {
+                let prefs =
+                    objc2_ui_kit::UIWindowSceneGeometryPreferencesIOS::initWithInterfaceOrientations(
+                        <objc2_ui_kit::UIWindowSceneGeometryPreferencesIOS as objc2::AnyThread>::alloc(),
+                        mask,
+                    );
+                scene.requestGeometryUpdateWithPreferences_errorHandler(&prefs, None);
+            }
+        });
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(1500);
+        let mut shared = SHARED.lock().expect("shared state lock");
+        while !turned(&shared) {
+            let now = std::time::Instant::now();
+            if now >= deadline {
+                break;
+            }
+            shared = INPUT_ARRIVED
+                .wait_timeout(shared, deadline - now)
+                .expect("shared state lock")
+                .0;
+        }
+    }
+
+    /// The view's bounds changed (the screen turned): move the GPU layer
+    /// with it and publish the new size for the guest.
+    fn view_laid_out(view: &KrateSurfaceView) {
+        let uiview: &UIView = view;
+        let bounds: CGRect = uiview.bounds();
+        if let Some(main_side) = MAIN_SIDE.0.get() {
+            objc2_quartz_core::CATransaction::begin();
+            objc2_quartz_core::CATransaction::setDisableActions(true);
+            main_side.metal.setFrame(bounds);
+            objc2_quartz_core::CATransaction::commit();
+        }
+        let Ok(logical) = WindowSize::new(
+            (bounds.size.width as u32).max(1),
+            (bounds.size.height as u32).max(1),
+        ) else {
+            return;
+        };
+        let mut shared = SHARED.lock().expect("shared state lock");
+        if let Some((current, scale)) = shared.screen {
+            if current != logical {
+                shared.screen = Some((logical, scale));
+                drop(shared);
+                INPUT_ARRIVED.notify_all();
+            }
+        }
+    }
 
     fn record_touches(view: &KrateSurfaceView, touches: &objc2_foundation::NSSet<UITouch>) {
         let uiview: &UIView = view;
@@ -312,7 +435,10 @@ mod real {
                         }
                     }
                 }
-                let controller = unsafe { UIViewController::new(mtm) };
+                let controller: Retained<KrateViewController> = {
+                    let this = KrateViewController::alloc(mtm).set_ivars(());
+                    unsafe { msg_send![super(this), init] }
+                };
                 let view: Retained<KrateSurfaceView> = {
                     let this = KrateSurfaceView::alloc(mtm).set_ivars(());
                     // SAFETY: UIView's initWithFrame is the designated
@@ -323,7 +449,8 @@ mod real {
                     view.setUserInteractionEnabled(true);
                     let as_uiview: &UIView = &view;
                     controller.setView(Some(as_uiview));
-                    window.setRootViewController(Some(&controller));
+                    let as_controller: &UIViewController = &controller;
+                    window.setRootViewController(Some(as_controller));
                     window.makeKeyAndVisible();
                 }
                 let logical = WindowSize::new(
@@ -378,11 +505,11 @@ mod real {
                     Some((metal_ptr, native_scale));
 
                 let _ = MAIN_SIDE.0.set(MainSide {
-                    _metal: metal,
+                    metal,
                     _link_target: link_target,
                     _display_link: display_link,
-                    _window: window,
-                    _controller: controller,
+                    window,
+                    controller,
                     view,
                 });
                 Ok((logical, scale))
@@ -598,7 +725,14 @@ mod real {
         _title: &str,
         size: WindowSize,
     ) -> Result<(u64, WinitWindowSnapshot), UiAdapterError> {
+        // The window exists first, then the screen turns to suit it, then
+        // the guest learns the size it got.
+        ensure_main_side()?;
+        request_orientation(size);
         with_guest(|guest| {
+            if let Some((logical, _)) = SHARED.lock().expect("shared state lock").screen {
+                guest.logical = logical;
+            }
             guest.krate = Some(krate);
             guest.placements.clear();
             guest.gesture = None;
@@ -649,6 +783,16 @@ mod real {
         }
         with_guest(|guest| {
             digest_touches(guest);
+            let screen = SHARED.lock().expect("shared state lock").screen;
+            if let (Some((logical, _)), Some(krate)) = (screen, guest.krate) {
+                if logical != guest.logical {
+                    guest.logical = logical;
+                    guest.dirty = true;
+                    guest
+                        .events
+                        .push((krate, WinitWindowNativeEvent::Resized(logical)));
+                }
+            }
             Ok(std::mem::take(&mut guest.events))
         })
     }
@@ -880,6 +1024,17 @@ mod real {
             }
             diag("gpu-present-start");
             let gpu = slot.as_mut().expect("gpu initialized");
+            // The screen turned: the drawable follows the view's new size.
+            let wanted = {
+                let shared = SHARED.lock().expect("shared state lock");
+                shared.metal_layer.zip(shared.screen.map(|(l, _)| l))
+            };
+            if let Some(((_, native_scale), logical)) = wanted {
+                gpu.resize(
+                    (logical.width as f32 * native_scale) as u32,
+                    (logical.height as f32 * native_scale) as u32,
+                );
+            }
             let outcome =
                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| gpu.present(list)))
                     .unwrap_or_else(|_| Err("gpu present panicked".into()));

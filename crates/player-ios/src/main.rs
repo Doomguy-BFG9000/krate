@@ -1,32 +1,46 @@
-//! The Krate player for iOS -- M2 of the mobile plan.
+//! Krate for iOS: the app a person opens Krate apps with.
 //!
-//! The same product as the Android player: open an app, show the wall, run
-//! it. The engine underneath is Pulley -- wasmtime's interpreter -- because
-//! iOS forbids executable pages, and the measurement said the interpreter
-//! renders krate-gram pixel-identical to the JIT.
+//! A `.krate` someone sends -- in Messages, Mail, AirDrop or Files -- opens
+//! here ("Open in Krate"). Krate keeps it in the person's library, asks
+//! with a native iOS alert what the app may use, and runs it. Tapping the
+//! Krate icon shows the library: every app received, and any app this
+//! build carries.
+//!
+//! Two engines, one rule from Apple (2.5.2): code that arrives after
+//! install may only be interpreted, so a received app runs on Pulley,
+//! wasmtime's interpreter. An app compiled on our machines and built into
+//! this binary (see build.rs) is native code signed with Krate, and runs
+//! at full speed -- including when the same app arrives as a `.krate`:
+//! its code is matched by hash, and the carried native code runs instead.
 //!
 //! Startup is the one genuinely iOS-shaped part. UIApplicationMain owns
-//! the process and never returns, so the player's real main runs from the
-//! app delegate's first `applicationDidBecomeActive:` and never returns
-//! either: the guest's own frame pacing pumps the run loop through the
-//! adapter, which is how touches arrive. When the flow ends the process
-//! exits -- the app is the process, same as Android.
-//!
-//! This build runs the embedded demo through the wall. Link and file
-//! opening (universal links, UTI document types) arrive with the Apple
-//! developer account, which the plan tracks.
+//! the process and never returns, so the player's real main runs on its
+//! own thread from the app delegate's first `applicationDidBecomeActive:`.
+//! When the person leaves, the process exits -- the app is the process,
+//! same as Android -- so every open is a fresh launch.
 
 #[cfg(target_os = "ios")]
+// The app-delegate URL callback: this app runs without a scene manifest, so
+// that is where "Open in Krate" arrives, though UIKit marks its key type
+// deprecated in favour of the scene lifecycle.
+#[allow(deprecated)]
 mod player {
-    use objc2::{define_class, ClassType, DefinedClass, MainThreadOnly};
-    use objc2_foundation::{NSObject, NSObjectProtocol, NSString};
-    use objc2_ui_kit::{UIApplication, UIApplicationDelegate};
+    use objc2::{define_class, ClassType, DefinedClass, MainThreadMarker, MainThreadOnly};
+    use objc2_foundation::{NSDictionary, NSObject, NSObjectProtocol, NSString, NSURL};
+    use objc2_ui_kit::{
+        UIAlertAction, UIAlertActionStyle, UIAlertController, UIAlertControllerStyle,
+        UIApplication, UIApplicationDelegate, UIApplicationOpenURLOptionsKey, UIViewController,
+        UIWindow, UIWindowScene,
+    };
     use std::cell::Cell;
+    use std::path::{Path, PathBuf};
+    use std::sync::Mutex;
 
-    /// A wrapper build's app, compiled to native code on our machines and
-    /// linked into this binary's executable text: signed with the app, so
-    /// it runs at native speed where iOS lets nothing become executable at
-    /// run time. The 16 KB alignment is the iPhone's page size.
+    /// The app this build carries as native code, if any: compiled on our
+    /// machines and linked into this binary's executable text, so it is
+    /// signed with Krate and runs at native speed where iOS lets nothing
+    /// become executable at run time. The 16 KB alignment is the iPhone's
+    /// page size.
     #[cfg(krate_native_image)]
     mod native {
         const N: usize = include_bytes!(env!("KRATE_NATIVE_IMAGE")).len();
@@ -35,18 +49,20 @@ mod player {
         #[link_section = "__TEXT,__krate_app,regular,pure_instructions"]
         pub static IMAGE: Aligned = Aligned(*include_bytes!(env!("KRATE_NATIVE_IMAGE")));
         pub const MANIFEST: &str = include_str!(env!("KRATE_NATIVE_MANIFEST"));
+        /// The SHA-256 of the app's WebAssembly, so the same app arriving
+        /// as a `.krate` is recognised and runs as this native code.
+        pub const SHA256: &str = env!("KRATE_NATIVE_SHA256");
     }
 
-    #[cfg(not(krate_native_image))]
-    const GRAM_WASM: &[u8] =
-        include_bytes!("../../../apps/krate-gram/target/wasm32-wasip1/release/krate_gram.wasm");
-    #[cfg(not(krate_native_image))]
-    const GRAM_MANIFEST: &str = include_str!("../../../apps/krate-gram/manifest.toml");
-    #[cfg(krate_native_image)]
-    const GRAM_MANIFEST: &str = native::MANIFEST;
     const WALL_WASM: &[u8] =
         include_bytes!("../../../apps/krate-wall/target/wasm32-wasip1/release/krate_wall.wasm");
     const WALL_MANIFEST: &str = include_str!("../../../apps/krate-wall/manifest.toml");
+
+    /// Larger than any Krate app a phone should be handed.
+    const MAX_BUNDLE_BYTES: u64 = 64 * 1024 * 1024;
+
+    /// A file someone opened with Krate, waiting for the guest thread.
+    static OPENED: Mutex<Option<PathBuf>> = Mutex::new(None);
 
     pub struct DelegateState {
         started: Cell<bool>,
@@ -61,13 +77,9 @@ mod player {
         #[ivars = DelegateState]
         struct KrateAppDelegate;
 
-        // SAFETY: NSObjectProtocol has no additional requirements.
         unsafe impl NSObjectProtocol for KrateAppDelegate {}
 
         impl KrateAppDelegate {
-            // SAFETY: init matches NSObject's designated initializer, and
-            // UIKit instantiates the delegate through exactly this path --
-            // the ivars must be planted here or they never exist.
             #[unsafe(method_id(init))]
             fn init(this: objc2::rc::Allocated<Self>) -> objc2::rc::Retained<Self> {
                 let this = this.set_ivars(DelegateState {
@@ -77,31 +89,31 @@ mod player {
             }
         }
 
-        // SAFETY: the implemented methods match UIApplicationDelegate's
-        // signatures.
         unsafe impl UIApplicationDelegate for KrateAppDelegate {
+            /// "Open in Krate" from Messages, Mail, AirDrop or Files: iOS
+            /// copies the file into Documents/Inbox and hands over its URL,
+            /// before the app becomes active.
+            #[unsafe(method(application:openURL:options:))]
+            fn open_url(
+                &self,
+                _application: &UIApplication,
+                url: &NSURL,
+                _options: &NSDictionary<UIApplicationOpenURLOptionsKey, objc2::runtime::AnyObject>,
+            ) -> objc2::runtime::Bool {
+                let Some(path) = url.path() else {
+                    return objc2::runtime::Bool::NO;
+                };
+                *OPENED.lock().expect("opened lock") = Some(PathBuf::from(path.to_string()));
+                objc2::runtime::Bool::YES
+            }
+
             #[unsafe(method(applicationDidEnterBackground:))]
             fn did_enter_background(&self, _application: &UIApplication) {
-                // The player's main never returns to UIKit, so iOS cannot
-                // suspend the process the normal way -- it waits ten
-                // seconds for a scene update that cannot come and then
-                // SIGKILLs (0x8BADF00D, read off a real device's crash
-                // log). Exiting on background is the honest v1: closing
-                // the player and reopening is exactly what relaunching
-                // after that kill looked like, minus the kill. Real
-                // suspend/resume arrives with M3's lifecycle work.
                 std::process::exit(0);
             }
 
             #[unsafe(method(applicationDidBecomeActive:))]
             fn did_become_active(&self, _application: &UIApplication) {
-                // The guest gets its own thread and this callout RETURNS:
-                // the main thread belongs to UIKit. Running the guest here
-                // nested a run loop that never drained the main dispatch
-                // queue -- through which iOS delivers parts of its own
-                // touch pipeline -- and a real iPhone felt every missing
-                // drain as input lag. The adapter marshals UI work back to
-                // the main queue and wakes the guest through a condvar.
                 if self.ivars().started.replace(true) {
                     return;
                 }
@@ -109,9 +121,6 @@ mod player {
                     .name("krate-guest".to_string())
                     .stack_size(8 * 1024 * 1024)
                     .spawn(|| {
-                        // The guest thread drives every visible frame; an
-                        // unqualified thread lands on efficiency cores and
-                        // a 10 ms raster became 40 (measured on-device).
                         unsafe {
                             libc::pthread_set_qos_class_self_np(
                                 libc::qos_class_t::QOS_CLASS_USER_INTERACTIVE,
@@ -133,32 +142,164 @@ mod player {
         UIApplication::main(None, Some(&delegate_class), mtm);
     }
 
+    /// An app the person can open.
+    enum App {
+        /// The app this build carries as native code.
+        #[cfg(krate_native_image)]
+        Carried,
+        /// A `.krate` in the library.
+        Received(PathBuf),
+    }
+
     fn run_player() {
         let data_root = std::env::var("HOME")
-            .map(|home| std::path::PathBuf::from(home).join("Documents"))
-            .unwrap_or_else(|_| std::path::PathBuf::from("."));
-        let _ = std::fs::create_dir_all(&data_root);
+            .map(|home| PathBuf::from(home).join("Documents"))
+            .unwrap_or_else(|_| PathBuf::from("."));
+        let library = data_root.join("Library");
+        let _ = std::fs::create_dir_all(&library);
 
-        let manifest = match krate_manifest::Manifest::parse(GRAM_MANIFEST) {
+        let opened = OPENED.lock().expect("opened lock").take();
+        let mut next = opened.and_then(|path| receive(&path, &library, &data_root));
+        loop {
+            let app = match next.take() {
+                Some(app) => app,
+                None => match home(&library, &data_root) {
+                    Some(app) => app,
+                    None => return,
+                },
+            };
+            launch(app, &data_root);
+        }
+    }
+
+    /// Keep a received `.krate` in the library, named for its app, so the
+    /// home screen lists it and a newer copy replaces an older one.
+    fn receive(path: &Path, library: &Path, data_root: &Path) -> Option<App> {
+        let kept = (|| -> Result<PathBuf, String> {
+            let size = std::fs::metadata(path)
+                .map_err(|_| "The file is not there any more.".to_string())?
+                .len();
+            if size > MAX_BUNDLE_BYTES {
+                return Err("This file is larger than any Krate app.".to_string());
+            }
+            let open = krate_bundle::open(path).map_err(|err| match err {
+                krate_bundle::BundleError::NeedsNewerKrate { .. } => format!("{err}"),
+                _ => {
+                    "This file is not a Krate app, or it was damaged on the way. Ask for it again."
+                        .to_string()
+                }
+            })?;
+            let manifest = std::fs::read_to_string(open.manifest_path()).unwrap_or_default();
+            let manifest = krate_manifest::Manifest::parse(&manifest)
+                .map_err(|_| "This app's description could not be read.".to_string())?;
+            let into = library.join(format!("{}.krate", sanitize(&manifest.app.id)));
+            std::fs::copy(path, &into).map_err(|err| format!("Could not keep the app: {err}"))?;
+            Ok(into)
+        })();
+        // iOS put the file in Documents/Inbox for us; it is ours to remove.
+        let _ = std::fs::remove_file(path);
+        match kept {
+            Ok(into) => Some(App::Received(into)),
+            Err(why) => {
+                notice(data_root, "Could not open this file", &why);
+                None
+            }
+        }
+    }
+
+    /// The home screen: the carried app first, then the library, newest
+    /// first. None when the person leaves it.
+    fn home(library: &Path, data_root: &Path) -> Option<App> {
+        let mut apps: Vec<(App, String, String)> = Vec::new();
+        #[cfg(krate_native_image)]
+        if let Ok(manifest) = krate_manifest::Manifest::parse(native::MANIFEST) {
+            apps.push((
+                App::Carried,
+                manifest.app.name,
+                "Built in -- runs at full speed".into(),
+            ));
+        }
+        let mut received: Vec<(std::time::SystemTime, PathBuf)> = std::fs::read_dir(library)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|path| path.extension().is_some_and(|ext| ext == "krate"))
+            .map(|path| {
+                let at = std::fs::metadata(&path)
+                    .and_then(|m| m.modified())
+                    .unwrap_or(std::time::UNIX_EPOCH);
+                (at, path)
+            })
+            .collect();
+        received.sort_by(|a, b| b.0.cmp(&a.0));
+        for (_, path) in received {
+            let name = krate_bundle::open(&path)
+                .ok()
+                .and_then(|open| std::fs::read_to_string(open.manifest_path()).ok())
+                .and_then(|text| krate_manifest::Manifest::parse(&text).ok())
+                .map(|manifest| manifest.app.name);
+            if let Some(name) = name {
+                apps.push((App::Received(path), name, "Received".into()));
+            }
+        }
+
+        let mut args = vec!["wall:home".to_string()];
+        for (_, name, line) in &apps {
+            args.push(name.replace(['\n', '\0'], " "));
+            args.push(line.clone());
+        }
+        let stdout = run_wall(data_root, args)?;
+        let pick = stdout.lines().find_map(|line| {
+            line.strip_prefix("wall:pick:")?
+                .trim()
+                .parse::<usize>()
+                .ok()
+        })?;
+        (pick < apps.len()).then(|| apps.swap_remove(pick).0)
+    }
+
+    /// Ask, then run. Every open asks: the answer is never remembered.
+    fn launch(app: App, data_root: &Path) {
+        // What runs, and its manifest.
+        let mut _opened_bundle = None;
+        let (manifest_text, wasm, assets_root) = match &app {
+            #[cfg(krate_native_image)]
+            App::Carried => (native::MANIFEST.to_string(), None, None),
+            App::Received(path) => {
+                let open = match krate_bundle::open(path) {
+                    Ok(open) => open,
+                    Err(err) => {
+                        notice(data_root, "This app did not open", &format!("{err}"));
+                        return;
+                    }
+                };
+                let manifest = std::fs::read_to_string(open.manifest_path()).unwrap_or_default();
+                let wasm = std::fs::read(open.component_path()).ok();
+                let assets = open.assets_path().map(Path::to_path_buf);
+                _opened_bundle = Some(open);
+                (manifest, wasm, assets)
+            }
+        };
+        let manifest = match krate_manifest::Manifest::parse(&manifest_text) {
             Ok(manifest) => manifest,
-            Err(err) => {
-                eprintln!("manifest failed to parse: {err:#}");
+            Err(_) => {
+                notice(
+                    data_root,
+                    "This app did not open",
+                    "Its description could not be read.",
+                );
                 return;
             }
         };
 
-        let granted = match show_wall(&manifest, &data_root) {
-            Some(granted) => granted,
-            None => {
-                eprintln!("the person said no; nothing runs");
-                return;
-            }
+        let Some(all) = ask_permission(&manifest) else {
+            return;
         };
-
         let declared = match manifest.declared_capabilities() {
             Ok(declared) => declared,
             Err(err) => {
-                eprintln!("capabilities failed to parse: {err:#}");
+                notice(data_root, "This app did not open", &format!("{err:#}"));
                 return;
             }
         };
@@ -166,74 +307,215 @@ mod player {
             .capabilities
             .iter()
             .zip(declared)
-            .filter(|(request, _)| granted.iter().any(|g| g == &request.cap))
+            .filter(|(request, _)| all || request.required)
             .map(|(_, capability)| capability)
             .collect();
-        let policy = krate_policy::SessionPolicy::from_grants(kept);
 
         let sandbox = data_root.join("apps").join(sanitize(&manifest.app.id));
         let _ = std::fs::create_dir_all(&sandbox);
-        // What the app declared with memory.budget, or the default.
-        let budget_mib = manifest
-            .capabilities
-            .iter()
-            .find_map(|c| c.cap.strip_prefix("memory.budget:")?.parse::<u64>().ok());
         let mut config = krate_runtime::Config {
-            session_policy: policy,
+            session_policy: krate_policy::SessionPolicy::from_grants(kept),
             sandbox_root: sandbox,
+            bundle_assets_root: assets_root,
             phase3_ui_mode: krate_runtime::phase3_ui::Phase3HostUiMode::NativePrototype,
             ..Default::default()
         };
-        if let Some(mib) = budget_mib {
+        if let Some(mib) = memory_budget_mib(&manifest) {
             config.memory_bytes = mib * 1024 * 1024;
         }
+
+        // The carried native code runs when the app is the carried one --
+        // tapped on the home screen, or arriving with the very same code.
         #[cfg(krate_native_image)]
-        {
-            let runtime = match krate_runtime::Runtime::new_for_native_image(&config) {
-                Ok(runtime) => runtime,
-                Err(err) => {
-                    eprintln!("engine failed to start: {err:#}");
-                    return;
-                }
+        let native = match &wasm {
+            None => true,
+            Some(bytes) => krate_bundle::sha256_hex(bytes) == native::SHA256,
+        };
+        #[cfg(not(krate_native_image))]
+        let native = false;
+
+        let outcome = if native {
+            run_native(&config)
+        } else {
+            let Some(wasm) = wasm else {
+                return;
             };
-            let started = std::time::Instant::now();
-            // SAFETY: the image was made by this Krate's precompile_native_image
-            // and sits in this binary's signed, executable text for the life
-            // of the process.
-            let loaded = match unsafe { runtime.load_native_image(&native::IMAGE.0) } {
-                Ok(loaded) => loaded,
-                Err(err) => {
-                    eprintln!("the app's code did not load: {err:#}");
-                    return;
-                }
-            };
-            eprintln!(
-                "native image loaded in {:.1} ms",
-                started.elapsed().as_secs_f64() * 1000.0
-            );
-            match runtime.run_loaded_for_world(&loaded, &config, krate_runtime::RuntimeWorld::Gui) {
-                Ok(outcome) => eprintln!("app finished: {outcome:?}"),
-                Err(err) => eprintln!("app failed: {err:#}"),
+            krate_runtime::Runtime::new(&config).and_then(|runtime| {
+                runtime.run_bytes_for_world(&wasm, &config, krate_runtime::RuntimeWorld::Gui)
+            })
+        };
+        match outcome {
+            Ok(outcome) => eprintln!("app finished: {outcome:?}"),
+            Err(err) => {
+                eprintln!("app failed: {err:#}");
+                notice(
+                    data_root,
+                    &format!("{} stopped", manifest.app.name),
+                    &format!("{err:#}"),
+                );
             }
         }
-        #[cfg(not(krate_native_image))]
-        self::run_demo(&config);
+    }
+
+    #[cfg(krate_native_image)]
+    fn run_native(
+        config: &krate_runtime::Config,
+    ) -> krate_runtime::Result<krate_runtime::RunOutcome> {
+        let runtime = krate_runtime::Runtime::new_for_native_image(config)?;
+        let started = std::time::Instant::now();
+        // SAFETY: the image was made by this Krate's precompile_native_image
+        // and sits in this binary's signed, executable text for the life of
+        // the process.
+        let loaded = unsafe { runtime.load_native_image(&native::IMAGE.0) }?;
+        eprintln!(
+            "native image loaded in {:.1} ms",
+            started.elapsed().as_secs_f64() * 1000.0
+        );
+        runtime.run_loaded_for_world(&loaded, config, krate_runtime::RuntimeWorld::Gui)
     }
 
     #[cfg(not(krate_native_image))]
-    fn run_demo(config: &krate_runtime::Config) {
-        let config = config.clone();
-        let runtime = match krate_runtime::Runtime::new(&config) {
-            Ok(runtime) => runtime,
-            Err(err) => {
-                eprintln!("engine failed to start: {err:#}");
-                return;
-            }
-        };
-        match runtime.run_bytes_for_world(GRAM_WASM, &config, krate_runtime::RuntimeWorld::Gui) {
-            Ok(outcome) => eprintln!("app finished: {outcome:?}"),
-            Err(err) => eprintln!("app failed: {err:#}"),
+    fn run_native(
+        _config: &krate_runtime::Config,
+    ) -> krate_runtime::Result<krate_runtime::RunOutcome> {
+        unreachable!("no native app in this build")
+    }
+
+    /// What the app may use, asked the way iOS asks: one native alert
+    /// naming the app and every reason it gave. Some(true) allows all,
+    /// Some(false) only what the app cannot run without, None opens
+    /// nothing. An app that asks for nothing privileged is not asked.
+    fn ask_permission(manifest: &krate_manifest::Manifest) -> Option<bool> {
+        if manifest.capabilities.is_empty() {
+            return Some(true);
         }
+        let title = format!("\u{201c}{}\u{201d} would like to", manifest.app.name);
+        let mut reasons: Vec<String> = Vec::new();
+        for request in &manifest.capabilities {
+            let line = request.rationale.trim();
+            if !line.is_empty() && !reasons.iter().any(|r| r == line) {
+                reasons.push(line.to_string());
+            }
+        }
+        let message = reasons
+            .iter()
+            .map(|r| format!("\u{2022} {r}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let optional = manifest.capabilities.iter().any(|c| !c.required);
+
+        let (tx, rx) = std::sync::mpsc::channel::<Option<bool>>();
+        dispatch2::DispatchQueue::main().exec_async(move || {
+            present_alert(&title, &message, optional, tx);
+        });
+        rx.recv().ok().flatten()
+    }
+
+    /// Present the permission alert over whatever is on screen, in a window
+    /// of its own, and send the answer when a button is tapped.
+    fn present_alert(
+        title: &str,
+        message: &str,
+        optional: bool,
+        tx: std::sync::mpsc::Sender<Option<bool>>,
+    ) {
+        let Some(mtm) = MainThreadMarker::new() else {
+            let _ = tx.send(None);
+            return;
+        };
+        let scene = UIApplication::sharedApplication(mtm)
+            .connectedScenes()
+            .allObjects()
+            .into_iter()
+            .find_map(|scene| scene.downcast::<UIWindowScene>().ok());
+        let Some(scene) = scene else {
+            let _ = tx.send(None);
+            return;
+        };
+        let window = UIWindow::initWithWindowScene(UIWindow::alloc(mtm), &scene);
+        let root = UIViewController::new(mtm);
+        unsafe {
+            window.setWindowLevel(objc2_ui_kit::UIWindowLevelAlert);
+            window.setRootViewController(Some(&root));
+            window.makeKeyAndVisible();
+        }
+        let alert = UIAlertController::alertControllerWithTitle_message_preferredStyle(
+            Some(&NSString::from_str(title)),
+            Some(&NSString::from_str(message)),
+            UIAlertControllerStyle::Alert,
+            mtm,
+        );
+        let action = |label: &str, style: UIAlertActionStyle, answer: Option<bool>| {
+            let tx = tx.clone();
+            let window = window.clone();
+            let handler = block2::RcBlock::new(move |_: std::ptr::NonNull<UIAlertAction>| {
+                window.setHidden(true);
+                let _ = tx.send(answer);
+            });
+            UIAlertAction::actionWithTitle_style_handler(
+                Some(&NSString::from_str(label)),
+                style,
+                Some(&handler),
+                mtm,
+            )
+        };
+        let allow = action("Allow", UIAlertActionStyle::Default, Some(true));
+        alert.addAction(&allow);
+        if optional {
+            alert.addAction(&action(
+                "Allow Only What It Needs",
+                UIAlertActionStyle::Default,
+                Some(false),
+            ));
+        }
+        alert.addAction(&action(
+            "Don\u{2019}t Allow",
+            UIAlertActionStyle::Cancel,
+            None,
+        ));
+        alert.setPreferredAction(Some(&allow));
+        root.presentViewController_animated_completion(&alert, true, None);
+    }
+
+    /// Run the wall guest -- Krate's own trusted screens -- and return what
+    /// it answered.
+    fn run_wall(data_root: &Path, args: Vec<String>) -> Option<String> {
+        let wall_manifest = krate_manifest::Manifest::parse(WALL_MANIFEST).ok()?;
+        let policy = krate_policy::SessionPolicy::allow_all_declared(&wall_manifest).ok()?;
+        let config = krate_runtime::Config {
+            session_policy: policy,
+            sandbox_root: data_root.join("wall"),
+            app_args: args,
+            phase3_ui_mode: krate_runtime::phase3_ui::Phase3HostUiMode::NativePrototype,
+            ..Default::default()
+        };
+        let runtime = krate_runtime::Runtime::new(&config).ok()?;
+        let (_, stdout) = runtime
+            .run_bytes_captured_for_world(WALL_WASM, &config, krate_runtime::RuntimeWorld::Gui)
+            .map_err(|err| eprintln!("the wall failed: {err:#}"))
+            .ok()?;
+        Some(String::from_utf8_lossy(&stdout).into_owned())
+    }
+
+    /// Tell the person why something did not open, and wait for Close.
+    fn notice(data_root: &Path, title: &str, message: &str) {
+        let _ = run_wall(
+            data_root,
+            vec![
+                "wall:notice".to_string(),
+                title.replace(['\n', '\0'], " "),
+                message.replace(['\n', '\0'], " "),
+            ],
+        );
+    }
+
+    /// `memory.budget:<MiB>`, if the app declared it. precompile_native_image
+    /// reads it the same way: it is part of a native image's memory layout.
+    fn memory_budget_mib(manifest: &krate_manifest::Manifest) -> Option<u64> {
+        manifest
+            .capabilities
+            .iter()
+            .find_map(|c| c.cap.strip_prefix("memory.budget:")?.parse::<u64>().ok())
     }
 
     /// App ids become directory names; nothing an id says may escape the
@@ -248,57 +530,6 @@ mod player {
                 }
             })
             .collect()
-    }
-
-    fn show_wall(
-        manifest: &krate_manifest::Manifest,
-        data_root: &std::path::Path,
-    ) -> Option<Vec<String>> {
-        if manifest.capabilities.is_empty() {
-            return Some(Vec::new());
-        }
-        // One argument per field. See the same change in the Android player:
-        // joining these with U+001E and U+001C let a manifest string that
-        // contained them add or rewrite rows on the permission screen.
-        let mut input = vec![manifest.app.name.clone()];
-        for request in &manifest.capabilities {
-            input.push(request.cap.clone());
-            input.push(request.rationale.clone());
-            input.push(if request.required { "1" } else { "0" }.to_string());
-        }
-
-        let wall_manifest = krate_manifest::Manifest::parse(WALL_MANIFEST).ok()?;
-        let policy = krate_policy::SessionPolicy::allow_all_declared(&wall_manifest).ok()?;
-        let config = krate_runtime::Config {
-            session_policy: policy,
-            sandbox_root: data_root.join("wall"),
-            app_args: input,
-            phase3_ui_mode: krate_runtime::phase3_ui::Phase3HostUiMode::NativePrototype,
-            ..Default::default()
-        };
-        let runtime = krate_runtime::Runtime::new(&config).ok()?;
-        let (_, stdout) = runtime
-            .run_bytes_captured_for_world(WALL_WASM, &config, krate_runtime::RuntimeWorld::Gui)
-            .map_err(|err| eprintln!("the wall failed: {err:#}"))
-            .ok()?;
-
-        let text = String::from_utf8_lossy(&stdout);
-        for line in text.lines() {
-            if let Some(list) = line.strip_prefix("wall:open:") {
-                return Some(
-                    list.split(',')
-                        .map(str::trim)
-                        .filter(|s| !s.is_empty())
-                        .map(str::to_string)
-                        .collect(),
-                );
-            }
-            if line.trim() == "wall:cancel" {
-                return None;
-            }
-        }
-        // A crashed sheet grants nothing.
-        None
     }
 }
 

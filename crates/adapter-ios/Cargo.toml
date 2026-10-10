@@ -52,6 +52,10 @@ objc2-ui-kit = { version = "0.3.2", default-features = false, features = [
     "UIScene",
     "UIScreen",
     "UIWindowScene",
+    "UIWindowSceneGeometryPreferences",
+    "UIWindowSceneGeometryPreferencesIOS",
+    "UIOrientation",
+    "block2",
     "UITouch",
     "UIView",
     "UIViewController",
@@ -67,6 +71,7 @@ objc2-quartz-core = { version = "0.3.2", default-features = false, features = [
     "CALayer",
     "CAMetalLayer",
     "CADisplayLink",
+    "CATransaction",
     "objc2-core-foundation",
 ] }
 objc2-core-graphics = { version = "0.3.2", default-features = false, features = [

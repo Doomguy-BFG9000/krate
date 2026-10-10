@@ -49,17 +49,31 @@ NAME="${NAME:-Krate}"
 rm -rf "$OUT" && mkdir -p "$OUT"
 cp "$BIN" "$OUT/KratePlayer"
 cp "$PROFILE" "$OUT/embedded.mobileprovision"
-# The home-screen icon: full-bleed renders cropped from the same mark the
-# desktop app ships; iOS rounds the corners itself.
-cp crates/player-ios/icons/AppIcon60x60@2x.png "$OUT/"
-cp crates/player-ios/icons/AppIcon60x60@3x.png "$OUT/"
+# The home-screen icon: the desktop app's 1024 px mark on a full-bleed
+# square (iOS rounds the corners itself), compiled into an asset catalog --
+# loose PNGs were upscaled from 60 pt and showed blurry and over-cropped.
+xcrun actool crates/player-ios/icons/Assets.xcassets --compile "$OUT" \
+  --platform iphoneos --minimum-deployment-target 15.0 --app-icon AppIcon \
+  --target-device iphone --output-partial-info-plist /tmp/krate-icon.plist >/dev/null
 EXTRA=""
 if [ "${LANDSCAPE:-0}" = 1 ]; then
   EXTRA="$EXTRA<key>UISupportedInterfaceOrientations</key><array><string>UIInterfaceOrientationLandscapeRight</string><string>UIInterfaceOrientationLandscapeLeft</string></array><key>UIRequiresFullScreen</key><true/><key>UIStatusBarHidden</key><true/><key>UIViewControllerBasedStatusBarAppearance</key><false/>"
+else
+  # Every way up but upside down: the app's own view controller picks
+  # portrait for its screens and landscape for a wide window (a game).
+  EXTRA="$EXTRA<key>UISupportedInterfaceOrientations</key><array><string>UIInterfaceOrientationPortrait</string><string>UIInterfaceOrientationLandscapeRight</string><string>UIInterfaceOrientationLandscapeLeft</string></array><key>UIRequiresFullScreen</key><true/>"
 fi
 if [ "${FILES:-0}" = 1 ]; then
-  EXTRA="$EXTRA<key>UIFileSharingEnabled</key><true/><key>LSSupportsOpeningDocumentsInPlace</key><true/>"
+  EXTRA="$EXTRA<key>UIFileSharingEnabled</key><true/>"
 fi
+# Krate itself owns .krate files: "Open in Krate" from Messages, Mail,
+# AirDrop and Files. iOS copies an opened file into Documents/Inbox (not in
+# place), which is what the player reads. Same type id as the Mac app.
+if [ "$BUNDLE_ID" = tech.krate.player ]; then
+  EXTRA="$EXTRA<key>CFBundleDocumentTypes</key><array><dict><key>CFBundleTypeName</key><string>Krate app</string><key>CFBundleTypeRole</key><string>Viewer</string><key>LSHandlerRank</key><string>Owner</string><key>LSItemContentTypes</key><array><string>dev.krate.bundle</string></array></dict></array>"
+  EXTRA="$EXTRA<key>UTExportedTypeDeclarations</key><array><dict><key>UTTypeIdentifier</key><string>dev.krate.bundle</string><key>UTTypeDescription</key><string>Krate app</string><key>UTTypeConformsTo</key><array><string>public.data</string></array><key>UTTypeTagSpecification</key><dict><key>public.filename-extension</key><array><string>krate</string></array></dict></dict></array>"
+fi
+EXTRA="$EXTRA<key>LSSupportsOpeningDocumentsInPlace</key><false/>"
 cat > "$OUT/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -78,6 +92,7 @@ cat > "$OUT/Info.plist" <<PLIST
   <key>CFBundleIcons</key><dict>
     <key>CFBundlePrimaryIcon</key><dict>
       <key>CFBundleIconFiles</key><array><string>AppIcon60x60</string></array>
+      <key>CFBundleIconName</key><string>AppIcon</string>
     </dict>
   </dict>
 </dict></plist>
