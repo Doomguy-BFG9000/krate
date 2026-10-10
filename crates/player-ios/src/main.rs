@@ -28,7 +28,6 @@ mod player {
     use objc2::{define_class, ClassType, DefinedClass, MainThreadMarker, MainThreadOnly};
     use objc2_foundation::{NSDictionary, NSObject, NSObjectProtocol, NSString, NSURL};
     use objc2_ui_kit::{
-        UIAlertAction, UIAlertActionStyle, UIAlertController, UIAlertControllerStyle,
         UIApplication, UIApplicationDelegate, UIApplicationOpenURLOptionsKey,
         UIDocumentPickerDelegate, UIViewController, UIWindow, UIWindowScene,
     };
@@ -107,6 +106,13 @@ mod player {
                     return objc2::runtime::Bool::NO;
                 };
                 *OPENED.lock().expect("opened lock") = Some(PathBuf::from(path.to_string()));
+                // Krate stays alive in the background now, so this usually
+                // arrives with the home screen or an app already open: close
+                // it, and the player opens the file next. At a cold start
+                // nothing is running yet and the player reads OPENED first.
+                if self.ivars().started.get() {
+                    krate_adapter_ios::uikit_native::close_for_opened_file();
+                }
                 objc2::runtime::Bool::YES
             }
 
@@ -194,13 +200,22 @@ mod player {
         let _ = std::fs::create_dir_all(&library);
 
         krate_adapter_ios::uikit_native::show_loading("Krate", "");
-        let opened = OPENED.lock().expect("opened lock").take();
-        let mut next = opened.and_then(|path| receive(&path, &library, &data_root));
+        let mut next = None;
         loop {
+            // A file opened from Messages, Mail or Files -- at start, or
+            // while something else was on screen -- comes first.
+            if let Some(path) = OPENED.lock().expect("opened lock").take() {
+                if let Some(app) = receive(&path, &library, &data_root) {
+                    next = Some(app);
+                }
+            }
             let app = match next.take() {
                 Some(app) => app,
                 None => match home(&library, &data_root) {
                     Some(app) => app,
+                    // The home screen closed because a file was opened: go
+                    // round and open it. Otherwise Krate's home was closed.
+                    None if OPENED.lock().expect("opened lock").is_some() => continue,
                     None => return,
                 },
             };
@@ -369,15 +384,27 @@ mod player {
             #[cfg(krate_native_image)]
             if let Ok(manifest) = krate_manifest::Manifest::parse(native::MANIFEST) {
                 apps.push(App::Carried);
+                let preview = preview_name(&App::Carried);
+                let art = if art_dir.join(&preview).exists() {
+                    preview.as_str()
+                } else {
+                    "-"
+                };
                 rows.push(format!(
-                    "{}\tBuilt in \u{00b7} Runs at full speed\t-",
+                    "{}\tBuilt in \u{00b7} Runs at full speed\t{art}",
                     field(&manifest.app.name)
                 ));
             }
             for (path, name, sha, size) in library_apps(library) {
-                // An app that came from the hub shows its hub picture: the
-                // hub names apps by the SHA-256 of their bytes.
-                let art = hub_art.get(&sha).map(String::as_str).unwrap_or("-");
+                // The app as it really looked the last time it ran on this
+                // phone; else, for an app from the hub, its hub picture (the
+                // hub names apps by the SHA-256 of their bytes).
+                let preview = preview_name(&App::Received(path.clone()));
+                let art = if art_dir.join(&preview).exists() {
+                    preview.as_str()
+                } else {
+                    hub_art.get(&sha).map(String::as_str).unwrap_or("-")
+                };
                 rows.push(format!(
                     "{}\tReceived \u{00b7} {}\t{art}",
                     field(&name),
@@ -586,8 +613,32 @@ mod player {
         Some(window)
     }
 
+    /// The file an app's preview is kept in, in the home screen's art folder:
+    /// one per library file, so a newer copy of an app replaces its preview.
+    /// (`screen-`, not the first builds' `preview-`: those could hold a
+    /// picture of the Library itself and are left unread.)
+    fn preview_name(app: &App) -> String {
+        match app {
+            #[cfg(krate_native_image)]
+            App::Carried => "screen-carried.rgba".to_string(),
+            App::Received(path) => format!(
+                "screen-{}.rgba",
+                sanitize(
+                    &path
+                        .file_stem()
+                        .map(|s| s.to_string_lossy().into_owned())
+                        .unwrap_or_default()
+                )
+            ),
+        }
+    }
+
     /// Ask, then run. Every open asks: the answer is never remembered.
     fn launch(app: App, data_root: &Path) {
+        let preview_path = data_root
+            .join("home-ui")
+            .join("art")
+            .join(preview_name(&app));
         // What runs, and its manifest.
         let mut _opened_bundle = None;
         let (manifest_text, wasm, assets_root) = match &app {
@@ -620,7 +671,20 @@ mod player {
             }
         };
 
-        let Some(all) = ask_permission(&manifest) else {
+        // The line under the app's name on the permission sheet.
+        let detail = match &app {
+            #[cfg(krate_native_image)]
+            App::Carried => format!("Version {} \u{00b7} Built in", manifest.app.version),
+            App::Received(path) => match std::fs::metadata(path) {
+                Ok(meta) => format!(
+                    "Version {} \u{00b7} {}",
+                    manifest.app.version,
+                    human_size(meta.len())
+                ),
+                Err(_) => format!("Version {}", manifest.app.version),
+            },
+        };
+        let Some(granted) = ask_on_wall(data_root, &manifest, &detail) else {
             return;
         };
         let declared = match manifest.declared_capabilities() {
@@ -634,7 +698,9 @@ mod player {
             .capabilities
             .iter()
             .zip(declared)
-            .filter(|(request, _)| all || request.required)
+            .filter(|(request, _)| {
+                request.required || granted.iter().any(|cap| *cap == request.cap)
+            })
             .map(|(_, capability)| capability)
             .collect();
 
@@ -676,6 +742,14 @@ mod player {
         // size; Krate's close capsule over the app, the way back home.
         krate_adapter_ios::uikit_native::show_loading(&manifest.app.name, "Opening");
         krate_adapter_ios::uikit_native::set_app_chrome(true);
+        // A picture of the app as it really looks, for its home-screen card,
+        // taken a few seconds into its own run (once per run). Asked only
+        // now, past the permission sheet: asked earlier, a slow answer on the
+        // sheet or a Don't Allow took the picture of Krate's own Library.
+        krate_adapter_ios::uikit_native::capture_preview(
+            preview_path,
+            std::time::Duration::from_millis(4000),
+        );
         let outcome = if native {
             run_native(&config)
         } else {
@@ -686,6 +760,7 @@ mod player {
                 runtime.run_bytes_for_world(&wasm, &config, krate_runtime::RuntimeWorld::Gui)
             })
         };
+        krate_adapter_ios::uikit_native::cancel_preview();
         krate_adapter_ios::uikit_native::set_app_chrome(false);
         // Back home: the cover until Krate's own screen has drawn.
         krate_adapter_ios::uikit_native::show_loading("Krate", "");
@@ -726,92 +801,38 @@ mod player {
         unreachable!("no native app in this build")
     }
 
-    /// What the app may use, asked the way iOS asks: one native alert
-    /// naming the app and every reason it gave. Some(true) allows all,
-    /// Some(false) only what the app cannot run without, None opens
-    /// nothing. An app that asks for nothing privileged is not asked.
-    fn ask_permission(manifest: &krate_manifest::Manifest) -> Option<bool> {
+    /// Ask on Krate's own permission sheet (apps/krate-wall): the app's
+    /// name, then each request's capability, its reason and whether the app
+    /// needs it. Returns what the person allowed, or None when they did not
+    /// open the app. An app that asks for nothing opens without asking.
+    fn ask_on_wall(
+        data_root: &Path,
+        manifest: &krate_manifest::Manifest,
+        detail: &str,
+    ) -> Option<Vec<String>> {
         if manifest.capabilities.is_empty() {
-            return Some(true);
+            return Some(Vec::new());
         }
-        let title = format!("\u{201c}{}\u{201d} would like to", manifest.app.name);
-        let mut reasons: Vec<String> = Vec::new();
+        // `wall:ask`, the name, then the line under it as its own argument,
+        // so a name cannot forge that line.
+        let mut args = vec![
+            "wall:ask".to_string(),
+            field(&manifest.app.name),
+            field(detail),
+        ];
         for request in &manifest.capabilities {
-            let line = request.rationale.trim();
-            if !line.is_empty() && !reasons.iter().any(|r| r == line) {
-                reasons.push(line.to_string());
-            }
+            args.push(field(&request.cap));
+            args.push(field(&request.rationale));
+            args.push(if request.required { "1" } else { "0" }.to_string());
         }
-        let message = reasons
-            .iter()
-            .map(|r| format!("\u{2022} {r}"))
-            .collect::<Vec<_>>()
-            .join("\n");
-        let optional = manifest.capabilities.iter().any(|c| !c.required);
-
-        let (tx, rx) = std::sync::mpsc::channel::<Option<bool>>();
-        dispatch2::DispatchQueue::main().exec_async(move || {
-            present_alert(&title, &message, optional, tx);
-        });
-        rx.recv().ok().flatten()
-    }
-
-    /// Present the permission alert over whatever is on screen, in a window
-    /// of its own, and send the answer when a button is tapped.
-    fn present_alert(
-        title: &str,
-        message: &str,
-        optional: bool,
-        tx: std::sync::mpsc::Sender<Option<bool>>,
-    ) {
-        let Some(mtm) = MainThreadMarker::new() else {
-            let _ = tx.send(None);
-            return;
-        };
-        let Some(window) = overlay_window(mtm) else {
-            let _ = tx.send(None);
-            return;
-        };
-        let Some(root) = window.rootViewController() else {
-            let _ = tx.send(None);
-            return;
-        };
-        let alert = UIAlertController::alertControllerWithTitle_message_preferredStyle(
-            Some(&NSString::from_str(title)),
-            Some(&NSString::from_str(message)),
-            UIAlertControllerStyle::Alert,
-            mtm,
-        );
-        let action = |label: &str, style: UIAlertActionStyle, answer: Option<bool>| {
-            let tx = tx.clone();
-            let window = window.clone();
-            let handler = block2::RcBlock::new(move |_: std::ptr::NonNull<UIAlertAction>| {
-                window.setHidden(true);
-                let _ = tx.send(answer);
-            });
-            UIAlertAction::actionWithTitle_style_handler(
-                Some(&NSString::from_str(label)),
-                style,
-                Some(&handler),
-                mtm,
-            )
-        };
-        let allow = action("Allow", UIAlertActionStyle::Default, Some(true));
-        alert.addAction(&allow);
-        if optional {
-            alert.addAction(&action(
-                "Allow Only What It Needs",
-                UIAlertActionStyle::Default,
-                Some(false),
-            ));
-        }
-        alert.addAction(&action(
-            "Don\u{2019}t Allow",
-            UIAlertActionStyle::Cancel,
-            None,
-        ));
-        alert.setPreferredAction(Some(&allow));
-        root.presentViewController_animated_completion(&alert, true, None);
+        let answer = run_wall(data_root, args)?;
+        let caps = answer.trim().strip_prefix("wall:open:")?;
+        Some(
+            caps.split(',')
+                .filter(|cap| !cap.is_empty())
+                .map(str::to_string)
+                .collect(),
+        )
     }
 
     /// Run the wall guest -- Krate's own trusted screens -- and return what

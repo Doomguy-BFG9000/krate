@@ -493,6 +493,11 @@ mod real {
     /// the app to close, as a desktop close button does; a second tap closes
     /// an app that does not answer.
     pub fn set_app_chrome(visible: bool) {
+        if visible {
+            // A close tapped before this app began (on the screen before
+            // it) is not meant for it: it must not close the app at once.
+            SHARED.lock().expect("shared state lock").close_tapped = false;
+        }
         APP_CHROME.store(visible, std::sync::atomic::Ordering::Relaxed);
         DispatchQueue::main().exec_async(move || {
             if let Some(main_side) = MAIN_SIDE.0.get() {
@@ -684,6 +689,87 @@ mod real {
         main_side
             .controller
             .presentViewController_animated_completion(&picker, true, None);
+    }
+
+    /// Where the running app's preview goes, and when to take it: a picture
+    /// of the app as it really looks, for its card on Krate's home screen,
+    /// taken once a couple of seconds in so the app has drawn its content.
+    static PREVIEW: Mutex<Option<(std::path::PathBuf, std::time::Instant)>> = Mutex::new(None);
+
+    /// Take the running app's preview, once, `after` from now, into `path`
+    /// (the home screen's picture format: width and height as little-endian
+    /// u32, then RGBA).
+    pub fn capture_preview(path: std::path::PathBuf, after: std::time::Duration) {
+        *PREVIEW.lock().expect("preview lock") = Some((path, std::time::Instant::now() + after));
+    }
+
+    /// The app ended before its preview was due: take none.
+    pub fn cancel_preview() {
+        PREVIEW.lock().expect("preview lock").take();
+    }
+
+    /// The preview's path when it is due now, taken so it is written once.
+    pub(crate) fn preview_due() -> Option<std::path::PathBuf> {
+        let mut preview = PREVIEW.lock().expect("preview lock");
+        match preview.as_ref() {
+            Some((_, at)) if std::time::Instant::now() >= *at => {
+                preview.take().map(|(path, _)| path)
+            }
+            _ => None,
+        }
+    }
+
+    /// Write a preview: RGBA pixels `w` by `h`, shrunk by a whole factor to
+    /// at most 400 pixels wide.
+    pub(crate) fn write_preview(path: &std::path::Path, rgba: &[u8], w: u32, h: u32) {
+        let factor = w.div_ceil(400).max(1);
+        let (ow, oh) = (w / factor, h / factor);
+        if ow == 0 || oh == 0 {
+            return;
+        }
+        let mut out = Vec::with_capacity(8 + (ow * oh * 4) as usize);
+        out.extend_from_slice(&ow.to_le_bytes());
+        out.extend_from_slice(&oh.to_le_bytes());
+        for y in 0..oh {
+            for x in 0..ow {
+                let mut sum = [0u32; 4];
+                for dy in 0..factor {
+                    for dx in 0..factor {
+                        let i = (((y * factor + dy) * w + x * factor + dx) * 4) as usize;
+                        for (c, s) in sum.iter_mut().enumerate() {
+                            *s += u32::from(rgba[i + c]);
+                        }
+                    }
+                }
+                let n = factor * factor;
+                // Opaque: a preview is a picture of the screen.
+                out.extend_from_slice(&[
+                    (sum[0] / n) as u8,
+                    (sum[1] / n) as u8,
+                    (sum[2] / n) as u8,
+                    255,
+                ]);
+            }
+        }
+        let part = path.with_extension("part");
+        if std::fs::write(&part, &out).is_ok() {
+            let _ = std::fs::rename(&part, path);
+        }
+    }
+
+    /// A file was opened in Krate from elsewhere (Messages, Mail, Files)
+    /// while Krate was running: cover the screen with "Opening" and ask
+    /// whatever is on it -- Krate's home screen or an app -- to close, so
+    /// the player can open the file next. Main thread only.
+    pub fn close_for_opened_file() {
+        LOADING.store(true, std::sync::atomic::Ordering::Relaxed);
+        *LOADING_SINCE.lock().expect("loading lock") = Some(std::time::Instant::now());
+        if let Some(main_side) = MAIN_SIDE.0.get() {
+            main_side.close.setHidden(true);
+            cover_shown(main_side, "Krate", "Opening");
+        }
+        SHARED.lock().expect("shared state lock").close_tapped = true;
+        INPUT_ARRIVED.notify_all();
     }
 
     /// Krate is in the background: nothing is drawn (iOS ends an app that
@@ -1923,6 +2009,12 @@ mod stub {
     pub fn set_adapts(_adapts: bool) {}
 
     pub fn set_background(_on: bool) {}
+
+    pub fn close_for_opened_file() {}
+
+    pub fn capture_preview(_path: std::path::PathBuf, _after: std::time::Duration) {}
+
+    pub fn cancel_preview() {}
 
     pub fn choose_path(_folder: bool, _filter: &str) -> Option<std::path::PathBuf> {
         None

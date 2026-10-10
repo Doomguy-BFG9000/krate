@@ -155,6 +155,16 @@ fn keep_art(canvas: u64, name: &str) -> Option<Kept> {
     if rgba.len() != (width * height * 4) as usize {
         return None;
     }
+    // A picture of the app as it ran fills its card edge to edge: cut to
+    // the card's shape, keeping the top of a tall screen (what an app
+    // shows first) and the middle of a wide one.
+    let cropped;
+    let (rgba, width, height) = if name.starts_with("screen-") {
+        cropped = crop_to(rgba, width, height, CARD_ASPECT);
+        (cropped.0.as_slice(), cropped.1, cropped.2)
+    } else {
+        (rgba, width, height)
+    };
     let (mut r, mut g, mut b, mut n) = (0u32, 0u32, 0u32, 0u32);
     for p in rgba.chunks_exact(4).step_by(97) {
         r += p[0] as u32;
@@ -170,6 +180,29 @@ fn keep_art(canvas: u64, name: &str) -> Option<Kept> {
         height,
         tint: (r as f32 / n, g as f32 / n, b as f32 / n),
     })
+}
+
+/// A Library card's width over its height (see `draw_library`).
+const CARD_ASPECT: f32 = 1.0 / 0.62;
+
+/// Cut `rgba` (`w` by `h`) to `aspect`: a tall picture keeps its top, below
+/// the status bar; a wide one keeps its middle.
+fn crop_to(rgba: &[u8], w: u32, h: u32, aspect: f32) -> (Vec<u8>, u32, u32) {
+    let (fw, fh) = (w as f32, h as f32);
+    let (cw, ch, x0, y0) = if fw / fh > aspect {
+        let cw = (fh * aspect) as u32;
+        (cw, h, (w - cw) / 2, 0)
+    } else {
+        let ch = ((fw / aspect) as u32).min(h);
+        let y0 = ((fh * 0.06) as u32).min(h - ch);
+        (w, ch, 0, y0)
+    };
+    let mut out = Vec::with_capacity((cw * ch * 4) as usize);
+    for y in y0..y0 + ch {
+        let start = ((y * w + x0) * 4) as usize;
+        out.extend_from_slice(&rgba[start..start + (cw * 4) as usize]);
+    }
+    (out, cw, ch)
 }
 
 /// A small diagonal gradient in a colour picked from the name, so an app
@@ -403,7 +436,7 @@ impl Screen {
         let canvas = self.canvas;
         y += 18.0;
         for index in 0..self.library.len() {
-            let card_h = (col * 0.62).min(260.0);
+            let card_h = (col / CARD_ASPECT).min(260.0);
             let area = rect(x, y, col, card_h);
             if Self::visible(y, y + card_h, h) {
                 let app = &self.library[index];

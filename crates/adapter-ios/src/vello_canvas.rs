@@ -552,6 +552,9 @@ impl GpuCanvas {
                 },
             )
             .map_err(|e| format!("render: {e}"))?;
+        if let Some(path) = crate::uikit_native::preview_due() {
+            self.save_preview(&path);
+        }
 
         let render_ms = t_render.elapsed().as_secs_f64() * 1000.0;
         let t_acquire = std::time::Instant::now();
@@ -590,10 +593,73 @@ impl GpuCanvas {
     /// scaled to the screen in one pass. Through vello it went into the
     /// image atlas again every frame (a new picture each time) and through
     /// its compute passes: Counter-Strike on an iPhone 13 Pro was laggy.
+    /// Read the frame just rendered back from the GPU and write it as the
+    /// app's preview. Once per app, so the stall does not matter.
+    fn save_preview(&self, path: &std::path::Path) {
+        let (width, height) = (self.width, self.height);
+        let bytes_per_row = (width * 4).next_multiple_of(256);
+        let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("krate-preview"),
+            size: u64::from(bytes_per_row) * u64::from(height),
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: &self.target,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &buffer,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(bytes_per_row),
+                    rows_per_image: None,
+                },
+            },
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+        );
+        self.queue.submit([encoder.finish()]);
+        let slice = buffer.slice(..);
+        let (tx, rx) = std::sync::mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |r| {
+            let _ = tx.send(r);
+        });
+        let _ = self.device.poll(wgpu::PollType::Wait {
+            submission_index: None,
+            timeout: None,
+        });
+        if !matches!(rx.recv(), Ok(Ok(()))) {
+            return;
+        }
+        let data = slice.get_mapped_range();
+        let mut rgba = Vec::with_capacity((width * height * 4) as usize);
+        for row in 0..height {
+            let start = (row * bytes_per_row) as usize;
+            rgba.extend_from_slice(&data[start..start + (width * 4) as usize]);
+        }
+        drop(data);
+        buffer.unmap();
+        crate::uikit_native::write_preview(path, &rgba, width, height);
+    }
+
     fn present_picture(
         &mut self,
         image: &krate_adapter_common::ui::ImagePixels,
     ) -> Result<(), String> {
+        if let Some(path) = crate::uikit_native::preview_due() {
+            // A whole-frame picture is its own preview.
+            crate::uikit_native::write_preview(&path, &image.rgba, image.width, image.height);
+        }
         let t = std::time::Instant::now();
         let (w, h) = (image.width.max(1), image.height.max(1));
         let stale = self
@@ -819,7 +885,10 @@ fn make_target(
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
         format: wgpu::TextureFormat::Rgba8Unorm,
-        usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING,
+        // COPY_SRC: the app's preview is read back from here (once per app).
+        usage: wgpu::TextureUsages::STORAGE_BINDING
+            | wgpu::TextureUsages::TEXTURE_BINDING
+            | wgpu::TextureUsages::COPY_SRC,
         view_formats: &[],
     });
     let view = target.create_view(&wgpu::TextureViewDescriptor::default());

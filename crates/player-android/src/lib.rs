@@ -232,7 +232,13 @@ mod player {
         // (encode_args_raw), so argument boundaries cannot be forged the way
         // an in-band separator can. Manifest parsing now refuses these
         // characters in displayed fields as well; both locks stay.
-        let mut input = vec![manifest.app.name.clone()];
+        // `wall:ask` first: the line under the name (its version) is its own
+        // argument, so a name cannot forge it.
+        let mut input = vec![
+            "wall:ask".to_string(),
+            manifest.app.name.clone(),
+            format!("Version {}", manifest.app.version),
+        ];
         for request in &manifest.capabilities {
             input.push(request.cap.clone());
             input.push(request.rationale.clone());
