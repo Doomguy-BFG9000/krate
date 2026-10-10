@@ -16,6 +16,7 @@
 
 use krate_adapter_common::ui::{BoxStyle, Color, Placement, TextStyle, WidgetKind, WidgetStyle};
 
+use crate::phase3_gui_bindings::krate::gfx as gfx3;
 use crate::phase3_gui_bindings::krate::ui as ui3;
 use crate::phase3_gui_host::{widget_node_from_parts, Phase3GuiHost};
 use crate::phase4_gui_bindings::krate::ui as ui4;
@@ -327,6 +328,43 @@ impl ui4::touch::Host for Phase3GuiHost {
             .into_iter()
             .map(|(id, x, y)| ui4::touch::TouchPoint { id, x, y })
             .collect())
+    }
+}
+
+/// Pictures a canvas keeps and draws by handle. Phase 4 only.
+impl crate::phase4_gui_bindings::krate::gfx::canvas_images::Host for Phase3GuiHost {
+    fn keep(
+        &mut self,
+        canvas: u64,
+        width: u32,
+        height: u32,
+        rgba: Vec<u8>,
+    ) -> wasmtime::Result<Result<u64, gfx3::types::GfxError>> {
+        Ok(self.keep_image(canvas, width, height, rgba))
+    }
+
+    fn draw(
+        &mut self,
+        canvas: u64,
+        image: u64,
+        area: gfx3::types::Rect,
+    ) -> wasmtime::Result<Result<(), gfx3::types::GfxError>> {
+        Ok(self.draw_kept_image(canvas, image, area, None))
+    }
+
+    fn draw_round(
+        &mut self,
+        canvas: u64,
+        image: u64,
+        area: gfx3::types::Rect,
+        radii: gfx3::types::CornerRadii,
+    ) -> wasmtime::Result<Result<(), gfx3::types::GfxError>> {
+        Ok(self.draw_kept_image(canvas, image, area, Some(radii)))
+    }
+
+    fn forget(&mut self, canvas: u64, image: u64) -> wasmtime::Result<()> {
+        self.forget_image(canvas, image);
+        Ok(())
     }
 }
 

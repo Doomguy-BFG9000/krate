@@ -379,7 +379,12 @@ A window wider than tall plays in landscape on a phone. A text field \
 the app draws itself (a name box in a game, a canvas editor) calls \
 `krate::ui::text_entry::start(win)` when it takes focus and `stop(win)` \
 when it loses it: a phone shows its keyboard, and the typing arrives as \
-the usual `TextInput` and key events.\n\n\
+the usual `TextInput` and key events. A picture that does not change \
+between frames (a screenshot, an avatar, a sprite sheet) is kept once \
+with `krate::gfx::canvas_images::keep(canvas, w, h, &rgba)` and drawn \
+by handle with `draw`/`draw_round` each frame: `draw_pixels` sends \
+every byte every frame, which makes a scrolling list of pictures lag \
+on a phone.\n\n\
 **3. Sprites.** Two ways, both real: `draw_pixels` blits a straight RGBA \
 buffer at a rect (fastest for tiles and unrotated sprites), and \
 `draw_sprite(canvas, center, dst, angle, w, h, rgba)` rotates one. For a \

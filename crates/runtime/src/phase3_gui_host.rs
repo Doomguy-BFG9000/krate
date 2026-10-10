@@ -158,6 +158,11 @@ pub struct Phase3GuiHost {
     /// travel the image widget's proven path to all three systems.
     canvases:
         std::cell::RefCell<std::collections::BTreeMap<u64, (WindowId, WidgetId, CanvasSurface)>>,
+    /// Pictures canvases keep (krate:gfx/canvas-images), by (canvas, handle),
+    /// and the next handle. One Arc per picture, so every frame that draws
+    /// it hands the adapters the same picture and they upload it once.
+    kept_images: std::cell::RefCell<std::collections::BTreeMap<(u64, u64), Arc<ImagePixels>>>,
+    next_kept_image: std::cell::Cell<u64>,
     /// Connected gamepads, polled on demand.
     gamepads: std::cell::RefCell<crate::gamepad::Gamepads>,
     /// Keys currently held down, for `events.key-held`.
@@ -435,6 +440,8 @@ impl Phase3GuiHost {
             headless_close_told: std::cell::Cell::new(None),
             images: std::cell::RefCell::new(std::collections::BTreeMap::new()),
             canvases: std::cell::RefCell::new(std::collections::BTreeMap::new()),
+            kept_images: std::cell::RefCell::new(std::collections::BTreeMap::new()),
+            next_kept_image: std::cell::Cell::new(1),
             gamepads: std::cell::RefCell::new(crate::gamepad::Gamepads::new()),
             held_keys: std::cell::RefCell::new(std::collections::BTreeSet::new()),
             scenes: std::cell::RefCell::new(std::collections::BTreeMap::new()),
@@ -2891,6 +2898,87 @@ impl Phase3GuiHost {
             Ok(id) => self.dispatcher().touches(id),
             Err(_) => Vec::new(),
         }
+    }
+
+    /// The most picture bytes one run may keep (krate:gfx/canvas-images).
+    /// Kept pictures live in the host, outside the app's memory budget, so
+    /// they need a bound of their own.
+    const KEPT_IMAGE_BYTES: usize = 256 * 1024 * 1024;
+
+    /// Keep a picture for a canvas; the handle, or why not.
+    pub(crate) fn keep_image(
+        &self,
+        canvas: u64,
+        width: u32,
+        height: u32,
+        rgba: Vec<u8>,
+    ) -> Result<u64, gfx::types::GfxError> {
+        if !self.canvases.borrow().contains_key(&canvas) {
+            return Err(gfx::types::GfxError::InvalidTarget);
+        }
+        let image = ImagePixels::new(width, height, rgba)
+            .map_err(|error| gfx::types::GfxError::Unsupported(error.to_string()))?;
+        let mut kept = self.kept_images.borrow_mut();
+        let held: usize = kept.values().map(|i| i.rgba.len()).sum();
+        if held + image.rgba.len() > Self::KEPT_IMAGE_BYTES {
+            return Err(gfx::types::GfxError::Unsupported(
+                "too many kept pictures: forget some first".to_string(),
+            ));
+        }
+        let handle = self.next_kept_image.get();
+        self.next_kept_image.set(handle + 1);
+        kept.insert((canvas, handle), Arc::new(image));
+        Ok(handle)
+    }
+
+    /// Draw a kept picture, as draw-pixels (no radii) or draw-pixels-round.
+    pub(crate) fn draw_kept_image(
+        &self,
+        canvas: u64,
+        handle: u64,
+        area: gfx::types::Rect,
+        radii: Option<gfx::types::CornerRadii>,
+    ) -> Result<(), gfx::types::GfxError> {
+        let Some(image) = self.kept_images.borrow().get(&(canvas, handle)).cloned() else {
+            return Err(gfx::types::GfxError::InvalidTarget);
+        };
+        let rect = (area.x, area.y, area.width, area.height);
+        let radii = radii.map(|r| (r.top_left, r.top_right, r.bottom_right, r.bottom_left));
+        if self.lists_enabled() || self.inspect_layout.get() {
+            self.record_op(
+                canvas,
+                match radii {
+                    Some(radii) => crate::canvas_list::CanvasOp::PixelsRound {
+                        rect,
+                        radii,
+                        image: image.clone(),
+                    },
+                    None => crate::canvas_list::CanvasOp::Pixels {
+                        rect,
+                        image: image.clone(),
+                    },
+                },
+            );
+        }
+        if self.lists_enabled() {
+            return Ok(());
+        }
+        let mut canvases = self.canvases.borrow_mut();
+        let Some((_, _, surface)) = canvases.get_mut(&canvas) else {
+            return Err(gfx::types::GfxError::InvalidTarget);
+        };
+        match radii {
+            Some(radii) => {
+                surface.draw_pixels_round(area.x, area.y, area.width, area.height, radii, &image)
+            }
+            None => surface.draw_pixels(area.x, area.y, area.width, area.height, &image),
+        }
+        Ok(())
+    }
+
+    /// Let a kept picture go.
+    pub(crate) fn forget_image(&self, canvas: u64, handle: u64) {
+        self.kept_images.borrow_mut().remove(&(canvas, handle));
     }
 
     /// The on-screen keyboard for a window the app owns; never for one it

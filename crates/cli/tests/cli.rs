@@ -6328,6 +6328,14 @@ fn an_app_asks_about_the_mouse_and_a_headless_capture_is_refused() {
         "headless: nowhere, nothing held, nothing moved, capture refused with a reason: {report}"
     );
     assert!(stdout.contains("released captured=false"), "{stdout}");
+    // krate:gfx/canvas-images: a kept picture draws both ways; a short
+    // buffer, an unknown canvas and a forgotten handle are refused.
+    assert!(
+        stdout.lines().any(
+            |l| l == "kept=ok draw=ok round=ok short=refused unknown=refused forgotten=refused"
+        ),
+        "{stdout}"
+    );
 }
 
 /// An app speaks through the binary a person runs (krate:speech/synthesis,

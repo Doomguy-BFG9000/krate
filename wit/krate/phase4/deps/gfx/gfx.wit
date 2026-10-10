@@ -332,6 +332,32 @@ interface canvas2d {
 /// Nothing appears until `present`. Draw calls mutate a host-side depth buffer
 /// and colour buffer; presenting publishes them to the widget the way a canvas
 /// does.
+/// Pictures a canvas keeps: upload once, draw by handle every frame.
+///
+/// `draw-pixels` sends every pixel on every call. For a frame that changes
+/// every time (a game's framebuffer) that is right. For pictures that stay
+/// the same -- a store's screenshots, a gallery, a sprite sheet -- it moved
+/// megabytes across the sandbox each frame and made the host treat each
+/// frame's copy as a new picture: a scrolling list of screenshots lagged
+/// on an iPhone and pictures broke. A kept picture crosses once, and the
+/// host recognises it every frame after.
+interface canvas-images {
+  use types.{rect, corner-radii, gfx-error};
+
+  /// Keep a picture for a canvas: `rgba` is `width*height*4` straight-alpha
+  /// bytes. The handle draws it until `forget`, or until the canvas goes.
+  /// Fails when the canvas does not exist, the bytes do not match the size,
+  /// or the app already keeps more pictures than the host allows.
+  keep: func(canvas: u64, width: u32, height: u32, rgba: list<u8>) -> result<u64, gfx-error>;
+  /// Draw a kept picture into `area`, exactly as `draw-pixels` would.
+  draw: func(canvas: u64, image: u64, area: rect) -> result<_, gfx-error>;
+  /// Draw a kept picture into `area` with rounded corners, exactly as
+  /// `draw-pixels-round` would.
+  draw-round: func(canvas: u64, image: u64, area: rect, radii: corner-radii) -> result<_, gfx-error>;
+  /// Let a kept picture go.
+  forget: func(canvas: u64, image: u64);
+}
+
 interface scene3d {
   use types.{color, gfx-error};
 

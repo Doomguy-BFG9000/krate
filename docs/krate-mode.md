@@ -624,6 +624,10 @@ takes this path, so any of them is a model for the wiring.
 - `canvas2d::draw-pixels: func(canvas: u64, area: rect, width: u32, height: u32, rgba: list<u8>) -> result<_, gfx-error>`
 - `canvas2d::draw-sprite: func(canvas: u64, center: point, dst: size, angle: f32, width: u32, height: u32, rgba: list<u8>) -> result<_, gfx-error>`
 - `canvas2d::present: func(canvas: u64) -> result<_, gfx-error>`
+- `canvas-images::keep: func(canvas: u64, width: u32, height: u32, rgba: list<u8>) -> result<u64, gfx-error>`
+- `canvas-images::draw: func(canvas: u64, image: u64, area: rect) -> result<_, gfx-error>`
+- `canvas-images::draw-round: func(canvas: u64, image: u64, area: rect, radii: corner-radii) -> result<_, gfx-error>`
+- `canvas-images::forget: func(canvas: u64, image: u64)`
 - `scene3d::bind: func(window: u64, widget: u64) -> result<u64, gfx-error>`
 - `scene3d::clear: func(scene: u64, sky: color) -> result<_, gfx-error>`
 - `scene3d::camera: func(scene: u64, eye: list<f32>, look-at: list<f32>, fov-degrees: f32) -> result<_, gfx-error>`

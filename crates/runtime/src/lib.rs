@@ -1426,6 +1426,8 @@ impl Runtime {
         link_gui!(ui4::touch);
         // Phase 4 only: the on-screen keyboard for self-drawn text fields.
         link_gui!(ui4::text_entry);
+        // Phase 4 only: pictures a canvas keeps and draws by handle.
+        link_gui!(phase4_gui_bindings::krate::gfx::canvas_images);
 
         link_gui!(ui::window);
         link_gui!(ui::image);

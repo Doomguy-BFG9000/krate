@@ -22,11 +22,65 @@ use krate::{
     ui::{
         events,
         pointer::{self, PointerButton},
+        tree,
         types::{self, Event},
         window,
     },
     Guest,
 };
+use krate::gfx::{canvas2d, canvas_images, types as gfx};
+
+/// Keep a picture for a canvas, draw it both ways, and check the refusals:
+/// a picture shorter than its size, an unknown canvas, a forgotten handle
+/// (krate:gfx/canvas-images).
+fn kept_pictures(win: u64) -> String {
+    let node = |id, parent, kind| types::WidgetNode {
+        id,
+        parent,
+        kind,
+        label: None,
+        role: None,
+        style: types::Style {
+            width: None,
+            height: None,
+            grow: 1.0,
+            padding: 0.0,
+            text: None,
+            place: None,
+            box_: None,
+        },
+        checked: None,
+        value: None,
+        selected: None,
+        text_cursor: None,
+    };
+    let _ = tree::set_root(win, &node(1, None, types::WidgetKind::Stack));
+    let _ = tree::upsert_node(win, &node(2, Some(1), types::WidgetKind::Canvas));
+    let Ok(canvas) = canvas2d::bind(win, 2) else {
+        return String::from("kept=no-canvas");
+    };
+    let area = gfx::Rect { x: 0.0, y: 0.0, width: 20.0, height: 20.0 };
+    let radii = gfx::CornerRadii { top_left: 4.0, top_right: 4.0, bottom_right: 4.0, bottom_left: 4.0 };
+    let word = |ok: bool| if ok { "ok" } else { "refused" };
+    let kept = canvas_images::keep(canvas, 2, 2, &[255; 16]);
+    let short = canvas_images::keep(canvas, 2, 2, &[255; 15]).is_err();
+    let unknown = canvas_images::keep(canvas + 999, 2, 2, &[255; 16]).is_err();
+    let Ok(handle) = kept else {
+        return String::from("kept=refused");
+    };
+    let draw = canvas_images::draw(canvas, handle, area).is_ok();
+    let round = canvas_images::draw_round(canvas, handle, area, radii).is_ok();
+    canvas_images::forget(canvas, handle);
+    let forgotten = canvas_images::draw(canvas, handle, area).is_err();
+    format!(
+        "kept=ok draw={} round={} short={} unknown={} forgotten={}",
+        word(draw),
+        word(round),
+        word(!short),
+        word(!unknown),
+        word(!forgotten),
+    )
+}
 
 struct Component;
 
@@ -92,6 +146,7 @@ impl Guest for Component {
             let _ = write_line(&out, &report(win, &capture));
             pointer::release(win);
             let _ = write_line(&out, &format!("released captured={}", pointer::captured(win)));
+            let _ = write_line(&out, &kept_pictures(win));
             let _ = window::close(win);
             return 0;
         }

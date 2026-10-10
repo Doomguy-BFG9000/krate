@@ -403,7 +403,7 @@ pub mod ui {
     }
 }
 
-/// `krate:gfx`: canvas2d, scene3d.
+/// `krate:gfx`: canvas2d, canvas_images, scene3d.
 pub mod gfx {
     /// `krate:gfx/canvas2d`.
     pub mod canvas2d {
@@ -763,6 +763,39 @@ pub mod gfx {
         /// Publish the raster to the widget. Until this, nothing is shown.
         pub fn present(canvas: u64) -> Result<(), GfxError> {
             crate::bindings::krate::gfx::canvas2d::present(canvas)
+        }
+    }
+    /// `krate:gfx/canvas_images`.
+    pub mod canvas_images {
+        pub use crate::bindings::krate::gfx::canvas_images::{CornerRadii, GfxError, Rect};
+
+        /// Keep a picture for a canvas: `rgba` is `width*height*4` straight-alpha
+        /// bytes. The handle draws it until `forget`, or until the canvas goes.
+        /// Fails when the canvas does not exist, the bytes do not match the size,
+        /// or the app already keeps more pictures than the host allows.
+        pub fn keep(canvas: u64, width: u32, height: u32, rgba: &[u8]) -> Result<u64, GfxError> {
+            crate::bindings::krate::gfx::canvas_images::keep(canvas, width, height, rgba)
+        }
+
+        /// Draw a kept picture into `area`, exactly as `draw-pixels` would.
+        pub fn draw(canvas: u64, image: u64, area: Rect) -> Result<(), GfxError> {
+            crate::bindings::krate::gfx::canvas_images::draw(canvas, image, area)
+        }
+
+        /// Draw a kept picture into `area` with rounded corners, exactly as
+        /// `draw-pixels-round` would.
+        pub fn draw_round(
+            canvas: u64,
+            image: u64,
+            area: Rect,
+            radii: CornerRadii,
+        ) -> Result<(), GfxError> {
+            crate::bindings::krate::gfx::canvas_images::draw_round(canvas, image, area, radii)
+        }
+
+        /// Let a kept picture go.
+        pub fn forget(canvas: u64, image: u64) {
+            crate::bindings::krate::gfx::canvas_images::forget(canvas, image)
         }
     }
     /// `krate:gfx/scene3d`.
