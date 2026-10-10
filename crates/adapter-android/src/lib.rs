@@ -33,6 +33,7 @@ pub const HOST_FAMILY: &str = "android";
 pub mod winit_native;
 
 mod bluetooth;
+pub mod camera;
 mod clipboard;
 mod documents;
 mod haptics;
@@ -40,6 +41,7 @@ mod haptics;
 mod java;
 mod location;
 mod motion;
+pub mod phone;
 
 #[derive(Debug, Default)]
 pub struct AndroidUiAdapter {
@@ -431,6 +433,8 @@ impl WindowAdapter for AndroidWinitPrototypeUiAdapter {
         location::stop();
         // Nothing stays connected after the app.
         bluetooth::disconnect_all();
+        #[cfg(target_os = "android")]
+        camera::close();
         self.remove_session(id);
         WindowAdapter::close_window(&self.headless, id)
     }

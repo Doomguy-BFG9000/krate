@@ -1,20 +1,12 @@
-//! Clipboard stubs for Android.
-//!
-//! There is no arboard backend on Android; the platform clipboard needs JNI
-//! through the activity, which is M3 work in the mobile plan. Until then both
-//! directions answer Unsupported, the same honest degradation macOS reports
-//! from the drawn path today -- apps already handle it.
+//! The clipboard on Android (IC-918): ClipboardManager's primary clip,
+//! through the player activity. Off Android there is none.
 
 use krate_adapter_common::ui::UiAdapterError;
 
 pub(crate) fn read_text() -> Result<String, UiAdapterError> {
-    Err(UiAdapterError::Unsupported(
-        "clipboard is not wired on Android yet".to_string(),
-    ))
+    crate::phone::read_clipboard().map_err(UiAdapterError::Unsupported)
 }
 
-pub(crate) fn write_text(_text: &str) -> Result<(), UiAdapterError> {
-    Err(UiAdapterError::Unsupported(
-        "clipboard is not wired on Android yet".to_string(),
-    ))
+pub(crate) fn write_text(text: &str) -> Result<(), UiAdapterError> {
+    crate::phone::write_clipboard(text).map_err(UiAdapterError::Unsupported)
 }

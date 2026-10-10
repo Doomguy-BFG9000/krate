@@ -249,6 +249,89 @@ public class KrateActivity extends NativeActivity {
         Ble.disconnectAll();
     }
 
+    // IC-918: the clipboard, links, notifications, speaking aloud, the
+    // microphone's and camera's prompts, and the camera itself.
+
+    public String krateClipRead() {
+        return Phone.readClip(this);
+    }
+
+    public boolean krateClipWrite(String text) {
+        return Phone.writeClip(this, text);
+    }
+
+    public String krateOpenUrl(String url) {
+        return Phone.openUrl(this, url);
+    }
+
+    /** The phone's prompt for posting notifications (Android 13 and up). */
+    public int krateNotifyAsk() {
+        String[] permissions = Phone.notifyPermissions();
+        return permissions.length == 0 ? GRANTED : krateAsk(permissions, true);
+    }
+
+    public String krateNotify(String app, String title, String body) {
+        return Phone.notify(this, app, title, body);
+    }
+
+    public int krateMicAsk() {
+        return krateAsk(new String[] {"android.permission.RECORD_AUDIO"}, true);
+    }
+
+    public int krateCameraAsk() {
+        return krateAsk(new String[] {"android.permission.CAMERA"}, true);
+    }
+
+    public int krateSpeechReady() {
+        return Phone.speechReady(this);
+    }
+
+    public String[] krateVoices() {
+        return Phone.voices();
+    }
+
+    public String krateSay(String text, String voice, float rate) {
+        return Phone.say(text, voice, rate);
+    }
+
+    public void krateStopSpeaking() {
+        Phone.stopSpeaking();
+    }
+
+    public boolean krateSpeaking() {
+        return Phone.isSpeaking();
+    }
+
+    public String[] krateCameras() {
+        return Cam.devices(this);
+    }
+
+    public String krateCameraOpen(String id, int width, int height, int fps) {
+        return Cam.open(this, id, width, height, fps);
+    }
+
+    public int[] krateCameraInfo() {
+        return Cam.info();
+    }
+
+    public byte[] krateCameraFrame() {
+        return Cam.frame();
+    }
+
+    public String krateCameraError() {
+        return Cam.error();
+    }
+
+    public void krateCameraClose() {
+        Cam.close();
+    }
+
+    /** The display's rotation, 0..3 (ROTATION_0 to ROTATION_270). */
+    @SuppressWarnings("deprecation")
+    public int krateDisplayRotation() {
+        return getWindowManager().getDefaultDisplay().getRotation();
+    }
+
     /** Write the file at path into the document at uri; true when it all went. */
     public boolean krateCopyOut(String path, String uri) {
         return Documents.copyOut(this, path, Uri.parse(uri));

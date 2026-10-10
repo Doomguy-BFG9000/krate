@@ -195,6 +195,9 @@ mod player {
             app_store_path: Some(store.clone()),
             app_database_path: Some(store.with_extension("sqlite")),
             bundle_assets_root: assets_root,
+            // The name the person agreed to on the wall: a notification's
+            // sender line, never text the app picks per call.
+            app_name: Some(manifest.app.name.clone()),
             phase3_ui_mode: krate_runtime::phase3_ui::Phase3HostUiMode::NativePrototype,
             ..Default::default()
         };
