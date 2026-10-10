@@ -2393,7 +2393,10 @@ dependencies = [
  "objc2 0.6.4",
  "objc2-foundation 0.3.2",
  "objc2-ui-kit 0.3.2",
+ "png 0.17.16",
+ "serde_json",
  "sha2",
+ "ureq",
 ]
 
 [[package]]

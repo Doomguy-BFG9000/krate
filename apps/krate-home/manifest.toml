@@ -1,0 +1,31 @@
+# Krate's own screens on a phone: your apps, and the apps on the hub. A
+# trusted guest the phone player runs; the player does the network and the
+# picture decoding, writes what to show into this app's folder, and reads
+# back from stdout which app the person opened or asked to get.
+
+[app]
+id = "dev.krate.home"
+name = "Krate"
+version = "0.1.0-dev"
+entry = "target/wasm32-wasip1/release/krate_home.wasm"
+world = "krate:app/gui@0.2.0"
+
+[[capabilities]]
+cap = "ui.window:create"
+rationale = "Draw your apps and the hub"
+required = true
+
+[[capabilities]]
+cap = "io.stdout"
+rationale = "Tell the player which app to open"
+required = true
+
+[[capabilities]]
+cap = "fs.read:./**"
+rationale = "Read the lists and pictures the player prepared"
+required = true
+
+[[capabilities]]
+cap = "fs.list:./**"
+rationale = "Find the pictures the player prepared"
+required = false

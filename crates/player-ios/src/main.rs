@@ -29,8 +29,8 @@ mod player {
     use objc2_foundation::{NSDictionary, NSObject, NSObjectProtocol, NSString, NSURL};
     use objc2_ui_kit::{
         UIAlertAction, UIAlertActionStyle, UIAlertController, UIAlertControllerStyle,
-        UIApplication, UIApplicationDelegate, UIApplicationOpenURLOptionsKey, UIViewController,
-        UIWindow, UIWindowScene,
+        UIApplication, UIApplicationDelegate, UIApplicationOpenURLOptionsKey,
+        UIDocumentPickerDelegate, UIViewController, UIWindow, UIWindowScene,
     };
     use std::cell::Cell;
     use std::path::{Path, PathBuf};
@@ -57,6 +57,9 @@ mod player {
     const WALL_WASM: &[u8] =
         include_bytes!("../../../apps/krate-wall/target/wasm32-wasip1/release/krate_wall.wasm");
     const WALL_MANIFEST: &str = include_str!("../../../apps/krate-wall/manifest.toml");
+    const HOME_WASM: &[u8] =
+        include_bytes!("../../../apps/krate-home/target/wasm32-wasip1/release/krate_home.wasm");
+    const HOME_MANIFEST: &str = include_str!("../../../apps/krate-home/manifest.toml");
 
     /// Larger than any Krate app a phone should be handed.
     const MAX_BUNDLE_BYTES: u64 = 64 * 1024 * 1024;
@@ -207,56 +210,265 @@ mod player {
         }
     }
 
-    /// The home screen: the carried app first, then the library, newest
-    /// first. None when the person leaves it.
+    /// Krate's own screens: Library and Discover (apps/krate-home). The
+    /// player prepares what they show -- the library, the hub catalogue,
+    /// decoded screenshots -- and acts on the answer: open an app, get one
+    /// from the hub, or pick a `.krate` in Files. None when the person
+    /// leaves.
     fn home(library: &Path, data_root: &Path) -> Option<App> {
-        let mut apps: Vec<(App, String, String)> = Vec::new();
-        #[cfg(krate_native_image)]
-        if let Ok(manifest) = krate_manifest::Manifest::parse(native::MANIFEST) {
-            apps.push((
-                App::Carried,
-                manifest.app.name,
-                "Built in -- runs at full speed".into(),
-            ));
+        let ui = data_root.join("home-ui");
+        let art_dir = ui.join("art");
+        let _ = std::fs::create_dir_all(&art_dir);
+        let mut start = None;
+        loop {
+            let hub_apps = crate::hub::catalogue(&ui);
+            let hub_art: std::collections::HashMap<String, String> = hub_apps
+                .iter()
+                .filter_map(|app| Some((app.id.clone(), crate::hub::art(app, &art_dir)?)))
+                .collect();
+
+            let mut apps: Vec<App> = Vec::new();
+            let mut rows: Vec<String> = Vec::new();
+            #[cfg(krate_native_image)]
+            if let Ok(manifest) = krate_manifest::Manifest::parse(native::MANIFEST) {
+                apps.push(App::Carried);
+                rows.push(format!(
+                    "{}\tBuilt in \u{00b7} Runs at full speed\t-",
+                    field(&manifest.app.name)
+                ));
+            }
+            let mut received: Vec<(std::time::SystemTime, PathBuf)> = std::fs::read_dir(library)
+                .into_iter()
+                .flatten()
+                .flatten()
+                .map(|entry| entry.path())
+                .filter(|path| path.extension().is_some_and(|ext| ext == "krate"))
+                .map(|path| {
+                    let at = std::fs::metadata(&path)
+                        .and_then(|m| m.modified())
+                        .unwrap_or(std::time::UNIX_EPOCH);
+                    (at, path)
+                })
+                .collect();
+            received.sort_by(|a, b| b.0.cmp(&a.0));
+            for (_, path) in received {
+                let Ok(bytes) = std::fs::read(&path) else {
+                    continue;
+                };
+                let name = krate_bundle::open(&path)
+                    .ok()
+                    .and_then(|open| std::fs::read_to_string(open.manifest_path()).ok())
+                    .and_then(|text| krate_manifest::Manifest::parse(&text).ok())
+                    .map(|manifest| manifest.app.name);
+                let Some(name) = name else {
+                    continue;
+                };
+                // An app that came from the hub shows its hub picture: the
+                // hub names apps by the SHA-256 of their bytes.
+                let art = hub_art
+                    .get(&krate_bundle::sha256_hex(&bytes))
+                    .map(String::as_str)
+                    .unwrap_or("-");
+                rows.push(format!(
+                    "{}\tReceived \u{00b7} {}\t{art}",
+                    field(&name),
+                    human_size(bytes.len() as u64)
+                ));
+                apps.push(App::Received(path));
+            }
+            let _ = std::fs::write(ui.join("library.txt"), rows.join("\n") + "\n");
+            let discover: Vec<String> = hub_apps
+                .iter()
+                .map(|app| {
+                    format!(
+                        "{}\t{}\t{}\t{}\t{}\t{}\t{}",
+                        app.id,
+                        field(&app.name),
+                        field(&app.author),
+                        field(if app.category.is_empty() {
+                            "apps"
+                        } else {
+                            &app.category
+                        }),
+                        field(&app.description),
+                        hub_art.get(&app.id).map(String::as_str).unwrap_or("-"),
+                        human_size(app.size),
+                    )
+                })
+                .collect();
+            let _ = std::fs::write(ui.join("discover.txt"), discover.join("\n") + "\n");
+            match start.take() {
+                Some(tab) => {
+                    let _ = std::fs::write(ui.join("start.txt"), tab);
+                }
+                None => {
+                    let _ = std::fs::remove_file(ui.join("start.txt"));
+                }
+            }
+
+            let answer = run_trusted(HOME_WASM, HOME_MANIFEST, &ui, Vec::new())?;
+            let answer = answer.lines().find(|l| l.starts_with("home:"))?.to_string();
+            if let Some(n) = answer.strip_prefix("home:open:") {
+                let n: usize = n.trim().parse().ok()?;
+                return (n < apps.len()).then(|| apps.swap_remove(n));
+            }
+            if let Some(id) = answer.strip_prefix("home:get:") {
+                let id: String = id.trim().chars().filter(char::is_ascii_hexdigit).collect();
+                match crate::hub::download(&id, MAX_BUNDLE_BYTES) {
+                    Ok(bytes) => {
+                        let downloads = data_root.join("Downloads");
+                        let _ = std::fs::create_dir_all(&downloads);
+                        let file = downloads.join(format!("{id}.krate"));
+                        if std::fs::write(&file, bytes).is_ok() {
+                            if let Some(app) = receive(&file, library, data_root) {
+                                return Some(app);
+                            }
+                        }
+                    }
+                    Err(why) => notice(
+                        data_root,
+                        "Could not download this app",
+                        &format!("{why}. Check the connection and try again."),
+                    ),
+                }
+                start = Some("discover");
+                continue;
+            }
+            if answer.trim() == "home:files" {
+                if let Some(path) = pick_file() {
+                    if let Some(app) = receive(&path, library, data_root) {
+                        return Some(app);
+                    }
+                }
+                continue;
+            }
+            return None;
         }
-        let mut received: Vec<(std::time::SystemTime, PathBuf)> = std::fs::read_dir(library)
-            .into_iter()
-            .flatten()
-            .flatten()
-            .map(|entry| entry.path())
-            .filter(|path| path.extension().is_some_and(|ext| ext == "krate"))
-            .map(|path| {
-                let at = std::fs::metadata(&path)
-                    .and_then(|m| m.modified())
-                    .unwrap_or(std::time::UNIX_EPOCH);
-                (at, path)
-            })
-            .collect();
-        received.sort_by(|a, b| b.0.cmp(&a.0));
-        for (_, path) in received {
-            let name = krate_bundle::open(&path)
-                .ok()
-                .and_then(|open| std::fs::read_to_string(open.manifest_path()).ok())
-                .and_then(|text| krate_manifest::Manifest::parse(&text).ok())
-                .map(|manifest| manifest.app.name);
-            if let Some(name) = name {
-                apps.push((App::Received(path), name, "Received".into()));
+    }
+
+    /// A value for one tab-separated field: no tabs or line breaks inside.
+    fn field(text: &str) -> String {
+        text.replace(['\t', '\n', '\r'], " ")
+    }
+
+    fn human_size(bytes: u64) -> String {
+        if bytes >= 1024 * 1024 {
+            format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
+        } else {
+            format!("{} KB", bytes.div_ceil(1024).max(1))
+        }
+    }
+
+    /// The iOS Files picker, for a `.krate` saved anywhere Files can see.
+    /// iOS copies the pick into the app (import mode); None when cancelled.
+    fn pick_file() -> Option<PathBuf> {
+        let (tx, rx) = std::sync::mpsc::channel::<Option<PathBuf>>();
+        dispatch2::DispatchQueue::main().exec_async(move || present_picker(tx));
+        rx.recv().ok().flatten()
+    }
+
+    pub struct PickerState {
+        tx: std::cell::RefCell<Option<std::sync::mpsc::Sender<Option<PathBuf>>>>,
+        window: std::cell::RefCell<Option<objc2::rc::Retained<UIWindow>>>,
+    }
+
+    define_class!(
+        // SAFETY:
+        // - NSObject has no subclassing requirements for a delegate.
+        // - UIKit calls the picker's delegate on the main thread.
+        #[unsafe(super = NSObject)]
+        #[thread_kind = MainThreadOnly]
+        #[ivars = PickerState]
+        struct KratePickerDelegate;
+
+        unsafe impl NSObjectProtocol for KratePickerDelegate {}
+
+        unsafe impl UIDocumentPickerDelegate for KratePickerDelegate {
+            #[unsafe(method(documentPicker:didPickDocumentsAtURLs:))]
+            fn picked(
+                &self,
+                _controller: &objc2_ui_kit::UIDocumentPickerViewController,
+                urls: &objc2_foundation::NSArray<NSURL>,
+            ) {
+                let path = urls
+                    .firstObject()
+                    .and_then(|url| url.path())
+                    .map(|p| PathBuf::from(p.to_string()));
+                self.finish(path);
+            }
+
+            #[unsafe(method(documentPickerWasCancelled:))]
+            fn cancelled(&self, _controller: &objc2_ui_kit::UIDocumentPickerViewController) {
+                self.finish(None);
             }
         }
+    );
 
-        let mut args = vec!["wall:home".to_string()];
-        for (_, name, line) in &apps {
-            args.push(name.replace(['\n', '\0'], " "));
-            args.push(line.clone());
+    impl KratePickerDelegate {
+        fn finish(&self, path: Option<PathBuf>) {
+            if let Some(window) = self.ivars().window.borrow_mut().take() {
+                window.setHidden(true);
+            }
+            if let Some(tx) = self.ivars().tx.borrow_mut().take() {
+                let _ = tx.send(path);
+            }
+            PICKER.with(|slot| slot.borrow_mut().take());
         }
-        let stdout = run_wall(data_root, args)?;
-        let pick = stdout.lines().find_map(|line| {
-            line.strip_prefix("wall:pick:")?
-                .trim()
-                .parse::<usize>()
-                .ok()
-        })?;
-        (pick < apps.len()).then(|| apps.swap_remove(pick).0)
+    }
+
+    thread_local! {
+        /// The live picker delegate: UIKit holds delegates weakly.
+        static PICKER: std::cell::RefCell<Option<objc2::rc::Retained<KratePickerDelegate>>> =
+            const { std::cell::RefCell::new(None) };
+    }
+
+    #[allow(deprecated)]
+    fn present_picker(tx: std::sync::mpsc::Sender<Option<PathBuf>>) {
+        let Some(mtm) = MainThreadMarker::new() else {
+            let _ = tx.send(None);
+            return;
+        };
+        let Some(window) = overlay_window(mtm) else {
+            let _ = tx.send(None);
+            return;
+        };
+        let types = objc2_foundation::NSArray::from_retained_slice(&[NSString::from_str(
+            "dev.krate.bundle",
+        )]);
+        let picker = objc2_ui_kit::UIDocumentPickerViewController::initWithDocumentTypes_inMode(
+            objc2_ui_kit::UIDocumentPickerViewController::alloc(mtm),
+            &types,
+            objc2_ui_kit::UIDocumentPickerMode::Import,
+        );
+        let delegate: objc2::rc::Retained<KratePickerDelegate> = {
+            let this = KratePickerDelegate::alloc(mtm).set_ivars(PickerState {
+                tx: std::cell::RefCell::new(Some(tx)),
+                window: std::cell::RefCell::new(Some(window.clone())),
+            });
+            unsafe { objc2::msg_send![super(this), init] }
+        };
+        picker.setDelegate(Some(objc2::runtime::ProtocolObject::from_ref(&*delegate)));
+        PICKER.with(|slot| *slot.borrow_mut() = Some(delegate));
+        if let Some(root) = window.rootViewController() {
+            root.presentViewController_animated_completion(&picker, true, None);
+        }
+    }
+
+    /// A window above everything, for a system sheet (an alert, a picker).
+    fn overlay_window(mtm: MainThreadMarker) -> Option<objc2::rc::Retained<UIWindow>> {
+        let scene = UIApplication::sharedApplication(mtm)
+            .connectedScenes()
+            .allObjects()
+            .into_iter()
+            .find_map(|scene| scene.downcast::<UIWindowScene>().ok())?;
+        let window = UIWindow::initWithWindowScene(UIWindow::alloc(mtm), &scene);
+        let root = UIViewController::new(mtm);
+        unsafe {
+            window.setWindowLevel(objc2_ui_kit::UIWindowLevelAlert);
+        }
+        window.setRootViewController(Some(&root));
+        window.makeKeyAndVisible();
+        Some(window)
     }
 
     /// Ask, then run. Every open asks: the answer is never remembered.
@@ -423,22 +635,14 @@ mod player {
             let _ = tx.send(None);
             return;
         };
-        let scene = UIApplication::sharedApplication(mtm)
-            .connectedScenes()
-            .allObjects()
-            .into_iter()
-            .find_map(|scene| scene.downcast::<UIWindowScene>().ok());
-        let Some(scene) = scene else {
+        let Some(window) = overlay_window(mtm) else {
             let _ = tx.send(None);
             return;
         };
-        let window = UIWindow::initWithWindowScene(UIWindow::alloc(mtm), &scene);
-        let root = UIViewController::new(mtm);
-        unsafe {
-            window.setWindowLevel(objc2_ui_kit::UIWindowLevelAlert);
-            window.setRootViewController(Some(&root));
-            window.makeKeyAndVisible();
-        }
+        let Some(root) = window.rootViewController() else {
+            let _ = tx.send(None);
+            return;
+        };
         let alert = UIAlertController::alertControllerWithTitle_message_preferredStyle(
             Some(&NSString::from_str(title)),
             Some(&NSString::from_str(message)),
@@ -480,19 +684,32 @@ mod player {
     /// Run the wall guest -- Krate's own trusted screens -- and return what
     /// it answered.
     fn run_wall(data_root: &Path, args: Vec<String>) -> Option<String> {
-        let wall_manifest = krate_manifest::Manifest::parse(WALL_MANIFEST).ok()?;
-        let policy = krate_policy::SessionPolicy::allow_all_declared(&wall_manifest).ok()?;
+        run_trusted(WALL_WASM, WALL_MANIFEST, &data_root.join("wall"), args)
+    }
+
+    /// Run one of Krate's own screens (the wall, the home screen) with
+    /// everything its manifest declares, in `sandbox`, and return what it
+    /// printed.
+    fn run_trusted(
+        wasm: &[u8],
+        manifest: &str,
+        sandbox: &Path,
+        args: Vec<String>,
+    ) -> Option<String> {
+        let manifest = krate_manifest::Manifest::parse(manifest).ok()?;
+        let policy = krate_policy::SessionPolicy::allow_all_declared(&manifest).ok()?;
+        let _ = std::fs::create_dir_all(sandbox);
         let config = krate_runtime::Config {
             session_policy: policy,
-            sandbox_root: data_root.join("wall"),
+            sandbox_root: sandbox.to_path_buf(),
             app_args: args,
             phase3_ui_mode: krate_runtime::phase3_ui::Phase3HostUiMode::NativePrototype,
             ..Default::default()
         };
         let runtime = krate_runtime::Runtime::new(&config).ok()?;
         let (_, stdout) = runtime
-            .run_bytes_captured_for_world(WALL_WASM, &config, krate_runtime::RuntimeWorld::Gui)
-            .map_err(|err| eprintln!("the wall failed: {err:#}"))
+            .run_bytes_captured_for_world(wasm, &config, krate_runtime::RuntimeWorld::Gui)
+            .map_err(|err| eprintln!("{} failed: {err:#}", manifest.app.name))
             .ok()?;
         Some(String::from_utf8_lossy(&stdout).into_owned())
     }
@@ -532,6 +749,9 @@ mod player {
             .collect()
     }
 }
+
+#[cfg(target_os = "ios")]
+mod hub;
 
 #[cfg(target_os = "ios")]
 fn main() {

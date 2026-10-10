@@ -30,6 +30,10 @@ objc2 = "0.6.4"
 libc = "0.2"
 block2 = "0.6"
 dispatch2 = "0.3"
+# The store: the hub's catalogue and apps over TLS, its screenshots decoded.
+ureq.workspace = true
+serde_json.workspace = true
+png = "0.17"
 objc2-foundation = { version = "0.3.2", default-features = false, features = [
     "std",
     "NSObject",
@@ -50,5 +54,6 @@ objc2-ui-kit = { version = "0.3.2", default-features = false, features = [
     "UIWindowScene",
     "UIScene",
     "UIView",
+    "UIDocumentPickerViewController",
     "block2",
 ] }
