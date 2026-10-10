@@ -187,6 +187,19 @@ pub struct Phase3GuiHost {
     /// waiting for its first input with a frame drawn (IC-915).
     born: std::time::Instant,
     first_wait_ms: std::cell::Cell<Option<f32>>,
+    /// The keys the app has asked about with `key-held`, in the order it
+    /// first asked: what an on-screen pad is built from (IC-914).
+    keys_asked: std::cell::RefCell<Vec<String>>,
+    /// The app reads touch itself (`krate:ui/touch`): it gets no pad.
+    reads_touch: std::cell::Cell<bool>,
+    /// The pad's keys held by fingers now, in the app's own spellings.
+    pad_held: std::cell::RefCell<std::collections::BTreeSet<String>>,
+    /// The pad and where it sits, while one is shown.
+    pad: std::cell::RefCell<Option<(crate::touch_pad::Pad, crate::touch_pad::Layout)>>,
+    /// The fingers on the screen when the pad last looked (for the knob).
+    pad_fingers: std::cell::RefCell<Vec<(f32, f32)>>,
+    /// When a finger was last on the pad: it rests dimmer when left alone.
+    pad_touched_at: std::cell::Cell<std::time::Instant>,
     implicit_designs: std::cell::RefCell<std::collections::BTreeSet<u64>>,
     next_kept_image: std::cell::Cell<u64>,
     /// Connected gamepads, polled on demand.
@@ -487,6 +500,31 @@ impl Phase3GuiHost {
             frame_costs: std::cell::RefCell::new(Vec::new()),
             born: std::time::Instant::now(),
             first_wait_ms: std::cell::Cell::new(None),
+            // `KRATE_PAD_KEYS` (headless, with `KRATE_SCREEN`): the keys a
+            // game would ask about, so the pad can be drawn and checked
+            // without playing to the point where it asks.
+            keys_asked: std::cell::RefCell::new(
+                std::env::var("KRATE_PAD_KEYS")
+                    .ok()
+                    .filter(|_| std::env::var_os("KRATE_SCREEN").is_some())
+                    .map(|keys| {
+                        keys.split(',')
+                            .map(|k| {
+                                if k == "space" {
+                                    " ".to_string()
+                                } else {
+                                    k.to_string()
+                                }
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+            ),
+            reads_touch: std::cell::Cell::new(false),
+            pad_held: std::cell::RefCell::new(std::collections::BTreeSet::new()),
+            pad: std::cell::RefCell::new(None),
+            pad_fingers: std::cell::RefCell::new(Vec::new()),
+            pad_touched_at: std::cell::Cell::new(std::time::Instant::now()),
             implicit_designs: std::cell::RefCell::new(std::collections::BTreeSet::new()),
             next_kept_image: std::cell::Cell::new(1),
             gamepads: std::cell::RefCell::new(crate::gamepad::Gamepads::new()),
@@ -2510,6 +2548,9 @@ impl Phase3GuiHost {
                 }
             }
             if let Some(event) = event_to_wit(event) {
+                if self.pad_covers(&event) {
+                    continue;
+                }
                 // Count a close request at the one point every real event
                 // passes exactly once -- not in poll/wait/key-held, where an
                 // event that cycles through the pending queue would be
@@ -3003,6 +3044,8 @@ impl Phase3GuiHost {
 
     /// The fingers on a window the app owns; none for one it does not.
     pub(crate) fn touch_points(&self, window: u64) -> Vec<(u64, f32, f32)> {
+        // An app that reads fingers has its own touch controls: no pad.
+        self.reads_touch.set(true);
         self.pump_for_query();
         match self.window_id(window) {
             Ok(id) => self.dispatcher().touches(id),
@@ -3140,6 +3183,386 @@ impl Phase3GuiHost {
         self.dispatcher().set_adapts(adapts);
     }
 
+    /// Follow the on-screen pad (IC-914): shown on a touch screen for an app
+    /// that asked about keys and never read touch, built from those keys,
+    /// pressed by the fingers on it. A key a finger presses or lifts is also
+    /// sent as a key event, for an app that listens for events.
+    fn update_pad(&self) {
+        let Some(window) = self.windows.first().copied() else {
+            return;
+        };
+        let screen = self.screen_now(window);
+        let wanted = !self.reads_touch.get() && screen.is_some_and(|(_, _, touch, _)| touch);
+        let built = if wanted {
+            screen.and_then(|(w, h, _, safe)| {
+                let pad = crate::touch_pad::Pad::from_keys(&self.keys_asked.borrow())?;
+                let layout = crate::touch_pad::layout(&pad, w, h, safe);
+                Some((pad, layout))
+            })
+        } else {
+            None
+        };
+        let now = match &built {
+            Some((pad, layout)) => {
+                let mut fingers: Vec<(f32, f32)> = self
+                    .dispatcher()
+                    .touches(window)
+                    .into_iter()
+                    .map(|(_, x, y)| (x, y))
+                    .collect();
+                // `KRATE_PAD_FINGERS=x,y;x,y` (headless): fingers held down,
+                // to draw the pad being pressed.
+                if self.headless {
+                    if let Ok(spec) = std::env::var("KRATE_PAD_FINGERS") {
+                        fingers.extend(spec.split(';').filter_map(|pair| {
+                            let (x, y) = pair.split_once(',')?;
+                            Some((x.trim().parse().ok()?, y.trim().parse().ok()?))
+                        }));
+                    }
+                }
+                if fingers
+                    .iter()
+                    .any(|&(x, y)| crate::touch_pad::covers(layout, x, y))
+                {
+                    self.pad_touched_at.set(std::time::Instant::now());
+                }
+                let held = crate::touch_pad::held(pad, layout, &fingers);
+                *self.pad_fingers.borrow_mut() = fingers;
+                held
+            }
+            None => std::collections::BTreeSet::new(),
+        };
+        let before = self.pad_held.replace(now.clone());
+        let key_event = |key: &String, pressed: bool| {
+            ui::types::Event::Key(ui::types::KeyEvent {
+                window: window.get(),
+                widget: None,
+                key: key.clone(),
+                pressed,
+                modifiers: modifiers_to_wit(Modifiers::default()),
+            })
+        };
+        let mut pending = self.pending_events.borrow_mut();
+        for key in now.difference(&before) {
+            pending.push_back(key_event(key, true));
+        }
+        for key in before.difference(&now) {
+            pending.push_back(key_event(key, false));
+        }
+        drop(pending);
+        *self.pad.borrow_mut() = built;
+    }
+
+    /// Whether a pointer event landed on the pad.
+    fn pad_covers(&self, event: &ui::types::Event) -> bool {
+        let ui::types::Event::Pointer(p) = event else {
+            return false;
+        };
+        self.pad
+            .borrow()
+            .as_ref()
+            .is_some_and(|(_, layout)| crate::touch_pad::covers(layout, p.x, p.y))
+    }
+
+    /// Draw the pad over the frame about to be shown, in the canvas's own
+    /// coordinates (a game with a design size is scaled; the pad must not
+    /// be).
+    /// Returns the app's design size when it switched it off for the pad,
+    /// to be put back once the frame is published.
+    fn draw_pad(&mut self, canvas: u64) -> Option<(f32, f32)> {
+        use gfx::canvas2d::Host as _;
+        self.update_pad();
+        let (pad, layout) = self.pad.borrow().clone()?;
+        // Drawn in the screen's own points, outside the app's design: a
+        // fixed-size game is scaled into the middle of a phone, and a pad
+        // drawn in its coordinates was cut off over the side bands. The list
+        // carries a marker; the CPU raster has its design switched off for
+        // the pad's ops and back on after.
+        // The GPU path (a recorded list) only needs the marker. The CPU
+        // raster has its bands painted first, then its design switched off
+        // for the pad and back on once the frame is published.
+        let design = if self.lists_enabled() {
+            None
+        } else {
+            self.canvases
+                .borrow()
+                .get(&canvas)
+                .and_then(|(_, _, surface)| surface.design_size())
+        };
+        self.record_op(canvas, crate::canvas_list::CanvasOp::ScreenSpace(true));
+        if design.is_some() {
+            if let Some((_, _, surface)) = self.canvases.borrow_mut().get_mut(&canvas) {
+                surface.bake_letterbox();
+                surface.set_design_size(0.0, 0.0);
+            }
+        }
+        let color = |r: f32, g: f32, b: f32, a: f32| gfx::types::Color { r, g, b, a };
+        let pt = |x: f32, y: f32| gfx::types::Point { x, y };
+        let held = self.pad_held.borrow().clone();
+        let pressed = |keys: &[String]| keys.iter().any(|key| held.contains(key));
+        // Left alone for a few seconds the pad rests dimmer, so the game
+        // shows through; a touch brings it back at once.
+        let idle = self.pad_touched_at.get().elapsed().as_secs_f32();
+        let fade = if idle < 2.5 {
+            1.0
+        } else {
+            1.0 - ((idle - 2.5) / 0.6).min(1.0) * 0.45
+        };
+        let white = |a: f32| color(1.0, 1.0, 1.0, a * fade);
+        let shadow = |a: f32| color(0.0, 0.0, 0.0, a * fade);
+        // A rounded stroke from (x0, y0) to (x1, y1), as a run of dots: the
+        // canvas has no line, and no font has to carry an arrow.
+        let stroke = |host: &mut Self, x0: f32, y0: f32, x1: f32, y1: f32, w: f32, ink| {
+            let len = ((x1 - x0).powi(2) + (y1 - y0).powi(2)).sqrt();
+            let steps = (len / (w * 0.35)).ceil().max(1.0) as usize;
+            for i in 0..=steps {
+                let t = i as f32 / steps as f32;
+                let _ = host.fill_circle(
+                    canvas,
+                    pt(x0 + (x1 - x0) * t, y0 + (y1 - y0) * t),
+                    w / 2.0,
+                    ink,
+                );
+            }
+        };
+        let bold = gfx::types::TextStyle {
+            weight: 700,
+            italic: false,
+            letter_spacing: 0.0,
+            family: gfx::types::FontFamily::Sans,
+        };
+
+        // The stick: a glass base, a chevron for each way the game reads, and
+        // a knob that follows the thumb.
+        if let Some((cx, cy, r)) = layout.dpad {
+            let _ = self.fill_circle(canvas, pt(cx, cy + 2.0), r + 1.0, shadow(0.18));
+            let _ = self.fill_circle(canvas, pt(cx, cy), r, shadow(0.32));
+            let _ = self.fill_circle(canvas, pt(cx, cy), r, white(0.06));
+            let _ = self.stroke_circle(canvas, pt(cx, cy), r - 0.75, 1.5, white(0.22));
+            for (dir, keys) in &pad.dirs {
+                let on = pressed(keys);
+                // The chevron's tip, pointing out, and its two arms.
+                let (ux, uy) = match dir {
+                    crate::touch_pad::Dir::Left => (-1.0, 0.0),
+                    crate::touch_pad::Dir::Right => (1.0, 0.0),
+                    crate::touch_pad::Dir::Up => (0.0, -1.0),
+                    crate::touch_pad::Dir::Down => (0.0, 1.0),
+                };
+                let tip = r * 0.80;
+                let back = r * 0.66;
+                let spread = r * 0.13;
+                let (tx, ty) = (cx + ux * tip, cy + uy * tip);
+                let (bx, by) = (cx + ux * back, cy + uy * back);
+                let (px, py) = (-uy * spread, ux * spread);
+                let ink = if on { white(1.0) } else { white(0.55) };
+                if on {
+                    let _ = self.radial_gradient(
+                        canvas,
+                        pt(cx + ux * r * 0.62, cy + uy * r * 0.62),
+                        r * 0.55,
+                        white(0.28),
+                        white(0.0),
+                    );
+                }
+                let w = (r * 0.065).max(3.0);
+                stroke(self, bx + px, by + py, tx, ty, w, ink);
+                stroke(self, bx - px, by - py, tx, ty, w, ink);
+            }
+            let (kx, ky) =
+                crate::touch_pad::knob(&layout, &self.pad_fingers.borrow()).unwrap_or((cx, cy));
+            let kr = r * 0.42;
+            let touched = (kx, ky) != (cx, cy) || pad.dirs.iter().any(|(_, keys)| pressed(keys));
+            let _ = self.fill_circle(canvas, pt(kx, ky + 3.0), kr + 1.0, shadow(0.30));
+            let _ = self.fill_circle(
+                canvas,
+                pt(kx, ky),
+                kr,
+                white(if touched { 0.92 } else { 0.78 }),
+            );
+            let _ = self.stroke_circle(
+                canvas,
+                pt(kx, ky),
+                kr - 0.5,
+                1.0,
+                color(1.0, 1.0, 1.0, fade),
+            );
+        }
+
+        // The buttons: glass circles, labelled; pressed, they fill white
+        // and their label turns dark.
+        for ((text, keys), (bx, by, br)) in pad.buttons.iter().zip(&layout.buttons) {
+            let on = pressed(keys);
+            let r = if on { br * 1.06 } else { *br };
+            let _ = self.fill_circle(canvas, pt(*bx, by + 2.0), r + 1.0, shadow(0.18));
+            if on {
+                let _ = self.fill_circle(canvas, pt(*bx, *by), r, white(0.92));
+            } else {
+                let _ = self.fill_circle(canvas, pt(*bx, *by), r, shadow(0.32));
+                let _ = self.fill_circle(canvas, pt(*bx, *by), r, white(0.08));
+                let _ = self.stroke_circle(canvas, pt(*bx, *by), r - 0.75, 1.5, white(0.30));
+            }
+            let size = if text.chars().count() > 2 {
+                br * 0.40
+            } else {
+                br * 0.62
+            };
+            let width = self
+                .measure_text_styled(canvas, text.to_string(), size, bold)
+                .ok()
+                .and_then(|m| m.ok())
+                .map(|m| m.width)
+                .unwrap_or(0.0);
+            let ink = if on {
+                color(0.08, 0.09, 0.12, fade)
+            } else {
+                white(0.92)
+            };
+            let _ = self.draw_text_styled(
+                canvas,
+                text.to_string(),
+                pt(bx - width / 2.0, by + size * 0.36),
+                size,
+                ink,
+                bold,
+            );
+        }
+        self.record_op(canvas, crate::canvas_list::CanvasOp::ScreenSpace(false));
+        design
+    }
+
+    /// Publish a frame: pace it, then hand it to whichever consumer shows it.
+    fn present_frame(&mut self, canvas: u64) -> wasmtime::Result<Result<(), gfx::types::GfxError>> {
+        // The one call that reaches the widget. Draw calls mutate the raster;
+        // this publishes it, so a hundred fills cost one render.
+        // Pace the frame. A game loop calls poll and present with no sleep of
+        // its own, which spins a core flat out to produce frames no display
+        // can show -- a laptop's fan tells you before the frame rate does.
+        // Sleeping the remainder of a 60Hz budget here means every app is
+        // paced without every author having to think about it, and an app that
+        // is already slower than the budget waits for nothing.
+        //
+        // Deliberately not in the guest: an app that forgets to sleep should
+        // not be able to melt the machine, and one that sleeps by hand still
+        // works because this only ever waits for the time left over.
+        // A game loop lives in present, not in wait or poll, so an interrupt
+        // has to be answered here as well or Ctrl-C does nothing to a game.
+        if interrupted() {
+            self.interrupts.set(self.interrupts.get() + 1);
+            if self.interrupts.get() > 1 {
+                std::process::exit(130);
+            }
+        }
+        // Same for the close button: a game loop may never call poll or wait,
+        // so the second unanswered close click has to be honoured here or the
+        // window cannot be shut at all (K-121).
+        if self.close_ignored_by_guest() {
+            std::process::exit(0);
+        }
+        // A GPU adapter's present blocks for the panel inside
+        // get_current_texture, and that IS the pacing. Adding our own timer
+        // on top made the guest free-run into FIFO's queue: measured on
+        // device as present-done immediately followed by present-start,
+        // every frame landing one refresh late, a hard 30 fps against a
+        // 60 Hz link, and acquire pinned at 27 ms. Let the display pace it.
+        // Keep the canvas the same size as its window, even for an app that
+        // never calls canvas-size. Without this the app keeps drawing at its
+        // opening size and the host scales that picture up to fit: blurry
+        // text, and a game's world pushed off the edge (K-096). Refitting
+        // here means the very next frame is drawn at the real resolution.
+        let _ = self.refit_canvas(canvas);
+        if self.lists_enabled() {
+            self.last_present.set(Some(std::time::Instant::now()));
+            return Ok(self.publish_canvas(canvas));
+        }
+        // A new frame begins: the next poll must see the queue for real.
+        self.last_pump.set(None);
+        let entry = std::time::Instant::now();
+        let gap_ms = self
+            .last_present_entry
+            .get()
+            .map(|t| t.elapsed().as_secs_f32() * 1000.0)
+            .unwrap_or(0.0);
+        self.last_present_entry.set(Some(entry));
+        let mut slept_ms = 0.0f32;
+        if let Some(previous) = self.last_present.get() {
+            let elapsed = previous.elapsed();
+            if elapsed < FRAME_BUDGET {
+                let remainder = FRAME_BUDGET - elapsed;
+                // Prefer the display's own clock where the adapter has one:
+                // park until the panel says a frame is due (CADisplayLink on
+                // iOS), capped by our budget so a host without a link still
+                // paces itself. Sleeping a fixed 16 ms drifts against the
+                // real refresh; on a 120 Hz phone that drift is visible.
+                //
+                // NOT the plain input-waking park of an earlier attempt:
+                // that let a 120 Hz finger present at touch rate, exhaust
+                // the drawable pool, and stall the next acquire for its full
+                // one-second timeout. Waking on VSYNC is bounded by the
+                // panel; waking on touches is not.
+                // Only sleep when the adapter does NOT block for vsync
+                // itself. A GPU adapter's present already waits for the
+                // panel inside get_current_texture, so pacing here as well
+                // is the second wait that put input a frame behind
+                // (measured: 12 ms of a 15.3 ms frame in acquire).
+                if !self.dispatcher().supports_canvas_lists() {
+                    let sleep_started = std::time::Instant::now();
+                    // Sleep short, then close the gap by yielding. Every OS
+                    // rounds a sleep UP to its timer granularity, and on
+                    // Windows that default is ~15.6ms -- a 2ms request
+                    // costing a full tick, twice a frame, is how 6ms of
+                    // work became 14fps. Asking for 1ms resolution fixes
+                    // the scale of the error; landing the last slice by
+                    // yielding fixes the error itself, on every platform.
+                    const SPIN_MARGIN: std::time::Duration =
+                        std::time::Duration::from_micros(1_200);
+                    if remainder > SPIN_MARGIN {
+                        std::thread::sleep(remainder - SPIN_MARGIN);
+                    }
+                    while previous.elapsed() < FRAME_BUDGET {
+                        std::thread::yield_now();
+                    }
+                    slept_ms = sleep_started.elapsed().as_secs_f32() * 1000.0;
+                }
+            }
+        }
+        if std::env::var("KRATE_FRAME_STATS").as_deref() == Ok("1") {
+            let mut times = self.present_times.borrow_mut();
+            times.push((gap_ms, slept_ms));
+            if times.len() >= 60 {
+                let p = |values: &mut Vec<f32>, q: f32| -> f32 {
+                    values.sort_by(|a, b| a.total_cmp(b));
+                    values[((values.len() - 1) as f32 * q) as usize]
+                };
+                let mut gaps: Vec<f32> = times.iter().map(|(g, _)| *g).collect();
+                let mut sleeps: Vec<f32> = times.iter().map(|(_, sl)| *sl).collect();
+                let pump = PUMP_MS.with(|c| c.replace(0.0));
+                let calls = PUMP_CALLS.with(|c| c.replace(0));
+                eprintln!("krate-pump: {pump:.1}ms across {calls} pump calls over these frames");
+                eprintln!(
+                    "krate-present: gap p50 {:.2}ms p99 {:.2}ms | slept p50 {:.2}ms p99 {:.2}ms (n={})",
+                    p(&mut gaps, 0.5),
+                    p(&mut gaps, 0.99),
+                    p(&mut sleeps, 0.5),
+                    p(&mut sleeps, 0.99),
+                    times.len(),
+                );
+                times.clear();
+            }
+        }
+        self.last_present.set(Some(std::time::Instant::now()));
+
+        let result = self.publish_canvas(canvas);
+        // A presented canvas is a real drawn frame -- the right moment to
+        // capture a 2D game or drawing, which may never call wait.
+        if result.is_ok() {
+            self.maybe_take_screenshot();
+        }
+        // The measured frame is done with; the next draw op begins another.
+        self.frame_ended.set(true);
+        self.end_stepped_frame();
+        Ok(result)
+    }
+
     /// One step of the scroll drive (`KRATE_DRIVE_SCROLL`): a scroll event
     /// at the middle of the first window, down for the first half of the
     /// steps and back up for the second; when the steps are done, the cost
@@ -3212,6 +3635,23 @@ impl Phase3GuiHost {
     /// and home bar, Krate's close button at the top right -- so check-app
     /// judges an app on the phone it will meet, not on a phone-shaped
     /// desktop window.
+    /// A window's screen, without counting it as the app asking (see
+    /// `screen_facts`).
+    fn screen_now(&self, id: WindowId) -> Option<ScreenAnswer> {
+        let record = self.dispatcher().window(id).ok().flatten()?;
+        let (w, h) = (record.size.width as f32, record.size.height as f32);
+        let mut kind = self.dispatcher().screen_kind(id);
+        if self.headless && std::env::var_os("KRATE_SCREEN").is_some() && w.min(h) < 600.0 {
+            kind.touch = true;
+            kind.safe = if h >= w {
+                (89.0, 0.0, 34.0, 0.0)
+            } else {
+                (50.0, 47.0, 21.0, 47.0)
+            };
+        }
+        Some((w, h, kind.touch, kind.safe))
+    }
+
     pub(crate) fn screen_facts(&self, window: u64) -> Option<ScreenAnswer> {
         let id = self.window_id(window).ok()?;
         // Asking is laying out from the screen: drop any design the host
@@ -4142,7 +4582,14 @@ impl ui::events::Host for Phase3GuiHost {
         if let Ok(Some(event)) = self.poll_one_event() {
             self.pending_events.borrow_mut().push_back(event);
         }
-        Ok(self.held_keys.borrow().contains(&key))
+        {
+            let mut asked = self.keys_asked.borrow_mut();
+            if asked.len() < 32 && !asked.contains(&key) {
+                asked.push(key.clone());
+            }
+        }
+        self.update_pad();
+        Ok(self.held_keys.borrow().contains(&key) || self.pad_held.borrow().contains(&key))
     }
 
     fn gamepad_connected(&mut self) -> wasmtime::Result<bool> {
@@ -5543,135 +5990,18 @@ impl gfx::canvas2d::Host for Phase3GuiHost {
                 .push(since.elapsed().as_secs_f32() * 1000.0);
         }
         self.fit_unasked_canvas(canvas);
-        // The one call that reaches the widget. Draw calls mutate the raster;
-        // this publishes it, so a hundred fills cost one render.
-        // Pace the frame. A game loop calls poll and present with no sleep of
-        // its own, which spins a core flat out to produce frames no display
-        // can show -- a laptop's fan tells you before the frame rate does.
-        // Sleeping the remainder of a 60Hz budget here means every app is
-        // paced without every author having to think about it, and an app that
-        // is already slower than the budget waits for nothing.
-        //
-        // Deliberately not in the guest: an app that forgets to sleep should
-        // not be able to melt the machine, and one that sleeps by hand still
-        // works because this only ever waits for the time left over.
-        // A game loop lives in present, not in wait or poll, so an interrupt
-        // has to be answered here as well or Ctrl-C does nothing to a game.
-        if interrupted() {
-            self.interrupts.set(self.interrupts.get() + 1);
-            if self.interrupts.get() > 1 {
-                std::process::exit(130);
+        // The pad is drawn with the app's design switched off, and the design
+        // comes back only after the frame is published: the CPU raster fills
+        // the bands around a design with its edge colours when it publishes,
+        // which would paint over the pad there.
+        let design = self.draw_pad(canvas);
+        let result = self.present_frame(canvas);
+        if let Some((dw, dh)) = design {
+            if let Some((_, _, surface)) = self.canvases.borrow_mut().get_mut(&canvas) {
+                surface.set_design_size(dw, dh);
             }
         }
-        // Same for the close button: a game loop may never call poll or wait,
-        // so the second unanswered close click has to be honoured here or the
-        // window cannot be shut at all (K-121).
-        if self.close_ignored_by_guest() {
-            std::process::exit(0);
-        }
-        // A GPU adapter's present blocks for the panel inside
-        // get_current_texture, and that IS the pacing. Adding our own timer
-        // on top made the guest free-run into FIFO's queue: measured on
-        // device as present-done immediately followed by present-start,
-        // every frame landing one refresh late, a hard 30 fps against a
-        // 60 Hz link, and acquire pinned at 27 ms. Let the display pace it.
-        // Keep the canvas the same size as its window, even for an app that
-        // never calls canvas-size. Without this the app keeps drawing at its
-        // opening size and the host scales that picture up to fit: blurry
-        // text, and a game's world pushed off the edge (K-096). Refitting
-        // here means the very next frame is drawn at the real resolution.
-        let _ = self.refit_canvas(canvas);
-        if self.lists_enabled() {
-            self.last_present.set(Some(std::time::Instant::now()));
-            return Ok(self.publish_canvas(canvas));
-        }
-        // A new frame begins: the next poll must see the queue for real.
-        self.last_pump.set(None);
-        let entry = std::time::Instant::now();
-        let gap_ms = self
-            .last_present_entry
-            .get()
-            .map(|t| t.elapsed().as_secs_f32() * 1000.0)
-            .unwrap_or(0.0);
-        self.last_present_entry.set(Some(entry));
-        let mut slept_ms = 0.0f32;
-        if let Some(previous) = self.last_present.get() {
-            let elapsed = previous.elapsed();
-            if elapsed < FRAME_BUDGET {
-                let remainder = FRAME_BUDGET - elapsed;
-                // Prefer the display's own clock where the adapter has one:
-                // park until the panel says a frame is due (CADisplayLink on
-                // iOS), capped by our budget so a host without a link still
-                // paces itself. Sleeping a fixed 16 ms drifts against the
-                // real refresh; on a 120 Hz phone that drift is visible.
-                //
-                // NOT the plain input-waking park of an earlier attempt:
-                // that let a 120 Hz finger present at touch rate, exhaust
-                // the drawable pool, and stall the next acquire for its full
-                // one-second timeout. Waking on VSYNC is bounded by the
-                // panel; waking on touches is not.
-                // Only sleep when the adapter does NOT block for vsync
-                // itself. A GPU adapter's present already waits for the
-                // panel inside get_current_texture, so pacing here as well
-                // is the second wait that put input a frame behind
-                // (measured: 12 ms of a 15.3 ms frame in acquire).
-                if !self.dispatcher().supports_canvas_lists() {
-                    let sleep_started = std::time::Instant::now();
-                    // Sleep short, then close the gap by yielding. Every OS
-                    // rounds a sleep UP to its timer granularity, and on
-                    // Windows that default is ~15.6ms -- a 2ms request
-                    // costing a full tick, twice a frame, is how 6ms of
-                    // work became 14fps. Asking for 1ms resolution fixes
-                    // the scale of the error; landing the last slice by
-                    // yielding fixes the error itself, on every platform.
-                    const SPIN_MARGIN: std::time::Duration =
-                        std::time::Duration::from_micros(1_200);
-                    if remainder > SPIN_MARGIN {
-                        std::thread::sleep(remainder - SPIN_MARGIN);
-                    }
-                    while previous.elapsed() < FRAME_BUDGET {
-                        std::thread::yield_now();
-                    }
-                    slept_ms = sleep_started.elapsed().as_secs_f32() * 1000.0;
-                }
-            }
-        }
-        if std::env::var("KRATE_FRAME_STATS").as_deref() == Ok("1") {
-            let mut times = self.present_times.borrow_mut();
-            times.push((gap_ms, slept_ms));
-            if times.len() >= 60 {
-                let p = |values: &mut Vec<f32>, q: f32| -> f32 {
-                    values.sort_by(|a, b| a.total_cmp(b));
-                    values[((values.len() - 1) as f32 * q) as usize]
-                };
-                let mut gaps: Vec<f32> = times.iter().map(|(g, _)| *g).collect();
-                let mut sleeps: Vec<f32> = times.iter().map(|(_, sl)| *sl).collect();
-                let pump = PUMP_MS.with(|c| c.replace(0.0));
-                let calls = PUMP_CALLS.with(|c| c.replace(0));
-                eprintln!("krate-pump: {pump:.1}ms across {calls} pump calls over these frames");
-                eprintln!(
-                    "krate-present: gap p50 {:.2}ms p99 {:.2}ms | slept p50 {:.2}ms p99 {:.2}ms (n={})",
-                    p(&mut gaps, 0.5),
-                    p(&mut gaps, 0.99),
-                    p(&mut sleeps, 0.5),
-                    p(&mut sleeps, 0.99),
-                    times.len(),
-                );
-                times.clear();
-            }
-        }
-        self.last_present.set(Some(std::time::Instant::now()));
-
-        let result = self.publish_canvas(canvas);
-        // A presented canvas is a real drawn frame -- the right moment to
-        // capture a 2D game or drawing, which may never call wait.
-        if result.is_ok() {
-            self.maybe_take_screenshot();
-        }
-        // The measured frame is done with; the next draw op begins another.
-        self.frame_ended.set(true);
-        self.end_stepped_frame();
-        Ok(result)
+        result
     }
 }
 

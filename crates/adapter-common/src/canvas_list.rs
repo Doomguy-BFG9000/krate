@@ -18,6 +18,10 @@ use crate::ui::ImagePixels;
 #[derive(Clone, Debug)]
 pub enum CanvasOp {
     Clear(u32),
+    /// The ops that follow are in the screen's own points, not the app's
+    /// design (true), or back in the design (false): the host's on-screen
+    /// pad for a keyboard game is drawn over the app, unscaled (IC-914).
+    ScreenSpace(bool),
     SetClip(Option<(f32, f32, f32, f32)>),
     FillRect {
         rect: (f32, f32, f32, f32),

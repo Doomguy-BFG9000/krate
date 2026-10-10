@@ -213,7 +213,9 @@ impl GpuCanvas {
         // off-centre, its buttons answering touches in the wrong places.
         let screen = Affine::scale(self.scale as f64);
         let (k, ox, oy) = list.design_transform();
-        let base = screen * Affine::translate((ox as f64, oy as f64)) * Affine::scale(k as f64);
+        let design_base =
+            screen * Affine::translate((ox as f64, oy as f64)) * Affine::scale(k as f64);
+        let mut base = design_base;
         // The spare space around a letterboxed design takes the app's own
         // edge colours, so it reads as filling the screen, not as a card
         // between black bars.
@@ -256,6 +258,9 @@ impl GpuCanvas {
                             list.logical_height as f64,
                         ),
                     );
+                }
+                CanvasOp::ScreenSpace(on) => {
+                    base = if *on { screen } else { design_base };
                 }
                 CanvasOp::SetClip(rect) => {
                     while clip_depth > 0 {

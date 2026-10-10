@@ -385,6 +385,30 @@ impl CanvasSurface {
         fill(x1..w, y0..y1, right);
     }
 
+    /// Paint the spare space around the design into the surface itself, as
+    /// `to_image` would into its picture. For drawing something over the
+    /// whole screen afterwards -- the host's on-screen pad (IC-914) -- with
+    /// the design switched off, when `to_image` will paint no bands.
+    pub fn bake_letterbox(&mut self) {
+        if self.design.is_none() || self.buffer.is_empty() {
+            return;
+        }
+        let mut rgba = vec![0u8; self.buffer.len() * 4];
+        for (chunk, word) in rgba.chunks_exact_mut(4).zip(self.buffer.iter()) {
+            chunk[0] = (word >> 16) as u8;
+            chunk[1] = (word >> 8) as u8;
+            chunk[2] = *word as u8;
+            chunk[3] = (word >> 24) as u8;
+        }
+        self.blend_letterbox(&mut rgba);
+        for (word, chunk) in self.buffer.iter_mut().zip(rgba.chunks_exact(4)) {
+            *word = (u32::from(chunk[3]) << 24)
+                | (u32::from(chunk[0]) << 16)
+                | (u32::from(chunk[1]) << 8)
+                | u32::from(chunk[2]);
+        }
+    }
+
     /// Map one design-space point onto the canvas.
     fn map_point(&self, x: f32, y: f32) -> (f32, f32) {
         let (k, ox, oy) = self.design_transform();

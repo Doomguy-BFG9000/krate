@@ -72,6 +72,7 @@ mod speech_transcription;
 pub mod sql_host;
 pub mod store_host;
 pub mod text_overlap;
+pub mod touch_pad;
 pub mod usability;
 
 #[cfg(feature = "phase2-bindings")]
