@@ -26314,6 +26314,237 @@ pub mod krate {
                 }
             }
         }
+        /// Reminders that arrive when the app is closed: a timer that rings, a
+        /// habit nudged each evening, a meeting about to start (IC-921).
+        ///
+        /// Behind `ui.notify`, and the phone asks the person once. The system
+        /// delivers them; tapping one opens the app that set it. Each app sees and
+        /// cancels only its own.
+        #[allow(dead_code, async_fn_in_trait, unused_imports, clippy::all)]
+        pub mod reminders {
+            #[used]
+            #[doc(hidden)]
+            static __FORCE_SECTION_REF: fn() = super::super::super::__link_custom_section_describing_imports;
+            use super::super::super::_rt;
+            pub type NotifyError = super::super::super::krate::ui::notify::NotifyError;
+            #[allow(unused_unsafe, clippy::all)]
+            /// Set reminder `id` (letters, digits, `-` and `_`, up to 64) to arrive
+            /// `after-seconds` from now (1 second to a year), replacing one with the
+            /// same id. With `daily`, it comes back at that time of day every day.
+            pub fn schedule(
+                id: &str,
+                title: &str,
+                body: &str,
+                after_seconds: u64,
+                daily: bool,
+            ) -> Result<(), NotifyError> {
+                unsafe {
+                    #[cfg_attr(target_pointer_width = "64", repr(align(8)))]
+                    #[cfg_attr(target_pointer_width = "32", repr(align(4)))]
+                    struct RetArea(
+                        [::core::mem::MaybeUninit<
+                            u8,
+                        >; 4 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let mut ret_area = RetArea(
+                        [::core::mem::MaybeUninit::uninit(); 4
+                            * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let vec0 = id;
+                    let ptr0 = vec0.as_ptr().cast::<u8>();
+                    let len0 = vec0.len();
+                    let vec1 = title;
+                    let ptr1 = vec1.as_ptr().cast::<u8>();
+                    let len1 = vec1.len();
+                    let vec2 = body;
+                    let ptr2 = vec2.as_ptr().cast::<u8>();
+                    let len2 = vec2.len();
+                    let ptr3 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:ui/reminders@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "schedule"]
+                        fn wit_import4(
+                            _: *mut u8,
+                            _: usize,
+                            _: *mut u8,
+                            _: usize,
+                            _: *mut u8,
+                            _: usize,
+                            _: i64,
+                            _: i32,
+                            _: *mut u8,
+                        );
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import4(
+                        _: *mut u8,
+                        _: usize,
+                        _: *mut u8,
+                        _: usize,
+                        _: *mut u8,
+                        _: usize,
+                        _: i64,
+                        _: i32,
+                        _: *mut u8,
+                    ) {
+                        unreachable!()
+                    }
+                    unsafe {
+                        wit_import4(
+                            ptr0.cast_mut(),
+                            len0,
+                            ptr1.cast_mut(),
+                            len1,
+                            ptr2.cast_mut(),
+                            len2,
+                            _rt::as_i64(&after_seconds),
+                            match &daily {
+                                true => 1,
+                                false => 0,
+                            },
+                            ptr3,
+                        )
+                    };
+                    let l5 = i32::from(*ptr3.add(0).cast::<u8>());
+                    let result14 = match l5 {
+                        0 => {
+                            let e = ();
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l6 = i32::from(
+                                    *ptr3.add(::core::mem::size_of::<*const u8>()).cast::<u8>(),
+                                );
+                                use super::super::super::krate::ui::notify::NotifyError as V13;
+                                let v13 = match l6 {
+                                    0 => V13::Denied,
+                                    1 => {
+                                        let e13 = {
+                                            let l7 = *ptr3
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l8 = *ptr3
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len9 = l8;
+                                            let bytes9 = _rt::Vec::from_raw_parts(
+                                                l7.cast(),
+                                                len9,
+                                                len9,
+                                            );
+                                            _rt::string_lift(bytes9)
+                                        };
+                                        V13::InvalidContent(e13)
+                                    }
+                                    n => {
+                                        debug_assert_eq!(n, 2, "invalid enum discriminant");
+                                        let e13 = {
+                                            let l10 = *ptr3
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l11 = *ptr3
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len12 = l11;
+                                            let bytes12 = _rt::Vec::from_raw_parts(
+                                                l10.cast(),
+                                                len12,
+                                                len12,
+                                            );
+                                            _rt::string_lift(bytes12)
+                                        };
+                                        V13::Unavailable(e13)
+                                    }
+                                };
+                                v13
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    };
+                    result14
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Take back a reminder not yet delivered. Unknown ids are ignored.
+            pub fn cancel(id: &str) -> () {
+                unsafe {
+                    let vec0 = id;
+                    let ptr0 = vec0.as_ptr().cast::<u8>();
+                    let len0 = vec0.len();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:ui/reminders@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "cancel"]
+                        fn wit_import1(_: *mut u8, _: usize);
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import1(_: *mut u8, _: usize) {
+                        unreachable!()
+                    }
+                    unsafe { wit_import1(ptr0.cast_mut(), len0) };
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// The ids of this app's reminders still to come.
+            pub fn pending() -> _rt::Vec<_rt::String> {
+                unsafe {
+                    #[cfg_attr(target_pointer_width = "64", repr(align(8)))]
+                    #[cfg_attr(target_pointer_width = "32", repr(align(4)))]
+                    struct RetArea(
+                        [::core::mem::MaybeUninit<
+                            u8,
+                        >; 2 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let mut ret_area = RetArea(
+                        [::core::mem::MaybeUninit::uninit(); 2
+                            * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:ui/reminders@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "pending"]
+                        fn wit_import1(_: *mut u8);
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import1(_: *mut u8) {
+                        unreachable!()
+                    }
+                    unsafe { wit_import1(ptr0) };
+                    let l2 = *ptr0.add(0).cast::<*mut u8>();
+                    let l3 = *ptr0
+                        .add(::core::mem::size_of::<*const u8>())
+                        .cast::<usize>();
+                    let base7 = l2;
+                    let len7 = l3;
+                    let mut result7 = _rt::Vec::with_capacity(len7);
+                    for i in 0..len7 {
+                        let base = base7
+                            .add(i * (2 * ::core::mem::size_of::<*const u8>()));
+                        let e7 = {
+                            let l4 = *base.add(0).cast::<*mut u8>();
+                            let l5 = *base
+                                .add(::core::mem::size_of::<*const u8>())
+                                .cast::<usize>();
+                            let len6 = l5;
+                            let bytes6 = _rt::Vec::from_raw_parts(l4.cast(), len6, len6);
+                            _rt::string_lift(bytes6)
+                        };
+                        result7.push(e7);
+                    }
+                    _rt::cabi_dealloc(
+                        base7,
+                        len7 * (2 * ::core::mem::size_of::<*const u8>()),
+                        ::core::mem::size_of::<*const u8>(),
+                    );
+                    let result8 = result7;
+                    result8
+                }
+            }
+        }
     }
 }
 #[rustfmt::skip]
@@ -26585,9 +26816,9 @@ pub(crate) use __export_gui_impl as export;
 )]
 #[doc(hidden)]
 #[allow(clippy::octal_escapes)]
-pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 16676] = *b"\
-\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\xa9\x81\x01\x01A\x02\
-\x01A\x99\x01\x01B\x04\x01m\x05\x05trace\x05debug\x04info\x04warn\x05error\x04\0\
+pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 16850] = *b"\
+\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\xd7\x82\x01\x01A\x02\
+\x01A\x9c\x01\x01B\x04\x01m\x05\x05trace\x05debug\x04info\x04warn\x05error\x04\0\
 \x09log-level\x03\0\0\x01q\x05\x06closed\0\0\x0binterrupted\0\0\x0eunexpected-eo\
 f\0\0\x0cinvalid-utf8\0\0\x05other\x01s\0\x04\0\x08io-error\x03\0\x02\x03\0\x14k\
 rate:io/types@0.1.0\x05\0\x02\x03\0\0\x08io-error\x01B\x15\x02\x03\x02\x01\x01\x04\
@@ -26837,26 +27068,30 @@ invalid\x01s\0\x04\0\x0bshare-error\x03\0\x03\x01ks\x01p\x02\x01j\x01\x7f\x01\x0
 n-file\x03\0\0\x01q\x03\x0bnot-allowed\0\0\x0bunavailable\x01s\0\x07invalid\x01s\
 \0\x04\0\x0cphotos-error\x03\0\x02\x01p\x01\x01j\x01\x04\x01\x03\x01@\x02\x06win\
 doww\x05limity\0\x05\x04\0\x04pick\x01\x06\x01p}\x01j\0\x01\x03\x01@\x02\x06wind\
-oww\x04data\x07\0\x08\x04\0\x04save\x01\x09\x03\0\x15krate:ui/photos@0.1.0\x05A\x01\
-B\x14\x01r\x04\x01rv\x01gv\x01bv\x01av\x04\0\x05color\x03\0\0\x01r\x02\x01xv\x01\
-yv\x04\0\x05point\x03\0\x02\x01r\x02\x05widthv\x06heightv\x04\0\x04size\x03\0\x04\
-\x01r\x04\x05widthv\x06heightv\x06ascentv\x07descentv\x04\0\x0ctext-metrics\x03\0\
-\x06\x01r\x04\x01xv\x01yv\x05widthv\x06heightv\x04\0\x04rect\x03\0\x08\x01r\x02\x06\
-offsetv\x05color\x01\x04\0\x0dgradient-stop\x03\0\x0a\x01m\x03\x04sans\x05serif\x04\
+oww\x04data\x07\0\x08\x04\0\x04save\x01\x09\x03\0\x15krate:ui/photos@0.1.0\x05A\x02\
+\x03\0%\x0cnotify-error\x01B\x0a\x02\x03\x02\x01B\x04\0\x0cnotify-error\x03\0\0\x01\
+j\0\x01\x01\x01@\x05\x02ids\x05titles\x04bodys\x0dafter-secondsw\x05daily\x7f\0\x02\
+\x04\0\x08schedule\x01\x03\x01@\x01\x02ids\x01\0\x04\0\x06cancel\x01\x04\x01ps\x01\
+@\0\0\x05\x04\0\x07pending\x01\x06\x03\0\x18krate:ui/reminders@0.1.0\x05C\x01B\x14\
+\x01r\x04\x01rv\x01gv\x01bv\x01av\x04\0\x05color\x03\0\0\x01r\x02\x01xv\x01yv\x04\
+\0\x05point\x03\0\x02\x01r\x02\x05widthv\x06heightv\x04\0\x04size\x03\0\x04\x01r\
+\x04\x05widthv\x06heightv\x06ascentv\x07descentv\x04\0\x0ctext-metrics\x03\0\x06\
+\x01r\x04\x01xv\x01yv\x05widthv\x06heightv\x04\0\x04rect\x03\0\x08\x01r\x02\x06o\
+ffsetv\x05color\x01\x04\0\x0dgradient-stop\x03\0\x0a\x01m\x03\x04sans\x05serif\x04\
 mono\x04\0\x0bfont-family\x03\0\x0c\x01r\x04\x06weight{\x06italic\x7f\x0eletter-\
 spacingv\x06family\x0d\x04\0\x0atext-style\x03\0\x0e\x01r\x04\x08top-leftv\x09to\
 p-rightv\x0cbottom-rightv\x0bbottom-leftv\x04\0\x0ccorner-radii\x03\0\x10\x01q\x04\
 \x11permission-denied\0\0\x0einvalid-target\0\0\x0bunsupported\x01s\0\x08platfor\
-m\x01s\0\x04\0\x09gfx-error\x03\0\x12\x03\0\x15krate:gfx/types@0.1.0\x05B\x02\x03\
-\0,\x05color\x02\x03\0,\x05point\x02\x03\0,\x04rect\x02\x03\0,\x04size\x02\x03\0\
-,\x0ctext-metrics\x02\x03\0,\x09gfx-error\x02\x03\0,\x0dgradient-stop\x02\x03\0,\
-\x0ccorner-radii\x02\x03\0,\x0atext-style\x02\x03\0,\x0bfont-family\x01BK\x02\x03\
-\x02\x01C\x04\0\x05color\x03\0\0\x02\x03\x02\x01D\x04\0\x05point\x03\0\x02\x02\x03\
-\x02\x01E\x04\0\x04rect\x03\0\x04\x02\x03\x02\x01F\x04\0\x04size\x03\0\x06\x02\x03\
-\x02\x01G\x04\0\x0ctext-metrics\x03\0\x08\x02\x03\x02\x01H\x04\0\x09gfx-error\x03\
-\0\x0a\x02\x03\x02\x01I\x04\0\x0dgradient-stop\x03\0\x0c\x02\x03\x02\x01J\x04\0\x0c\
-corner-radii\x03\0\x0e\x02\x03\x02\x01K\x04\0\x0atext-style\x03\0\x10\x02\x03\x02\
-\x01L\x04\0\x0bfont-family\x03\0\x12\x01j\x01w\x01\x0b\x01@\x02\x06windoww\x06wi\
+m\x01s\0\x04\0\x09gfx-error\x03\0\x12\x03\0\x15krate:gfx/types@0.1.0\x05D\x02\x03\
+\0-\x05color\x02\x03\0-\x05point\x02\x03\0-\x04rect\x02\x03\0-\x04size\x02\x03\0\
+-\x0ctext-metrics\x02\x03\0-\x09gfx-error\x02\x03\0-\x0dgradient-stop\x02\x03\0-\
+\x0ccorner-radii\x02\x03\0-\x0atext-style\x02\x03\0-\x0bfont-family\x01BK\x02\x03\
+\x02\x01E\x04\0\x05color\x03\0\0\x02\x03\x02\x01F\x04\0\x05point\x03\0\x02\x02\x03\
+\x02\x01G\x04\0\x04rect\x03\0\x04\x02\x03\x02\x01H\x04\0\x04size\x03\0\x06\x02\x03\
+\x02\x01I\x04\0\x0ctext-metrics\x03\0\x08\x02\x03\x02\x01J\x04\0\x09gfx-error\x03\
+\0\x0a\x02\x03\x02\x01K\x04\0\x0dgradient-stop\x03\0\x0c\x02\x03\x02\x01L\x04\0\x0c\
+corner-radii\x03\0\x0e\x02\x03\x02\x01M\x04\0\x0atext-style\x03\0\x10\x02\x03\x02\
+\x01N\x04\0\x0bfont-family\x03\0\x12\x01j\x01w\x01\x0b\x01@\x02\x06windoww\x06wi\
 dgetw\0\x14\x04\0\x04bind\x01\x15\x01j\x01\x07\x01\x0b\x01@\x01\x06canvasw\0\x16\
 \x04\0\x0bcanvas-size\x01\x17\x01j\0\x01\x0b\x01@\x02\x06canvasw\x04size\x07\0\x18\
 \x04\0\x0fset-design-size\x01\x19\x01@\x05\x06canvasw\x01xv\x01yv\x01wv\x01hv\0\x18\
@@ -26885,8 +27120,8 @@ canvasw\x04area\x05\x03top\x01\x06bottom\x01\0\x18\x04\0\x0flinear-gradient\x01-
 e-text\x01/\x01@\x05\x06canvasw\x04area\x05\x05widthy\x06heighty\x04rgba(\0\x18\x04\
 \0\x0bdraw-pixels\x010\x01@\x07\x06canvasw\x06center\x03\x03dst\x07\x05anglev\x05\
 widthy\x06heighty\x04rgba(\0\x18\x04\0\x0bdraw-sprite\x011\x04\0\x07present\x01\x1b\
-\x03\0\x18krate:gfx/canvas2d@0.1.0\x05M\x01B%\x02\x03\x02\x01C\x04\0\x05color\x03\
-\0\0\x02\x03\x02\x01H\x04\0\x09gfx-error\x03\0\x02\x01pv\x01r\x0a\x07ambientv\x08\
+\x03\0\x18krate:gfx/canvas2d@0.1.0\x05O\x01B%\x02\x03\x02\x01E\x04\0\x05color\x03\
+\0\0\x02\x03\x02\x01J\x04\0\x09gfx-error\x03\0\x02\x01pv\x01r\x0a\x07ambientv\x08\
 specularv\x09shininessv\x0bfog-densityv\x09fog-color\x01\x0efill-direction\x04\x0a\
 fill-color\x01\x0dshadow-radiusv\x0fshadow-softnessv\x08exposurev\x04\0\x08light\
 ing\x03\0\x05\x01j\x01w\x01\x03\x01@\x02\x06windoww\x06widgetw\0\x07\x04\0\x04bi\
@@ -26904,33 +27139,33 @@ set-lighting\x01\x13\x01@\x08\x05scenew\x08vertices\x04\x07normals\x04\x08tangen
 ts\x04\x03uvs\x04\x07texturew\x0enormal-texturew\x04tint\x01\0\x09\x04\0\x0dnorm\
 al-mapped\x01\x14\x04\0\x05unlit\x01\x11\x01@\x02\x05scenew\x07enabled\x7f\0\x09\
 \x04\0\x0fcull-back-faces\x01\x15\x01@\x01\x05scenew\0\x09\x04\0\x07present\x01\x16\
-\x03\0\x17krate:gfx/scene3d@0.1.0\x05N\x01B\x11\x02\x03\x02\x01E\x04\0\x04rect\x03\
-\0\0\x02\x03\x02\x01J\x04\0\x0ccorner-radii\x03\0\x02\x02\x03\x02\x01H\x04\0\x09\
+\x03\0\x17krate:gfx/scene3d@0.1.0\x05P\x01B\x11\x02\x03\x02\x01G\x04\0\x04rect\x03\
+\0\0\x02\x03\x02\x01L\x04\0\x0ccorner-radii\x03\0\x02\x02\x03\x02\x01J\x04\0\x09\
 gfx-error\x03\0\x04\x01p}\x01j\x01w\x01\x05\x01@\x04\x06canvasw\x05widthy\x06hei\
 ghty\x04rgba\x06\0\x07\x04\0\x04keep\x01\x08\x01j\0\x01\x05\x01@\x03\x06canvasw\x05\
 imagew\x04area\x01\0\x09\x04\0\x04draw\x01\x0a\x01@\x04\x06canvasw\x05imagew\x04\
 area\x01\x05radii\x03\0\x09\x04\0\x0adraw-round\x01\x0b\x01@\x02\x06canvasw\x05i\
-magew\x01\0\x04\0\x06forget\x01\x0c\x03\0\x1dkrate:gfx/canvas-images@0.1.0\x05O\x01\
+magew\x01\0\x04\0\x06forget\x01\x0c\x03\0\x1dkrate:gfx/canvas-images@0.1.0\x05Q\x01\
 B\x06\x01m\x02\x07pcm-s16\x07float32\x04\0\x0dsample-format\x03\0\0\x01r\x04\x0b\
 sample-ratey\x08channels{\x06format\x01\x0dbuffer-framesy\x04\0\x0dstream-config\
 \x03\0\x02\x01q\x05\x11permission-denied\0\0\x0einvalid-stream\0\0\x12device-una\
 vailable\0\0\x0bunsupported\x01s\0\x08platform\x01s\0\x04\0\x0baudio-error\x03\0\
-\x04\x03\0\x17krate:audio/types@0.1.0\x05P\x02\x03\00\x0baudio-error\x02\x03\00\x0d\
-stream-config\x01B\x15\x02\x03\x02\x01Q\x04\0\x0baudio-error\x03\0\0\x02\x03\x02\
-\x01R\x04\0\x0dstream-config\x03\0\x02\x01j\x01w\x01\x01\x01@\x01\x06config\x03\0\
+\x04\x03\0\x17krate:audio/types@0.1.0\x05R\x02\x03\01\x0baudio-error\x02\x03\01\x0d\
+stream-config\x01B\x15\x02\x03\x02\x01S\x04\0\x0baudio-error\x03\0\0\x02\x03\x02\
+\x01T\x04\0\x0dstream-config\x03\0\x02\x01j\x01w\x01\x01\x01@\x01\x06config\x03\0\
 \x04\x04\0\x04open\x01\x05\x01j\0\x01\x01\x01@\x01\x09stream-idw\0\x06\x04\0\x05\
 start\x01\x07\x04\0\x04stop\x01\x07\x01p}\x01j\x01y\x01\x01\x01@\x02\x09stream-i\
 dw\x05bytes\x08\0\x09\x04\0\x05write\x01\x0a\x01@\x02\x09stream-idw\x05bytes\x08\
 \0\x04\x04\0\x0aload-sound\x01\x0b\x01@\x03\x09stream-idw\x05soundw\x04gainv\0\x06\
 \x04\0\x0aplay-sound\x01\x0c\x01@\x02\x09stream-idw\x05soundw\0\x06\x04\0\x0asto\
-p-sound\x01\x0d\x03\0\x1akrate:audio/playback@0.1.0\x05S\x01B\x05\x02\x03\x02\x01\
-Q\x04\0\x0baudio-error\x03\0\0\x01j\x01y\x01\x01\x01@\x01\x09stream-idw\0\x02\x04\
-\0\x06queued\x01\x03\x03\0\x20krate:audio/playback-queue@0.1.0\x05T\x01B\x0f\x02\
-\x03\x02\x01Q\x04\0\x0baudio-error\x03\0\0\x02\x03\x02\x01R\x04\0\x0dstream-conf\
+p-sound\x01\x0d\x03\0\x1akrate:audio/playback@0.1.0\x05U\x01B\x05\x02\x03\x02\x01\
+S\x04\0\x0baudio-error\x03\0\0\x01j\x01y\x01\x01\x01@\x01\x09stream-idw\0\x02\x04\
+\0\x06queued\x01\x03\x03\0\x20krate:audio/playback-queue@0.1.0\x05V\x01B\x0f\x02\
+\x03\x02\x01S\x04\0\x0baudio-error\x03\0\0\x02\x03\x02\x01T\x04\0\x0dstream-conf\
 ig\x03\0\x02\x01j\x01w\x01\x01\x01@\x01\x06config\x03\0\x04\x04\0\x04open\x01\x05\
 \x01j\0\x01\x01\x01@\x01\x09stream-idw\0\x06\x04\0\x05start\x01\x07\x04\0\x04sto\
 p\x01\x07\x01p}\x01j\x01\x08\x01\x01\x01@\x02\x09stream-idw\x09max-bytesy\0\x09\x04\
-\0\x04read\x01\x0a\x03\0\x19krate:audio/capture@0.1.0\x05U\x01B\x0d\x01m\x01\x05\
+\0\x04read\x01\x0a\x03\0\x19krate:audio/capture@0.1.0\x05W\x01B\x0d\x01m\x01\x05\
 rgba8\x04\0\x0cframe-format\x03\0\0\x01r\x04\x05widthy\x06heighty\x03fpsy\x06for\
 mat\x01\x04\0\x0dstream-config\x03\0\x02\x01r\x04\x05widthy\x06heighty\x03fpsy\x06\
 format\x01\x04\0\x0aframe-info\x03\0\x04\x01r\x02\x02ids\x05labels\x04\0\x0bdevi\
@@ -26938,17 +27173,17 @@ ce-info\x03\0\x06\x01p}\x01r\x04\x05bytes\x08\x05widthy\x06heighty\x0eelapsed-mi
 llisw\x04\0\x05frame\x03\0\x09\x01q\x06\x11permission-denied\0\0\x0einvalid-stre\
 am\0\0\x12device-unavailable\0\0\x0dsystem-denied\0\0\x0bunsupported\x01s\0\x08p\
 latform\x01s\0\x04\0\x0ccamera-error\x03\0\x0b\x03\0\x18krate:camera/types@0.1.0\
-\x05V\x02\x03\04\x0ccamera-error\x02\x03\04\x0bdevice-info\x02\x03\04\x05frame\x02\
-\x03\04\x0aframe-info\x02\x03\04\x0dstream-config\x01B\x1d\x02\x03\x02\x01W\x04\0\
-\x0ccamera-error\x03\0\0\x02\x03\x02\x01X\x04\0\x0bdevice-info\x03\0\x02\x02\x03\
-\x02\x01Y\x04\0\x05frame\x03\0\x04\x02\x03\x02\x01Z\x04\0\x0aframe-info\x03\0\x06\
-\x02\x03\x02\x01[\x04\0\x0dstream-config\x03\0\x08\x01p\x03\x01j\x01\x0a\x01\x01\
+\x05X\x02\x03\05\x0ccamera-error\x02\x03\05\x0bdevice-info\x02\x03\05\x05frame\x02\
+\x03\05\x0aframe-info\x02\x03\05\x0dstream-config\x01B\x1d\x02\x03\x02\x01Y\x04\0\
+\x0ccamera-error\x03\0\0\x02\x03\x02\x01Z\x04\0\x0bdevice-info\x03\0\x02\x02\x03\
+\x02\x01[\x04\0\x05frame\x03\0\x04\x02\x03\x02\x01\\\x04\0\x0aframe-info\x03\0\x06\
+\x02\x03\x02\x01]\x04\0\x0dstream-config\x03\0\x08\x01p\x03\x01j\x01\x0a\x01\x01\
 \x01@\0\0\x0b\x04\0\x07devices\x01\x0c\x01j\x01w\x01\x01\x01@\x02\x06devices\x06\
 config\x09\0\x0d\x04\0\x04open\x01\x0e\x01j\x01\x07\x01\x01\x01@\x01\x09stream-i\
 dw\0\x0f\x04\0\x04info\x01\x10\x01j\0\x01\x01\x01@\x01\x09stream-idw\0\x11\x04\0\
 \x05start\x01\x12\x04\0\x04stop\x01\x12\x01k\x05\x01j\x01\x13\x01\x01\x01@\x01\x09\
 stream-idw\0\x14\x04\0\x04read\x01\x15\x04\0\x05close\x01\x12\x03\0\x1akrate:cam\
-era/capture@0.1.0\x05\\\x01B\x12\x01r\x01\x04texts\x04\0\x0atranscript\x03\0\0\x01\
+era/capture@0.1.0\x05^\x01B\x12\x01r\x01\x04texts\x04\0\x0atranscript\x03\0\0\x01\
 q\x05\x0finvalid-request\x01s\0\x0fmodel-not-found\0\0\x0dmodel-invalid\x01s\0\x0b\
 unsupported\x01s\0\x09inference\x01s\0\x04\0\x0cspeech-error\x03\0\x02\x01m\x05\x0f\
 invalid-request\x0fmodel-not-found\x0dmodel-invalid\x0bunsupported\x09inference\x04\
@@ -26958,14 +27193,14 @@ e\x01\x09\x01j\x01}\x01\x05\x01@\x05\x0bmodel-assets\x0apcm-s16-le\x06\x0bsample
 -ratey\x08language\x07\x08expecteds\0\x0a\x04\0\x0amatch-line\x01\x0b\x01k}\x01j\
 \x01\x0c\x01\x05\x01@\x06\x0bmodel-assets\x0apcm-s16-le\x06\x0bsample-ratey\x08l\
 anguage\x07\x08expecteds\x06finish\x7f\0\x0d\x04\0\x11match-line-stream\x01\x0e\x03\
-\0\x20krate:speech/transcription@0.1.0\x05]\x01B\x12\x01r\x03\x02ids\x04names\x08\
+\0\x20krate:speech/transcription@0.1.0\x05_\x01B\x12\x01r\x03\x02ids\x04names\x08\
 languages\x04\0\x05voice\x03\0\0\x01q\x04\x11permission-denied\0\0\x0finvalid-re\
 quest\x01s\0\x0bunsupported\x01s\0\x08platform\x01s\0\x04\0\x09say-error\x03\0\x02\
 \x01p\x01\x01j\x01\x04\x01\x03\x01@\0\0\x05\x04\0\x06voices\x01\x06\x01ks\x01kv\x01\
 j\0\x01\x03\x01@\x03\x04texts\x05voice\x07\x04rate\x08\0\x09\x04\0\x03say\x01\x0a\
 \x01@\0\0\x09\x04\0\x04stop\x01\x0b\x01j\x01\x7f\x01\x03\x01@\0\0\x0c\x04\0\x08s\
-peaking\x01\x0d\x03\0\x1ckrate:speech/synthesis@0.1.0\x05^\x01@\0\0z\x04\0\x03ru\
-n\x01_\x04\0\x13krate:app/gui@0.2.0\x04\0\x0b\x09\x01\0\x03gui\x03\0\0\0G\x09pro\
+peaking\x01\x0d\x03\0\x1ckrate:speech/synthesis@0.1.0\x05`\x01@\0\0z\x04\0\x03ru\
+n\x01a\x04\0\x13krate:app/gui@0.2.0\x04\0\x0b\x09\x01\0\x03gui\x03\0\0\0G\x09pro\
 ducers\x01\x0cprocessed-by\x02\x0dwit-component\x070.227.1\x10wit-bindgen-rust\x06\
 0.41.0";
 #[inline(never)]
