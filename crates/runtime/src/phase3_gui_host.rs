@@ -723,6 +723,72 @@ impl Phase3GuiHost {
         self.runtime.dispatcher()
     }
 
+    /// Schedule a reminder (IC-921), behind `ui.notify`: the id checked
+    /// (it becomes part of the system's identifier), the text checked as a
+    /// notification's is, the delay held to a second to a year.
+    pub(crate) fn reminder_schedule(
+        &self,
+        id: &str,
+        title: &str,
+        body: &str,
+        after_seconds: u64,
+        daily: bool,
+    ) -> Result<(), crate::desktop_host::NotifyError> {
+        use crate::desktop_host::NotifyError;
+        if self
+            .runtime
+            .guard()
+            .check(&UapiCall::Ui(UiCall::Notify))
+            .is_err()
+        {
+            return Err(NotifyError::Denied);
+        }
+        if !valid_reminder_id(id) {
+            return Err(NotifyError::InvalidContent(
+                "a reminder id is 1 to 64 letters, digits, - and _".to_string(),
+            ));
+        }
+        crate::desktop_host::check_notification(title, body)?;
+        if !(1..=366 * 24 * 3600).contains(&after_seconds) {
+            return Err(NotifyError::InvalidContent(
+                "a reminder comes 1 second to a year from now".to_string(),
+            ));
+        }
+        if self.headless {
+            return Err(NotifyError::Unavailable(
+                "no reminders when nothing is on screen".to_string(),
+            ));
+        }
+        let sender = self.attribution();
+        self.dispatcher()
+            .reminders()
+            .reminder_schedule(id, &sender, title, body, after_seconds, daily)
+            .map_err(NotifyError::Unavailable)
+    }
+
+    pub(crate) fn reminder_cancel(&self, id: &str) {
+        let granted = self
+            .runtime
+            .guard()
+            .check(&UapiCall::Ui(UiCall::Notify))
+            .is_ok();
+        if granted && valid_reminder_id(id) && !self.headless {
+            self.dispatcher().reminders().reminder_cancel(id);
+        }
+    }
+
+    pub(crate) fn reminder_pending(&self) -> Vec<String> {
+        let granted = self
+            .runtime
+            .guard()
+            .check(&UapiCall::Ui(UiCall::Notify))
+            .is_ok();
+        if !granted || self.headless {
+            return Vec::new();
+        }
+        self.dispatcher().reminders().reminder_pending()
+    }
+
     /// Pick photos (IC-920): the phone's photo picker, or on a computer the
     /// file dialog for pictures; each pick remembered as a chosen file.
     /// Headless answers as cancelled, as open-file does.
@@ -7547,6 +7613,14 @@ pub(crate) fn save_file_on_host(
         dialog = dialog.add_filter("Supported files", &extensions);
     }
     Ok(dialog.save_file())
+}
+
+/// A reminder id an app may use: 1 to 64 of letters, digits, `-` and `_`.
+pub(crate) fn valid_reminder_id(id: &str) -> bool {
+    (1..=64).contains(&id.len())
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
 /// Headless, `KRATE_BLUETOOTH=heart`: a stand-in heart-rate strap is

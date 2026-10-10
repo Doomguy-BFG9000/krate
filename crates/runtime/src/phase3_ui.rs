@@ -611,6 +611,11 @@ impl<'a> Phase3UiDispatcher<'a> {
         self.adapter.haptic(feel, strength)
     }
 
+    /// The adapter, for reminders (IC-921), which pass through as they are.
+    pub fn reminders(&self) -> &dyn krate_adapter_common::ui::UiAdapter {
+        self.adapter
+    }
+
     /// The photo picker (IC-920).
     pub fn pick_photos(
         &self,

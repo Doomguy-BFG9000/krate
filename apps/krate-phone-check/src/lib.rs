@@ -12,7 +12,7 @@ use krate::camera::capture as camera;
 use krate::gfx::{canvas2d, canvas_images, types as gfx};
 use krate::layout::{Rect, Screen};
 use krate::speech::synthesis;
-use krate::ui::{clipboard, launcher, notify, photos, share};
+use krate::ui::{clipboard, launcher, notify, photos, reminders, share};
 use krate::{
     io::{args, stdio},
     time::clock,
@@ -79,9 +79,10 @@ enum Check {
     Share,
     Pick,
     SavePhoto,
+    Remind,
 }
 
-const CHECKS: [(Check, &str); 10] = [
+const CHECKS: [(Check, &str); 11] = [
     (Check::Copy, "Copy a line"),
     (Check::Paste, "Paste"),
     (Check::Record, "Record 3 s and play back"),
@@ -92,11 +93,12 @@ const CHECKS: [(Check, &str); 10] = [
     (Check::Share, "Share a note and a file"),
     (Check::Pick, "Pick photos"),
     (Check::SavePhoto, "Save a picture to Photos"),
+    (Check::Remind, "Remind me in 15 s"),
 ];
 
 struct Page {
     rows: Vec<Rect>,
-    results: [String; 10],
+    results: [String; 11],
     /// A recording in progress: the stream, when it started, the bytes so far.
     recording: Option<(u64, u64, Vec<u8>)>,
     camera: Option<u64>,
@@ -214,6 +216,10 @@ fn run_check(win: u64, check: Check, page: &mut Page) {
         },
         Check::SavePhoto => match photos::save(win, &gradient_png(240, 160)) {
             Ok(()) => String::from("ok: added -- look in Photos"),
+            Err(e) => format!("failed: {e:?}"),
+        },
+        Check::Remind => match reminders::schedule("check", "Phone Check", "This came with Phone Check closed. Tap to open it.", 15, false) {
+            Ok(()) => format!("ok: set ({} pending) -- now leave Krate", reminders::pending().len()),
             Err(e) => format!("failed: {e:?}"),
         },
         Check::Share => {

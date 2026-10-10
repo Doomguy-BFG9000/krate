@@ -1348,6 +1348,37 @@ mod real {
 
         // UNUserNotificationCenterDelegate, by selector.
         impl KrateNoticeDelegate {
+            /// A reminder tapped: open the app that set it (IC-921). Its
+            /// userInfo names the app; Krate's player opens it next.
+            #[unsafe(method(userNotificationCenter:didReceiveNotificationResponse:withCompletionHandler:))]
+            fn did_receive(
+                &self,
+                _center: &objc2::runtime::AnyObject,
+                response: &objc2::runtime::AnyObject,
+                done: &block2::DynBlock<dyn Fn()>,
+            ) {
+                // SAFETY: the response's notification, request, content and
+                // userInfo, read for one string Krate itself wrote.
+                let opens: Option<String> = unsafe {
+                    let notification: Retained<objc2::runtime::AnyObject> = msg_send![response, notification];
+                    let request: Retained<objc2::runtime::AnyObject> = msg_send![&*notification, request];
+                    let content: Retained<objc2::runtime::AnyObject> = msg_send![&*request, content];
+                    let info: Option<Retained<objc2::runtime::AnyObject>> = msg_send![&*content, userInfo];
+                    info.and_then(|info| {
+                        let value: Option<Retained<objc2_foundation::NSString>> =
+                            msg_send![&*info, objectForKey: &*objc2_foundation::NSString::from_str("krate-open")];
+                        value.map(|v| v.to_string())
+                    })
+                };
+                if let Some(opens) = opens {
+                    *NOTICE_OPEN.lock().expect("notice lock") = Some(opens);
+                    if guest_initialized() {
+                        close_for_opened_file();
+                    }
+                }
+                done.call(());
+            }
+
             /// Show an app's notification while Krate is in front: by
             /// default iOS shows nothing for the app on screen, and the
             /// app on screen is the one posting.
@@ -1367,6 +1398,214 @@ mod real {
     thread_local! {
         static NOTICE_DELEGATE: std::cell::OnceCell<Retained<KrateNoticeDelegate>> =
             const { std::cell::OnceCell::new() };
+    }
+
+    /// The app a tapped reminder asks to open, waiting for the player.
+    static NOTICE_OPEN: Mutex<Option<String>> = Mutex::new(None);
+    /// The running app: its id (reminders are namespaced by it) and what
+    /// the player calls it, to open it again from a reminder.
+    static CURRENT_APP: Mutex<Option<(String, String)>> = Mutex::new(None);
+
+    /// The player says which app is running, or none (IC-921).
+    pub fn set_current_app(app: Option<(String, String)>) {
+        *CURRENT_APP.lock().expect("app lock") = app;
+    }
+
+    /// The app a tapped reminder asked to open, once.
+    pub fn take_notice_open() -> Option<String> {
+        NOTICE_OPEN.lock().expect("notice lock").take()
+    }
+
+    /// Be the notification center's delegate from launch, so a reminder
+    /// tapped while Krate was closed still reaches it. Main thread.
+    pub fn install_notice_delegate() {
+        let Some(mtm) = MainThreadMarker::new() else {
+            return;
+        };
+        let Some(center_class) = objc2::runtime::AnyClass::get(c"UNUserNotificationCenter") else {
+            return;
+        };
+        // SAFETY: the current center and Krate's delegate, held for the life
+        // of the process.
+        unsafe {
+            let center: Retained<objc2::runtime::AnyObject> =
+                msg_send![center_class, currentNotificationCenter];
+            NOTICE_DELEGATE.with(|cell| {
+                let delegate = cell.get_or_init(|| {
+                    let this = KrateNoticeDelegate::alloc(mtm).set_ivars(());
+                    msg_send![super(this), init]
+                });
+                let _: () = msg_send![&*center, setDelegate: &**delegate];
+            });
+        }
+    }
+
+    fn reminder_prefix() -> Option<(String, String)> {
+        CURRENT_APP
+            .lock()
+            .expect("app lock")
+            .clone()
+            .map(|(id, opens)| (format!("krate.{id}."), opens))
+    }
+
+    /// Schedule a reminder for the running app (IC-921): identifier
+    /// `krate.<app id>.<id>`, so apps never meet; delivered by iOS with
+    /// the app closed; `daily` repeats at that time of day.
+    pub fn reminder_schedule(
+        sender: &str,
+        id: &str,
+        title: &str,
+        body: &str,
+        after: u64,
+        daily: bool,
+    ) -> Result<(), String> {
+        let (prefix, opens) = reminder_prefix().ok_or("no app is running")?;
+        let (sender, title, body) = (sender.to_string(), title.to_string(), body.to_string());
+        let full = format!("{prefix}{id}");
+        let (tx, rx) = std::sync::mpsc::channel::<Result<(), String>>();
+        DispatchQueue::main().exec_async(move || {
+            install_notice_delegate();
+            let classes = (
+                objc2::runtime::AnyClass::get(c"UNUserNotificationCenter"),
+                objc2::runtime::AnyClass::get(c"UNMutableNotificationContent"),
+                objc2::runtime::AnyClass::get(c"UNNotificationRequest"),
+                objc2::runtime::AnyClass::get(c"UNTimeIntervalNotificationTrigger"),
+                objc2::runtime::AnyClass::get(c"UNCalendarNotificationTrigger"),
+                objc2::runtime::AnyClass::get(c"NSDateComponents"),
+                objc2::runtime::AnyClass::get(c"NSDictionary"),
+            );
+            let (Some(center_class), Some(content_class), Some(request_class), Some(interval_class), Some(calendar_class), Some(components_class), Some(dict_class)) = classes else {
+                let _ = tx.send(Err("this iOS has no reminders".to_string()));
+                return;
+            };
+            // SAFETY: authorization, then a content, a trigger (a time
+            // interval, or the time of day for a daily one) and a request
+            // added to the current center; the completion answers.
+            unsafe {
+                let center: Retained<objc2::runtime::AnyObject> = msg_send![center_class, currentNotificationCenter];
+                let center_for_add = center.clone();
+                let asked = block2::RcBlock::new(move |ok: objc2::runtime::Bool, _error: *mut objc2::runtime::AnyObject| {
+                    if !ok.as_bool() {
+                        let _ = tx.send(Err("notifications are switched off for Krate: Settings > Krate > Notifications".to_string()));
+                        return;
+                    }
+                    let ns = |t: &str| objc2_foundation::NSString::from_str(t);
+                    let content: Retained<objc2::runtime::AnyObject> = msg_send![content_class, new];
+                    let _: () = msg_send![&*content, setTitle: &*ns(&sender)];
+                    let _: () = msg_send![&*content, setSubtitle: &*ns(&title)];
+                    let _: () = msg_send![&*content, setBody: &*ns(&body)];
+                    let info: Retained<objc2::runtime::AnyObject> =
+                        msg_send![dict_class, dictionaryWithObject: &*ns(&opens), forKey: &*ns("krate-open")];
+                    let _: () = msg_send![&*content, setUserInfo: &*info];
+                    let sound: Option<Retained<objc2::runtime::AnyObject>> = objc2::runtime::AnyClass::get(c"UNNotificationSound")
+                        .and_then(|class| msg_send![class, defaultSound]);
+                    if let Some(sound) = sound {
+                        let _: () = msg_send![&*content, setSound: &*sound];
+                    }
+                    let trigger: Retained<objc2::runtime::AnyObject> = if daily {
+                        // The time of day it first comes, every day.
+                        let at = std::time::SystemTime::now() + std::time::Duration::from_secs(after);
+                        let date_class = objc2::runtime::AnyClass::get(c"NSDate").expect("NSDate");
+                        let calendar_cls = objc2::runtime::AnyClass::get(c"NSCalendar").expect("NSCalendar");
+                        let secs = at.duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.0);
+                        let date: Retained<objc2::runtime::AnyObject> = msg_send![date_class, dateWithTimeIntervalSince1970: secs];
+                        let calendar: Retained<objc2::runtime::AnyObject> = msg_send![calendar_cls, currentCalendar];
+                        // Hour (32) | minute (64) | second (128).
+                        let parts: Retained<objc2::runtime::AnyObject> =
+                            msg_send![&*calendar, components: (32usize | 64 | 128), fromDate: &*date];
+                        let _ = components_class;
+                        msg_send![calendar_class, triggerWithDateMatchingComponents: &*parts, repeats: true]
+                    } else {
+                        msg_send![interval_class, triggerWithTimeInterval: after as f64, repeats: false]
+                    };
+                    let request: Retained<objc2::runtime::AnyObject> = msg_send![
+                        request_class,
+                        requestWithIdentifier: &*ns(&full),
+                        content: &*content,
+                        trigger: &*trigger
+                    ];
+                    let tx_add = tx.clone();
+                    let added = block2::RcBlock::new(move |error: *mut objc2::runtime::AnyObject| {
+                        let _ = tx_add.send(if error.is_null() {
+                            Ok(())
+                        } else {
+                            Err("iOS refused the reminder".to_string())
+                        });
+                    });
+                    let _: () = msg_send![&*center_for_add, addNotificationRequest: &*request, withCompletionHandler: &*added];
+                });
+                let _: () = msg_send![&*center, requestAuthorizationWithOptions: 7usize, completionHandler: &*asked];
+            }
+        });
+        rx.recv_timeout(std::time::Duration::from_secs(120))
+            .unwrap_or(Err("iOS did not answer".to_string()))
+    }
+
+    /// Take back one of the running app's reminders.
+    pub fn reminder_cancel(id: &str) {
+        let Some((prefix, _)) = reminder_prefix() else {
+            return;
+        };
+        let full = format!("{prefix}{id}");
+        DispatchQueue::main().exec_async(move || {
+            let Some(center_class) = objc2::runtime::AnyClass::get(c"UNUserNotificationCenter")
+            else {
+                return;
+            };
+            // SAFETY: remove one pending request by its identifier.
+            unsafe {
+                let center: Retained<objc2::runtime::AnyObject> =
+                    msg_send![center_class, currentNotificationCenter];
+                let ids = objc2_foundation::NSArray::from_retained_slice(&[
+                    objc2_foundation::NSString::from_str(&full),
+                ]);
+                let _: () =
+                    msg_send![&*center, removePendingNotificationRequestsWithIdentifiers: &*ids];
+            }
+        });
+    }
+
+    /// The running app's reminders still to come, by the app's own ids.
+    pub fn reminder_pending() -> Vec<String> {
+        let Some((prefix, _)) = reminder_prefix() else {
+            return Vec::new();
+        };
+        let (tx, rx) = std::sync::mpsc::channel::<Vec<String>>();
+        DispatchQueue::main().exec_async(move || {
+            let Some(center_class) = objc2::runtime::AnyClass::get(c"UNUserNotificationCenter")
+            else {
+                let _ = tx.send(Vec::new());
+                return;
+            };
+            // SAFETY: the pending requests, read for their identifiers.
+            unsafe {
+                let center: Retained<objc2::runtime::AnyObject> =
+                    msg_send![center_class, currentNotificationCenter];
+                let got = block2::RcBlock::new(move |requests: *mut objc2::runtime::AnyObject| {
+                    let mut ids = Vec::new();
+                    if !requests.is_null() {
+                        let count: usize = msg_send![&*requests, count];
+                        for i in 0..count {
+                            let request: Retained<objc2::runtime::AnyObject> =
+                                msg_send![&*requests, objectAtIndex: i];
+                            let id: Option<Retained<objc2_foundation::NSString>> =
+                                msg_send![&*request, identifier];
+                            if let Some(rest) = id
+                                .map(|s| s.to_string())
+                                .and_then(|s| s.strip_prefix(&prefix).map(str::to_string))
+                            {
+                                ids.push(rest);
+                            }
+                        }
+                    }
+                    let _ = tx.send(ids);
+                });
+                let _: () =
+                    msg_send![&*center, getPendingNotificationRequestsWithCompletionHandler: &*got];
+            }
+        });
+        rx.recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap_or_default()
     }
 
     /// Post a notification now (IC-918): `sender` -- the app's consented
@@ -2925,6 +3164,31 @@ mod stub {
 
     pub fn notify(_sender: &str, _title: &str, _body: &str) -> Result<(), String> {
         Err("notifications post from the iOS player only".to_string())
+    }
+
+    pub fn set_current_app(_app: Option<(String, String)>) {}
+
+    pub fn take_notice_open() -> Option<String> {
+        None
+    }
+
+    pub fn install_notice_delegate() {}
+
+    pub fn reminder_schedule(
+        _sender: &str,
+        _id: &str,
+        _title: &str,
+        _body: &str,
+        _after: u64,
+        _daily: bool,
+    ) -> Result<(), String> {
+        Err("reminders are on the iOS player only".to_string())
+    }
+
+    pub fn reminder_cancel(_id: &str) {}
+
+    pub fn reminder_pending() -> Vec<String> {
+        Vec::new()
     }
 
     pub fn haptic(_feel: Option<krate_adapter_common::ui::HapticFeel>, _strength: f32) -> bool {

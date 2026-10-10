@@ -92,6 +92,19 @@ mod player {
         }
 
         unsafe impl UIApplicationDelegate for KrateAppDelegate {
+            /// Be the notification center's delegate before launch ends, so
+            /// a reminder tapped while Krate was closed opens its app
+            /// (IC-921).
+            #[unsafe(method(application:didFinishLaunchingWithOptions:))]
+            fn did_finish_launching(
+                &self,
+                _application: &UIApplication,
+                _options: Option<&NSDictionary<objc2::runtime::AnyObject, objc2::runtime::AnyObject>>,
+            ) -> objc2::runtime::Bool {
+                krate_adapter_ios::uikit_native::install_notice_delegate();
+                objc2::runtime::Bool::YES
+            }
+
             /// "Open in Krate" from Messages, Mail, AirDrop or Files: iOS
             /// copies the file into Documents/Inbox and hands over its URL,
             /// before the app becomes active.
@@ -236,6 +249,14 @@ mod player {
                     next = Some(app);
                 }
             }
+            // A reminder tapped: the app that set it.
+            let reminded = REMINDED.lock().expect("reminded lock").take();
+            if let Some(opens) = reminded.or_else(krate_adapter_ios::uikit_native::take_notice_open)
+            {
+                if let Some(app) = app_named(&opens, &library) {
+                    next = Some(app);
+                }
+            }
             let app = match next.take() {
                 Some(app) => app,
                 None => match home(&library, &data_root) {
@@ -243,12 +264,38 @@ mod player {
                     // The home screen closed because a file was opened: go
                     // round and open it. Otherwise Krate's home was closed.
                     None if OPENED.lock().expect("opened lock").is_some() => continue,
+                    None if next.is_none() && reminder_waiting() => continue,
                     None => return,
                 },
             };
             launch(app, &data_root);
         }
     }
+
+    /// The app a reminder names: "carried", or a file in the library.
+    fn app_named(opens: &str, library: &Path) -> Option<App> {
+        #[cfg(krate_native_image)]
+        if opens == "carried" {
+            return Some(App::Carried);
+        }
+        let path = PathBuf::from(opens);
+        (path.parent() == Some(library) && path.is_file()).then_some(App::Received(path))
+    }
+
+    /// Whether a tapped reminder is waiting to open its app. Looked at, not
+    /// taken: the loop takes it on its next turn.
+    fn reminder_waiting() -> bool {
+        match krate_adapter_ios::uikit_native::take_notice_open() {
+            Some(opens) => {
+                REMINDED.lock().expect("reminded lock").replace(opens);
+                true
+            }
+            None => REMINDED.lock().expect("reminded lock").is_some(),
+        }
+    }
+
+    /// A tapped reminder seen by `reminder_waiting`, for the loop to open.
+    static REMINDED: Mutex<Option<String>> = Mutex::new(None);
 
     /// Keep a received `.krate` in the library, named for its app, so the
     /// home screen lists it and a newer copy replaces an older one.
@@ -697,6 +744,14 @@ mod player {
                 return;
             }
         };
+        // Which app runs, for its reminders: their ids are namespaced by the
+        // app's id, and a tapped one opens it again by this name.
+        let opens = match &app {
+            #[cfg(krate_native_image)]
+            App::Carried => "carried".to_string(),
+            App::Received(path) => path.to_string_lossy().into_owned(),
+        };
+        krate_adapter_ios::uikit_native::set_current_app(Some((manifest.app.id.clone(), opens)));
 
         // The line under the app's name on the permission sheet.
         let detail = match &app {
@@ -793,6 +848,7 @@ mod player {
         };
         krate_adapter_ios::uikit_native::cancel_preview();
         krate_adapter_ios::uikit_native::set_app_chrome(false);
+        krate_adapter_ios::uikit_native::set_current_app(None);
         if records {
             record_session(false);
         }

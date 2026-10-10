@@ -707,6 +707,9 @@ takes this path, so any of them is a model for the wiring.
 - `photos::save: func(window: u64, data: list<u8>) -> result<_, photos-error>`
 - `share::share: func(window: u64, text: option<string>, url: option<string>, files: list<shared-file>) -> result<bool, share-error>`
 - `notify::show: func(title: string, body: string) -> result<_, notify-error>`
+- `reminders::schedule: func(id: string, title: string, body: string, after-seconds: u64, daily: bool) -> result<_, notify-error>`
+- `reminders::cancel: func(id: string)`
+- `reminders::pending: func() -> list<string>`
 - `print::window: func(window: u64, title: string) -> result<print-outcome, ui-error>`
 - `print::add-page: func(window: u64) -> result<u32, ui-error>`
 - `print::finish: func(window: u64, title: string) -> result<print-outcome, ui-error>`
