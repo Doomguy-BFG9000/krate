@@ -15,6 +15,9 @@
   <!-- Fetching a tapped krate.tech link, and apps' own granted net.fetch
        calls, both go through the network. -->
   <uses-permission android:name="android.permission.INTERNET" />
+  <!-- krate:ui/haptics: the phone tapping back under the finger. Granted at
+       install; there is no prompt, as for any app's touch feedback. -->
+  <uses-permission android:name="android.permission.VIBRATE" />
 
   <application
       android:label="Krate"

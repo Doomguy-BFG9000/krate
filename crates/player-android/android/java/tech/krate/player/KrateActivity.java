@@ -104,6 +104,16 @@ public class KrateActivity extends NativeActivity {
         return Documents.syncBack(this, root);
     }
 
+    /** Whether the phone can tap back (krate:ui/haptics). */
+    public boolean krateHapticsAvailable() {
+        return Haptics.available(this);
+    }
+
+    /** Tap back with feel, or an impact at strength when feel is -1. */
+    public boolean krateHaptic(int feel, float strength) {
+        return Haptics.play(this, feel, strength);
+    }
+
     /** Write the file at path into the document at uri; true when it all went. */
     public boolean krateCopyOut(String path, String uri) {
         return Documents.copyOut(this, path, Uri.parse(uri));

@@ -34,6 +34,7 @@ pub mod winit_native;
 
 mod clipboard;
 mod documents;
+mod haptics;
 #[cfg(target_os = "android")]
 mod java;
 
@@ -613,6 +614,16 @@ impl UiAdapter for AndroidWinitPrototypeUiAdapter {
         filter: &str,
     ) -> Option<std::path::PathBuf> {
         documents::choose(folder, filter)
+    }
+
+    /// Whether the phone has a vibrator to tap back with (IC-917).
+    fn haptics_available(&self) -> bool {
+        haptics::available()
+    }
+
+    /// Tap back: one of the seven feels, or an impact at `strength`.
+    fn haptic(&self, feel: Option<krate_adapter_common::ui::HapticFeel>, strength: f32) -> bool {
+        haptics::play(feel, strength)
     }
 
     /// A save the app wrote, to the place the person picks in the system's
