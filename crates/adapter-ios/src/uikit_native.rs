@@ -208,6 +208,8 @@ mod real {
         window: Retained<UIWindow>,
         /// Krate's close capsule, over every app (see `set_app_chrome`).
         close: Retained<objc2_ui_kit::UIButton>,
+        /// Krate's loading cover (see `show_loading`).
+        loading: Loading,
         _close_target: Retained<KrateCloseTarget>,
         controller: Retained<KrateViewController>,
         metal: Retained<objc2_quartz_core::CAMetalLayer>,
@@ -380,11 +382,104 @@ mod real {
         impl KrateCloseTarget {
             #[unsafe(method(krateClose:))]
             fn krate_close(&self, _sender: &objc2_foundation::NSObject) {
+                // The cover at once, so the tap answers before the app has
+                // finished closing and Krate's home is drawn.
+                LOADING.store(true, std::sync::atomic::Ordering::Relaxed);
+                *LOADING_SINCE.lock().expect("loading lock") = Some(std::time::Instant::now());
+                if let Some(main_side) = MAIN_SIDE.0.get() {
+                    main_side.close.setHidden(true);
+                    cover_shown(main_side, "Krate", "");
+                }
                 SHARED.lock().expect("shared state lock").close_tapped = true;
                 INPUT_ARRIVED.notify_all();
             }
         }
     );
+
+    /// Krate's loading cover: the mark, a title, a line of status and the
+    /// system spinner, over everything while an app opens or Krate gets
+    /// ready -- so a person never watches a blank screen, or an app's first
+    /// frame drawn for the wrong size.
+    struct Loading {
+        cover: Retained<UIView>,
+        mark: Retained<UIImageView>,
+        title: Retained<objc2_ui_kit::UILabel>,
+        status: Retained<objc2_ui_kit::UILabel>,
+        spinner: Retained<objc2_ui_kit::UIActivityIndicatorView>,
+    }
+
+    static LOADING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    static LOADING_SINCE: Mutex<Option<std::time::Instant>> = Mutex::new(None);
+    /// The cover lifts on its own after this, whatever the app does.
+    const LOADING_MOST: std::time::Duration = std::time::Duration::from_secs(5);
+
+    fn cover_shown(main_side: &MainSide, title: &str, status: &str) {
+        let l = &main_side.loading;
+        l.title
+            .setText(Some(&objc2_foundation::NSString::from_str(title)));
+        l.status
+            .setText(Some(&objc2_foundation::NSString::from_str(status)));
+        l.cover.setHidden(false);
+        let host: &UIView = &main_side.view;
+        host.bringSubviewToFront(&l.cover);
+        l.spinner.startAnimating();
+    }
+
+    /// Cover the screen with Krate's loading cover. It lifts by itself on
+    /// the first frame an app draws at the screen's real size (or after five
+    /// seconds), or with `hide_loading`.
+    pub fn show_loading(title: &str, status: &str) {
+        if ensure_main_side().is_err() {
+            return;
+        }
+        LOADING.store(true, std::sync::atomic::Ordering::Relaxed);
+        *LOADING_SINCE.lock().expect("loading lock") = Some(std::time::Instant::now());
+        let (title, status) = (title.to_string(), status.to_string());
+        DispatchQueue::main().exec_async(move || {
+            if let Some(main_side) = MAIN_SIDE.0.get() {
+                cover_shown(main_side, &title, &status);
+            }
+        });
+    }
+
+    /// Lift the loading cover.
+    pub fn hide_loading() {
+        if !LOADING.swap(false, std::sync::atomic::Ordering::Relaxed) {
+            return;
+        }
+        DispatchQueue::main().exec_async(|| {
+            if let Some(main_side) = MAIN_SIDE.0.get() {
+                main_side.loading.cover.setHidden(true);
+                main_side.loading.spinner.stopAnimating();
+            }
+        });
+    }
+
+    /// A frame of `size` reached the screen: the cover lifts when the frame
+    /// is the screen's real size, or when it has been up too long.
+    fn frame_shown(size: Option<WindowSize>) {
+        if !LOADING.load(std::sync::atomic::Ordering::Relaxed) {
+            return;
+        }
+        let screen = SHARED
+            .lock()
+            .expect("shared state lock")
+            .screen
+            .map(|(l, _)| l);
+        let right_size = match (size, screen) {
+            (Some(frame), Some(screen)) => {
+                frame.width.abs_diff(screen.width) <= 1 && frame.height.abs_diff(screen.height) <= 1
+            }
+            _ => true,
+        };
+        let too_long = LOADING_SINCE
+            .lock()
+            .expect("loading lock")
+            .is_some_and(|since| since.elapsed() > LOADING_MOST);
+        if right_size || too_long {
+            hide_loading();
+        }
+    }
 
     /// Show (true) or hide Krate's close capsule. The player shows it over
     /// every app it runs and hides it on Krate's own screens.
@@ -519,6 +614,27 @@ mod real {
                 objc2_core_foundation::CGSize::new(cw, ch),
             ));
             uiview.bringSubviewToFront(close);
+            // The cover fills the view, its contents centred.
+            let l = &main_side.loading;
+            let (w, h) = (bounds.size.width, bounds.size.height);
+            let frame = |x: f64, y: f64, fw: f64, fh: f64| {
+                CGRect::new(
+                    CGPoint::new(x, y),
+                    objc2_core_foundation::CGSize::new(fw, fh),
+                )
+            };
+            l.cover.setFrame(bounds);
+            let mark: &UIView = &l.mark;
+            mark.setFrame(frame(w / 2.0 - 36.0, h / 2.0 - 96.0, 72.0, 72.0));
+            let title: &UIView = &l.title;
+            title.setFrame(frame(16.0, h / 2.0 - 8.0, w - 32.0, 28.0));
+            let status: &UIView = &l.status;
+            status.setFrame(frame(16.0, h / 2.0 + 22.0, w - 32.0, 22.0));
+            let spinner: &UIView = &l.spinner;
+            spinner.setFrame(frame(w / 2.0 - 15.0, h / 2.0 + 58.0, 30.0, 30.0));
+            if !l.cover.isHidden() {
+                uiview.bringSubviewToFront(&l.cover);
+            }
         }
         let Ok(logical) = WindowSize::new(
             (bounds.size.width as u32).max(1),
@@ -658,6 +774,15 @@ mod real {
                         objc2::sel!(krateDisplayLinkFired:),
                     )
                 };
+                // The panel's full rate: 120 Hz on a ProMotion iPhone (the
+                // Info.plist opts in), so a list follows the finger the way
+                // the phone's own apps do. iOS still lowers it for battery
+                // when nothing moves.
+                display_link.setPreferredFrameRateRange(objc2_quartz_core::CAFrameRateRange {
+                    minimum: 60.0,
+                    maximum: 120.0,
+                    preferred: 120.0,
+                });
                 unsafe {
                     display_link.addToRunLoop_forMode(
                         &objc2_foundation::NSRunLoop::mainRunLoop(),
@@ -699,7 +824,58 @@ mod real {
                     let host: &UIView = &view;
                     host.addSubview(as_view);
                 }
+                // The loading cover: light, the mark, a title, a status line
+                // and the spinner; hidden until something is loading.
+                let loading = unsafe {
+                    let cover = UIView::new(mtm);
+                    cover.setBackgroundColor(Some(
+                        &objc2_ui_kit::UIColor::colorWithRed_green_blue_alpha(
+                            0.949, 0.953, 0.969, 1.0,
+                        ),
+                    ));
+                    cover.setHidden(true);
+                    let mark_image =
+                        UIImage::imageNamed(&objc2_foundation::NSString::from_str("KrateMark"));
+                    let mark =
+                        UIImageView::initWithImage(UIImageView::alloc(mtm), mark_image.as_deref());
+                    let label = |size: f64, weight: f64, grey: f64| {
+                        let label = objc2_ui_kit::UILabel::new(mtm);
+                        label.setFont(Some(&objc2_ui_kit::UIFont::systemFontOfSize_weight(
+                            size, weight,
+                        )));
+                        label.setTextColor(Some(&objc2_ui_kit::UIColor::colorWithWhite_alpha(
+                            grey, 1.0,
+                        )));
+                        label.setTextAlignment(objc2_ui_kit::NSTextAlignment::Center);
+                        label
+                    };
+                    let title = label(20.0, objc2_ui_kit::UIFontWeightSemibold, 0.05);
+                    let status = label(15.0, objc2_ui_kit::UIFontWeightRegular, 0.45);
+                    let spinner =
+                        objc2_ui_kit::UIActivityIndicatorView::initWithActivityIndicatorStyle(
+                            objc2_ui_kit::UIActivityIndicatorView::alloc(mtm),
+                            objc2_ui_kit::UIActivityIndicatorViewStyle::Medium,
+                        );
+                    for part in [
+                        &*mark as &UIView,
+                        &*title as &UIView,
+                        &*status as &UIView,
+                        &*spinner as &UIView,
+                    ] {
+                        cover.addSubview(part);
+                    }
+                    let host: &UIView = &view;
+                    host.addSubview(&cover);
+                    Loading {
+                        cover,
+                        mark,
+                        title,
+                        status,
+                        spinner,
+                    }
+                };
                 let _ = MAIN_SIDE.0.set(MainSide {
+                    loading,
                     close,
                     _close_target: close_target,
                     metal,
@@ -949,6 +1125,14 @@ mod real {
             });
         });
         guest.dirty = false;
+        // A CPU frame lifts the loading cover only while it is what the
+        // screen shows. Once the GPU draws the canvases, the CPU blit is
+        // the empty window a new app has before its first canvas frame --
+        // lifting the cover on it showed the last app's frame, stretched,
+        // through the turn of the screen and the app's start.
+        if !GPU_ACTIVE.load(std::sync::atomic::Ordering::Relaxed) {
+            frame_shown(Some(guest.logical));
+        }
     }
 
     // ------------------------------------------------------------------
@@ -1340,11 +1524,8 @@ mod real {
                     .map(|(layer, logical)| (layer, logical, shared.panel_scale))
             };
             if let Some(((_, native_scale), logical, panel_scale)) = wanted {
-                let scale = if crate::vello_canvas::whole_frame_picture(list).is_some() {
-                    panel_scale
-                } else {
-                    native_scale
-                };
+                let picture = crate::vello_canvas::whole_frame_picture(list).is_some();
+                let scale = if picture { panel_scale } else { native_scale };
                 if gpu.layer_scale() != scale {
                     DispatchQueue::main().exec_sync(|| {
                         if let Some(main_side) = MAIN_SIDE.0.get() {
@@ -1364,6 +1545,7 @@ mod real {
             match outcome {
                 Ok(()) => {
                     diag("gpu-present-done");
+                    frame_shown(WindowSize::new(list.logical_width, list.logical_height).ok());
                     true
                 }
                 Err(why) => {
@@ -1443,6 +1625,10 @@ mod stub {
     }
 
     pub fn set_app_chrome(_visible: bool) {}
+
+    pub fn show_loading(_title: &str, _status: &str) {}
+
+    pub fn hide_loading() {}
 
     pub fn drain_wheel_samples() -> Vec<RawWheelSample> {
         Vec::new()

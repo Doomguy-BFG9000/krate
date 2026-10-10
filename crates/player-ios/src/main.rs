@@ -161,6 +161,7 @@ mod player {
         let library = data_root.join("Library");
         let _ = std::fs::create_dir_all(&library);
 
+        krate_adapter_ios::uikit_native::show_loading("Krate", "");
         let opened = OPENED.lock().expect("opened lock").take();
         let mut next = opened.and_then(|path| receive(&path, &library, &data_root));
         loop {
@@ -197,6 +198,7 @@ mod player {
                 .map_err(|_| "This app's description could not be read.".to_string())?;
             let into = library.join(format!("{}.krate", sanitize(&manifest.app.id)));
             std::fs::copy(path, &into).map_err(|err| format!("Could not keep the app: {err}"))?;
+            remember(library, &into, &manifest.app.name);
             Ok(into)
         })();
         // iOS put the file in Documents/Inbox for us; it is ours to remove.
@@ -210,6 +212,96 @@ mod player {
         }
     }
 
+    /// The library's index: one line per kept app -- file name, app name,
+    /// SHA-256, size -- so the home screen lists the library without
+    /// unpacking every app to read its name each time it is drawn.
+    fn remember(library: &Path, file: &Path, name: &str) {
+        let Ok(bytes) = std::fs::read(file) else {
+            return;
+        };
+        let file_name = file
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let index = library.join("index.tsv");
+        let mut lines: Vec<String> = std::fs::read_to_string(&index)
+            .unwrap_or_default()
+            .lines()
+            .filter(|l| l.split('\t').next() != Some(file_name.as_str()))
+            .map(str::to_string)
+            .collect();
+        lines.push(format!(
+            "{file_name}\t{}\t{}\t{}",
+            field(name),
+            krate_bundle::sha256_hex(&bytes),
+            bytes.len()
+        ));
+        let _ = std::fs::write(index, lines.join("\n") + "\n");
+    }
+
+    /// The library's apps, newest first: (file, name, sha, size). Apps kept
+    /// before the index existed are read once and added to it.
+    fn library_apps(library: &Path) -> Vec<(PathBuf, String, String, u64)> {
+        let index = std::fs::read_to_string(library.join("index.tsv")).unwrap_or_default();
+        let mut known: std::collections::HashMap<String, (String, String, u64)> = index
+            .lines()
+            .filter_map(|l| {
+                let f: Vec<&str> = l.split('\t').collect();
+                (f.len() == 4).then(|| {
+                    (
+                        f[0].to_string(),
+                        (
+                            f[1].to_string(),
+                            f[2].to_string(),
+                            f[3].parse().unwrap_or(0),
+                        ),
+                    )
+                })
+            })
+            .collect();
+        let mut files: Vec<(std::time::SystemTime, PathBuf)> = std::fs::read_dir(library)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|path| path.extension().is_some_and(|ext| ext == "krate"))
+            .map(|path| {
+                let at = std::fs::metadata(&path)
+                    .and_then(|m| m.modified())
+                    .unwrap_or(std::time::UNIX_EPOCH);
+                (at, path)
+            })
+            .collect();
+        files.sort_by(|a, b| b.0.cmp(&a.0));
+        let mut out = Vec::new();
+        for (_, path) in files {
+            let name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+            if !known.get(&name).is_some_and(|k| k.2 == size) {
+                let app_name = krate_bundle::open(&path)
+                    .ok()
+                    .and_then(|open| std::fs::read_to_string(open.manifest_path()).ok())
+                    .and_then(|text| krate_manifest::Manifest::parse(&text).ok())
+                    .map(|manifest| manifest.app.name);
+                let Some(app_name) = app_name else {
+                    continue;
+                };
+                remember(library, &path, &app_name);
+                let sha = std::fs::read(&path)
+                    .map(|b| krate_bundle::sha256_hex(&b))
+                    .unwrap_or_default();
+                known.insert(name.clone(), (app_name, sha, size));
+            }
+            if let Some((app_name, sha, size)) = known.get(&name).cloned() {
+                out.push((path, app_name, sha, size));
+            }
+        }
+        out
+    }
+
     /// Krate's own screens: Library and Discover (apps/krate-home). The
     /// player prepares what they show -- the library, the hub catalogue,
     /// decoded screenshots -- and acts on the answer: open an app, get one
@@ -220,11 +312,24 @@ mod player {
         let art_dir = ui.join("art");
         let _ = std::fs::create_dir_all(&art_dir);
         let mut start = None;
+        // The hub's catalogue as last fetched, refreshed in the background
+        // for next time -- coming back from an app waited seconds on the
+        // network. Only the very first visit, with nothing cached, waits.
+        if crate::hub::catalogue(&ui).is_empty() {
+            krate_adapter_ios::uikit_native::show_loading("Krate", "Loading apps");
+            crate::hub::refresh(&ui, &art_dir);
+        } else {
+            static REFRESHED: std::sync::Once = std::sync::Once::new();
+            REFRESHED.call_once(|| {
+                let (ui, art_dir) = (ui.clone(), art_dir.clone());
+                std::thread::spawn(move || crate::hub::refresh(&ui, &art_dir));
+            });
+        }
         loop {
             let hub_apps = crate::hub::catalogue(&ui);
             let hub_art: std::collections::HashMap<String, String> = hub_apps
                 .iter()
-                .filter_map(|app| Some((app.id.clone(), crate::hub::art(app, &art_dir)?)))
+                .filter_map(|app| Some((app.id.clone(), crate::hub::cached_art(app, &art_dir)?)))
                 .collect();
 
             let mut apps: Vec<App> = Vec::new();
@@ -237,42 +342,14 @@ mod player {
                     field(&manifest.app.name)
                 ));
             }
-            let mut received: Vec<(std::time::SystemTime, PathBuf)> = std::fs::read_dir(library)
-                .into_iter()
-                .flatten()
-                .flatten()
-                .map(|entry| entry.path())
-                .filter(|path| path.extension().is_some_and(|ext| ext == "krate"))
-                .map(|path| {
-                    let at = std::fs::metadata(&path)
-                        .and_then(|m| m.modified())
-                        .unwrap_or(std::time::UNIX_EPOCH);
-                    (at, path)
-                })
-                .collect();
-            received.sort_by(|a, b| b.0.cmp(&a.0));
-            for (_, path) in received {
-                let Ok(bytes) = std::fs::read(&path) else {
-                    continue;
-                };
-                let name = krate_bundle::open(&path)
-                    .ok()
-                    .and_then(|open| std::fs::read_to_string(open.manifest_path()).ok())
-                    .and_then(|text| krate_manifest::Manifest::parse(&text).ok())
-                    .map(|manifest| manifest.app.name);
-                let Some(name) = name else {
-                    continue;
-                };
+            for (path, name, sha, size) in library_apps(library) {
                 // An app that came from the hub shows its hub picture: the
                 // hub names apps by the SHA-256 of their bytes.
-                let art = hub_art
-                    .get(&krate_bundle::sha256_hex(&bytes))
-                    .map(String::as_str)
-                    .unwrap_or("-");
+                let art = hub_art.get(&sha).map(String::as_str).unwrap_or("-");
                 rows.push(format!(
                     "{}\tReceived \u{00b7} {}\t{art}",
                     field(&name),
-                    human_size(bytes.len() as u64)
+                    human_size(size)
                 ));
                 apps.push(App::Received(path));
             }
@@ -314,6 +391,12 @@ mod player {
             }
             if let Some(id) = answer.strip_prefix("home:get:") {
                 let id: String = id.trim().chars().filter(char::is_ascii_hexdigit).collect();
+                let name = hub_apps
+                    .iter()
+                    .find(|app| app.id == id)
+                    .map(|app| app.name.clone())
+                    .unwrap_or_else(|| "The app".to_string());
+                krate_adapter_ios::uikit_native::show_loading(&name, "Getting it from the hub");
                 match crate::hub::download(&id, MAX_BUNDLE_BYTES) {
                     Ok(bytes) => {
                         let downloads = data_root.join("Downloads");
@@ -546,7 +629,10 @@ mod player {
         #[cfg(not(krate_native_image))]
         let native = false;
 
-        // Krate's close capsule over the app, the way back home.
+        // The cover while the app starts -- the screen turning, an engine
+        // loading -- lifting on the app's first frame at the screen's real
+        // size; Krate's close capsule over the app, the way back home.
+        krate_adapter_ios::uikit_native::show_loading(&manifest.app.name, "Opening");
         krate_adapter_ios::uikit_native::set_app_chrome(true);
         let outcome = if native {
             run_native(&config)
@@ -559,6 +645,8 @@ mod player {
             })
         };
         krate_adapter_ios::uikit_native::set_app_chrome(false);
+        // Back home: the cover until Krate's own screen has drawn.
+        krate_adapter_ios::uikit_native::show_loading("Krate", "");
         match outcome {
             Ok(outcome) => eprintln!("app finished: {outcome:?}"),
             Err(err) => {

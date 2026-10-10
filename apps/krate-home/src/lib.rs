@@ -971,10 +971,13 @@ impl krate::Guest for Component {
         };
 
         // Draw only after a change. A flick keeps gliding after the finger
-        // lifts and slows to a stop, the way a phone list moves.
+        // lifts and slows to a stop, the way a phone list moves: velocity is
+        // in points per millisecond and every step uses the time that really
+        // passed, so an uneven frame shows as a longer step, not a stutter.
         let mut dirty = true;
         let mut velocity = 0.0f32;
         let mut last_wheel = 0u64;
+        let mut last_step = 0u64;
         let mut pressed_at: Option<usize> = None;
         loop {
             let (w, h) = match canvas2d::canvas_size(canvas) {
@@ -989,8 +992,8 @@ impl krate::Guest for Component {
                 let _ = window::request_redraw(win);
                 dirty = false;
             }
-            let gliding = velocity.abs() > 0.3;
-            let event = events::wait(if gliding { Some(16) } else { None });
+            let gliding = velocity.abs() > 0.02;
+            let event = events::wait(if gliding { Some(8) } else { None });
             let now = clock::monotonic_nanos();
             match event {
                 Some(types::Event::CloseRequested(_)) => {
@@ -999,10 +1002,13 @@ impl krate::Guest for Component {
                 }
                 Some(types::Event::Resized(_)) => dirty = true,
                 Some(types::Event::Wheel(wheel)) => {
-                    // The finger's own speed, per 16 ms frame, smoothed.
-                    let dt = ((now - last_wheel) as f32 / 16_000_000.0).clamp(1.0, 6.0);
-                    velocity = velocity * 0.4 + (wheel.dy / dt) * 0.6;
+                    // The finger's own speed, smoothed; a pause forgets the
+                    // speed before it.
+                    let gap = (now - last_wheel) as f32 / 1_000_000.0;
+                    let speed = wheel.dy / gap.clamp(4.0, 100.0);
+                    velocity = if gap > 100.0 { speed } else { velocity * 0.3 + speed * 0.7 };
                     last_wheel = now;
+                    last_step = now;
                     let max = (screen.content - h).max(0.0);
                     let s = screen.scroll();
                     let next = (*s + wheel.dy).clamp(0.0, max);
@@ -1053,15 +1059,22 @@ impl krate::Guest for Component {
                     }
                 }
                 None if gliding && now - last_wheel > 40_000_000 => {
-                    // The finger has lifted: keep going, slowing down.
+                    // The finger has lifted: keep going, slowing down at
+                    // iOS's own rate (0.998 per millisecond).
+                    let dt = ((now - last_step) as f32 / 1_000_000.0).min(50.0);
+                    last_step = now;
                     let max = (screen.content - h).max(0.0);
                     let s = screen.scroll();
-                    let next = (*s + velocity).clamp(0.0, max);
+                    let next = (*s + velocity * dt).clamp(0.0, max);
                     if next == *s {
                         velocity = 0.0;
                     } else {
                         *s = next;
-                        velocity *= 0.95;
+                        // 0.998 to the power dt, without a float library.
+                        for _ in 0..dt as u32 {
+                            velocity *= 0.998;
+                        }
+                        velocity *= 1.0 - 0.002 * (dt - (dt as u32) as f32);
                         dirty = true;
                     }
                 }

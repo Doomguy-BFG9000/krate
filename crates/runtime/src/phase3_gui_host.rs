@@ -2454,6 +2454,24 @@ impl Phase3GuiHost {
                 }
                 _ => {}
             }
+            // A window that changed size takes its canvases with it NOW,
+            // before the app hears of it and redraws. They used to follow
+            // only when the app asked its size (or a tap made the host
+            // look), so an app with a design size -- which never asks --
+            // drew its first frames for the window it asked for: on an
+            // iPhone a calculator sat in the top-left corner until touched.
+            if let UiEvent::Resized { id, .. } = &event {
+                let bound: Vec<u64> = self
+                    .canvases
+                    .borrow()
+                    .iter()
+                    .filter(|(_, (window, _, _))| window == id)
+                    .map(|(canvas, _)| *canvas)
+                    .collect();
+                for canvas in bound {
+                    let _ = self.refit_canvas(canvas);
+                }
+            }
             if let Some(event) = event_to_wit(event) {
                 // Count a close request at the one point every real event
                 // passes exactly once -- not in poll/wait/key-held, where an
@@ -3524,6 +3542,20 @@ impl ui::window::Host for Phase3GuiHost {
             Ok(size) => size,
             Err(err) => return Ok(Err(ui::types::UiError::Platform(err.to_string()))),
         };
+        // `KRATE_SCREEN=390x844` (headless only): the window is that screen
+        // whatever the app asked for, as on a phone, so a shot shows what a
+        // phone shows. The app's own ask is still what `requested` records.
+        let asked = size;
+        let size = match (self.headless, std::env::var("KRATE_SCREEN").ok()) {
+            (true, Some(screen)) => screen
+                .split_once('x')
+                .and_then(|(w, h)| {
+                    Some((w.trim().parse::<u32>().ok()?, h.trim().parse::<u32>().ok()?))
+                })
+                .and_then(|(w, h)| WindowSize::new(w, h).ok())
+                .unwrap_or(size),
+            _ => size,
+        };
         let options = match WindowOptions::new(title, size) {
             Ok(options) => options,
             Err(err) => return Ok(Err(ui::types::UiError::Platform(err.to_string()))),
@@ -3540,7 +3572,7 @@ impl ui::window::Host for Phase3GuiHost {
         krate_adapter_common::vector_text::warm_text_engine();
 
         let title_note = options.title.clone();
-        let requested = (size.width as f32, size.height as f32);
+        let requested = (asked.width as f32, asked.height as f32);
         match self.dispatcher().create_window(options) {
             Ok(id) => {
                 self.windows.push(id);

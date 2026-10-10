@@ -52,6 +52,8 @@ cp "$PROFILE" "$OUT/embedded.mobileprovision"
 # The home-screen icon: the desktop app's 1024 px mark on a full-bleed
 # square (iOS rounds the corners itself), compiled into an asset catalog --
 # loose PNGs were upscaled from 60 pt and showed blurry and over-cropped.
+# The mark the loading cover shows (the site's logo, transparent).
+cp docs/landing/krate-logo.png "$OUT/KrateMark.png"
 xcrun actool crates/player-ios/icons/Assets.xcassets --compile "$OUT" \
   --platform iphoneos --minimum-deployment-target 15.0 --app-icon AppIcon \
   --target-device iphone --output-partial-info-plist /tmp/krate-icon.plist >/dev/null
@@ -86,6 +88,7 @@ cat > "$OUT/Info.plist" <<PLIST
   <key>CFBundleShortVersionString</key><string>0.1.9</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>MinimumOSVersion</key><string>15.0</string>
+  <key>CADisableMinimumFrameDurationOnPhone</key><true/>
   <key>UIDeviceFamily</key><array><integer>1</integer></array>
   <key>UILaunchScreen</key><dict/>
   $EXTRA

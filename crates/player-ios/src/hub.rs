@@ -48,19 +48,28 @@ fn get(url: &str, limit: u64) -> Result<Vec<u8>, String> {
     Ok(bytes)
 }
 
-/// The listed apps, fresh when the hub answers, else the last ones seen.
-pub fn catalogue(cache: &Path) -> Vec<HubApp> {
-    let file = cache.join("catalogue.json");
-    let text = match get(&format!("{HUB}/apps"), 8 * 1024 * 1024) {
+/// Fetch the catalogue and any screenshot not yet decoded, into the cache,
+/// for the next time the home screen is drawn. Slow (the network), so the
+/// home screen never waits on it except the very first time.
+pub fn refresh(cache: &Path, art_dir: &Path) {
+    match get(&format!("{HUB}/apps"), 8 * 1024 * 1024) {
         Ok(bytes) => {
-            let _ = std::fs::write(&file, &bytes);
-            String::from_utf8_lossy(&bytes).into_owned()
+            // Written whole, then moved into place: a reader never sees half.
+            let part = cache.join("catalogue.json.part");
+            if std::fs::write(&part, &bytes).is_ok() {
+                let _ = std::fs::rename(&part, cache.join("catalogue.json"));
+            }
         }
-        Err(why) => {
-            eprintln!("hub catalogue: {why}; using the last one");
-            std::fs::read_to_string(&file).unwrap_or_default()
-        }
-    };
+        Err(why) => eprintln!("hub catalogue: {why}; keeping the last one"),
+    }
+    for app in catalogue(cache) {
+        let _ = art(&app, art_dir);
+    }
+}
+
+/// The listed apps, as last fetched; empty before the first fetch.
+pub fn catalogue(cache: &Path) -> Vec<HubApp> {
+    let text = std::fs::read_to_string(cache.join("catalogue.json")).unwrap_or_default();
     let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) else {
         return Vec::new();
     };
@@ -90,10 +99,20 @@ pub fn catalogue(cache: &Path) -> Vec<HubApp> {
         .collect()
 }
 
+fn art_name(app: &HubApp) -> String {
+    format!("{}.rgba", &app.id[..app.id.len().min(16)])
+}
+
+/// The app's screenshot file, if it has been fetched and decoded already.
+pub fn cached_art(app: &HubApp, art_dir: &Path) -> Option<String> {
+    let name = art_name(app);
+    art_dir.join(&name).exists().then_some(name)
+}
+
 /// The app's screenshot as a ready-to-draw file in `art_dir`, fetched and
 /// decoded the first time. Returns its file name.
 pub fn art(app: &HubApp, art_dir: &Path) -> Option<String> {
-    let name = format!("{}.rgba", &app.id[..app.id.len().min(16)]);
+    let name = art_name(app);
     if art_dir.join(&name).exists() {
         return Some(name);
     }

@@ -136,10 +136,8 @@ impl GpuCanvas {
                 caps.alpha_modes[0]
             },
             view_formats: vec![],
-            // One frame in flight: with FIFO as the single pacer, a
-            // second queued frame is a whole extra frame of latency
-            // between the finger and the glass.
-            desired_maximum_frame_latency: 1,
+            // Two frames in flight (see `present`).
+            desired_maximum_frame_latency: 2,
         };
         surface.configure(&device, &surface_config);
 
@@ -199,8 +197,11 @@ impl GpuCanvas {
         if let Some(image) = whole_frame_picture(list) {
             return self.present_picture(image);
         }
-        if self.surface_config.desired_maximum_frame_latency != 1 {
-            self.surface_config.desired_maximum_frame_latency = 1;
+        // Two frames in flight, as for pictures. With one, a frame that
+        // took 3 ms to draw still waited 30 ms for the panel to show the
+        // last one: the store scrolled at 31 fps on an iPhone 13 Pro.
+        if self.surface_config.desired_maximum_frame_latency != 2 {
+            self.surface_config.desired_maximum_frame_latency = 2;
             self.surface.configure(&self.device, &self.surface_config);
         }
         let t_scene = std::time::Instant::now();
@@ -612,11 +613,10 @@ impl GpuCanvas {
             let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
             self.picture = Some((texture, view));
         }
-        // Two frames in flight for pictures. With one, a game whose frame
-        // takes 13 ms waited for the panel to show the last frame before it
-        // could hand over the next, and landed every other refresh: 30 fps
-        // on an iPhone 13 Pro that could draw 70. Interface frames keep one
-        // (set back in `present`), for the shortest finger-to-glass time.
+        // Two frames in flight. With one, a game whose frame takes 13 ms
+        // waited for the panel to show the last frame before it could hand
+        // over the next, and landed every other refresh: 30 fps on an
+        // iPhone 13 Pro that could draw 70.
         if self.surface_config.desired_maximum_frame_latency != 2 {
             self.surface_config.desired_maximum_frame_latency = 2;
             self.surface.configure(&self.device, &self.surface_config);
@@ -1011,16 +1011,25 @@ fn fs(in: VsOut) -> @location(0) vec4<f32> {
 pub(crate) fn whole_frame_picture(
     list: &CanvasList,
 ) -> Option<&krate_adapter_common::ui::ImagePixels> {
-    if list.design.is_some() {
-        return None;
-    }
+    // The picture must cover what the app draws in: its design when it set
+    // one, the canvas otherwise. A design of another shape is letterboxed,
+    // and the spare space is the vector path's to fill.
+    let (cw, ch) = match list.design {
+        None => (list.logical_width as f32, list.logical_height as f32),
+        Some((dw, dh)) => {
+            let (sw, sh) = (list.logical_width as f32, list.logical_height as f32);
+            if dw <= 0.0 || dh <= 0.0 || ((dw / dh) / (sw / sh) - 1.0).abs() > 0.01 {
+                return None;
+            }
+            (dw, dh)
+        }
+    };
     let mut picture = None;
     for op in &list.ops {
         match op {
             CanvasOp::Clear(_) | CanvasOp::SetClip(None) if picture.is_none() => {}
             CanvasOp::Pixels { rect, image } if picture.is_none() => {
                 let (x, y, w, h) = *rect;
-                let (cw, ch) = (list.logical_width as f32, list.logical_height as f32);
                 let covers = x <= 0.5
                     && y <= 0.5
                     && (x + w - cw).abs() <= cw * 0.01 + 0.5
