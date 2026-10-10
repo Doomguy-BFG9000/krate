@@ -424,6 +424,28 @@ fn component_error(err: &(dyn std::error::Error + 'static)) -> String {
     message.lines().next().unwrap_or("unreadable").to_string()
 }
 
+/// Where compiled apps are kept: `KRATE_CACHE_DIR`, else the platform's
+/// cache folder, under `compiled`. `KRATE_NO_COMPILE_CACHE=1` turns it off
+/// (measuring a cold start).
+#[cfg(not(any(target_os = "ios", target_arch = "wasm32")))]
+fn compile_cache_dir() -> Option<PathBuf> {
+    if std::env::var_os("KRATE_NO_COMPILE_CACHE").is_some() {
+        return None;
+    }
+    let root = if let Some(root) = std::env::var_os("KRATE_CACHE_DIR") {
+        PathBuf::from(root)
+    } else if cfg!(target_os = "windows") {
+        PathBuf::from(std::env::var_os("LOCALAPPDATA")?)
+            .join("Krate")
+            .join("cache")
+    } else {
+        PathBuf::from(std::env::var_os("HOME")?)
+            .join(".cache")
+            .join("krate")
+    };
+    Some(root.join("compiled"))
+}
+
 pub struct Runtime {
     engine: Engine,
 }
@@ -529,6 +551,24 @@ impl Runtime {
         // check-app stage at the speed they were.
         if config.phase3_ui_mode.can_open_a_window() {
             wt_config.epoch_interruption(true);
+        }
+
+        // Compiled code is kept on disk, keyed by the component's bytes and
+        // these exact engine settings, so an app compiles once rather than on
+        // every run. Measured on an M4 with a 38 MB Bevy app (the Bistro
+        // scene): 4.9 s from launch to the app's first line without it,
+        // 0.35 s with it. wasmtime checks the key and the artifact; a cache
+        // it cannot open is a cache miss, never a refusal.
+        #[cfg(not(any(target_os = "ios", target_arch = "wasm32")))]
+        if let Some(dir) = compile_cache_dir() {
+            let mut cache = wasmtime::CacheConfig::new();
+            cache.with_directory(dir);
+            match wasmtime::Cache::new(cache) {
+                Ok(cache) => {
+                    wt_config.cache(Some(cache));
+                }
+                Err(error) => tracing::debug!(%error, "no compile cache this run"),
+            }
         }
 
         Ok(wt_config)
