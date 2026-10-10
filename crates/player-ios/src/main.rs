@@ -191,6 +191,33 @@ mod player {
         }
     }
 
+    /// While an app that may record runs, the session plays AND records:
+    /// the play-only session refuses the microphone, so a voice memo made in
+    /// Studio heard nothing on an iPhone (IC-918). Sound still comes out of
+    /// the speaker, not the earpiece, and Bluetooth headphones still play.
+    fn record_session(records: bool) {
+        // SAFETY: ordinary category changes on the shared session.
+        unsafe {
+            let session = objc2_avf_audio::AVAudioSession::sharedInstance();
+            let result = if records {
+                objc2_avf_audio::AVAudioSessionCategoryPlayAndRecord.map(|category| {
+                    // DefaultToSpeaker (0x8) | AllowBluetoothA2DP (0x20).
+                    session.setCategory_withOptions_error(
+                        category,
+                        objc2_avf_audio::AVAudioSessionCategoryOptions(0x8 | 0x20),
+                    )
+                })
+            } else {
+                objc2_avf_audio::AVAudioSessionCategoryPlayback
+                    .map(|category| session.setCategory_error(category))
+            };
+            if let Some(Err(why)) = result {
+                eprintln!("krate: audio session category refused: {why:?}");
+            }
+            let _ = session.setActive_error(true);
+        }
+    }
+
     fn run_player() {
         audio_session();
         let data_root = std::env::var("HOME")
@@ -704,6 +731,10 @@ mod player {
             .map(|(_, capability)| capability)
             .collect();
 
+        let records = kept
+            .iter()
+            .any(|cap| cap.module() == "audio" && cap.action() == "capture");
+        record_session(records);
         let sandbox = data_root.join("apps").join(sanitize(&manifest.app.id));
         let _ = std::fs::create_dir_all(&sandbox);
         // The app's key-value store and database: the runtime opens them only
@@ -762,6 +793,9 @@ mod player {
         };
         krate_adapter_ios::uikit_native::cancel_preview();
         krate_adapter_ios::uikit_native::set_app_chrome(false);
+        if records {
+            record_session(false);
+        }
         // Back home: the cover until Krate's own screen has drawn.
         krate_adapter_ios::uikit_native::show_loading("Krate", "");
         match outcome {

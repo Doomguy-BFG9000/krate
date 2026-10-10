@@ -37,7 +37,8 @@ mod async_ws;
 mod audio_capture;
 mod audio_playback;
 pub mod camera_capture;
-#[cfg(target_os = "macos")]
+// AVFoundation's capture classes are the same on an iPhone (IC-918).
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 mod camera_macos;
 #[cfg(any(target_os = "windows", target_os = "linux"))]
 mod camera_nokhwa;

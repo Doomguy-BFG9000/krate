@@ -1,0 +1,51 @@
+[app]
+id = "dev.krate.phone-check"
+name = "Phone Check"
+version = "0.1.0"
+entry = "target/wasm32-wasip1/release/krate_phone_check.wasm"
+world = "krate:app/gui@0.2.0"
+
+[[capabilities]]
+cap = "ui.window:create"
+rationale = "A window of checks"
+required = true
+
+[[capabilities]]
+cap = "ui.clipboard:write"
+rationale = "Copy a line of text"
+required = true
+
+[[capabilities]]
+cap = "ui.clipboard:read"
+rationale = "Paste what you copied"
+required = true
+
+[[capabilities]]
+cap = "audio.capture"
+rationale = "Record three seconds and play them back"
+required = true
+
+[[capabilities]]
+cap = "audio.playback"
+rationale = "Play the recording back and speak a sentence"
+required = true
+
+[[capabilities]]
+cap = "camera.capture"
+rationale = "Show what the camera sees"
+required = true
+
+[[capabilities]]
+cap = "ui.notify"
+rationale = "Post one notification"
+required = true
+
+[[capabilities]]
+cap = "ui.open-url"
+rationale = "Open krate.tech in the browser"
+required = true
+
+[[capabilities]]
+cap = "io.stdout"
+rationale = "Report each check, for automated runs"
+required = true

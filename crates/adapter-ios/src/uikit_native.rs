@@ -734,6 +734,12 @@ mod real {
     /// the last layout so a reading can be turned into the screen's frame.
     static INTERFACE_TURN: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(1);
 
+    /// The way the interface is turned now, as UIKit numbers it (1 upright,
+    /// 2 upside down, 3 home button right, 4 home button left).
+    pub fn interface_turn() -> u8 {
+        INTERFACE_TURN.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
     fn motion_class() -> Option<&'static objc2::runtime::AnyClass> {
         objc2::runtime::AnyClass::get(c"CMMotionManager")
     }
@@ -944,6 +950,131 @@ mod real {
                 age_ms: (age.max(0.0) * 1000.0) as u64,
             })
         }
+    }
+
+    /// Open a link that has passed the runtime's checks (IC-918): iOS hands
+    /// it to Safari, Mail or the app that owns it.
+    pub fn open_url(url: &str) -> Result<(), String> {
+        let text = url.to_string();
+        let (tx, rx) = std::sync::mpsc::channel();
+        DispatchQueue::main().exec_async(move || {
+            let answer = (|| {
+                let class = objc2::runtime::AnyClass::get(c"NSURL").ok_or("no NSURL")?;
+                // SAFETY: +[NSURL URLWithString:] (nil for a malformed one),
+                // then UIApplication's openURL:options:completionHandler:.
+                unsafe {
+                    let link: Option<Retained<objc2::runtime::AnyObject>> =
+                        msg_send![class, URLWithString: &*objc2_foundation::NSString::from_str(&text)];
+                    let link = link.ok_or("iOS could not read that link")?;
+                    let app = UIApplication::sharedApplication(MainThreadMarker::new().ok_or("not on the main thread")?);
+                    let options = objc2_foundation::NSDictionary::<objc2::runtime::AnyObject, objc2::runtime::AnyObject>::new();
+                    let _: () = msg_send![&*app, openURL: &*link, options: &*options, completionHandler: Option::<&objc2::runtime::AnyObject>::None];
+                }
+                Ok::<(), &'static str>(())
+            })();
+            let _ = tx.send(answer.map_err(str::to_string));
+        });
+        rx.recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap_or_else(|_| Err("iOS did not answer".to_string()))
+    }
+
+    // UserNotifications, through the Objective-C runtime.
+    #[link(name = "UserNotifications", kind = "framework")]
+    unsafe extern "C" {}
+
+    define_class!(
+        // SAFETY:
+        // - NSObject has no subclassing requirements for a delegate.
+        // - UserNotifications calls it on the main thread.
+        #[unsafe(super = objc2_foundation::NSObject)]
+        #[thread_kind = MainThreadOnly]
+        struct KrateNoticeDelegate;
+
+        // SAFETY: NSObjectProtocol has no additional requirements.
+        unsafe impl NSObjectProtocol for KrateNoticeDelegate {}
+
+        // UNUserNotificationCenterDelegate, by selector.
+        impl KrateNoticeDelegate {
+            /// Show an app's notification while Krate is in front: by
+            /// default iOS shows nothing for the app on screen, and the
+            /// app on screen is the one posting.
+            #[unsafe(method(userNotificationCenter:willPresentNotification:withCompletionHandler:))]
+            fn will_present(
+                &self,
+                _center: &objc2::runtime::AnyObject,
+                _notification: &objc2::runtime::AnyObject,
+                done: &block2::DynBlock<dyn Fn(usize)>,
+            ) {
+                // Banner (16) | list (8) | sound (2).
+                done.call((16 | 8 | 2,));
+            }
+        }
+    );
+
+    thread_local! {
+        static NOTICE_DELEGATE: std::cell::OnceCell<Retained<KrateNoticeDelegate>> =
+            const { std::cell::OnceCell::new() };
+    }
+
+    /// Post a notification now (IC-918): `sender` -- the app's consented
+    /// name, never its own words -- on the title line, the app's title
+    /// under it. iOS asks the person once whether Krate may notify.
+    pub fn notify(sender: &str, title: &str, body: &str) -> Result<(), String> {
+        let (sender, title, body) = (sender.to_string(), title.to_string(), body.to_string());
+        DispatchQueue::main().exec_async(move || {
+            let Some(mtm) = MainThreadMarker::new() else {
+                return;
+            };
+            let Some(center_class) = objc2::runtime::AnyClass::get(c"UNUserNotificationCenter") else {
+                return;
+            };
+            // SAFETY: the current notification center, its delegate held by
+            // Krate (it holds delegates weakly), and an authorization request
+            // whose completion posts the notification.
+            unsafe {
+                let center: Retained<objc2::runtime::AnyObject> = msg_send![center_class, currentNotificationCenter];
+                NOTICE_DELEGATE.with(|cell| {
+                    let delegate = cell.get_or_init(|| {
+                        let this = KrateNoticeDelegate::alloc(mtm).set_ivars(());
+                        msg_send![super(this), init]
+                    });
+                    let _: () = msg_send![&*center, setDelegate: &**delegate];
+                });
+                let center_for_post = center.clone();
+                let granted = block2::RcBlock::new(move |ok: objc2::runtime::Bool, _error: *mut objc2::runtime::AnyObject| {
+                    if !ok.as_bool() {
+                        return;
+                    }
+                    let (Some(content_class), Some(request_class)) = (
+                        objc2::runtime::AnyClass::get(c"UNMutableNotificationContent"),
+                        objc2::runtime::AnyClass::get(c"UNNotificationRequest"),
+                    ) else {
+                        return;
+                    };
+                    let ns = |t: &str| objc2_foundation::NSString::from_str(t);
+                    let content: Retained<objc2::runtime::AnyObject> = msg_send![content_class, new];
+                    let _: () = msg_send![&*content, setTitle: &*ns(&sender)];
+                    let _: () = msg_send![&*content, setSubtitle: &*ns(&title)];
+                    let _: () = msg_send![&*content, setBody: &*ns(&body)];
+                    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+                    let id = format!("krate-{}", NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
+                    let request: Retained<objc2::runtime::AnyObject> = msg_send![
+                        request_class,
+                        requestWithIdentifier: &*ns(&id),
+                        content: &*content,
+                        trigger: Option::<&objc2::runtime::AnyObject>::None
+                    ];
+                    let _: () = msg_send![
+                        &*center_for_post,
+                        addNotificationRequest: &*request,
+                        withCompletionHandler: Option::<&objc2::runtime::AnyObject>::None
+                    ];
+                });
+                // Alert (4) | sound (2) | badge (1).
+                let _: () = msg_send![&*center, requestAuthorizationWithOptions: 7usize, completionHandler: &*granted];
+            }
+        });
+        Ok(())
     }
 
     /// The controller Krate's own sheets are shown from.
@@ -2417,6 +2548,14 @@ mod stub {
 
     pub fn export_file(_path: &std::path::Path) -> bool {
         false
+    }
+
+    pub fn open_url(_url: &str) -> Result<(), String> {
+        Err("links open from the iOS player only".to_string())
+    }
+
+    pub fn notify(_sender: &str, _title: &str, _body: &str) -> Result<(), String> {
+        Err("notifications post from the iOS player only".to_string())
     }
 
     pub fn haptic(_feel: Option<krate_adapter_common::ui::HapticFeel>, _strength: f32) -> bool {
