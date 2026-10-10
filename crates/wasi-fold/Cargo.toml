@@ -1,0 +1,21 @@
+[package]
+name = "krate-wasi-fold"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+description = "Fold a linked app's leftover WASI imports into the answers krate-c-runtime already links into it, so a Rust std program is a krate:*-only component."
+
+[[bin]]
+name = "krate-wasi-fold"
+path = "src/main.rs"
+
+[dependencies]
+wasmparser.workspace = true
+wasm-encoder = { version = "0.244.0", default-features = false, features = ["std", "wasmparser"] }
+
+[dev-dependencies]
+wat = "1"
+wasmprinter = "0.251.0"

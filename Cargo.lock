@@ -2526,6 +2526,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "krate-wasi-fold"
+version = "0.5.5"
+dependencies = [
+ "wasm-encoder 0.244.0",
+ "wasmparser 0.244.0",
+ "wasmprinter",
+ "wat",
+]
+
+[[package]]
 name = "kurbo"
 version = "0.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -833,7 +833,12 @@ impl g::Host for Phase3GuiHost {
 
     fn adapter_features(&mut self, adapter: u64) -> wasmtime::Result<GpuResult<Vec<String>>> {
         let gpu = self.gpu.get_mut();
-        Ok(gpu.adapter(adapter).map(|a| feature_list(a.features())))
+        // Experimental features need a separate opt-in krate:gpu does not
+        // offer; advertising them made an engine that asks for everything
+        // offered (Bevy) have its device refused.
+        Ok(gpu
+            .adapter(adapter)
+            .map(|a| feature_list(a.features() - wgpu::Features::all_experimental_mask())))
     }
 
     fn adapter_limits(&mut self, adapter: u64) -> wasmtime::Result<GpuResult<Vec<t::Limit>>> {
@@ -2353,7 +2358,11 @@ impl g::Host for Phase3GuiHost {
         if self.close_ignored_by_guest() {
             std::process::exit(0);
         }
-        self.pace_frame();
+        // KRATE_GPU_UNPACED=1 measures what a frame costs rather than what the
+        // display allows: present stops waiting for the 60 Hz budget.
+        if std::env::var_os("KRATE_GPU_UNPACED").is_none() {
+            self.pace_frame();
+        }
         let (window, widget, image) = {
             let gpu = self.gpu.get_mut();
             match gpu.read_frame(surface) {

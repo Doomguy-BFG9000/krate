@@ -1,0 +1,23 @@
+[package]
+name = "wgpu-krate"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/incyashraj/krate"
+rust-version = "1.95"  # wgpu 29 needs 1.95; the repository pins 1.94.1, so guest builds use 1.95
+description = "wgpu's custom backend over krate:gpu: a program or engine written for wgpu draws inside a Krate app unchanged."
+
+# Its own workspace: a guest crate, built for wasm32 inside apps, never by the
+# repository's host workspace.
+[workspace]
+
+[dependencies]
+# The wgpu the engines use (Bevy 0.19 pins 29). `custom` is the out-of-tree
+# backend this crate implements; `wgsl` and `naga-ir` match what Bevy turns
+# on, because both change the backend traits; the fragile Send/Sync feature
+# is what Bevy builds wgpu with on wasm.
+wgpu = { version = "29.0.4", default-features = false, features = ["custom", "std", "wgsl", "naga-ir", "fragile-send-sync-non-atomic-wasm"] }
+# A naga module (Bevy's composed shaders) goes to the host as WGSL text.
+naga = { version = "29.0.3", default-features = false, features = ["wgsl-out"] }
+krate = { path = "../bindings-rust", features = ["gui", "std"] }
+krate-gpu-names = { path = "../gpu-names" }
