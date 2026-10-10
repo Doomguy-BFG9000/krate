@@ -18,6 +18,10 @@
   <!-- krate:ui/haptics: the phone tapping back under the finger. Granted at
        install; there is no prompt, as for any app's touch feedback. -->
   <uses-permission android:name="android.permission.VIBRATE" />
+  <!-- krate:ui/location, for an app the person allowed location.read on
+       Krate's sheet; the phone asks too, the first time such an app asks. -->
+  <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+  <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
 
   <application
       android:label="Krate"

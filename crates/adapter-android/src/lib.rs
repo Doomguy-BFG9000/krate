@@ -37,6 +37,7 @@ mod documents;
 mod haptics;
 #[cfg(target_os = "android")]
 mod java;
+mod location;
 mod motion;
 
 #[derive(Debug, Default)]
@@ -426,6 +427,7 @@ impl WindowAdapter for AndroidWinitPrototypeUiAdapter {
         documents::put_back_folders();
         // Sensors stop with the app, so they cost nothing after it.
         motion::stop();
+        location::stop();
         self.remove_session(id);
         WindowAdapter::close_window(&self.headless, id)
     }
@@ -617,6 +619,16 @@ impl UiAdapter for AndroidWinitPrototypeUiAdapter {
         filter: &str,
     ) -> Option<std::path::PathBuf> {
         documents::choose(folder, filter)
+    }
+
+    /// Whether the phone can tell where it is (IC-917).
+    fn location_available(&self) -> bool {
+        location::available()
+    }
+
+    /// The latest fix; the runtime has already checked `location.read`.
+    fn location(&self) -> krate_adapter_common::ui::LocationAnswer {
+        location::read()
     }
 
     /// Whether the phone has motion sensors (IC-917).

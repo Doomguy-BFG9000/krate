@@ -3,8 +3,11 @@ package tech.krate.player;
 import android.app.NativeActivity;
 import android.content.ActivityNotFoundException;
 import android.content.Intent;
+import android.content.pm.PackageManager;
 import android.net.Uri;
 import android.util.Log;
+
+import java.util.HashMap;
 
 /**
  * The Krate player's one activity: NativeActivity, which loads
@@ -23,6 +26,16 @@ public class KrateActivity extends NativeActivity {
 
     /** The request code of Krate's picker; the low 16 bits are all Android keeps. */
     private static final int PICK = 0x4b01;
+    /** The request code of the phone's permission prompts. */
+    private static final int ASK = 0x4b02;
+
+    /** krateAsk's answers. */
+    static final int GRANTED = 0;
+    static final int REFUSED = 1;
+    static final int ASKING = 2;
+
+    /** Permission sets asked for this run, and whether the prompt has answered. */
+    private final HashMap<String, Boolean> asked = new HashMap<>();
 
     private final Object lock = new Object();
     /** True while the system's picker is up. */
@@ -41,6 +54,52 @@ public class KrateActivity extends NativeActivity {
             picked = uri == null ? "" : uri.toString();
             picking = false;
         }
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int request, String[] permissions, int[] results) {
+        super.onRequestPermissionsResult(request, permissions, results);
+        if (request != ASK) {
+            return;
+        }
+        synchronized (lock) {
+            asked.put(String.join(",", permissions), Boolean.TRUE);
+        }
+    }
+
+    /**
+     * Whether the phone lets Krate use these permissions (any of them, or
+     * all when all is true), asking the person the first time this run.
+     * The app's own grant was already checked on Krate's sheet; this is the
+     * phone's prompt behind it. GRANTED, REFUSED once the prompt answered
+     * no, or ASKING while it is up.
+     */
+    public int krateAsk(final String[] permissions, boolean all) {
+        int granted = 0;
+        for (String permission : permissions) {
+            if (checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED) {
+                granted++;
+            }
+        }
+        if (all ? granted == permissions.length : granted > 0) {
+            return GRANTED;
+        }
+        String key = String.join(",", permissions);
+        synchronized (lock) {
+            Boolean answered = asked.get(key);
+            if (answered != null) {
+                return answered ? REFUSED : ASKING;
+            }
+            asked.put(key, Boolean.FALSE);
+        }
+        Log.i(TAG, "asking the phone for " + key);
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                requestPermissions(permissions, ASK);
+            }
+        });
+        return ASKING;
     }
 
     /**
@@ -127,6 +186,21 @@ public class KrateActivity extends NativeActivity {
     /** Stop the motion sensors. */
     public void krateMotionStop() {
         Motion.stop();
+    }
+
+    /** Whether the phone can tell where it is (krate:ui/location). */
+    public boolean krateLocationAvailable() {
+        return Where.available(this);
+    }
+
+    /** The latest fix, asking and starting on the first call; see Where.read. */
+    public double[] krateLocation() {
+        return Where.read(this);
+    }
+
+    /** Stop looking for where the phone is. */
+    public void krateLocationStop() {
+        Where.stop();
     }
 
     /** Write the file at path into the document at uri; true when it all went. */
