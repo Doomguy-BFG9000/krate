@@ -113,7 +113,7 @@ pub mod bindings;
 #[cfg(feature = "gui")]
 mod phase3;
 #[cfg(feature = "gui")]
-pub use phase3::{audio, camera, gfx, speech, ui};
+pub use phase3::{audio, camera, gfx, gpu, speech, ui};
 
 pub use bindings::Guest;
 

@@ -49,6 +49,7 @@ world = "gui"
 "krate:random" = { path = "../../wit/krate/phase4/deps/random" }
 "krate:ui" = { path = "../../wit/krate/phase4/deps/ui" }
 "krate:gfx" = { path = "../../wit/krate/phase4/deps/gfx" }
+"krate:gpu" = { path = "../../wit/krate/phase4/deps/gpu" }
 "krate:audio" = { path = "../../wit/krate/phase4/deps/audio" }
 "krate:camera" = { path = "../../wit/krate/phase4/deps/camera" }
 "krate:speech" = { path = "../../wit/krate/phase4/deps/speech" }

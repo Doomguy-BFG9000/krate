@@ -1288,6 +1288,21 @@ An app with no image files can still generate a texture in code: fill an RGBA \
 buffer with a checker, a noise pattern, or stripes, and upload that. A tiled \
 procedural texture on the ground and the walls is the single biggest \
 improvement available to a 3D scene, and it costs no assets.\n\n\
+## Your own GPU renderer: krate:gpu\n\n\
+`scene3d` and `canvas2d` cover almost every app; reach for `krate::gpu` only \
+when the app IS a renderer -- an engine, shaders, a compute pass. It is \
+WebGPU's object model with host handles: `request_adapter`, \
+`request_device`, buffers, textures, bind groups, WGSL shader modules, render \
+and compute pipelines; a pass is recorded as one list of commands \
+(`encode_render_pass(encoder, desc, &commands)`). Every call returns its own \
+error. Shaders are WGSL only and are validated before the driver sees them: \
+`create_shader_module` returns `Err(ShaderError)` with the message, line and \
+column -- print it, fix the line. To show frames, put a `canvas` widget in \
+the tree, `create_surface(window, canvas_id)`, configure it to \
+`surface_pixel_size` (again when a frame comes back `suboptimal`), then per \
+frame `current_texture`, draw into a view of it, `submit`, `present`. \
+`present` paces to the display. `apps/krate-gpu-probe` is the reference: a \
+lit cube with a depth buffer, and every check the interface promises.\n\n\
 ## Files the person hands the app\n\n\
 Two more doors exist beside `open_file`, and both use the same grant model: \
 the person's own action IS the permission, the app gets a name and a token, \

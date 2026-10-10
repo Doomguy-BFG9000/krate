@@ -11005,3 +11005,76 @@ fn sdk_reference_lists_functions_capabilities_and_leaks() {
     let leaks = v["leaks"].as_array().unwrap();
     assert!(leaks.iter().any(|l| l["pattern"] == "std::fs"));
 }
+
+/// An app reaches the GPU through the binary a person runs (krate:gpu,
+/// IC-540, IC-916).
+///
+/// `gpu-probe.wasm` asks for a device and runs one check per line: a WGSL
+/// shader with a type error is refused by validation with the line it is on
+/// and never reaches the driver (the shader door, F-311); a triangle is drawn
+/// and its pixel read back; a compute pass doubles four numbers; a handle that
+/// was never given out and an impossible buffer are refused with the app still
+/// running; a device lost on purpose says so on the next call and a fresh one
+/// works. A machine with no GPU at all says so and the test stands down -- it
+/// is the only case where these lines do not appear.
+#[test]
+fn an_app_draws_and_computes_on_the_gpu_and_a_bad_shader_is_refused() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let wasm = dir.path().join("code.wasm");
+    std::fs::write(&wasm, include_bytes!("fixtures/gpu-probe.wasm")).expect("probe");
+    let manifest = dir.path().join("manifest.toml");
+    std::fs::write(
+        &manifest,
+        "[app]\nid = \"com.acme.gpu-probe\"\nname = \"gpu-probe\"\nversion = \"1.0.0\"\n\
+         entry = \"code.wasm\"\nworld = \"krate:app/gui@0.2.0\"\n\n\
+         [[capabilities]]\ncap = \"ui.window:create\"\nrationale = \"window\"\nrequired = true\n\n\
+         [[capabilities]]\ncap = \"io.stdout\"\nrationale = \"print\"\nrequired = true\n\n\
+         [[capabilities]]\ncap = \"io.args\"\nrationale = \"args\"\nrequired = true\n",
+    )
+    .expect("manifest");
+    let out = krate()
+        .arg("run")
+        .arg("--headless")
+        .arg(&wasm)
+        .arg("--manifest")
+        .arg(&manifest)
+        .arg("--auto-grant")
+        .arg("--")
+        .arg("check")
+        .output()
+        .expect("run");
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    if stdout.starts_with("adapter=Unsupported") {
+        eprintln!("skipping: this machine has no GPU: {stdout}");
+        return;
+    }
+    let line = |key: &str| -> String {
+        stdout
+            .lines()
+            .find(|l| l.starts_with(key))
+            .unwrap_or_else(|| panic!("no {key} line in: {stdout}{stderr}"))
+            .to_string()
+    };
+    let shader = line("shader=");
+    assert!(
+        shader.starts_with("shader=refused line=4 column=9 "),
+        "the broken shader's type error is on line 4: {shader}"
+    );
+    assert!(
+        shader.contains("expected to be `vec3<f32>`, but got `f32`"),
+        "the refusal says what is wrong: {shader}"
+    );
+    assert_eq!(line("pixel="), "pixel=255,0,0,255", "the triangle is red");
+    assert_eq!(
+        line("compute="),
+        "compute=2,4,6,8",
+        "the compute pass doubled"
+    );
+    assert_eq!(
+        line("invalid-handle="),
+        "invalid-handle=refused oversized-buffer=refused"
+    );
+    assert_eq!(line("lost="), "lost=yes recovered=yes");
+    assert!(out.status.success(), "{stdout}{stderr}");
+}

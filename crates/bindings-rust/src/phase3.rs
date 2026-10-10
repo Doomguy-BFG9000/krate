@@ -1039,6 +1039,445 @@ pub mod gfx {
     }
 }
 
+/// `krate:gpu`: gpu.
+pub mod gpu {
+    /// `krate:gpu/gpu`.
+    pub mod gpu {
+        pub use crate::bindings::krate::gpu::gpu::{
+            AdapterInfo, AdapterOptions, BindGroupDescriptor, BindGroupLayoutDescriptor,
+            BufferDescriptor, CompilationMessage, ComputeCommand, ComputePassDescriptor,
+            ComputePipelineDescriptor, DeviceDescriptor, Extent3d, FormatFeatures, GpuError,
+            Handle, Limit, MapMode, PipelineLayoutDescriptor, QuerySetDescriptor, RenderCommand,
+            RenderPassDescriptor, RenderPipelineDescriptor, SamplerDescriptor, ShaderError,
+            ShaderModuleDescriptor, SurfaceCapabilities, SurfaceConfiguration, SurfaceError,
+            SurfaceFrame, TexelCopyBufferInfo, TexelCopyBufferLayout, TexelCopyTextureInfo,
+            TextureDescriptor, TextureViewDescriptor,
+        };
+
+        /// Choose a GPU. Fails when there is no GPU that fits the options.
+        pub fn request_adapter(options: AdapterOptions) -> Result<Handle, GpuError> {
+            crate::bindings::krate::gpu::gpu::request_adapter(options)
+        }
+
+        /// What the adapter says about itself.
+        pub fn describe_adapter(adapter: Handle) -> Result<AdapterInfo, GpuError> {
+            crate::bindings::krate::gpu::gpu::describe_adapter(adapter)
+        }
+
+        /// The features the adapter offers, by WebGPU name.
+        pub fn adapter_features(
+            adapter: Handle,
+        ) -> Result<alloc::vec::Vec<alloc::string::String>, GpuError> {
+            crate::bindings::krate::gpu::gpu::adapter_features(adapter)
+        }
+
+        /// The best limits the adapter offers.
+        pub fn adapter_limits(adapter: Handle) -> Result<alloc::vec::Vec<Limit>, GpuError> {
+            crate::bindings::krate::gpu::gpu::adapter_limits(adapter)
+        }
+
+        /// What a texture format can do on this adapter.
+        pub fn adapter_format_features(
+            adapter: Handle,
+            format: &str,
+        ) -> Result<FormatFeatures, GpuError> {
+            crate::bindings::krate::gpu::gpu::adapter_format_features(adapter, format)
+        }
+
+        /// Make a device (and its queue) on the adapter.
+        pub fn request_device(
+            adapter: Handle,
+            descriptor: &DeviceDescriptor,
+        ) -> Result<Handle, GpuError> {
+            crate::bindings::krate::gpu::gpu::request_device(adapter, descriptor)
+        }
+
+        /// The features the device was made with.
+        pub fn device_features(
+            device: Handle,
+        ) -> Result<alloc::vec::Vec<alloc::string::String>, GpuError> {
+            crate::bindings::krate::gpu::gpu::device_features(device)
+        }
+
+        /// The limits the device was made with.
+        pub fn device_limits(device: Handle) -> Result<alloc::vec::Vec<Limit>, GpuError> {
+            crate::bindings::krate::gpu::gpu::device_limits(device)
+        }
+
+        /// Lose the device on purpose: every call on it fails with `lost` from now on.
+        pub fn destroy_device(device: Handle) -> Result<(), GpuError> {
+            crate::bindings::krate::gpu::gpu::destroy_device(device)
+        }
+
+        /// Why the device was lost, or none while it is not.
+        pub fn device_lost_reason(device: Handle) -> Option<alloc::string::String> {
+            crate::bindings::krate::gpu::gpu::device_lost_reason(device)
+        }
+
+        /// Let finished GPU work complete; with `wait`, block until the queue is idle.
+        /// True when no work is left.
+        pub fn poll(device: Handle, wait: bool) -> Result<bool, GpuError> {
+            crate::bindings::krate::gpu::gpu::poll(device, wait)
+        }
+
+        /// Make a buffer.
+        pub fn create_buffer(
+            device: Handle,
+            descriptor: &BufferDescriptor,
+        ) -> Result<Handle, GpuError> {
+            crate::bindings::krate::gpu::gpu::create_buffer(device, descriptor)
+        }
+
+        /// Map part of a buffer for the app to read or write. Returns once it is mapped.
+        pub fn map_buffer(
+            buffer: Handle,
+            mode: MapMode,
+            offset: u64,
+            size: u64,
+        ) -> Result<(), GpuError> {
+            crate::bindings::krate::gpu::gpu::map_buffer(buffer, mode, offset, size)
+        }
+
+        /// Read bytes from a mapped buffer.
+        pub fn read_mapped(
+            buffer: Handle,
+            offset: u64,
+            size: u64,
+        ) -> Result<alloc::vec::Vec<u8>, GpuError> {
+            crate::bindings::krate::gpu::gpu::read_mapped(buffer, offset, size)
+        }
+
+        /// Write bytes into a buffer mapped for writing.
+        pub fn write_mapped(buffer: Handle, offset: u64, data: &[u8]) -> Result<(), GpuError> {
+            crate::bindings::krate::gpu::gpu::write_mapped(buffer, offset, data)
+        }
+
+        /// Give a mapped buffer back to the GPU.
+        pub fn unmap_buffer(buffer: Handle) -> Result<(), GpuError> {
+            crate::bindings::krate::gpu::gpu::unmap_buffer(buffer)
+        }
+
+        /// Free a buffer's memory now; the handle stays valid and unusable.
+        pub fn destroy_buffer(buffer: Handle) -> Result<(), GpuError> {
+            crate::bindings::krate::gpu::gpu::destroy_buffer(buffer)
+        }
+
+        /// Make a texture.
+        pub fn create_texture(
+            device: Handle,
+            descriptor: &TextureDescriptor,
+        ) -> Result<Handle, GpuError> {
+            crate::bindings::krate::gpu::gpu::create_texture(device, descriptor)
+        }
+
+        /// Free a texture's memory now.
+        pub fn destroy_texture(texture: Handle) -> Result<(), GpuError> {
+            crate::bindings::krate::gpu::gpu::destroy_texture(texture)
+        }
+
+        /// Make a view of a texture.
+        pub fn create_texture_view(
+            texture: Handle,
+            descriptor: &TextureViewDescriptor,
+        ) -> Result<Handle, GpuError> {
+            crate::bindings::krate::gpu::gpu::create_texture_view(texture, descriptor)
+        }
+
+        /// Make a sampler.
+        pub fn create_sampler(
+            device: Handle,
+            descriptor: &SamplerDescriptor,
+        ) -> Result<Handle, GpuError> {
+            crate::bindings::krate::gpu::gpu::create_sampler(device, descriptor)
+        }
+
+        /// Make a query set.
+        pub fn create_query_set(
+            device: Handle,
+            descriptor: &QuerySetDescriptor,
+        ) -> Result<Handle, GpuError> {
+            crate::bindings::krate::gpu::gpu::create_query_set(device, descriptor)
+        }
+
+        /// Make a bind group layout.
+        pub fn create_bind_group_layout(
+            device: Handle,
+            descriptor: &BindGroupLayoutDescriptor,
+        ) -> Result<Handle, GpuError> {
+            crate::bindings::krate::gpu::gpu::create_bind_group_layout(device, descriptor)
+        }
+
+        /// Make a bind group.
+        pub fn create_bind_group(
+            device: Handle,
+            descriptor: &BindGroupDescriptor,
+        ) -> Result<Handle, GpuError> {
+            crate::bindings::krate::gpu::gpu::create_bind_group(device, descriptor)
+        }
+
+        /// Make a pipeline layout.
+        pub fn create_pipeline_layout(
+            device: Handle,
+            descriptor: &PipelineLayoutDescriptor,
+        ) -> Result<Handle, GpuError> {
+            crate::bindings::krate::gpu::gpu::create_pipeline_layout(device, descriptor)
+        }
+
+        /// Make a shader module from WGSL. The source is validated first; a shader
+        /// that fails is refused with the reason and where, and never reaches the
+        /// driver.
+        pub fn create_shader_module(
+            device: Handle,
+            descriptor: &ShaderModuleDescriptor,
+        ) -> Result<Handle, ShaderError> {
+            crate::bindings::krate::gpu::gpu::create_shader_module(device, descriptor)
+        }
+
+        /// Warnings and notes about an accepted shader.
+        pub fn shader_compilation_info(
+            module: Handle,
+        ) -> Result<alloc::vec::Vec<CompilationMessage>, GpuError> {
+            crate::bindings::krate::gpu::gpu::shader_compilation_info(module)
+        }
+
+        /// Make a render pipeline.
+        pub fn create_render_pipeline(
+            device: Handle,
+            descriptor: &RenderPipelineDescriptor,
+        ) -> Result<Handle, GpuError> {
+            crate::bindings::krate::gpu::gpu::create_render_pipeline(device, descriptor)
+        }
+
+        /// Make a compute pipeline.
+        pub fn create_compute_pipeline(
+            device: Handle,
+            descriptor: &ComputePipelineDescriptor,
+        ) -> Result<Handle, GpuError> {
+            crate::bindings::krate::gpu::gpu::create_compute_pipeline(device, descriptor)
+        }
+
+        /// The bind group layout a render or compute pipeline uses at an index.
+        pub fn pipeline_bind_group_layout(
+            pipeline: Handle,
+            index: u32,
+        ) -> Result<Handle, GpuError> {
+            crate::bindings::krate::gpu::gpu::pipeline_bind_group_layout(pipeline, index)
+        }
+
+        /// Start recording commands.
+        pub fn create_command_encoder(
+            device: Handle,
+            label: Option<&str>,
+        ) -> Result<Handle, GpuError> {
+            crate::bindings::krate::gpu::gpu::create_command_encoder(device, label)
+        }
+
+        /// Record a whole render pass: its attachments and every command in it.
+        pub fn encode_render_pass(
+            encoder: Handle,
+            descriptor: &RenderPassDescriptor,
+            commands: &[RenderCommand],
+        ) -> Result<(), GpuError> {
+            crate::bindings::krate::gpu::gpu::encode_render_pass(encoder, descriptor, commands)
+        }
+
+        /// Record a whole compute pass.
+        pub fn encode_compute_pass(
+            encoder: Handle,
+            descriptor: &ComputePassDescriptor,
+            commands: &[ComputeCommand],
+        ) -> Result<(), GpuError> {
+            crate::bindings::krate::gpu::gpu::encode_compute_pass(encoder, descriptor, commands)
+        }
+
+        /// Copy between buffers.
+        pub fn copy_buffer_to_buffer(
+            encoder: Handle,
+            source: Handle,
+            source_offset: u64,
+            destination: Handle,
+            destination_offset: u64,
+            size: Option<u64>,
+        ) -> Result<(), GpuError> {
+            crate::bindings::krate::gpu::gpu::copy_buffer_to_buffer(
+                encoder,
+                source,
+                source_offset,
+                destination,
+                destination_offset,
+                size,
+            )
+        }
+
+        /// Copy a buffer into a texture.
+        pub fn copy_buffer_to_texture(
+            encoder: Handle,
+            source: TexelCopyBufferInfo,
+            destination: TexelCopyTextureInfo,
+            size: Extent3d,
+        ) -> Result<(), GpuError> {
+            crate::bindings::krate::gpu::gpu::copy_buffer_to_texture(
+                encoder,
+                source,
+                destination,
+                size,
+            )
+        }
+
+        /// Copy a texture into a buffer.
+        pub fn copy_texture_to_buffer(
+            encoder: Handle,
+            source: TexelCopyTextureInfo,
+            destination: TexelCopyBufferInfo,
+            size: Extent3d,
+        ) -> Result<(), GpuError> {
+            crate::bindings::krate::gpu::gpu::copy_texture_to_buffer(
+                encoder,
+                source,
+                destination,
+                size,
+            )
+        }
+
+        /// Copy between textures.
+        pub fn copy_texture_to_texture(
+            encoder: Handle,
+            source: TexelCopyTextureInfo,
+            destination: TexelCopyTextureInfo,
+            size: Extent3d,
+        ) -> Result<(), GpuError> {
+            crate::bindings::krate::gpu::gpu::copy_texture_to_texture(
+                encoder,
+                source,
+                destination,
+                size,
+            )
+        }
+
+        /// Fill part of a buffer with zeros.
+        pub fn clear_buffer(
+            encoder: Handle,
+            buffer: Handle,
+            offset: u64,
+            size: Option<u64>,
+        ) -> Result<(), GpuError> {
+            crate::bindings::krate::gpu::gpu::clear_buffer(encoder, buffer, offset, size)
+        }
+
+        /// Copy query results into a buffer.
+        pub fn resolve_query_set(
+            encoder: Handle,
+            query_set: Handle,
+            first_query: u32,
+            query_count: u32,
+            destination: Handle,
+            destination_offset: u64,
+        ) -> Result<(), GpuError> {
+            crate::bindings::krate::gpu::gpu::resolve_query_set(
+                encoder,
+                query_set,
+                first_query,
+                query_count,
+                destination,
+                destination_offset,
+            )
+        }
+
+        /// Write a timestamp between passes.
+        pub fn write_timestamp(
+            encoder: Handle,
+            query_set: Handle,
+            index: u32,
+        ) -> Result<(), GpuError> {
+            crate::bindings::krate::gpu::gpu::write_timestamp(encoder, query_set, index)
+        }
+
+        /// Finish recording; the encoder is spent and a command buffer is returned.
+        pub fn finish_encoder(encoder: Handle, label: Option<&str>) -> Result<Handle, GpuError> {
+            crate::bindings::krate::gpu::gpu::finish_encoder(encoder, label)
+        }
+
+        /// Run command buffers, in order. They are spent. Returns the submission's index.
+        pub fn submit(device: Handle, command_buffers: &[Handle]) -> Result<u64, GpuError> {
+            crate::bindings::krate::gpu::gpu::submit(device, command_buffers)
+        }
+
+        /// Write bytes into a buffer, in queue order.
+        pub fn write_buffer(
+            device: Handle,
+            buffer: Handle,
+            offset: u64,
+            data: &[u8],
+        ) -> Result<(), GpuError> {
+            crate::bindings::krate::gpu::gpu::write_buffer(device, buffer, offset, data)
+        }
+
+        /// Write texels into a texture, in queue order.
+        pub fn write_texture(
+            device: Handle,
+            destination: TexelCopyTextureInfo,
+            data: &[u8],
+            layout: TexelCopyBufferLayout,
+            size: Extent3d,
+        ) -> Result<(), GpuError> {
+            crate::bindings::krate::gpu::gpu::write_texture(device, destination, data, layout, size)
+        }
+
+        /// Nanoseconds per timestamp tick.
+        pub fn timestamp_period(device: Handle) -> Result<f32, GpuError> {
+            crate::bindings::krate::gpu::gpu::timestamp_period(device)
+        }
+
+        /// A surface on a canvas widget of a window, to draw frames into.
+        pub fn create_surface(window: u64, widget: u64) -> Result<Handle, GpuError> {
+            crate::bindings::krate::gpu::gpu::create_surface(window, widget)
+        }
+
+        /// The size in pixels the surface's canvas is shown at now: its laid-out
+        /// size times the display's density. Configure to this for a sharp picture;
+        /// it changes when the window is resized or moves to another display.
+        pub fn surface_pixel_size(surface: Handle) -> Result<(u32, u32), GpuError> {
+            crate::bindings::krate::gpu::gpu::surface_pixel_size(surface)
+        }
+
+        /// What a surface can do with an adapter.
+        pub fn get_surface_capabilities(
+            surface: Handle,
+            adapter: Handle,
+        ) -> Result<SurfaceCapabilities, GpuError> {
+            crate::bindings::krate::gpu::gpu::get_surface_capabilities(surface, adapter)
+        }
+
+        /// Set a surface up for a device, a size and a format.
+        pub fn configure_surface(
+            surface: Handle,
+            device: Handle,
+            configuration: &SurfaceConfiguration,
+        ) -> Result<(), GpuError> {
+            crate::bindings::krate::gpu::gpu::configure_surface(surface, device, configuration)
+        }
+
+        /// The texture to draw the next frame into.
+        pub fn current_texture(surface: Handle) -> Result<SurfaceFrame, SurfaceError> {
+            crate::bindings::krate::gpu::gpu::current_texture(surface)
+        }
+
+        /// Show the frame drawn into the current texture.
+        pub fn present(surface: Handle) -> Result<(), GpuError> {
+            crate::bindings::krate::gpu::gpu::present(surface)
+        }
+
+        /// Let a handle go. The object lives on while the GPU still uses it.
+        pub fn release(object: Handle) {
+            crate::bindings::krate::gpu::gpu::release(object)
+        }
+    }
+    /// The records and errors this package's interfaces share.
+    pub mod types {
+        pub use crate::bindings::krate::gpu::types::*;
+    }
+}
+
 /// `krate:audio`: capture, playback, playback_queue.
 pub mod audio {
     /// `krate:audio/capture`.

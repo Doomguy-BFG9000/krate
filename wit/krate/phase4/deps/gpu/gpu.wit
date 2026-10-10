@@ -1,0 +1,1493 @@
+package krate:gpu@0.1.0;
+
+/// The GPU as a programmable surface (IC-540, IC-916): WebGPU's object model,
+/// spoken over the component boundary.
+///
+/// Shaped like WebGPU rather than like any one library's Rust API, so a
+/// program written for WebGPU, for wgpu, or for an engine built on either can
+/// be pointed at it, and so it never freezes one crate's types into Krate's
+/// contract. Every object -- adapter, device, buffer, texture, view, sampler,
+/// layout, bind group, shader, pipeline, encoder, command buffer, query set,
+/// surface -- is a host handle, a `u64` the app passes back. `release` lets
+/// one go; everything an app holds is freed when it exits.
+///
+/// Open sets travel as WebGPU's own names, as strings: texture and vertex
+/// formats ("rgba8unorm-srgb", "float32x3"), features
+/// ("texture-compression-bc") and limits ("max-texture-dimension-2d"). WebGPU
+/// grows those sets every year; a WIT enum would have to change shape to
+/// follow, and a changed shape refuses every app built against the old one
+/// (K-403). A name the host does not know is refused with the name in the
+/// error.
+///
+/// Shaders are WGSL, and only WGSL, validated by the host before the GPU
+/// driver ever sees them; a shader that fails validation is refused with the
+/// reason and the line (the chapter 50 "shader door", decided by F-311).
+///
+/// A render or compute pass is recorded by the app and sent whole, as one
+/// list of commands, when it ends: a scene of a thousand draws crosses into
+/// the host once, not seven thousand times (IC-539).
+///
+/// Errors come back from the call that caused them. WebGPU reports them later,
+/// through error scopes, because a browser's GPU lives in another process and
+/// a round trip per call would be slow; Krate's lives in the same process, so
+/// every call validates as it goes and says what was wrong. A library that
+/// wants WebGPU's scopes keeps them on its own side (the guest wgpu backend
+/// does).
+interface types {
+  /// Every GPU object is one of these: an id the host gave out.
+  type handle = u64;
+
+  /// Why a GPU call was refused.
+  variant gpu-error {
+    /// A handle that is unknown, released, or of the wrong kind for the call.
+    invalid-handle(string),
+    /// The call broke one of WebGPU's validation rules; the text says which.
+    validation(string),
+    /// The GPU or the app's GPU budget ran out of memory.
+    out-of-memory,
+    /// The device is lost (a driver reset, the GPU removed, or `destroy-device`);
+    /// make a new one.
+    lost(string),
+    /// Something this host does not offer: a feature, a limit, a format.
+    unsupported(string),
+    /// A failure inside the host or the driver.
+    internal(string),
+  }
+
+  /// A WGSL shader that could not be accepted, and where.
+  record shader-error {
+    /// What is wrong, as the validator says it.
+    message: string,
+    /// The 1-based line of the first problem, or 0 if it has no place.
+    line: u32,
+    /// The 1-based column of the first problem, or 0.
+    column: u32,
+    /// The byte offset of the first problem in the source.
+    offset: u32,
+    /// How many bytes the problem spans.
+    length: u32,
+  }
+
+  /// One message about a shader that was accepted (a warning or a note).
+  record compilation-message {
+    /// The message text.
+    message: string,
+    /// "error", "warning" or "info".
+    kind: string,
+    /// The 1-based line, or 0.
+    line: u32,
+    /// The 1-based column, or 0.
+    column: u32,
+    /// The byte offset in the source.
+    offset: u32,
+    /// How many bytes it spans.
+    length: u32,
+  }
+
+  /// A named limit and its value, as WebGPU names it ("max-bind-groups").
+  record limit {
+    /// The limit's WebGPU name in kebab case.
+    name: string,
+    /// Its value.
+    value: u64,
+  }
+
+  /// Which GPU to prefer when there is more than one.
+  enum power-preference {
+    /// Let the host choose.
+    none,
+    /// The GPU that saves battery.
+    low-power,
+    /// The fastest GPU.
+    high-performance,
+  }
+
+  /// What to ask for when choosing a GPU.
+  record adapter-options {
+    /// Which GPU to prefer.
+    power-preference: power-preference,
+    /// Accept a software (CPU) adapter. Off, a machine with no real GPU has none.
+    force-fallback-adapter: bool,
+    /// A surface the adapter must be able to present to, if any.
+    compatible-surface: option<handle>,
+  }
+
+  /// The kind of GPU an adapter is.
+  enum device-type {
+    /// Not known.
+    other,
+    /// A GPU built into the processor package.
+    integrated-gpu,
+    /// A separate GPU.
+    discrete-gpu,
+    /// A virtual GPU in a virtual machine.
+    virtual-gpu,
+    /// A software rasterizer.
+    cpu,
+  }
+
+  /// What an adapter says about itself.
+  record adapter-info {
+    /// The GPU's name.
+    name: string,
+    /// PCI vendor id, or 0.
+    vendor: u32,
+    /// PCI device id, or 0.
+    device: u32,
+    /// What kind of GPU it is.
+    device-type: device-type,
+    /// The native API underneath ("metal", "vulkan", "dx12", "gl").
+    backend: string,
+    /// The driver's name.
+    driver: string,
+    /// The driver's own version or detail text.
+    driver-info: string,
+  }
+
+  /// What to ask of a new device.
+  record device-descriptor {
+    /// A name for debugging.
+    label: option<string>,
+    /// Features the device must have, by WebGPU name.
+    required-features: list<string>,
+    /// Limits the device must meet; any limit not named keeps WebGPU's default.
+    required-limits: list<limit>,
+  }
+
+  /// How a buffer may be used.
+  flags buffer-usages {
+    /// Mappable for reading.
+    map-read,
+    /// Mappable for writing.
+    map-write,
+    /// The source of a copy.
+    copy-src,
+    /// The destination of a copy.
+    copy-dst,
+    /// An index buffer.
+    index,
+    /// A vertex buffer.
+    vertex,
+    /// A uniform buffer.
+    uniform,
+    /// A storage buffer.
+    storage,
+    /// Arguments for an indirect draw or dispatch.
+    indirect,
+    /// The destination of a query resolve.
+    query-resolve,
+  }
+
+  /// A new buffer.
+  record buffer-descriptor {
+    /// A name for debugging.
+    label: option<string>,
+    /// Its size in bytes.
+    size: u64,
+    /// How it will be used.
+    usage: buffer-usages,
+    /// Start mapped for writing, so its contents can be written before first use.
+    mapped-at-creation: bool,
+  }
+
+  /// How a texture may be used.
+  flags texture-usages {
+    /// The source of a copy.
+    copy-src,
+    /// The destination of a copy.
+    copy-dst,
+    /// Sampled or loaded in a shader.
+    texture-binding,
+    /// Written (or read and written) as a storage texture.
+    storage-binding,
+    /// Drawn into as a color or depth attachment.
+    render-attachment,
+  }
+
+  /// A width, height and depth (or layer count).
+  record extent3d {
+    /// Width in texels.
+    width: u32,
+    /// Height in texels.
+    height: u32,
+    /// Depth in texels, or the number of array layers.
+    depth-or-array-layers: u32,
+  }
+
+  /// A texel position.
+  record origin3d {
+    /// X in texels.
+    x: u32,
+    /// Y in texels.
+    y: u32,
+    /// Z in texels, or the array layer.
+    z: u32,
+  }
+
+  /// How many dimensions a texture has.
+  enum texture-dimension {
+    /// One.
+    d1,
+    /// Two.
+    d2,
+    /// Three.
+    d3,
+  }
+
+  /// A new texture.
+  record texture-descriptor {
+    /// A name for debugging.
+    label: option<string>,
+    /// Its size.
+    size: extent3d,
+    /// How many mip levels.
+    mip-level-count: u32,
+    /// Samples per texel: 1, or 4 for multisampling.
+    sample-count: u32,
+    /// How many dimensions.
+    dimension: texture-dimension,
+    /// Its format, by WebGPU name ("rgba8unorm-srgb", "depth32float").
+    format: string,
+    /// How it will be used.
+    usage: texture-usages,
+    /// Other formats views of it may take.
+    view-formats: list<string>,
+  }
+
+  /// The shape a view gives a texture.
+  enum texture-view-dimension {
+    /// One-dimensional.
+    d1,
+    /// Two-dimensional.
+    d2,
+    /// An array of two-dimensional layers.
+    d2-array,
+    /// A cube of six faces.
+    cube,
+    /// An array of cubes.
+    cube-array,
+    /// Three-dimensional.
+    d3,
+  }
+
+  /// Which part of a depth-stencil texture.
+  enum texture-aspect {
+    /// All of it.
+    all,
+    /// The stencil part only.
+    stencil-only,
+    /// The depth part only.
+    depth-only,
+  }
+
+  /// A new view of a texture.
+  record texture-view-descriptor {
+    /// A name for debugging.
+    label: option<string>,
+    /// The view's format; the texture's own when absent.
+    format: option<string>,
+    /// The view's shape; derived from the texture when absent.
+    dimension: option<texture-view-dimension>,
+    /// The usages this view is for; the texture's when absent.
+    usage: option<texture-usages>,
+    /// Which part of the texture.
+    aspect: texture-aspect,
+    /// The first mip level.
+    base-mip-level: u32,
+    /// How many mip levels; all that remain when absent.
+    mip-level-count: option<u32>,
+    /// The first array layer.
+    base-array-layer: u32,
+    /// How many array layers; all that remain when absent.
+    array-layer-count: option<u32>,
+  }
+
+  /// What a sampler does past the edge.
+  enum address-mode {
+    /// Clamp to the edge texel.
+    clamp-to-edge,
+    /// Repeat.
+    repeat,
+    /// Repeat, mirrored.
+    mirror-repeat,
+    /// Use the border color.
+    clamp-to-border,
+  }
+
+  /// How texels are blended.
+  enum filter-mode {
+    /// Nearest texel.
+    nearest,
+    /// Linear blend.
+    linear,
+  }
+
+  /// How a comparison passes.
+  enum compare-function {
+    /// Never.
+    never,
+    /// When less.
+    less,
+    /// When equal.
+    equal,
+    /// When less or equal.
+    less-equal,
+    /// When greater.
+    greater,
+    /// When not equal.
+    not-equal,
+    /// When greater or equal.
+    greater-equal,
+    /// Always.
+    always,
+  }
+
+  /// The color past the edge with `clamp-to-border`.
+  enum border-color {
+    /// Transparent black.
+    transparent-black,
+    /// Opaque black.
+    opaque-black,
+    /// Opaque white.
+    opaque-white,
+    /// Zero, for integer textures.
+    zero,
+  }
+
+  /// A new sampler.
+  record sampler-descriptor {
+    /// A name for debugging.
+    label: option<string>,
+    /// Past the edge in u.
+    address-mode-u: address-mode,
+    /// Past the edge in v.
+    address-mode-v: address-mode,
+    /// Past the edge in w.
+    address-mode-w: address-mode,
+    /// Magnification filter.
+    mag-filter: filter-mode,
+    /// Minification filter.
+    min-filter: filter-mode,
+    /// Filter between mip levels.
+    mipmap-filter: filter-mode,
+    /// The lowest level of detail.
+    lod-min-clamp: f32,
+    /// The highest level of detail.
+    lod-max-clamp: f32,
+    /// A comparison sampler's function.
+    compare: option<compare-function>,
+    /// Anisotropic filtering, 1 for none.
+    anisotropy-clamp: u16,
+    /// The border color for `clamp-to-border`.
+    border-color: option<border-color>,
+  }
+
+  /// Shader stages, as a set.
+  flags shader-stages {
+    /// The vertex stage.
+    vertex,
+    /// The fragment stage.
+    fragment,
+    /// The compute stage.
+    compute,
+  }
+
+  /// What kind of buffer a binding holds.
+  variant buffer-binding-type {
+    /// A uniform buffer.
+    uniform,
+    /// A storage buffer; true when read-only.
+    storage(bool),
+  }
+
+  /// A buffer binding in a layout.
+  record buffer-binding-layout {
+    /// Uniform or storage.
+    kind: buffer-binding-type,
+    /// The offset is given when the group is set.
+    has-dynamic-offset: bool,
+    /// The smallest size the binding may have, 0 for no minimum.
+    min-binding-size: u64,
+  }
+
+  /// What a sampler binding expects.
+  enum sampler-binding-type {
+    /// A filtering sampler.
+    filtering,
+    /// A non-filtering sampler.
+    non-filtering,
+    /// A comparison sampler.
+    comparison,
+  }
+
+  /// What a sampled texture holds.
+  variant texture-sample-type {
+    /// Floats; true when filterable.
+    float(bool),
+    /// Depth.
+    depth,
+    /// Signed integers.
+    sint,
+    /// Unsigned integers.
+    uint,
+  }
+
+  /// A sampled texture binding in a layout.
+  record texture-binding-layout {
+    /// What the texture holds.
+    sample-type: texture-sample-type,
+    /// The view's shape.
+    view-dimension: texture-view-dimension,
+    /// Whether the texture is multisampled.
+    multisampled: bool,
+  }
+
+  /// How a shader may touch a storage texture.
+  enum storage-texture-access {
+    /// Write only.
+    write-only,
+    /// Read only.
+    read-only,
+    /// Read and write.
+    read-write,
+  }
+
+  /// A storage texture binding in a layout.
+  record storage-texture-binding-layout {
+    /// How the shader touches it.
+    access: storage-texture-access,
+    /// Its format.
+    format: string,
+    /// The view's shape.
+    view-dimension: texture-view-dimension,
+  }
+
+  /// What one binding slot holds.
+  variant binding-type {
+    /// A buffer.
+    buffer(buffer-binding-layout),
+    /// A sampler.
+    sampler(sampler-binding-type),
+    /// A sampled texture.
+    texture(texture-binding-layout),
+    /// A storage texture.
+    storage-texture(storage-texture-binding-layout),
+  }
+
+  /// One slot of a bind group layout.
+  record bind-group-layout-entry {
+    /// The `@binding` number.
+    binding: u32,
+    /// The stages that see it.
+    visibility: shader-stages,
+    /// What it holds.
+    kind: binding-type,
+    /// For a binding array, how many elements.
+    count: option<u32>,
+  }
+
+  /// A new bind group layout.
+  record bind-group-layout-descriptor {
+    /// A name for debugging.
+    label: option<string>,
+    /// Its slots.
+    entries: list<bind-group-layout-entry>,
+  }
+
+  /// A range of a buffer, bound.
+  record buffer-binding {
+    /// The buffer.
+    buffer: handle,
+    /// The first byte.
+    offset: u64,
+    /// How many bytes; the rest of the buffer when absent.
+    size: option<u64>,
+  }
+
+  /// What one slot of a bind group is given.
+  variant binding-resource {
+    /// A buffer range.
+    buffer(buffer-binding),
+    /// An array of buffer ranges.
+    buffer-array(list<buffer-binding>),
+    /// A sampler.
+    sampler(handle),
+    /// An array of samplers.
+    sampler-array(list<handle>),
+    /// A texture view.
+    texture-view(handle),
+    /// An array of texture views.
+    texture-view-array(list<handle>),
+  }
+
+  /// One slot of a bind group.
+  record bind-group-entry {
+    /// The `@binding` number.
+    binding: u32,
+    /// What it is given.
+    %resource: binding-resource,
+  }
+
+  /// A new bind group.
+  record bind-group-descriptor {
+    /// A name for debugging.
+    label: option<string>,
+    /// Its layout.
+    layout: handle,
+    /// Its slots.
+    entries: list<bind-group-entry>,
+  }
+
+  /// A new pipeline layout.
+  record pipeline-layout-descriptor {
+    /// A name for debugging.
+    label: option<string>,
+    /// The bind group layout for each group index; none leaves a gap.
+    bind-group-layouts: list<option<handle>>,
+    /// Bytes of immediate data the pipelines may use.
+    immediate-size: u32,
+  }
+
+  /// A new shader module, from WGSL source.
+  record shader-module-descriptor {
+    /// A name for debugging.
+    label: option<string>,
+    /// The WGSL source.
+    code: string,
+  }
+
+  /// A pipeline-overridable constant and its value.
+  record constant-entry {
+    /// The `override` name or id.
+    name: string,
+    /// Its value.
+    value: f64,
+  }
+
+  /// One stage of a pipeline: a shader and its entry point.
+  record programmable-stage {
+    /// The shader module.
+    module: handle,
+    /// The entry point; the only one of its stage when absent.
+    entry-point: option<string>,
+    /// Values for the shader's overridable constants.
+    constants: list<constant-entry>,
+  }
+
+  /// Whether a vertex buffer advances per vertex or per instance.
+  enum vertex-step-mode {
+    /// Per vertex.
+    vertex,
+    /// Per instance.
+    instance,
+  }
+
+  /// One attribute of a vertex buffer.
+  record vertex-attribute {
+    /// Its format, by WebGPU name ("float32x3").
+    format: string,
+    /// Its offset in the vertex.
+    offset: u64,
+    /// The `@location` it feeds.
+    shader-location: u32,
+  }
+
+  /// The layout of one vertex buffer.
+  record vertex-buffer-layout {
+    /// Bytes from one element to the next.
+    array-stride: u64,
+    /// Per vertex or per instance.
+    step-mode: vertex-step-mode,
+    /// Its attributes.
+    attributes: list<vertex-attribute>,
+  }
+
+  /// The vertex stage of a render pipeline.
+  record vertex-state {
+    /// The shader and entry point.
+    stage: programmable-stage,
+    /// The vertex buffers it reads.
+    buffers: list<vertex-buffer-layout>,
+  }
+
+  /// How vertices make primitives.
+  enum primitive-topology {
+    /// Points.
+    point-list,
+    /// Separate lines.
+    line-list,
+    /// A connected line.
+    line-strip,
+    /// Separate triangles.
+    triangle-list,
+    /// A strip of triangles.
+    triangle-strip,
+  }
+
+  /// The width of an index.
+  enum index-format {
+    /// 16-bit.
+    uint16,
+    /// 32-bit.
+    uint32,
+  }
+
+  /// Which winding is the front.
+  enum front-face {
+    /// Counter-clockwise.
+    ccw,
+    /// Clockwise.
+    cw,
+  }
+
+  /// Which faces are culled.
+  enum cull-mode {
+    /// None.
+    none,
+    /// Front faces.
+    front,
+    /// Back faces.
+    back,
+  }
+
+  /// How triangles are filled.
+  enum polygon-mode {
+    /// Filled.
+    fill,
+    /// Edges only.
+    line,
+    /// Vertices only.
+    point,
+  }
+
+  /// How primitives are assembled and rasterized.
+  record primitive-state {
+    /// How vertices make primitives.
+    topology: primitive-topology,
+    /// For a strip with an index buffer, the index format.
+    strip-index-format: option<index-format>,
+    /// Which winding is the front.
+    front-face: front-face,
+    /// Which faces are culled.
+    cull-mode: cull-mode,
+    /// Do not clip at the depth range.
+    unclipped-depth: bool,
+    /// How triangles are filled.
+    polygon-mode: polygon-mode,
+    /// Conservative rasterization.
+    conservative: bool,
+  }
+
+  /// What a stencil test does.
+  enum stencil-operation {
+    /// Keep the value.
+    keep,
+    /// Set it to zero.
+    zero,
+    /// Set it to the reference.
+    replace,
+    /// Invert its bits.
+    invert,
+    /// Add one, clamped.
+    increment-clamp,
+    /// Subtract one, clamped.
+    decrement-clamp,
+    /// Add one, wrapping.
+    increment-wrap,
+    /// Subtract one, wrapping.
+    decrement-wrap,
+  }
+
+  /// The stencil test for one face.
+  record stencil-face-state {
+    /// The comparison.
+    compare: compare-function,
+    /// On a failed stencil test.
+    fail-op: stencil-operation,
+    /// On a passed stencil test and failed depth test.
+    depth-fail-op: stencil-operation,
+    /// On both passed.
+    pass-op: stencil-operation,
+  }
+
+  /// The depth and stencil state of a render pipeline.
+  record depth-stencil-state {
+    /// The attachment's format.
+    format: string,
+    /// Write depth.
+    depth-write-enabled: bool,
+    /// The depth comparison.
+    depth-compare: compare-function,
+    /// Front-face stencil.
+    stencil-front: stencil-face-state,
+    /// Back-face stencil.
+    stencil-back: stencil-face-state,
+    /// Which stencil bits are read.
+    stencil-read-mask: u32,
+    /// Which stencil bits are written.
+    stencil-write-mask: u32,
+    /// Constant depth bias.
+    depth-bias: s32,
+    /// Slope-scaled depth bias.
+    depth-bias-slope-scale: f32,
+    /// The most depth bias.
+    depth-bias-clamp: f32,
+  }
+
+  /// Multisampling.
+  record multisample-state {
+    /// Samples per pixel.
+    count: u32,
+    /// Which samples are written.
+    mask: u64,
+    /// Alpha to coverage.
+    alpha-to-coverage-enabled: bool,
+  }
+
+  /// A blend factor.
+  enum blend-factor {
+    /// 0.
+    zero,
+    /// 1.
+    one,
+    /// The source color.
+    src,
+    /// 1 - the source color.
+    one-minus-src,
+    /// The source alpha.
+    src-alpha,
+    /// 1 - the source alpha.
+    one-minus-src-alpha,
+    /// The destination color.
+    dst,
+    /// 1 - the destination color.
+    one-minus-dst,
+    /// The destination alpha.
+    dst-alpha,
+    /// 1 - the destination alpha.
+    one-minus-dst-alpha,
+    /// min(source alpha, 1 - destination alpha).
+    src-alpha-saturated,
+    /// The blend constant.
+    constant,
+    /// 1 - the blend constant.
+    one-minus-constant,
+    /// The second source color (dual-source blending).
+    src1,
+    /// 1 - the second source color.
+    one-minus-src1,
+    /// The second source alpha.
+    src1-alpha,
+    /// 1 - the second source alpha.
+    one-minus-src1-alpha,
+  }
+
+  /// How source and destination combine.
+  enum blend-operation {
+    /// Source + destination.
+    add,
+    /// Source - destination.
+    subtract,
+    /// Destination - source.
+    reverse-subtract,
+    /// The smaller.
+    min,
+    /// The larger.
+    max,
+  }
+
+  /// Blending for color or for alpha.
+  record blend-component {
+    /// The source factor.
+    src-factor: blend-factor,
+    /// The destination factor.
+    dst-factor: blend-factor,
+    /// The operation.
+    operation: blend-operation,
+  }
+
+  /// Blending for one color target.
+  record blend-state {
+    /// For color.
+    color: blend-component,
+    /// For alpha.
+    alpha: blend-component,
+  }
+
+  /// Which channels are written.
+  flags color-writes {
+    /// Red.
+    red,
+    /// Green.
+    green,
+    /// Blue.
+    blue,
+    /// Alpha.
+    alpha,
+  }
+
+  /// One color target of a render pipeline.
+  record color-target-state {
+    /// The attachment's format.
+    format: string,
+    /// Blending, or none to replace.
+    blend: option<blend-state>,
+    /// Which channels are written.
+    write-mask: color-writes,
+  }
+
+  /// The fragment stage of a render pipeline.
+  record fragment-state {
+    /// The shader and entry point.
+    stage: programmable-stage,
+    /// The color targets, by attachment index; none leaves a gap.
+    targets: list<option<color-target-state>>,
+  }
+
+  /// A new render pipeline.
+  record render-pipeline-descriptor {
+    /// A name for debugging.
+    label: option<string>,
+    /// Its layout; derived from the shaders when absent.
+    layout: option<handle>,
+    /// The vertex stage.
+    vertex: vertex-state,
+    /// How primitives are assembled.
+    primitive: primitive-state,
+    /// Depth and stencil, if the pass has a depth attachment.
+    depth-stencil: option<depth-stencil-state>,
+    /// Multisampling.
+    multisample: multisample-state,
+    /// The fragment stage, if any.
+    fragment: option<fragment-state>,
+    /// For multiview rendering, the mask of views.
+    multiview-mask: option<u32>,
+  }
+
+  /// A new compute pipeline.
+  record compute-pipeline-descriptor {
+    /// A name for debugging.
+    label: option<string>,
+    /// Its layout; derived from the shader when absent.
+    layout: option<handle>,
+    /// The shader and entry point.
+    stage: programmable-stage,
+  }
+
+  /// The kind of a query set.
+  enum query-type {
+    /// Counts samples that pass the depth test.
+    occlusion,
+    /// GPU timestamps.
+    timestamp,
+  }
+
+  /// A new query set.
+  record query-set-descriptor {
+    /// A name for debugging.
+    label: option<string>,
+    /// Its kind.
+    kind: query-type,
+    /// How many queries.
+    count: u32,
+  }
+
+  /// A texture location for a copy.
+  record texel-copy-texture-info {
+    /// The texture.
+    texture: handle,
+    /// The mip level.
+    mip-level: u32,
+    /// Where in it.
+    origin: origin3d,
+    /// Which part.
+    aspect: texture-aspect,
+  }
+
+  /// How texel data is laid out in a buffer or in bytes.
+  record texel-copy-buffer-layout {
+    /// The first byte.
+    offset: u64,
+    /// Bytes per row of blocks.
+    bytes-per-row: option<u32>,
+    /// Rows per image.
+    rows-per-image: option<u32>,
+  }
+
+  /// A buffer location for a copy.
+  record texel-copy-buffer-info {
+    /// The buffer.
+    buffer: handle,
+    /// Its layout.
+    layout: texel-copy-buffer-layout,
+  }
+
+  /// A color, for clears and blend constants.
+  record color {
+    /// Red.
+    r: f64,
+    /// Green.
+    g: f64,
+    /// Blue.
+    b: f64,
+    /// Alpha.
+    a: f64,
+  }
+
+  /// What happens to a color attachment when a pass begins.
+  variant color-load-op {
+    /// Clear it to this color.
+    clear(color),
+    /// Keep what is there.
+    load,
+  }
+
+  /// What happens to an attachment when a pass ends.
+  enum store-op {
+    /// Keep what was drawn.
+    store,
+    /// Throw it away.
+    discard,
+  }
+
+  /// One color attachment of a render pass.
+  record render-pass-color-attachment {
+    /// The texture view drawn into.
+    view: handle,
+    /// For a 3D texture, the slice.
+    depth-slice: option<u32>,
+    /// Where a multisampled view resolves to.
+    resolve-target: option<handle>,
+    /// When the pass begins.
+    load: color-load-op,
+    /// When the pass ends.
+    store: store-op,
+  }
+
+  /// What happens to depth when a pass begins.
+  variant depth-load-op {
+    /// Clear to this depth.
+    clear(f32),
+    /// Keep what is there.
+    load,
+  }
+
+  /// What happens to stencil when a pass begins.
+  variant stencil-load-op {
+    /// Clear to this value.
+    clear(u32),
+    /// Keep what is there.
+    load,
+  }
+
+  /// Depth operations of a pass.
+  record depth-ops {
+    /// When the pass begins.
+    load: depth-load-op,
+    /// When it ends.
+    store: store-op,
+  }
+
+  /// Stencil operations of a pass.
+  record stencil-ops {
+    /// When the pass begins.
+    load: stencil-load-op,
+    /// When it ends.
+    store: store-op,
+  }
+
+  /// The depth-stencil attachment of a render pass.
+  record render-pass-depth-stencil-attachment {
+    /// The view.
+    view: handle,
+    /// Depth operations, or none for a read-only depth.
+    depth-ops: option<depth-ops>,
+    /// Stencil operations, or none for a read-only stencil.
+    stencil-ops: option<stencil-ops>,
+  }
+
+  /// Timestamps written at the start and end of a pass.
+  record pass-timestamp-writes {
+    /// The query set.
+    query-set: handle,
+    /// The query written when the pass begins.
+    beginning-of-pass-write-index: option<u32>,
+    /// The query written when the pass ends.
+    end-of-pass-write-index: option<u32>,
+  }
+
+  /// A render pass.
+  record render-pass-descriptor {
+    /// A name for debugging.
+    label: option<string>,
+    /// Its color attachments; none leaves a gap.
+    color-attachments: list<option<render-pass-color-attachment>>,
+    /// Its depth-stencil attachment.
+    depth-stencil-attachment: option<render-pass-depth-stencil-attachment>,
+    /// Timestamps to write.
+    timestamp-writes: option<pass-timestamp-writes>,
+    /// The query set occlusion queries write to.
+    occlusion-query-set: option<handle>,
+    /// For multiview rendering, the mask of views.
+    multiview-mask: option<u32>,
+  }
+
+  /// A compute pass.
+  record compute-pass-descriptor {
+    /// A name for debugging.
+    label: option<string>,
+    /// Timestamps to write.
+    timestamp-writes: option<pass-timestamp-writes>,
+  }
+
+  /// Setting a bind group in a pass.
+  record set-bind-group {
+    /// The group index.
+    index: u32,
+    /// The bind group; none unsets it.
+    group: option<handle>,
+    /// Dynamic offsets, in binding order.
+    offsets: list<u32>,
+  }
+
+  /// Setting a vertex buffer in a render pass.
+  record set-vertex-buffer {
+    /// The slot.
+    slot: u32,
+    /// The buffer.
+    buffer: handle,
+    /// The first byte.
+    offset: u64,
+    /// How many bytes; the rest when absent.
+    size: option<u64>,
+  }
+
+  /// Setting the index buffer in a render pass.
+  record set-index-buffer {
+    /// The buffer.
+    buffer: handle,
+    /// The index width.
+    format: index-format,
+    /// The first byte.
+    offset: u64,
+    /// How many bytes; the rest when absent.
+    size: option<u64>,
+  }
+
+  /// The viewport.
+  record viewport {
+    /// Left edge.
+    x: f32,
+    /// Top edge.
+    y: f32,
+    /// Width.
+    width: f32,
+    /// Height.
+    height: f32,
+    /// The near depth.
+    min-depth: f32,
+    /// The far depth.
+    max-depth: f32,
+  }
+
+  /// A rectangle in pixels.
+  record scissor-rect {
+    /// Left edge.
+    x: u32,
+    /// Top edge.
+    y: u32,
+    /// Width.
+    width: u32,
+    /// Height.
+    height: u32,
+  }
+
+  /// Immediate data for the next draws or dispatches.
+  record set-immediates {
+    /// The first byte.
+    offset: u32,
+    /// The bytes.
+    data: list<u8>,
+  }
+
+  /// A draw.
+  record draw {
+    /// Vertices.
+    vertex-count: u32,
+    /// Instances.
+    instance-count: u32,
+    /// The first vertex.
+    first-vertex: u32,
+    /// The first instance.
+    first-instance: u32,
+  }
+
+  /// An indexed draw.
+  record draw-indexed {
+    /// Indices.
+    index-count: u32,
+    /// Instances.
+    instance-count: u32,
+    /// The first index.
+    first-index: u32,
+    /// Added to every index.
+    base-vertex: s32,
+    /// The first instance.
+    first-instance: u32,
+  }
+
+  /// Arguments read from a buffer.
+  record indirect {
+    /// The buffer.
+    buffer: handle,
+    /// The first byte.
+    offset: u64,
+  }
+
+  /// Several indirect draws read from a buffer.
+  record multi-indirect {
+    /// The buffer.
+    buffer: handle,
+    /// The first byte.
+    offset: u64,
+    /// How many draws.
+    count: u32,
+  }
+
+  /// Several indirect draws, their number read from a second buffer.
+  record multi-indirect-count {
+    /// The argument buffer.
+    buffer: handle,
+    /// Its first byte.
+    offset: u64,
+    /// The buffer holding the count.
+    count-buffer: handle,
+    /// Where the count is.
+    count-offset: u64,
+    /// The most draws.
+    max-count: u32,
+  }
+
+  /// A query write inside a pass.
+  record query-write {
+    /// The query set.
+    query-set: handle,
+    /// The query.
+    index: u32,
+  }
+
+  /// One command of a render pass.
+  variant render-command {
+    /// Use a render pipeline.
+    set-pipeline(handle),
+    /// Set a bind group.
+    set-bind-group(set-bind-group),
+    /// Set a vertex buffer.
+    set-vertex-buffer(set-vertex-buffer),
+    /// Set the index buffer.
+    set-index-buffer(set-index-buffer),
+    /// Set the viewport.
+    set-viewport(viewport),
+    /// Set the scissor rectangle.
+    set-scissor-rect(scissor-rect),
+    /// Set the blend constant.
+    set-blend-constant(color),
+    /// Set the stencil reference.
+    set-stencil-reference(u32),
+    /// Set immediate data.
+    set-immediates(set-immediates),
+    /// Draw.
+    draw(draw),
+    /// Draw indexed.
+    draw-indexed(draw-indexed),
+    /// Draw with arguments from a buffer.
+    draw-indirect(indirect),
+    /// Draw indexed with arguments from a buffer.
+    draw-indexed-indirect(indirect),
+    /// Several draws with arguments from a buffer.
+    multi-draw-indirect(multi-indirect),
+    /// Several indexed draws with arguments from a buffer.
+    multi-draw-indexed-indirect(multi-indirect),
+    /// Several draws, counted by a buffer.
+    multi-draw-indirect-count(multi-indirect-count),
+    /// Several indexed draws, counted by a buffer.
+    multi-draw-indexed-indirect-count(multi-indirect-count),
+    /// Begin an occlusion query.
+    begin-occlusion-query(u32),
+    /// End the occlusion query.
+    end-occlusion-query,
+    /// Write a timestamp.
+    write-timestamp(query-write),
+    /// Open a debug group.
+    push-debug-group(string),
+    /// Close a debug group.
+    pop-debug-group,
+    /// Mark a point for a debugger.
+    insert-debug-marker(string),
+  }
+
+  /// One command of a compute pass.
+  variant compute-command {
+    /// Use a compute pipeline.
+    set-pipeline(handle),
+    /// Set a bind group.
+    set-bind-group(set-bind-group),
+    /// Set immediate data.
+    set-immediates(set-immediates),
+    /// Dispatch workgroups (x, y, z).
+    dispatch(origin3d),
+    /// Dispatch with the counts read from a buffer.
+    dispatch-indirect(indirect),
+    /// Write a timestamp.
+    write-timestamp(query-write),
+    /// Open a debug group.
+    push-debug-group(string),
+    /// Close a debug group.
+    pop-debug-group,
+    /// Mark a point for a debugger.
+    insert-debug-marker(string),
+  }
+
+  /// Reading or writing, for a buffer map.
+  enum map-mode {
+    /// Map to read.
+    read,
+    /// Map to write.
+    write,
+  }
+
+  /// How a surface waits for the display.
+  enum present-mode {
+    /// Wait for vertical blank, queueing frames.
+    fifo,
+    /// Wait for vertical blank; a late frame tears.
+    fifo-relaxed,
+    /// Show at once; may tear.
+    immediate,
+    /// Replace the queued frame.
+    mailbox,
+  }
+
+  /// How a surface's alpha is composited.
+  enum composite-alpha-mode {
+    /// Ignore alpha.
+    opaque,
+    /// Alpha is premultiplied.
+    pre-multiplied,
+    /// Alpha is not premultiplied.
+    post-multiplied,
+    /// Inherit from the window system.
+    inherit,
+  }
+
+  /// What a surface can do with a given adapter.
+  record surface-capabilities {
+    /// Formats it can show, best first.
+    formats: list<string>,
+    /// Present modes it supports.
+    present-modes: list<present-mode>,
+    /// Alpha modes it supports.
+    alpha-modes: list<composite-alpha-mode>,
+    /// Usages its textures may have.
+    usages: texture-usages,
+  }
+
+  /// How a surface is set up.
+  record surface-configuration {
+    /// How its textures will be used.
+    usage: texture-usages,
+    /// Its format.
+    format: string,
+    /// Width in pixels.
+    width: u32,
+    /// Height in pixels.
+    height: u32,
+    /// How it waits for the display.
+    present-mode: present-mode,
+    /// How alpha is composited.
+    alpha-mode: composite-alpha-mode,
+    /// Other formats views of its textures may take.
+    view-formats: list<string>,
+    /// How many frames may be queued.
+    desired-maximum-frame-latency: u32,
+  }
+
+  /// The texture a surface hands out for one frame.
+  record surface-frame {
+    /// The texture to draw into.
+    texture: handle,
+    /// The surface changed (a resize) and should be configured again.
+    suboptimal: bool,
+  }
+
+  /// Why a surface had no frame to give.
+  variant surface-error {
+    /// Not configured, or configured for a device that is gone.
+    not-configured,
+    /// The surface no longer matches its window; configure it again.
+    outdated,
+    /// The window is hidden; skip this frame.
+    occluded,
+    /// The surface or its device is lost.
+    lost(string),
+    /// Something else, as text.
+    other(string),
+  }
+
+  /// What a format can do on an adapter.
+  record format-features {
+    /// The usages a texture of this format may have.
+    allowed-usages: texture-usages,
+    /// Sample counts it supports for multisampling.
+    sample-counts: list<u32>,
+    /// It may be filtered when sampled.
+    filterable: bool,
+    /// It may be blended as a color target.
+    blendable: bool,
+    /// It may be a storage texture with read-write access.
+    storage-read-write: bool,
+  }
+}
+
+/// The calls. All of them, in one interface, in WebGPU's order: adapter,
+/// device, resources, shaders and pipelines, commands, queue, surfaces.
+interface gpu {
+  use types.{
+    handle, gpu-error, shader-error, compilation-message, limit,
+    adapter-options, adapter-info, device-descriptor, buffer-descriptor,
+    texture-descriptor, texture-view-descriptor, sampler-descriptor,
+    bind-group-layout-descriptor, bind-group-descriptor,
+    pipeline-layout-descriptor, shader-module-descriptor,
+    render-pipeline-descriptor, compute-pipeline-descriptor,
+    query-set-descriptor, texel-copy-texture-info, texel-copy-buffer-layout,
+    texel-copy-buffer-info, extent3d, render-pass-descriptor, render-command,
+    compute-pass-descriptor, compute-command, map-mode,
+    surface-capabilities, surface-configuration, surface-frame,
+    surface-error, format-features,
+  };
+
+
+  /// Choose a GPU. Fails when there is no GPU that fits the options.
+  request-adapter: func(options: adapter-options) -> result<handle, gpu-error>;
+  /// What the adapter says about itself.
+  describe-adapter: func(adapter: handle) -> result<adapter-info, gpu-error>;
+  /// The features the adapter offers, by WebGPU name.
+  adapter-features: func(adapter: handle) -> result<list<string>, gpu-error>;
+  /// The best limits the adapter offers.
+  adapter-limits: func(adapter: handle) -> result<list<limit>, gpu-error>;
+  /// What a texture format can do on this adapter.
+  adapter-format-features: func(adapter: handle, format: string) -> result<format-features, gpu-error>;
+  /// Make a device (and its queue) on the adapter.
+  request-device: func(adapter: handle, descriptor: device-descriptor) -> result<handle, gpu-error>;
+
+
+  /// The features the device was made with.
+  device-features: func(device: handle) -> result<list<string>, gpu-error>;
+  /// The limits the device was made with.
+  device-limits: func(device: handle) -> result<list<limit>, gpu-error>;
+  /// Lose the device on purpose: every call on it fails with `lost` from now on.
+  destroy-device: func(device: handle) -> result<_, gpu-error>;
+  /// Why the device was lost, or none while it is not.
+  device-lost-reason: func(device: handle) -> option<string>;
+  /// Let finished GPU work complete; with `wait`, block until the queue is idle.
+  /// True when no work is left.
+  poll: func(device: handle, wait: bool) -> result<bool, gpu-error>;
+
+
+  /// Make a buffer.
+  create-buffer: func(device: handle, descriptor: buffer-descriptor) -> result<handle, gpu-error>;
+  /// Map part of a buffer for the app to read or write. Returns once it is mapped.
+  map-buffer: func(buffer: handle, mode: map-mode, offset: u64, size: u64) -> result<_, gpu-error>;
+  /// Read bytes from a mapped buffer.
+  read-mapped: func(buffer: handle, offset: u64, size: u64) -> result<list<u8>, gpu-error>;
+  /// Write bytes into a buffer mapped for writing.
+  write-mapped: func(buffer: handle, offset: u64, data: list<u8>) -> result<_, gpu-error>;
+  /// Give a mapped buffer back to the GPU.
+  unmap-buffer: func(buffer: handle) -> result<_, gpu-error>;
+  /// Free a buffer's memory now; the handle stays valid and unusable.
+  destroy-buffer: func(buffer: handle) -> result<_, gpu-error>;
+  /// Make a texture.
+  create-texture: func(device: handle, descriptor: texture-descriptor) -> result<handle, gpu-error>;
+  /// Free a texture's memory now.
+  destroy-texture: func(texture: handle) -> result<_, gpu-error>;
+  /// Make a view of a texture.
+  create-texture-view: func(texture: handle, descriptor: texture-view-descriptor) -> result<handle, gpu-error>;
+  /// Make a sampler.
+  create-sampler: func(device: handle, descriptor: sampler-descriptor) -> result<handle, gpu-error>;
+  /// Make a query set.
+  create-query-set: func(device: handle, descriptor: query-set-descriptor) -> result<handle, gpu-error>;
+  /// Make a bind group layout.
+  create-bind-group-layout: func(device: handle, descriptor: bind-group-layout-descriptor) -> result<handle, gpu-error>;
+  /// Make a bind group.
+  create-bind-group: func(device: handle, descriptor: bind-group-descriptor) -> result<handle, gpu-error>;
+  /// Make a pipeline layout.
+  create-pipeline-layout: func(device: handle, descriptor: pipeline-layout-descriptor) -> result<handle, gpu-error>;
+
+
+  /// Make a shader module from WGSL. The source is validated first; a shader
+  /// that fails is refused with the reason and where, and never reaches the
+  /// driver.
+  create-shader-module: func(device: handle, descriptor: shader-module-descriptor) -> result<handle, shader-error>;
+  /// Warnings and notes about an accepted shader.
+  shader-compilation-info: func(module: handle) -> result<list<compilation-message>, gpu-error>;
+  /// Make a render pipeline.
+  create-render-pipeline: func(device: handle, descriptor: render-pipeline-descriptor) -> result<handle, gpu-error>;
+  /// Make a compute pipeline.
+  create-compute-pipeline: func(device: handle, descriptor: compute-pipeline-descriptor) -> result<handle, gpu-error>;
+  /// The bind group layout a render or compute pipeline uses at an index.
+  pipeline-bind-group-layout: func(pipeline: handle, index: u32) -> result<handle, gpu-error>;
+
+
+  /// Start recording commands.
+  create-command-encoder: func(device: handle, label: option<string>) -> result<handle, gpu-error>;
+  /// Record a whole render pass: its attachments and every command in it.
+  encode-render-pass: func(encoder: handle, descriptor: render-pass-descriptor, commands: list<render-command>) -> result<_, gpu-error>;
+  /// Record a whole compute pass.
+  encode-compute-pass: func(encoder: handle, descriptor: compute-pass-descriptor, commands: list<compute-command>) -> result<_, gpu-error>;
+  /// Copy between buffers.
+  copy-buffer-to-buffer: func(encoder: handle, source: handle, source-offset: u64, destination: handle, destination-offset: u64, size: option<u64>) -> result<_, gpu-error>;
+  /// Copy a buffer into a texture.
+  copy-buffer-to-texture: func(encoder: handle, source: texel-copy-buffer-info, destination: texel-copy-texture-info, size: extent3d) -> result<_, gpu-error>;
+  /// Copy a texture into a buffer.
+  copy-texture-to-buffer: func(encoder: handle, source: texel-copy-texture-info, destination: texel-copy-buffer-info, size: extent3d) -> result<_, gpu-error>;
+  /// Copy between textures.
+  copy-texture-to-texture: func(encoder: handle, source: texel-copy-texture-info, destination: texel-copy-texture-info, size: extent3d) -> result<_, gpu-error>;
+  /// Fill part of a buffer with zeros.
+  clear-buffer: func(encoder: handle, buffer: handle, offset: u64, size: option<u64>) -> result<_, gpu-error>;
+  /// Copy query results into a buffer.
+  resolve-query-set: func(encoder: handle, query-set: handle, first-query: u32, query-count: u32, destination: handle, destination-offset: u64) -> result<_, gpu-error>;
+  /// Write a timestamp between passes.
+  write-timestamp: func(encoder: handle, query-set: handle, index: u32) -> result<_, gpu-error>;
+  /// Finish recording; the encoder is spent and a command buffer is returned.
+  finish-encoder: func(encoder: handle, label: option<string>) -> result<handle, gpu-error>;
+
+
+  /// Run command buffers, in order. They are spent. Returns the submission's index.
+  submit: func(device: handle, command-buffers: list<handle>) -> result<u64, gpu-error>;
+  /// Write bytes into a buffer, in queue order.
+  write-buffer: func(device: handle, buffer: handle, offset: u64, data: list<u8>) -> result<_, gpu-error>;
+  /// Write texels into a texture, in queue order.
+  write-texture: func(device: handle, destination: texel-copy-texture-info, data: list<u8>, layout: texel-copy-buffer-layout, size: extent3d) -> result<_, gpu-error>;
+  /// Nanoseconds per timestamp tick.
+  timestamp-period: func(device: handle) -> result<f32, gpu-error>;
+
+
+  /// A surface on a canvas widget of a window, to draw frames into.
+  create-surface: func(window: u64, widget: u64) -> result<handle, gpu-error>;
+  /// The size in pixels the surface's canvas is shown at now: its laid-out
+  /// size times the display's density. Configure to this for a sharp picture;
+  /// it changes when the window is resized or moves to another display.
+  surface-pixel-size: func(surface: handle) -> result<tuple<u32, u32>, gpu-error>;
+  /// What a surface can do with an adapter.
+  get-surface-capabilities: func(surface: handle, adapter: handle) -> result<surface-capabilities, gpu-error>;
+  /// Set a surface up for a device, a size and a format.
+  configure-surface: func(surface: handle, device: handle, configuration: surface-configuration) -> result<_, gpu-error>;
+  /// The texture to draw the next frame into.
+  current-texture: func(surface: handle) -> result<surface-frame, surface-error>;
+  /// Show the frame drawn into the current texture.
+  present: func(surface: handle) -> result<_, gpu-error>;
+
+
+  /// Let a handle go. The object lives on while the GPU still uses it.
+  release: func(object: handle);
+}

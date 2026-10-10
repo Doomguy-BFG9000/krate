@@ -1,0 +1,21 @@
+[app]
+id = "com.acme.gpu-probe"
+name = "gpu-probe"
+version = "0.1.0-dev"
+entry = "target/wasm32-wasip1/release/krate_gpu_probe.wasm"
+world = "krate:app/gui@0.2.0"
+
+[[capabilities]]
+cap = "ui.window:create"
+rationale = "A window for the cube"
+required = true
+
+[[capabilities]]
+cap = "io.stdout"
+rationale = "Print what the GPU answered"
+required = true
+
+[[capabilities]]
+cap = "io.args"
+rationale = "Read which check to run"
+required = true

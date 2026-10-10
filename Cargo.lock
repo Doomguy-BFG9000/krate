@@ -2324,6 +2324,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "krate-gpu-names"
+version = "0.5.5"
+dependencies = [
+ "wgpu-types",
+]
+
+[[package]]
 name = "krate-hub"
 version = "0.5.5"
 dependencies = [
@@ -2446,9 +2453,11 @@ dependencies = [
  "krate-adapter-linux",
  "krate-adapter-macos",
  "krate-adapter-windows",
+ "krate-gpu-names",
  "krate-layout",
  "krate-manifest",
  "krate-policy",
+ "krate-presenter-gpu",
  "krate-scene3d-gpu",
  "libc",
  "miniz_oxide",
@@ -2459,6 +2468,7 @@ dependencies = [
  "objc2-core-video",
  "objc2-foundation 0.3.2",
  "png 0.18.1",
+ "pollster",
  "rfd",
  "ring",
  "rusqlite",

@@ -33,6 +33,11 @@ use crate::{
     uapi::{AudioCall, CameraCall, UapiCall, UapiGuard, UiCall},
 };
 
+// krate:gpu lives beside the host it extends, as a child module so it can
+// present through the same private paths a scene3d frame takes.
+#[path = "gpu_host.rs"]
+mod gpu_host;
+
 /// How long `events.wait` sleeps between polls.
 const WAIT_POLL_INTERVAL_MILLIS: u64 = 10;
 
@@ -188,6 +193,9 @@ pub struct Phase3GuiHost {
     /// Bound 3D scenes, sharing the canvas id space so a scene and a canvas
     /// can never collide on one number.
     scenes: std::cell::RefCell<std::collections::BTreeMap<u64, (WindowId, WidgetId, SceneBackend)>>,
+    /// The app's GPU objects (krate:gpu): devices, buffers, textures,
+    /// pipelines and surfaces, by the handle the app was given.
+    gpu: std::cell::RefCell<gpu_host::GpuState>,
     /// The next canvas or scene id to hand out; never reused within a run.
     next_canvas_id: std::cell::Cell<u64>,
     /// Per-canvas display lists, recorded only when the adapter renders
@@ -466,6 +474,7 @@ impl Phase3GuiHost {
             gamepads: std::cell::RefCell::new(crate::gamepad::Gamepads::new()),
             held_keys: std::cell::RefCell::new(std::collections::BTreeSet::new()),
             scenes: std::cell::RefCell::new(std::collections::BTreeMap::new()),
+            gpu: Default::default(),
             next_canvas_id: std::cell::Cell::new(1),
             canvas_lists: Default::default(),
             lists_enabled: std::cell::Cell::new(None),

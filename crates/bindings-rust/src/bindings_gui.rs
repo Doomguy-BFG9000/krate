@@ -9827,6 +9827,13496 @@ pub mod krate {
             }
         }
     }
+    pub mod gpu {
+        /// The GPU as a programmable surface (IC-540, IC-916): WebGPU's object model,
+        /// spoken over the component boundary.
+        ///
+        /// Shaped like WebGPU rather than like any one library's Rust API, so a
+        /// program written for WebGPU, for wgpu, or for an engine built on either can
+        /// be pointed at it, and so it never freezes one crate's types into Krate's
+        /// contract. Every object -- adapter, device, buffer, texture, view, sampler,
+        /// layout, bind group, shader, pipeline, encoder, command buffer, query set,
+        /// surface -- is a host handle, a `u64` the app passes back. `release` lets
+        /// one go; everything an app holds is freed when it exits.
+        ///
+        /// Open sets travel as WebGPU's own names, as strings: texture and vertex
+        /// formats ("rgba8unorm-srgb", "float32x3"), features
+        /// ("texture-compression-bc") and limits ("max-texture-dimension-2d"). WebGPU
+        /// grows those sets every year; a WIT enum would have to change shape to
+        /// follow, and a changed shape refuses every app built against the old one
+        /// (K-403). A name the host does not know is refused with the name in the
+        /// error.
+        ///
+        /// Shaders are WGSL, and only WGSL, validated by the host before the GPU
+        /// driver ever sees them; a shader that fails validation is refused with the
+        /// reason and the line (the chapter 50 "shader door", decided by F-311).
+        ///
+        /// A render or compute pass is recorded by the app and sent whole, as one
+        /// list of commands, when it ends: a scene of a thousand draws crosses into
+        /// the host once, not seven thousand times (IC-539).
+        ///
+        /// Errors come back from the call that caused them. WebGPU reports them later,
+        /// through error scopes, because a browser's GPU lives in another process and
+        /// a round trip per call would be slow; Krate's lives in the same process, so
+        /// every call validates as it goes and says what was wrong. A library that
+        /// wants WebGPU's scopes keeps them on its own side (the guest wgpu backend
+        /// does).
+        #[allow(dead_code, async_fn_in_trait, unused_imports, clippy::all)]
+        pub mod types {
+            #[used]
+            #[doc(hidden)]
+            static __FORCE_SECTION_REF: fn() =
+                super::super::super::__link_custom_section_describing_imports;
+
+            use super::super::super::_rt;
+            /// Every GPU object is one of these: an id the host gave out.
+            pub type Handle = u64;
+            /// Why a GPU call was refused.
+            #[derive(Clone)]
+            pub enum GpuError {
+                /// A handle that is unknown, released, or of the wrong kind for the call.
+                InvalidHandle(_rt::String),
+                /// The call broke one of WebGPU's validation rules; the text says which.
+                Validation(_rt::String),
+                /// The GPU or the app's GPU budget ran out of memory.
+                OutOfMemory,
+                /// The device is lost (a driver reset, the GPU removed, or `destroy-device`);
+                /// make a new one.
+                Lost(_rt::String),
+                /// Something this host does not offer: a feature, a limit, a format.
+                Unsupported(_rt::String),
+                /// A failure inside the host or the driver.
+                Internal(_rt::String),
+            }
+            impl ::core::fmt::Debug for GpuError {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    match self {
+                        GpuError::InvalidHandle(e) => {
+                            f.debug_tuple("GpuError::InvalidHandle").field(e).finish()
+                        }
+                        GpuError::Validation(e) => {
+                            f.debug_tuple("GpuError::Validation").field(e).finish()
+                        }
+                        GpuError::OutOfMemory => f.debug_tuple("GpuError::OutOfMemory").finish(),
+                        GpuError::Lost(e) => f.debug_tuple("GpuError::Lost").field(e).finish(),
+                        GpuError::Unsupported(e) => {
+                            f.debug_tuple("GpuError::Unsupported").field(e).finish()
+                        }
+                        GpuError::Internal(e) => {
+                            f.debug_tuple("GpuError::Internal").field(e).finish()
+                        }
+                    }
+                }
+            }
+            impl ::core::fmt::Display for GpuError {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    write!(f, "{:?}", self)
+                }
+            }
+
+            #[cfg(feature = "std")]
+            impl std::error::Error for GpuError {}
+            /// A WGSL shader that could not be accepted, and where.
+            #[derive(Clone)]
+            pub struct ShaderError {
+                /// What is wrong, as the validator says it.
+                pub message: _rt::String,
+                /// The 1-based line of the first problem, or 0 if it has no place.
+                pub line: u32,
+                /// The 1-based column of the first problem, or 0.
+                pub column: u32,
+                /// The byte offset of the first problem in the source.
+                pub offset: u32,
+                /// How many bytes the problem spans.
+                pub length: u32,
+            }
+            impl ::core::fmt::Debug for ShaderError {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    f.debug_struct("ShaderError")
+                        .field("message", &self.message)
+                        .field("line", &self.line)
+                        .field("column", &self.column)
+                        .field("offset", &self.offset)
+                        .field("length", &self.length)
+                        .finish()
+                }
+            }
+            impl ::core::fmt::Display for ShaderError {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    write!(f, "{:?}", self)
+                }
+            }
+            #[cfg(feature = "std")]
+            impl std::error::Error for ShaderError {}
+            /// One message about a shader that was accepted (a warning or a note).
+            #[derive(Clone)]
+            pub struct CompilationMessage {
+                /// The message text.
+                pub message: _rt::String,
+                /// "error", "warning" or "info".
+                pub kind: _rt::String,
+                /// The 1-based line, or 0.
+                pub line: u32,
+                /// The 1-based column, or 0.
+                pub column: u32,
+                /// The byte offset in the source.
+                pub offset: u32,
+                /// How many bytes it spans.
+                pub length: u32,
+            }
+            impl ::core::fmt::Debug for CompilationMessage {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    f.debug_struct("CompilationMessage")
+                        .field("message", &self.message)
+                        .field("kind", &self.kind)
+                        .field("line", &self.line)
+                        .field("column", &self.column)
+                        .field("offset", &self.offset)
+                        .field("length", &self.length)
+                        .finish()
+                }
+            }
+            /// A named limit and its value, as WebGPU names it ("max-bind-groups").
+            #[derive(Clone)]
+            pub struct Limit {
+                /// The limit's WebGPU name in kebab case.
+                pub name: _rt::String,
+                /// Its value.
+                pub value: u64,
+            }
+            impl ::core::fmt::Debug for Limit {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    f.debug_struct("Limit")
+                        .field("name", &self.name)
+                        .field("value", &self.value)
+                        .finish()
+                }
+            }
+            /// Which GPU to prefer when there is more than one.
+            #[repr(u8)]
+            #[derive(Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
+            pub enum PowerPreference {
+                /// Let the host choose.
+                None,
+                /// The GPU that saves battery.
+                LowPower,
+                /// The fastest GPU.
+                HighPerformance,
+            }
+            impl ::core::fmt::Debug for PowerPreference {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    match self {
+                        PowerPreference::None => f.debug_tuple("PowerPreference::None").finish(),
+                        PowerPreference::LowPower => {
+                            f.debug_tuple("PowerPreference::LowPower").finish()
+                        }
+                        PowerPreference::HighPerformance => {
+                            f.debug_tuple("PowerPreference::HighPerformance").finish()
+                        }
+                    }
+                }
+            }
+
+            impl PowerPreference {
+                #[doc(hidden)]
+                pub unsafe fn _lift(val: u8) -> PowerPreference {
+                    if !cfg!(debug_assertions) {
+                        return ::core::mem::transmute(val);
+                    }
+
+                    match val {
+                        0 => PowerPreference::None,
+                        1 => PowerPreference::LowPower,
+                        2 => PowerPreference::HighPerformance,
+
+                        _ => panic!("invalid enum discriminant"),
+                    }
+                }
+            }
+
+            /// What to ask for when choosing a GPU.
+            #[repr(C)]
+            #[derive(Clone, Copy)]
+            pub struct AdapterOptions {
+                /// Which GPU to prefer.
+                pub power_preference: PowerPreference,
+                /// Accept a software (CPU) adapter. Off, a machine with no real GPU has none.
+                pub force_fallback_adapter: bool,
+                /// A surface the adapter must be able to present to, if any.
+                pub compatible_surface: Option<Handle>,
+            }
+            impl ::core::fmt::Debug for AdapterOptions {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    f.debug_struct("AdapterOptions")
+                        .field("power-preference", &self.power_preference)
+                        .field("force-fallback-adapter", &self.force_fallback_adapter)
+                        .field("compatible-surface", &self.compatible_surface)
+                        .finish()
+                }
+            }
+            /// The kind of GPU an adapter is.
+            #[repr(u8)]
+            #[derive(Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
+            pub enum DeviceType {
+                /// Not known.
+                Other,
+                /// A GPU built into the processor package.
+                IntegratedGpu,
+                /// A separate GPU.
+                DiscreteGpu,
+                /// A virtual GPU in a virtual machine.
+                VirtualGpu,
+                /// A software rasterizer.
+                Cpu,
+            }
+            impl ::core::fmt::Debug for DeviceType {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    match self {
+                        DeviceType::Other => f.debug_tuple("DeviceType::Other").finish(),
+                        DeviceType::IntegratedGpu => {
+                            f.debug_tuple("DeviceType::IntegratedGpu").finish()
+                        }
+                        DeviceType::DiscreteGpu => {
+                            f.debug_tuple("DeviceType::DiscreteGpu").finish()
+                        }
+                        DeviceType::VirtualGpu => f.debug_tuple("DeviceType::VirtualGpu").finish(),
+                        DeviceType::Cpu => f.debug_tuple("DeviceType::Cpu").finish(),
+                    }
+                }
+            }
+
+            impl DeviceType {
+                #[doc(hidden)]
+                pub unsafe fn _lift(val: u8) -> DeviceType {
+                    if !cfg!(debug_assertions) {
+                        return ::core::mem::transmute(val);
+                    }
+
+                    match val {
+                        0 => DeviceType::Other,
+                        1 => DeviceType::IntegratedGpu,
+                        2 => DeviceType::DiscreteGpu,
+                        3 => DeviceType::VirtualGpu,
+                        4 => DeviceType::Cpu,
+
+                        _ => panic!("invalid enum discriminant"),
+                    }
+                }
+            }
+
+            /// What an adapter says about itself.
+            #[derive(Clone)]
+            pub struct AdapterInfo {
+                /// The GPU's name.
+                pub name: _rt::String,
+                /// PCI vendor id, or 0.
+                pub vendor: u32,
+                /// PCI device id, or 0.
+                pub device: u32,
+                /// What kind of GPU it is.
+                pub device_type: DeviceType,
+                /// The native API underneath ("metal", "vulkan", "dx12", "gl").
+                pub backend: _rt::String,
+                /// The driver's name.
+                pub driver: _rt::String,
+                /// The driver's own version or detail text.
+                pub driver_info: _rt::String,
+            }
+            impl ::core::fmt::Debug for AdapterInfo {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    f.debug_struct("AdapterInfo")
+                        .field("name", &self.name)
+                        .field("vendor", &self.vendor)
+                        .field("device", &self.device)
+                        .field("device-type", &self.device_type)
+                        .field("backend", &self.backend)
+                        .field("driver", &self.driver)
+                        .field("driver-info", &self.driver_info)
+                        .finish()
+                }
+            }
+            /// What to ask of a new device.
+            #[derive(Clone)]
+            pub struct DeviceDescriptor {
+                /// A name for debugging.
+                pub label: Option<_rt::String>,
+                /// Features the device must have, by WebGPU name.
+                pub required_features: _rt::Vec<_rt::String>,
+                /// Limits the device must meet; any limit not named keeps WebGPU's default.
+                pub required_limits: _rt::Vec<Limit>,
+            }
+            impl ::core::fmt::Debug for DeviceDescriptor {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    f.debug_struct("DeviceDescriptor")
+                        .field("label", &self.label)
+                        .field("required-features", &self.required_features)
+                        .field("required-limits", &self.required_limits)
+                        .finish()
+                }
+            }
+            wit_bindgen_rt::bitflags::bitflags! {
+              /// How a buffer may be used.
+              #[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Clone, Copy)]
+              pub struct BufferUsages: u16 {
+                /// Mappable for reading.
+                const MAP_READ = 1 << 0;
+                /// Mappable for writing.
+                const MAP_WRITE = 1 << 1;
+                /// The source of a copy.
+                const COPY_SRC = 1 << 2;
+                /// The destination of a copy.
+                const COPY_DST = 1 << 3;
+                /// An index buffer.
+                const INDEX = 1 << 4;
+                /// A vertex buffer.
+                const VERTEX = 1 << 5;
+                /// A uniform buffer.
+                const UNIFORM = 1 << 6;
+                /// A storage buffer.
+                const STORAGE = 1 << 7;
+                /// Arguments for an indirect draw or dispatch.
+                const INDIRECT = 1 << 8;
+                /// The destination of a query resolve.
+                const QUERY_RESOLVE = 1 << 9;
+              }
+            }
+            /// A new buffer.
+            #[derive(Clone)]
+            pub struct BufferDescriptor {
+                /// A name for debugging.
+                pub label: Option<_rt::String>,
+                /// Its size in bytes.
+                pub size: u64,
+                /// How it will be used.
+                pub usage: BufferUsages,
+                /// Start mapped for writing, so its contents can be written before first use.
+                pub mapped_at_creation: bool,
+            }
+            impl ::core::fmt::Debug for BufferDescriptor {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    f.debug_struct("BufferDescriptor")
+                        .field("label", &self.label)
+                        .field("size", &self.size)
+                        .field("usage", &self.usage)
+                        .field("mapped-at-creation", &self.mapped_at_creation)
+                        .finish()
+                }
+            }
+            wit_bindgen_rt::bitflags::bitflags! {
+              /// How a texture may be used.
+              #[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Clone, Copy)]
+              pub struct TextureUsages: u8 {
+                /// The source of a copy.
+                const COPY_SRC = 1 << 0;
+                /// The destination of a copy.
+                const COPY_DST = 1 << 1;
+                /// Sampled or loaded in a shader.
+                const TEXTURE_BINDING = 1 << 2;
+                /// Written (or read and written) as a storage texture.
+                const STORAGE_BINDING = 1 << 3;
+                /// Drawn into as a color or depth attachment.
+                const RENDER_ATTACHMENT = 1 << 4;
+              }
+            }
+            /// A width, height and depth (or layer count).
+            #[repr(C)]
+            #[derive(Clone, Copy)]
+            pub struct Extent3d {
+                /// Width in texels.
+                pub width: u32,
+                /// Height in texels.
+                pub height: u32,
+                /// Depth in texels, or the number of array layers.
+                pub depth_or_array_layers: u32,
+            }
+            impl ::core::fmt::Debug for Extent3d {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    f.debug_struct("Extent3d")
+                        .field("width", &self.width)
+                        .field("height", &self.height)
+                        .field("depth-or-array-layers", &self.depth_or_array_layers)
+                        .finish()
+                }
+            }
+            /// A texel position.
+            #[repr(C)]
+            #[derive(Clone, Copy)]
+            pub struct Origin3d {
+                /// X in texels.
+                pub x: u32,
+                /// Y in texels.
+                pub y: u32,
+                /// Z in texels, or the array layer.
+                pub z: u32,
+            }
+            impl ::core::fmt::Debug for Origin3d {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    f.debug_struct("Origin3d")
+                        .field("x", &self.x)
+                        .field("y", &self.y)
+                        .field("z", &self.z)
+                        .finish()
+                }
+            }
+            /// How many dimensions a texture has.
+            #[repr(u8)]
+            #[derive(Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
+            pub enum TextureDimension {
+                /// One.
+                D1,
+                /// Two.
+                D2,
+                /// Three.
+                D3,
+            }
+            impl ::core::fmt::Debug for TextureDimension {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    match self {
+                        TextureDimension::D1 => f.debug_tuple("TextureDimension::D1").finish(),
+                        TextureDimension::D2 => f.debug_tuple("TextureDimension::D2").finish(),
+                        TextureDimension::D3 => f.debug_tuple("TextureDimension::D3").finish(),
+                    }
+                }
+            }
+
+            impl TextureDimension {
+                #[doc(hidden)]
+                pub unsafe fn _lift(val: u8) -> TextureDimension {
+                    if !cfg!(debug_assertions) {
+                        return ::core::mem::transmute(val);
+                    }
+
+                    match val {
+                        0 => TextureDimension::D1,
+                        1 => TextureDimension::D2,
+                        2 => TextureDimension::D3,
+
+                        _ => panic!("invalid enum discriminant"),
+                    }
+                }
+            }
+
+            /// A new texture.
+            #[derive(Clone)]
+            pub struct TextureDescriptor {
+                /// A name for debugging.
+                pub label: Option<_rt::String>,
+                /// Its size.
+                pub size: Extent3d,
+                /// How many mip levels.
+                pub mip_level_count: u32,
+                /// Samples per texel: 1, or 4 for multisampling.
+                pub sample_count: u32,
+                /// How many dimensions.
+                pub dimension: TextureDimension,
+                /// Its format, by WebGPU name ("rgba8unorm-srgb", "depth32float").
+                pub format: _rt::String,
+                /// How it will be used.
+                pub usage: TextureUsages,
+                /// Other formats views of it may take.
+                pub view_formats: _rt::Vec<_rt::String>,
+            }
+            impl ::core::fmt::Debug for TextureDescriptor {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    f.debug_struct("TextureDescriptor")
+                        .field("label", &self.label)
+                        .field("size", &self.size)
+                        .field("mip-level-count", &self.mip_level_count)
+                        .field("sample-count", &self.sample_count)
+                        .field("dimension", &self.dimension)
+                        .field("format", &self.format)
+                        .field("usage", &self.usage)
+                        .field("view-formats", &self.view_formats)
+                        .finish()
+                }
+            }
+            /// The shape a view gives a texture.
+            #[repr(u8)]
+            #[derive(Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
+            pub enum TextureViewDimension {
+                /// One-dimensional.
+                D1,
+                /// Two-dimensional.
+                D2,
+                /// An array of two-dimensional layers.
+                D2Array,
+                /// A cube of six faces.
+                Cube,
+                /// An array of cubes.
+                CubeArray,
+                /// Three-dimensional.
+                D3,
+            }
+            impl ::core::fmt::Debug for TextureViewDimension {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    match self {
+                        TextureViewDimension::D1 => {
+                            f.debug_tuple("TextureViewDimension::D1").finish()
+                        }
+                        TextureViewDimension::D2 => {
+                            f.debug_tuple("TextureViewDimension::D2").finish()
+                        }
+                        TextureViewDimension::D2Array => {
+                            f.debug_tuple("TextureViewDimension::D2Array").finish()
+                        }
+                        TextureViewDimension::Cube => {
+                            f.debug_tuple("TextureViewDimension::Cube").finish()
+                        }
+                        TextureViewDimension::CubeArray => {
+                            f.debug_tuple("TextureViewDimension::CubeArray").finish()
+                        }
+                        TextureViewDimension::D3 => {
+                            f.debug_tuple("TextureViewDimension::D3").finish()
+                        }
+                    }
+                }
+            }
+
+            impl TextureViewDimension {
+                #[doc(hidden)]
+                pub unsafe fn _lift(val: u8) -> TextureViewDimension {
+                    if !cfg!(debug_assertions) {
+                        return ::core::mem::transmute(val);
+                    }
+
+                    match val {
+                        0 => TextureViewDimension::D1,
+                        1 => TextureViewDimension::D2,
+                        2 => TextureViewDimension::D2Array,
+                        3 => TextureViewDimension::Cube,
+                        4 => TextureViewDimension::CubeArray,
+                        5 => TextureViewDimension::D3,
+
+                        _ => panic!("invalid enum discriminant"),
+                    }
+                }
+            }
+
+            /// Which part of a depth-stencil texture.
+            #[repr(u8)]
+            #[derive(Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
+            pub enum TextureAspect {
+                /// All of it.
+                All,
+                /// The stencil part only.
+                StencilOnly,
+                /// The depth part only.
+                DepthOnly,
+            }
+            impl ::core::fmt::Debug for TextureAspect {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    match self {
+                        TextureAspect::All => f.debug_tuple("TextureAspect::All").finish(),
+                        TextureAspect::StencilOnly => {
+                            f.debug_tuple("TextureAspect::StencilOnly").finish()
+                        }
+                        TextureAspect::DepthOnly => {
+                            f.debug_tuple("TextureAspect::DepthOnly").finish()
+                        }
+                    }
+                }
+            }
+
+            impl TextureAspect {
+                #[doc(hidden)]
+                pub unsafe fn _lift(val: u8) -> TextureAspect {
+                    if !cfg!(debug_assertions) {
+                        return ::core::mem::transmute(val);
+                    }
+
+                    match val {
+                        0 => TextureAspect::All,
+                        1 => TextureAspect::StencilOnly,
+                        2 => TextureAspect::DepthOnly,
+
+                        _ => panic!("invalid enum discriminant"),
+                    }
+                }
+            }
+
+            /// A new view of a texture.
+            #[derive(Clone)]
+            pub struct TextureViewDescriptor {
+                /// A name for debugging.
+                pub label: Option<_rt::String>,
+                /// The view's format; the texture's own when absent.
+                pub format: Option<_rt::String>,
+                /// The view's shape; derived from the texture when absent.
+                pub dimension: Option<TextureViewDimension>,
+                /// The usages this view is for; the texture's when absent.
+                pub usage: Option<TextureUsages>,
+                /// Which part of the texture.
+                pub aspect: TextureAspect,
+                /// The first mip level.
+                pub base_mip_level: u32,
+                /// How many mip levels; all that remain when absent.
+                pub mip_level_count: Option<u32>,
+                /// The first array layer.
+                pub base_array_layer: u32,
+                /// How many array layers; all that remain when absent.
+                pub array_layer_count: Option<u32>,
+            }
+            impl ::core::fmt::Debug for TextureViewDescriptor {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    f.debug_struct("TextureViewDescriptor")
+                        .field("label", &self.label)
+                        .field("format", &self.format)
+                        .field("dimension", &self.dimension)
+                        .field("usage", &self.usage)
+                        .field("aspect", &self.aspect)
+                        .field("base-mip-level", &self.base_mip_level)
+                        .field("mip-level-count", &self.mip_level_count)
+                        .field("base-array-layer", &self.base_array_layer)
+                        .field("array-layer-count", &self.array_layer_count)
+                        .finish()
+                }
+            }
+            /// What a sampler does past the edge.
+            #[repr(u8)]
+            #[derive(Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
+            pub enum AddressMode {
+                /// Clamp to the edge texel.
+                ClampToEdge,
+                /// Repeat.
+                Repeat,
+                /// Repeat, mirrored.
+                MirrorRepeat,
+                /// Use the border color.
+                ClampToBorder,
+            }
+            impl ::core::fmt::Debug for AddressMode {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    match self {
+                        AddressMode::ClampToEdge => {
+                            f.debug_tuple("AddressMode::ClampToEdge").finish()
+                        }
+                        AddressMode::Repeat => f.debug_tuple("AddressMode::Repeat").finish(),
+                        AddressMode::MirrorRepeat => {
+                            f.debug_tuple("AddressMode::MirrorRepeat").finish()
+                        }
+                        AddressMode::ClampToBorder => {
+                            f.debug_tuple("AddressMode::ClampToBorder").finish()
+                        }
+                    }
+                }
+            }
+
+            impl AddressMode {
+                #[doc(hidden)]
+                pub unsafe fn _lift(val: u8) -> AddressMode {
+                    if !cfg!(debug_assertions) {
+                        return ::core::mem::transmute(val);
+                    }
+
+                    match val {
+                        0 => AddressMode::ClampToEdge,
+                        1 => AddressMode::Repeat,
+                        2 => AddressMode::MirrorRepeat,
+                        3 => AddressMode::ClampToBorder,
+
+                        _ => panic!("invalid enum discriminant"),
+                    }
+                }
+            }
+
+            /// How texels are blended.
+            #[repr(u8)]
+            #[derive(Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
+            pub enum FilterMode {
+                /// Nearest texel.
+                Nearest,
+                /// Linear blend.
+                Linear,
+            }
+            impl ::core::fmt::Debug for FilterMode {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    match self {
+                        FilterMode::Nearest => f.debug_tuple("FilterMode::Nearest").finish(),
+                        FilterMode::Linear => f.debug_tuple("FilterMode::Linear").finish(),
+                    }
+                }
+            }
+
+            impl FilterMode {
+                #[doc(hidden)]
+                pub unsafe fn _lift(val: u8) -> FilterMode {
+                    if !cfg!(debug_assertions) {
+                        return ::core::mem::transmute(val);
+                    }
+
+                    match val {
+                        0 => FilterMode::Nearest,
+                        1 => FilterMode::Linear,
+
+                        _ => panic!("invalid enum discriminant"),
+                    }
+                }
+            }
+
+            /// How a comparison passes.
+            #[repr(u8)]
+            #[derive(Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
+            pub enum CompareFunction {
+                /// Never.
+                Never,
+                /// When less.
+                Less,
+                /// When equal.
+                Equal,
+                /// When less or equal.
+                LessEqual,
+                /// When greater.
+                Greater,
+                /// When not equal.
+                NotEqual,
+                /// When greater or equal.
+                GreaterEqual,
+                /// Always.
+                Always,
+            }
+            impl ::core::fmt::Debug for CompareFunction {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    match self {
+                        CompareFunction::Never => f.debug_tuple("CompareFunction::Never").finish(),
+                        CompareFunction::Less => f.debug_tuple("CompareFunction::Less").finish(),
+                        CompareFunction::Equal => f.debug_tuple("CompareFunction::Equal").finish(),
+                        CompareFunction::LessEqual => {
+                            f.debug_tuple("CompareFunction::LessEqual").finish()
+                        }
+                        CompareFunction::Greater => {
+                            f.debug_tuple("CompareFunction::Greater").finish()
+                        }
+                        CompareFunction::NotEqual => {
+                            f.debug_tuple("CompareFunction::NotEqual").finish()
+                        }
+                        CompareFunction::GreaterEqual => {
+                            f.debug_tuple("CompareFunction::GreaterEqual").finish()
+                        }
+                        CompareFunction::Always => {
+                            f.debug_tuple("CompareFunction::Always").finish()
+                        }
+                    }
+                }
+            }
+
+            impl CompareFunction {
+                #[doc(hidden)]
+                pub unsafe fn _lift(val: u8) -> CompareFunction {
+                    if !cfg!(debug_assertions) {
+                        return ::core::mem::transmute(val);
+                    }
+
+                    match val {
+                        0 => CompareFunction::Never,
+                        1 => CompareFunction::Less,
+                        2 => CompareFunction::Equal,
+                        3 => CompareFunction::LessEqual,
+                        4 => CompareFunction::Greater,
+                        5 => CompareFunction::NotEqual,
+                        6 => CompareFunction::GreaterEqual,
+                        7 => CompareFunction::Always,
+
+                        _ => panic!("invalid enum discriminant"),
+                    }
+                }
+            }
+
+            /// The color past the edge with `clamp-to-border`.
+            #[repr(u8)]
+            #[derive(Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
+            pub enum BorderColor {
+                /// Transparent black.
+                TransparentBlack,
+                /// Opaque black.
+                OpaqueBlack,
+                /// Opaque white.
+                OpaqueWhite,
+                /// Zero, for integer textures.
+                Zero,
+            }
+            impl ::core::fmt::Debug for BorderColor {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    match self {
+                        BorderColor::TransparentBlack => {
+                            f.debug_tuple("BorderColor::TransparentBlack").finish()
+                        }
+                        BorderColor::OpaqueBlack => {
+                            f.debug_tuple("BorderColor::OpaqueBlack").finish()
+                        }
+                        BorderColor::OpaqueWhite => {
+                            f.debug_tuple("BorderColor::OpaqueWhite").finish()
+                        }
+                        BorderColor::Zero => f.debug_tuple("BorderColor::Zero").finish(),
+                    }
+                }
+            }
+
+            impl BorderColor {
+                #[doc(hidden)]
+                pub unsafe fn _lift(val: u8) -> BorderColor {
+                    if !cfg!(debug_assertions) {
+                        return ::core::mem::transmute(val);
+                    }
+
+                    match val {
+                        0 => BorderColor::TransparentBlack,
+                        1 => BorderColor::OpaqueBlack,
+                        2 => BorderColor::OpaqueWhite,
+                        3 => BorderColor::Zero,
+
+                        _ => panic!("invalid enum discriminant"),
+                    }
+                }
+            }
+
+            /// A new sampler.
+            #[derive(Clone)]
+            pub struct SamplerDescriptor {
+                /// A name for debugging.
+                pub label: Option<_rt::String>,
+                /// Past the edge in u.
+                pub address_mode_u: AddressMode,
+                /// Past the edge in v.
+                pub address_mode_v: AddressMode,
+                /// Past the edge in w.
+                pub address_mode_w: AddressMode,
+                /// Magnification filter.
+                pub mag_filter: FilterMode,
+                /// Minification filter.
+                pub min_filter: FilterMode,
+                /// Filter between mip levels.
+                pub mipmap_filter: FilterMode,
+                /// The lowest level of detail.
+                pub lod_min_clamp: f32,
+                /// The highest level of detail.
+                pub lod_max_clamp: f32,
+                /// A comparison sampler's function.
+                pub compare: Option<CompareFunction>,
+                /// Anisotropic filtering, 1 for none.
+                pub anisotropy_clamp: u16,
+                /// The border color for `clamp-to-border`.
+                pub border_color: Option<BorderColor>,
+            }
+            impl ::core::fmt::Debug for SamplerDescriptor {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    f.debug_struct("SamplerDescriptor")
+                        .field("label", &self.label)
+                        .field("address-mode-u", &self.address_mode_u)
+                        .field("address-mode-v", &self.address_mode_v)
+                        .field("address-mode-w", &self.address_mode_w)
+                        .field("mag-filter", &self.mag_filter)
+                        .field("min-filter", &self.min_filter)
+                        .field("mipmap-filter", &self.mipmap_filter)
+                        .field("lod-min-clamp", &self.lod_min_clamp)
+                        .field("lod-max-clamp", &self.lod_max_clamp)
+                        .field("compare", &self.compare)
+                        .field("anisotropy-clamp", &self.anisotropy_clamp)
+                        .field("border-color", &self.border_color)
+                        .finish()
+                }
+            }
+            wit_bindgen_rt::bitflags::bitflags! {
+              /// Shader stages, as a set.
+              #[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Clone, Copy)]
+              pub struct ShaderStages: u8 {
+                /// The vertex stage.
+                const VERTEX = 1 << 0;
+                /// The fragment stage.
+                const FRAGMENT = 1 << 1;
+                /// The compute stage.
+                const COMPUTE = 1 << 2;
+              }
+            }
+            /// What kind of buffer a binding holds.
+            #[derive(Clone, Copy)]
+            pub enum BufferBindingType {
+                /// A uniform buffer.
+                Uniform,
+                /// A storage buffer; true when read-only.
+                Storage(bool),
+            }
+            impl ::core::fmt::Debug for BufferBindingType {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    match self {
+                        BufferBindingType::Uniform => {
+                            f.debug_tuple("BufferBindingType::Uniform").finish()
+                        }
+                        BufferBindingType::Storage(e) => f
+                            .debug_tuple("BufferBindingType::Storage")
+                            .field(e)
+                            .finish(),
+                    }
+                }
+            }
+            /// A buffer binding in a layout.
+            #[repr(C)]
+            #[derive(Clone, Copy)]
+            pub struct BufferBindingLayout {
+                /// Uniform or storage.
+                pub kind: BufferBindingType,
+                /// The offset is given when the group is set.
+                pub has_dynamic_offset: bool,
+                /// The smallest size the binding may have, 0 for no minimum.
+                pub min_binding_size: u64,
+            }
+            impl ::core::fmt::Debug for BufferBindingLayout {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    f.debug_struct("BufferBindingLayout")
+                        .field("kind", &self.kind)
+                        .field("has-dynamic-offset", &self.has_dynamic_offset)
+                        .field("min-binding-size", &self.min_binding_size)
+                        .finish()
+                }
+            }
+            /// What a sampler binding expects.
+            #[repr(u8)]
+            #[derive(Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
+            pub enum SamplerBindingType {
+                /// A filtering sampler.
+                Filtering,
+                /// A non-filtering sampler.
+                NonFiltering,
+                /// A comparison sampler.
+                Comparison,
+            }
+            impl ::core::fmt::Debug for SamplerBindingType {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    match self {
+                        SamplerBindingType::Filtering => {
+                            f.debug_tuple("SamplerBindingType::Filtering").finish()
+                        }
+                        SamplerBindingType::NonFiltering => {
+                            f.debug_tuple("SamplerBindingType::NonFiltering").finish()
+                        }
+                        SamplerBindingType::Comparison => {
+                            f.debug_tuple("SamplerBindingType::Comparison").finish()
+                        }
+                    }
+                }
+            }
+
+            impl SamplerBindingType {
+                #[doc(hidden)]
+                pub unsafe fn _lift(val: u8) -> SamplerBindingType {
+                    if !cfg!(debug_assertions) {
+                        return ::core::mem::transmute(val);
+                    }
+
+                    match val {
+                        0 => SamplerBindingType::Filtering,
+                        1 => SamplerBindingType::NonFiltering,
+                        2 => SamplerBindingType::Comparison,
+
+                        _ => panic!("invalid enum discriminant"),
+                    }
+                }
+            }
+
+            /// What a sampled texture holds.
+            #[derive(Clone, Copy)]
+            pub enum TextureSampleType {
+                /// Floats; true when filterable.
+                Float(bool),
+                /// Depth.
+                Depth,
+                /// Signed integers.
+                Sint,
+                /// Unsigned integers.
+                Uint,
+            }
+            impl ::core::fmt::Debug for TextureSampleType {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    match self {
+                        TextureSampleType::Float(e) => {
+                            f.debug_tuple("TextureSampleType::Float").field(e).finish()
+                        }
+                        TextureSampleType::Depth => {
+                            f.debug_tuple("TextureSampleType::Depth").finish()
+                        }
+                        TextureSampleType::Sint => {
+                            f.debug_tuple("TextureSampleType::Sint").finish()
+                        }
+                        TextureSampleType::Uint => {
+                            f.debug_tuple("TextureSampleType::Uint").finish()
+                        }
+                    }
+                }
+            }
+            /// A sampled texture binding in a layout.
+            #[repr(C)]
+            #[derive(Clone, Copy)]
+            pub struct TextureBindingLayout {
+                /// What the texture holds.
+                pub sample_type: TextureSampleType,
+                /// The view's shape.
+                pub view_dimension: TextureViewDimension,
+                /// Whether the texture is multisampled.
+                pub multisampled: bool,
+            }
+            impl ::core::fmt::Debug for TextureBindingLayout {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    f.debug_struct("TextureBindingLayout")
+                        .field("sample-type", &self.sample_type)
+                        .field("view-dimension", &self.view_dimension)
+                        .field("multisampled", &self.multisampled)
+                        .finish()
+                }
+            }
+            /// How a shader may touch a storage texture.
+            #[repr(u8)]
+            #[derive(Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
+            pub enum StorageTextureAccess {
+                /// Write only.
+                WriteOnly,
+                /// Read only.
+                ReadOnly,
+                /// Read and write.
+                ReadWrite,
+            }
+            impl ::core::fmt::Debug for StorageTextureAccess {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    match self {
+                        StorageTextureAccess::WriteOnly => {
+                            f.debug_tuple("StorageTextureAccess::WriteOnly").finish()
+                        }
+                        StorageTextureAccess::ReadOnly => {
+                            f.debug_tuple("StorageTextureAccess::ReadOnly").finish()
+                        }
+                        StorageTextureAccess::ReadWrite => {
+                            f.debug_tuple("StorageTextureAccess::ReadWrite").finish()
+                        }
+                    }
+                }
+            }
+
+            impl StorageTextureAccess {
+                #[doc(hidden)]
+                pub unsafe fn _lift(val: u8) -> StorageTextureAccess {
+                    if !cfg!(debug_assertions) {
+                        return ::core::mem::transmute(val);
+                    }
+
+                    match val {
+                        0 => StorageTextureAccess::WriteOnly,
+                        1 => StorageTextureAccess::ReadOnly,
+                        2 => StorageTextureAccess::ReadWrite,
+
+                        _ => panic!("invalid enum discriminant"),
+                    }
+                }
+            }
+
+            /// A storage texture binding in a layout.
+            #[derive(Clone)]
+            pub struct StorageTextureBindingLayout {
+                /// How the shader touches it.
+                pub access: StorageTextureAccess,
+                /// Its format.
+                pub format: _rt::String,
+                /// The view's shape.
+                pub view_dimension: TextureViewDimension,
+            }
+            impl ::core::fmt::Debug for StorageTextureBindingLayout {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    f.debug_struct("StorageTextureBindingLayout")
+                        .field("access", &self.access)
+                        .field("format", &self.format)
+                        .field("view-dimension", &self.view_dimension)
+                        .finish()
+                }
+            }
+            /// What one binding slot holds.
+            #[derive(Clone)]
+            pub enum BindingType {
+                /// A buffer.
+                Buffer(BufferBindingLayout),
+                /// A sampler.
+                Sampler(SamplerBindingType),
+                /// A sampled texture.
+                Texture(TextureBindingLayout),
+                /// A storage texture.
+                StorageTexture(StorageTextureBindingLayout),
+            }
+            impl ::core::fmt::Debug for BindingType {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    match self {
+                        BindingType::Buffer(e) => {
+                            f.debug_tuple("BindingType::Buffer").field(e).finish()
+                        }
+                        BindingType::Sampler(e) => {
+                            f.debug_tuple("BindingType::Sampler").field(e).finish()
+                        }
+                        BindingType::Texture(e) => {
+                            f.debug_tuple("BindingType::Texture").field(e).finish()
+                        }
+                        BindingType::StorageTexture(e) => f
+                            .debug_tuple("BindingType::StorageTexture")
+                            .field(e)
+                            .finish(),
+                    }
+                }
+            }
+            /// One slot of a bind group layout.
+            #[derive(Clone)]
+            pub struct BindGroupLayoutEntry {
+                /// The `@binding` number.
+                pub binding: u32,
+                /// The stages that see it.
+                pub visibility: ShaderStages,
+                /// What it holds.
+                pub kind: BindingType,
+                /// For a binding array, how many elements.
+                pub count: Option<u32>,
+            }
+            impl ::core::fmt::Debug for BindGroupLayoutEntry {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    f.debug_struct("BindGroupLayoutEntry")
+                        .field("binding", &self.binding)
+                        .field("visibility", &self.visibility)
+                        .field("kind", &self.kind)
+                        .field("count", &self.count)
+                        .finish()
+                }
+            }
+            /// A new bind group layout.
+            #[derive(Clone)]
+            pub struct BindGroupLayoutDescriptor {
+                /// A name for debugging.
+                pub label: Option<_rt::String>,
+                /// Its slots.
+                pub entries: _rt::Vec<BindGroupLayoutEntry>,
+            }
+            impl ::core::fmt::Debug for BindGroupLayoutDescriptor {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    f.debug_struct("BindGroupLayoutDescriptor")
+                        .field("label", &self.label)
+                        .field("entries", &self.entries)
+                        .finish()
+                }
+            }
+            /// A range of a buffer, bound.
+            #[repr(C)]
+            #[derive(Clone, Copy)]
+            pub struct BufferBinding {
+                /// The buffer.
+                pub buffer: Handle,
+                /// The first byte.
+                pub offset: u64,
+                /// How many bytes; the rest of the buffer when absent.
+                pub size: Option<u64>,
+            }
+            impl ::core::fmt::Debug for BufferBinding {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    f.debug_struct("BufferBinding")
+                        .field("buffer", &self.buffer)
+                        .field("offset", &self.offset)
+                        .field("size", &self.size)
+                        .finish()
+                }
+            }
+            /// What one slot of a bind group is given.
+            #[derive(Clone)]
+            pub enum BindingResource {
+                /// A buffer range.
+                Buffer(BufferBinding),
+                /// An array of buffer ranges.
+                BufferArray(_rt::Vec<BufferBinding>),
+                /// A sampler.
+                Sampler(Handle),
+                /// An array of samplers.
+                SamplerArray(_rt::Vec<Handle>),
+                /// A texture view.
+                TextureView(Handle),
+                /// An array of texture views.
+                TextureViewArray(_rt::Vec<Handle>),
+            }
+            impl ::core::fmt::Debug for BindingResource {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    match self {
+                        BindingResource::Buffer(e) => {
+                            f.debug_tuple("BindingResource::Buffer").field(e).finish()
+                        }
+                        BindingResource::BufferArray(e) => f
+                            .debug_tuple("BindingResource::BufferArray")
+                            .field(e)
+                            .finish(),
+                        BindingResource::Sampler(e) => {
+                            f.debug_tuple("BindingResource::Sampler").field(e).finish()
+                        }
+                        BindingResource::SamplerArray(e) => f
+                            .debug_tuple("BindingResource::SamplerArray")
+                            .field(e)
+                            .finish(),
+                        BindingResource::TextureView(e) => f
+                            .debug_tuple("BindingResource::TextureView")
+                            .field(e)
+                            .finish(),
+                        BindingResource::TextureViewArray(e) => f
+                            .debug_tuple("BindingResource::TextureViewArray")
+                            .field(e)
+                            .finish(),
+                    }
+                }
+            }
+            /// One slot of a bind group.
+            #[derive(Clone)]
+            pub struct BindGroupEntry {
+                /// The `@binding` number.
+                pub binding: u32,
+                /// What it is given.
+                pub resource: BindingResource,
+            }
+            impl ::core::fmt::Debug for BindGroupEntry {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    f.debug_struct("BindGroupEntry")
+                        .field("binding", &self.binding)
+                        .field("resource", &self.resource)
+                        .finish()
+                }
+            }
+            /// A new bind group.
+            #[derive(Clone)]
+            pub struct BindGroupDescriptor {
+                /// A name for debugging.
+                pub label: Option<_rt::String>,
+                /// Its layout.
+                pub layout: Handle,
+                /// Its slots.
+                pub entries: _rt::Vec<BindGroupEntry>,
+            }
+            impl ::core::fmt::Debug for BindGroupDescriptor {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    f.debug_struct("BindGroupDescriptor")
+                        .field("label", &self.label)
+                        .field("layout", &self.layout)
+                        .field("entries", &self.entries)
+                        .finish()
+                }
+            }
+            /// A new pipeline layout.
+            #[derive(Clone)]
+            pub struct PipelineLayoutDescriptor {
+                /// A name for debugging.
+                pub label: Option<_rt::String>,
+                /// The bind group layout for each group index; none leaves a gap.
+                pub bind_group_layouts: _rt::Vec<Option<Handle>>,
+                /// Bytes of immediate data the pipelines may use.
+                pub immediate_size: u32,
+            }
+            impl ::core::fmt::Debug for PipelineLayoutDescriptor {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    f.debug_struct("PipelineLayoutDescriptor")
+                        .field("label", &self.label)
+                        .field("bind-group-layouts", &self.bind_group_layouts)
+                        .field("immediate-size", &self.immediate_size)
+                        .finish()
+                }
+            }
+            /// A new shader module, from WGSL source.
+            #[derive(Clone)]
+            pub struct ShaderModuleDescriptor {
+                /// A name for debugging.
+                pub label: Option<_rt::String>,
+                /// The WGSL source.
+                pub code: _rt::String,
+            }
+            impl ::core::fmt::Debug for ShaderModuleDescriptor {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    f.debug_struct("ShaderModuleDescriptor")
+                        .field("label", &self.label)
+                        .field("code", &self.code)
+                        .finish()
+                }
+            }
+            /// A pipeline-overridable constant and its value.
+            #[derive(Clone)]
+            pub struct ConstantEntry {
+                /// The `override` name or id.
+                pub name: _rt::String,
+                /// Its value.
+                pub value: f64,
+            }
+            impl ::core::fmt::Debug for ConstantEntry {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    f.debug_struct("ConstantEntry")
+                        .field("name", &self.name)
+                        .field("value", &self.value)
+                        .finish()
+                }
+            }
+            /// One stage of a pipeline: a shader and its entry point.
+            #[derive(Clone)]
+            pub struct ProgrammableStage {
+                /// The shader module.
+                pub module: Handle,
+                /// The entry point; the only one of its stage when absent.
+                pub entry_point: Option<_rt::String>,
+                /// Values for the shader's overridable constants.
+                pub constants: _rt::Vec<ConstantEntry>,
+            }
+            impl ::core::fmt::Debug for ProgrammableStage {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    f.debug_struct("ProgrammableStage")
+                        .field("module", &self.module)
+                        .field("entry-point", &self.entry_point)
+                        .field("constants", &self.constants)
+                        .finish()
+                }
+            }
+            /// Whether a vertex buffer advances per vertex or per instance.
+            #[repr(u8)]
+            #[derive(Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
+            pub enum VertexStepMode {
+                /// Per vertex.
+                Vertex,
+                /// Per instance.
+                Instance,
+            }
+            impl ::core::fmt::Debug for VertexStepMode {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    match self {
+                        VertexStepMode::Vertex => f.debug_tuple("VertexStepMode::Vertex").finish(),
+                        VertexStepMode::Instance => {
+                            f.debug_tuple("VertexStepMode::Instance").finish()
+                        }
+                    }
+                }
+            }
+
+            impl VertexStepMode {
+                #[doc(hidden)]
+                pub unsafe fn _lift(val: u8) -> VertexStepMode {
+                    if !cfg!(debug_assertions) {
+                        return ::core::mem::transmute(val);
+                    }
+
+                    match val {
+                        0 => VertexStepMode::Vertex,
+                        1 => VertexStepMode::Instance,
+
+                        _ => panic!("invalid enum discriminant"),
+                    }
+                }
+            }
+
+            /// One attribute of a vertex buffer.
+            #[derive(Clone)]
+            pub struct VertexAttribute {
+                /// Its format, by WebGPU name ("float32x3").
+                pub format: _rt::String,
+                /// Its offset in the vertex.
+                pub offset: u64,
+                /// The `@location` it feeds.
+                pub shader_location: u32,
+            }
+            impl ::core::fmt::Debug for VertexAttribute {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    f.debug_struct("VertexAttribute")
+                        .field("format", &self.format)
+                        .field("offset", &self.offset)
+                        .field("shader-location", &self.shader_location)
+                        .finish()
+                }
+            }
+            /// The layout of one vertex buffer.
+            #[derive(Clone)]
+            pub struct VertexBufferLayout {
+                /// Bytes from one element to the next.
+                pub array_stride: u64,
+                /// Per vertex or per instance.
+                pub step_mode: VertexStepMode,
+                /// Its attributes.
+                pub attributes: _rt::Vec<VertexAttribute>,
+            }
+            impl ::core::fmt::Debug for VertexBufferLayout {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    f.debug_struct("VertexBufferLayout")
+                        .field("array-stride", &self.array_stride)
+                        .field("step-mode", &self.step_mode)
+                        .field("attributes", &self.attributes)
+                        .finish()
+                }
+            }
+            /// The vertex stage of a render pipeline.
+            #[derive(Clone)]
+            pub struct VertexState {
+                /// The shader and entry point.
+                pub stage: ProgrammableStage,
+                /// The vertex buffers it reads.
+                pub buffers: _rt::Vec<VertexBufferLayout>,
+            }
+            impl ::core::fmt::Debug for VertexState {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    f.debug_struct("VertexState")
+                        .field("stage", &self.stage)
+                        .field("buffers", &self.buffers)
+                        .finish()
+                }
+            }
+            /// How vertices make primitives.
+            #[repr(u8)]
+            #[derive(Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
+            pub enum PrimitiveTopology {
+                /// Points.
+                PointList,
+                /// Separate lines.
+                LineList,
+                /// A connected line.
+                LineStrip,
+                /// Separate triangles.
+                TriangleList,
+                /// A strip of triangles.
+                TriangleStrip,
+            }
+            impl ::core::fmt::Debug for PrimitiveTopology {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    match self {
+                        PrimitiveTopology::PointList => {
+                            f.debug_tuple("PrimitiveTopology::PointList").finish()
+                        }
+                        PrimitiveTopology::LineList => {
+                            f.debug_tuple("PrimitiveTopology::LineList").finish()
+                        }
+                        PrimitiveTopology::LineStrip => {
+                            f.debug_tuple("PrimitiveTopology::LineStrip").finish()
+                        }
+                        PrimitiveTopology::TriangleList => {
+                            f.debug_tuple("PrimitiveTopology::TriangleList").finish()
+                        }
+                        PrimitiveTopology::TriangleStrip => {
+                            f.debug_tuple("PrimitiveTopology::TriangleStrip").finish()
+                        }
+                    }
+                }
+            }
+
+            impl PrimitiveTopology {
+                #[doc(hidden)]
+                pub unsafe fn _lift(val: u8) -> PrimitiveTopology {
+                    if !cfg!(debug_assertions) {
+                        return ::core::mem::transmute(val);
+                    }
+
+                    match val {
+                        0 => PrimitiveTopology::PointList,
+                        1 => PrimitiveTopology::LineList,
+                        2 => PrimitiveTopology::LineStrip,
+                        3 => PrimitiveTopology::TriangleList,
+                        4 => PrimitiveTopology::TriangleStrip,
+
+                        _ => panic!("invalid enum discriminant"),
+                    }
+                }
+            }
+
+            /// The width of an index.
+            #[repr(u8)]
+            #[derive(Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
+            pub enum IndexFormat {
+                /// 16-bit.
+                Uint16,
+                /// 32-bit.
+                Uint32,
+            }
+            impl ::core::fmt::Debug for IndexFormat {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    match self {
+                        IndexFormat::Uint16 => f.debug_tuple("IndexFormat::Uint16").finish(),
+                        IndexFormat::Uint32 => f.debug_tuple("IndexFormat::Uint32").finish(),
+                    }
+                }
+            }
+
+            impl IndexFormat {
+                #[doc(hidden)]
+                pub unsafe fn _lift(val: u8) -> IndexFormat {
+                    if !cfg!(debug_assertions) {
+                        return ::core::mem::transmute(val);
+                    }
+
+                    match val {
+                        0 => IndexFormat::Uint16,
+                        1 => IndexFormat::Uint32,
+
+                        _ => panic!("invalid enum discriminant"),
+                    }
+                }
+            }
+
+            /// Which winding is the front.
+            #[repr(u8)]
+            #[derive(Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
+            pub enum FrontFace {
+                /// Counter-clockwise.
+                Ccw,
+                /// Clockwise.
+                Cw,
+            }
+            impl ::core::fmt::Debug for FrontFace {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    match self {
+                        FrontFace::Ccw => f.debug_tuple("FrontFace::Ccw").finish(),
+                        FrontFace::Cw => f.debug_tuple("FrontFace::Cw").finish(),
+                    }
+                }
+            }
+
+            impl FrontFace {
+                #[doc(hidden)]
+                pub unsafe fn _lift(val: u8) -> FrontFace {
+                    if !cfg!(debug_assertions) {
+                        return ::core::mem::transmute(val);
+                    }
+
+                    match val {
+                        0 => FrontFace::Ccw,
+                        1 => FrontFace::Cw,
+
+                        _ => panic!("invalid enum discriminant"),
+                    }
+                }
+            }
+
+            /// Which faces are culled.
+            #[repr(u8)]
+            #[derive(Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
+            pub enum CullMode {
+                /// None.
+                None,
+                /// Front faces.
+                Front,
+                /// Back faces.
+                Back,
+            }
+            impl ::core::fmt::Debug for CullMode {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    match self {
+                        CullMode::None => f.debug_tuple("CullMode::None").finish(),
+                        CullMode::Front => f.debug_tuple("CullMode::Front").finish(),
+                        CullMode::Back => f.debug_tuple("CullMode::Back").finish(),
+                    }
+                }
+            }
+
+            impl CullMode {
+                #[doc(hidden)]
+                pub unsafe fn _lift(val: u8) -> CullMode {
+                    if !cfg!(debug_assertions) {
+                        return ::core::mem::transmute(val);
+                    }
+
+                    match val {
+                        0 => CullMode::None,
+                        1 => CullMode::Front,
+                        2 => CullMode::Back,
+
+                        _ => panic!("invalid enum discriminant"),
+                    }
+                }
+            }
+
+            /// How triangles are filled.
+            #[repr(u8)]
+            #[derive(Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
+            pub enum PolygonMode {
+                /// Filled.
+                Fill,
+                /// Edges only.
+                Line,
+                /// Vertices only.
+                Point,
+            }
+            impl ::core::fmt::Debug for PolygonMode {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    match self {
+                        PolygonMode::Fill => f.debug_tuple("PolygonMode::Fill").finish(),
+                        PolygonMode::Line => f.debug_tuple("PolygonMode::Line").finish(),
+                        PolygonMode::Point => f.debug_tuple("PolygonMode::Point").finish(),
+                    }
+                }
+            }
+
+            impl PolygonMode {
+                #[doc(hidden)]
+                pub unsafe fn _lift(val: u8) -> PolygonMode {
+                    if !cfg!(debug_assertions) {
+                        return ::core::mem::transmute(val);
+                    }
+
+                    match val {
+                        0 => PolygonMode::Fill,
+                        1 => PolygonMode::Line,
+                        2 => PolygonMode::Point,
+
+                        _ => panic!("invalid enum discriminant"),
+                    }
+                }
+            }
+
+            /// How primitives are assembled and rasterized.
+            #[repr(C)]
+            #[derive(Clone, Copy)]
+            pub struct PrimitiveState {
+                /// How vertices make primitives.
+                pub topology: PrimitiveTopology,
+                /// For a strip with an index buffer, the index format.
+                pub strip_index_format: Option<IndexFormat>,
+                /// Which winding is the front.
+                pub front_face: FrontFace,
+                /// Which faces are culled.
+                pub cull_mode: CullMode,
+                /// Do not clip at the depth range.
+                pub unclipped_depth: bool,
+                /// How triangles are filled.
+                pub polygon_mode: PolygonMode,
+                /// Conservative rasterization.
+                pub conservative: bool,
+            }
+            impl ::core::fmt::Debug for PrimitiveState {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    f.debug_struct("PrimitiveState")
+                        .field("topology", &self.topology)
+                        .field("strip-index-format", &self.strip_index_format)
+                        .field("front-face", &self.front_face)
+                        .field("cull-mode", &self.cull_mode)
+                        .field("unclipped-depth", &self.unclipped_depth)
+                        .field("polygon-mode", &self.polygon_mode)
+                        .field("conservative", &self.conservative)
+                        .finish()
+                }
+            }
+            /// What a stencil test does.
+            #[repr(u8)]
+            #[derive(Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
+            pub enum StencilOperation {
+                /// Keep the value.
+                Keep,
+                /// Set it to zero.
+                Zero,
+                /// Set it to the reference.
+                Replace,
+                /// Invert its bits.
+                Invert,
+                /// Add one, clamped.
+                IncrementClamp,
+                /// Subtract one, clamped.
+                DecrementClamp,
+                /// Add one, wrapping.
+                IncrementWrap,
+                /// Subtract one, wrapping.
+                DecrementWrap,
+            }
+            impl ::core::fmt::Debug for StencilOperation {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    match self {
+                        StencilOperation::Keep => f.debug_tuple("StencilOperation::Keep").finish(),
+                        StencilOperation::Zero => f.debug_tuple("StencilOperation::Zero").finish(),
+                        StencilOperation::Replace => {
+                            f.debug_tuple("StencilOperation::Replace").finish()
+                        }
+                        StencilOperation::Invert => {
+                            f.debug_tuple("StencilOperation::Invert").finish()
+                        }
+                        StencilOperation::IncrementClamp => {
+                            f.debug_tuple("StencilOperation::IncrementClamp").finish()
+                        }
+                        StencilOperation::DecrementClamp => {
+                            f.debug_tuple("StencilOperation::DecrementClamp").finish()
+                        }
+                        StencilOperation::IncrementWrap => {
+                            f.debug_tuple("StencilOperation::IncrementWrap").finish()
+                        }
+                        StencilOperation::DecrementWrap => {
+                            f.debug_tuple("StencilOperation::DecrementWrap").finish()
+                        }
+                    }
+                }
+            }
+
+            impl StencilOperation {
+                #[doc(hidden)]
+                pub unsafe fn _lift(val: u8) -> StencilOperation {
+                    if !cfg!(debug_assertions) {
+                        return ::core::mem::transmute(val);
+                    }
+
+                    match val {
+                        0 => StencilOperation::Keep,
+                        1 => StencilOperation::Zero,
+                        2 => StencilOperation::Replace,
+                        3 => StencilOperation::Invert,
+                        4 => StencilOperation::IncrementClamp,
+                        5 => StencilOperation::DecrementClamp,
+                        6 => StencilOperation::IncrementWrap,
+                        7 => StencilOperation::DecrementWrap,
+
+                        _ => panic!("invalid enum discriminant"),
+                    }
+                }
+            }
+
+            /// The stencil test for one face.
+            #[repr(C)]
+            #[derive(Clone, Copy)]
+            pub struct StencilFaceState {
+                /// The comparison.
+                pub compare: CompareFunction,
+                /// On a failed stencil test.
+                pub fail_op: StencilOperation,
+                /// On a passed stencil test and failed depth test.
+                pub depth_fail_op: StencilOperation,
+                /// On both passed.
+                pub pass_op: StencilOperation,
+            }
+            impl ::core::fmt::Debug for StencilFaceState {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    f.debug_struct("StencilFaceState")
+                        .field("compare", &self.compare)
+                        .field("fail-op", &self.fail_op)
+                        .field("depth-fail-op", &self.depth_fail_op)
+                        .field("pass-op", &self.pass_op)
+                        .finish()
+                }
+            }
+            /// The depth and stencil state of a render pipeline.
+            #[derive(Clone)]
+            pub struct DepthStencilState {
+                /// The attachment's format.
+                pub format: _rt::String,
+                /// Write depth.
+                pub depth_write_enabled: bool,
+                /// The depth comparison.
+                pub depth_compare: CompareFunction,
+                /// Front-face stencil.
+                pub stencil_front: StencilFaceState,
+                /// Back-face stencil.
+                pub stencil_back: StencilFaceState,
+                /// Which stencil bits are read.
+                pub stencil_read_mask: u32,
+                /// Which stencil bits are written.
+                pub stencil_write_mask: u32,
+                /// Constant depth bias.
+                pub depth_bias: i32,
+                /// Slope-scaled depth bias.
+                pub depth_bias_slope_scale: f32,
+                /// The most depth bias.
+                pub depth_bias_clamp: f32,
+            }
+            impl ::core::fmt::Debug for DepthStencilState {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    f.debug_struct("DepthStencilState")
+                        .field("format", &self.format)
+                        .field("depth-write-enabled", &self.depth_write_enabled)
+                        .field("depth-compare", &self.depth_compare)
+                        .field("stencil-front", &self.stencil_front)
+                        .field("stencil-back", &self.stencil_back)
+                        .field("stencil-read-mask", &self.stencil_read_mask)
+                        .field("stencil-write-mask", &self.stencil_write_mask)
+                        .field("depth-bias", &self.depth_bias)
+                        .field("depth-bias-slope-scale", &self.depth_bias_slope_scale)
+                        .field("depth-bias-clamp", &self.depth_bias_clamp)
+                        .finish()
+                }
+            }
+            /// Multisampling.
+            #[repr(C)]
+            #[derive(Clone, Copy)]
+            pub struct MultisampleState {
+                /// Samples per pixel.
+                pub count: u32,
+                /// Which samples are written.
+                pub mask: u64,
+                /// Alpha to coverage.
+                pub alpha_to_coverage_enabled: bool,
+            }
+            impl ::core::fmt::Debug for MultisampleState {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    f.debug_struct("MultisampleState")
+                        .field("count", &self.count)
+                        .field("mask", &self.mask)
+                        .field("alpha-to-coverage-enabled", &self.alpha_to_coverage_enabled)
+                        .finish()
+                }
+            }
+            /// A blend factor.
+            #[repr(u8)]
+            #[derive(Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
+            pub enum BlendFactor {
+                /// 0.
+                Zero,
+                /// 1.
+                One,
+                /// The source color.
+                Src,
+                /// 1 - the source color.
+                OneMinusSrc,
+                /// The source alpha.
+                SrcAlpha,
+                /// 1 - the source alpha.
+                OneMinusSrcAlpha,
+                /// The destination color.
+                Dst,
+                /// 1 - the destination color.
+                OneMinusDst,
+                /// The destination alpha.
+                DstAlpha,
+                /// 1 - the destination alpha.
+                OneMinusDstAlpha,
+                /// min(source alpha, 1 - destination alpha).
+                SrcAlphaSaturated,
+                /// The blend constant.
+                Constant,
+                /// 1 - the blend constant.
+                OneMinusConstant,
+                /// The second source color (dual-source blending).
+                Src1,
+                /// 1 - the second source color.
+                OneMinusSrc1,
+                /// The second source alpha.
+                Src1Alpha,
+                /// 1 - the second source alpha.
+                OneMinusSrc1Alpha,
+            }
+            impl ::core::fmt::Debug for BlendFactor {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    match self {
+                        BlendFactor::Zero => f.debug_tuple("BlendFactor::Zero").finish(),
+                        BlendFactor::One => f.debug_tuple("BlendFactor::One").finish(),
+                        BlendFactor::Src => f.debug_tuple("BlendFactor::Src").finish(),
+                        BlendFactor::OneMinusSrc => {
+                            f.debug_tuple("BlendFactor::OneMinusSrc").finish()
+                        }
+                        BlendFactor::SrcAlpha => f.debug_tuple("BlendFactor::SrcAlpha").finish(),
+                        BlendFactor::OneMinusSrcAlpha => {
+                            f.debug_tuple("BlendFactor::OneMinusSrcAlpha").finish()
+                        }
+                        BlendFactor::Dst => f.debug_tuple("BlendFactor::Dst").finish(),
+                        BlendFactor::OneMinusDst => {
+                            f.debug_tuple("BlendFactor::OneMinusDst").finish()
+                        }
+                        BlendFactor::DstAlpha => f.debug_tuple("BlendFactor::DstAlpha").finish(),
+                        BlendFactor::OneMinusDstAlpha => {
+                            f.debug_tuple("BlendFactor::OneMinusDstAlpha").finish()
+                        }
+                        BlendFactor::SrcAlphaSaturated => {
+                            f.debug_tuple("BlendFactor::SrcAlphaSaturated").finish()
+                        }
+                        BlendFactor::Constant => f.debug_tuple("BlendFactor::Constant").finish(),
+                        BlendFactor::OneMinusConstant => {
+                            f.debug_tuple("BlendFactor::OneMinusConstant").finish()
+                        }
+                        BlendFactor::Src1 => f.debug_tuple("BlendFactor::Src1").finish(),
+                        BlendFactor::OneMinusSrc1 => {
+                            f.debug_tuple("BlendFactor::OneMinusSrc1").finish()
+                        }
+                        BlendFactor::Src1Alpha => f.debug_tuple("BlendFactor::Src1Alpha").finish(),
+                        BlendFactor::OneMinusSrc1Alpha => {
+                            f.debug_tuple("BlendFactor::OneMinusSrc1Alpha").finish()
+                        }
+                    }
+                }
+            }
+
+            impl BlendFactor {
+                #[doc(hidden)]
+                pub unsafe fn _lift(val: u8) -> BlendFactor {
+                    if !cfg!(debug_assertions) {
+                        return ::core::mem::transmute(val);
+                    }
+
+                    match val {
+                        0 => BlendFactor::Zero,
+                        1 => BlendFactor::One,
+                        2 => BlendFactor::Src,
+                        3 => BlendFactor::OneMinusSrc,
+                        4 => BlendFactor::SrcAlpha,
+                        5 => BlendFactor::OneMinusSrcAlpha,
+                        6 => BlendFactor::Dst,
+                        7 => BlendFactor::OneMinusDst,
+                        8 => BlendFactor::DstAlpha,
+                        9 => BlendFactor::OneMinusDstAlpha,
+                        10 => BlendFactor::SrcAlphaSaturated,
+                        11 => BlendFactor::Constant,
+                        12 => BlendFactor::OneMinusConstant,
+                        13 => BlendFactor::Src1,
+                        14 => BlendFactor::OneMinusSrc1,
+                        15 => BlendFactor::Src1Alpha,
+                        16 => BlendFactor::OneMinusSrc1Alpha,
+
+                        _ => panic!("invalid enum discriminant"),
+                    }
+                }
+            }
+
+            /// How source and destination combine.
+            #[repr(u8)]
+            #[derive(Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
+            pub enum BlendOperation {
+                /// Source + destination.
+                Add,
+                /// Source - destination.
+                Subtract,
+                /// Destination - source.
+                ReverseSubtract,
+                /// The smaller.
+                Min,
+                /// The larger.
+                Max,
+            }
+            impl ::core::fmt::Debug for BlendOperation {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    match self {
+                        BlendOperation::Add => f.debug_tuple("BlendOperation::Add").finish(),
+                        BlendOperation::Subtract => {
+                            f.debug_tuple("BlendOperation::Subtract").finish()
+                        }
+                        BlendOperation::ReverseSubtract => {
+                            f.debug_tuple("BlendOperation::ReverseSubtract").finish()
+                        }
+                        BlendOperation::Min => f.debug_tuple("BlendOperation::Min").finish(),
+                        BlendOperation::Max => f.debug_tuple("BlendOperation::Max").finish(),
+                    }
+                }
+            }
+
+            impl BlendOperation {
+                #[doc(hidden)]
+                pub unsafe fn _lift(val: u8) -> BlendOperation {
+                    if !cfg!(debug_assertions) {
+                        return ::core::mem::transmute(val);
+                    }
+
+                    match val {
+                        0 => BlendOperation::Add,
+                        1 => BlendOperation::Subtract,
+                        2 => BlendOperation::ReverseSubtract,
+                        3 => BlendOperation::Min,
+                        4 => BlendOperation::Max,
+
+                        _ => panic!("invalid enum discriminant"),
+                    }
+                }
+            }
+
+            /// Blending for color or for alpha.
+            #[repr(C)]
+            #[derive(Clone, Copy)]
+            pub struct BlendComponent {
+                /// The source factor.
+                pub src_factor: BlendFactor,
+                /// The destination factor.
+                pub dst_factor: BlendFactor,
+                /// The operation.
+                pub operation: BlendOperation,
+            }
+            impl ::core::fmt::Debug for BlendComponent {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    f.debug_struct("BlendComponent")
+                        .field("src-factor", &self.src_factor)
+                        .field("dst-factor", &self.dst_factor)
+                        .field("operation", &self.operation)
+                        .finish()
+                }
+            }
+            /// Blending for one color target.
+            #[repr(C)]
+            #[derive(Clone, Copy)]
+            pub struct BlendState {
+                /// For color.
+                pub color: BlendComponent,
+                /// For alpha.
+                pub alpha: BlendComponent,
+            }
+            impl ::core::fmt::Debug for BlendState {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    f.debug_struct("BlendState")
+                        .field("color", &self.color)
+                        .field("alpha", &self.alpha)
+                        .finish()
+                }
+            }
+            wit_bindgen_rt::bitflags::bitflags! {
+              /// Which channels are written.
+              #[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Clone, Copy)]
+              pub struct ColorWrites: u8 {
+                /// Red.
+                const RED = 1 << 0;
+                /// Green.
+                const GREEN = 1 << 1;
+                /// Blue.
+                const BLUE = 1 << 2;
+                /// Alpha.
+                const ALPHA = 1 << 3;
+              }
+            }
+            /// One color target of a render pipeline.
+            #[derive(Clone)]
+            pub struct ColorTargetState {
+                /// The attachment's format.
+                pub format: _rt::String,
+                /// Blending, or none to replace.
+                pub blend: Option<BlendState>,
+                /// Which channels are written.
+                pub write_mask: ColorWrites,
+            }
+            impl ::core::fmt::Debug for ColorTargetState {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    f.debug_struct("ColorTargetState")
+                        .field("format", &self.format)
+                        .field("blend", &self.blend)
+                        .field("write-mask", &self.write_mask)
+                        .finish()
+                }
+            }
+            /// The fragment stage of a render pipeline.
+            #[derive(Clone)]
+            pub struct FragmentState {
+                /// The shader and entry point.
+                pub stage: ProgrammableStage,
+                /// The color targets, by attachment index; none leaves a gap.
+                pub targets: _rt::Vec<Option<ColorTargetState>>,
+            }
+            impl ::core::fmt::Debug for FragmentState {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    f.debug_struct("FragmentState")
+                        .field("stage", &self.stage)
+                        .field("targets", &self.targets)
+                        .finish()
+                }
+            }
+            /// A new render pipeline.
+            #[derive(Clone)]
+            pub struct RenderPipelineDescriptor {
+                /// A name for debugging.
+                pub label: Option<_rt::String>,
+                /// Its layout; derived from the shaders when absent.
+                pub layout: Option<Handle>,
+                /// The vertex stage.
+                pub vertex: VertexState,
+                /// How primitives are assembled.
+                pub primitive: PrimitiveState,
+                /// Depth and stencil, if the pass has a depth attachment.
+                pub depth_stencil: Option<DepthStencilState>,
+                /// Multisampling.
+                pub multisample: MultisampleState,
+                /// The fragment stage, if any.
+                pub fragment: Option<FragmentState>,
+                /// For multiview rendering, the mask of views.
+                pub multiview_mask: Option<u32>,
+            }
+            impl ::core::fmt::Debug for RenderPipelineDescriptor {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    f.debug_struct("RenderPipelineDescriptor")
+                        .field("label", &self.label)
+                        .field("layout", &self.layout)
+                        .field("vertex", &self.vertex)
+                        .field("primitive", &self.primitive)
+                        .field("depth-stencil", &self.depth_stencil)
+                        .field("multisample", &self.multisample)
+                        .field("fragment", &self.fragment)
+                        .field("multiview-mask", &self.multiview_mask)
+                        .finish()
+                }
+            }
+            /// A new compute pipeline.
+            #[derive(Clone)]
+            pub struct ComputePipelineDescriptor {
+                /// A name for debugging.
+                pub label: Option<_rt::String>,
+                /// Its layout; derived from the shader when absent.
+                pub layout: Option<Handle>,
+                /// The shader and entry point.
+                pub stage: ProgrammableStage,
+            }
+            impl ::core::fmt::Debug for ComputePipelineDescriptor {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    f.debug_struct("ComputePipelineDescriptor")
+                        .field("label", &self.label)
+                        .field("layout", &self.layout)
+                        .field("stage", &self.stage)
+                        .finish()
+                }
+            }
+            /// The kind of a query set.
+            #[repr(u8)]
+            #[derive(Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
+            pub enum QueryType {
+                /// Counts samples that pass the depth test.
+                Occlusion,
+                /// GPU timestamps.
+                Timestamp,
+            }
+            impl ::core::fmt::Debug for QueryType {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    match self {
+                        QueryType::Occlusion => f.debug_tuple("QueryType::Occlusion").finish(),
+                        QueryType::Timestamp => f.debug_tuple("QueryType::Timestamp").finish(),
+                    }
+                }
+            }
+
+            impl QueryType {
+                #[doc(hidden)]
+                pub unsafe fn _lift(val: u8) -> QueryType {
+                    if !cfg!(debug_assertions) {
+                        return ::core::mem::transmute(val);
+                    }
+
+                    match val {
+                        0 => QueryType::Occlusion,
+                        1 => QueryType::Timestamp,
+
+                        _ => panic!("invalid enum discriminant"),
+                    }
+                }
+            }
+
+            /// A new query set.
+            #[derive(Clone)]
+            pub struct QuerySetDescriptor {
+                /// A name for debugging.
+                pub label: Option<_rt::String>,
+                /// Its kind.
+                pub kind: QueryType,
+                /// How many queries.
+                pub count: u32,
+            }
+            impl ::core::fmt::Debug for QuerySetDescriptor {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    f.debug_struct("QuerySetDescriptor")
+                        .field("label", &self.label)
+                        .field("kind", &self.kind)
+                        .field("count", &self.count)
+                        .finish()
+                }
+            }
+            /// A texture location for a copy.
+            #[repr(C)]
+            #[derive(Clone, Copy)]
+            pub struct TexelCopyTextureInfo {
+                /// The texture.
+                pub texture: Handle,
+                /// The mip level.
+                pub mip_level: u32,
+                /// Where in it.
+                pub origin: Origin3d,
+                /// Which part.
+                pub aspect: TextureAspect,
+            }
+            impl ::core::fmt::Debug for TexelCopyTextureInfo {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    f.debug_struct("TexelCopyTextureInfo")
+                        .field("texture", &self.texture)
+                        .field("mip-level", &self.mip_level)
+                        .field("origin", &self.origin)
+                        .field("aspect", &self.aspect)
+                        .finish()
+                }
+            }
+            /// How texel data is laid out in a buffer or in bytes.
+            #[repr(C)]
+            #[derive(Clone, Copy)]
+            pub struct TexelCopyBufferLayout {
+                /// The first byte.
+                pub offset: u64,
+                /// Bytes per row of blocks.
+                pub bytes_per_row: Option<u32>,
+                /// Rows per image.
+                pub rows_per_image: Option<u32>,
+            }
+            impl ::core::fmt::Debug for TexelCopyBufferLayout {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    f.debug_struct("TexelCopyBufferLayout")
+                        .field("offset", &self.offset)
+                        .field("bytes-per-row", &self.bytes_per_row)
+                        .field("rows-per-image", &self.rows_per_image)
+                        .finish()
+                }
+            }
+            /// A buffer location for a copy.
+            #[repr(C)]
+            #[derive(Clone, Copy)]
+            pub struct TexelCopyBufferInfo {
+                /// The buffer.
+                pub buffer: Handle,
+                /// Its layout.
+                pub layout: TexelCopyBufferLayout,
+            }
+            impl ::core::fmt::Debug for TexelCopyBufferInfo {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    f.debug_struct("TexelCopyBufferInfo")
+                        .field("buffer", &self.buffer)
+                        .field("layout", &self.layout)
+                        .finish()
+                }
+            }
+            /// A color, for clears and blend constants.
+            #[repr(C)]
+            #[derive(Clone, Copy)]
+            pub struct Color {
+                /// Red.
+                pub r: f64,
+                /// Green.
+                pub g: f64,
+                /// Blue.
+                pub b: f64,
+                /// Alpha.
+                pub a: f64,
+            }
+            impl ::core::fmt::Debug for Color {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    f.debug_struct("Color")
+                        .field("r", &self.r)
+                        .field("g", &self.g)
+                        .field("b", &self.b)
+                        .field("a", &self.a)
+                        .finish()
+                }
+            }
+            /// What happens to a color attachment when a pass begins.
+            #[derive(Clone, Copy)]
+            pub enum ColorLoadOp {
+                /// Clear it to this color.
+                Clear(Color),
+                /// Keep what is there.
+                Load,
+            }
+            impl ::core::fmt::Debug for ColorLoadOp {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    match self {
+                        ColorLoadOp::Clear(e) => {
+                            f.debug_tuple("ColorLoadOp::Clear").field(e).finish()
+                        }
+                        ColorLoadOp::Load => f.debug_tuple("ColorLoadOp::Load").finish(),
+                    }
+                }
+            }
+            /// What happens to an attachment when a pass ends.
+            #[repr(u8)]
+            #[derive(Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
+            pub enum StoreOp {
+                /// Keep what was drawn.
+                Store,
+                /// Throw it away.
+                Discard,
+            }
+            impl ::core::fmt::Debug for StoreOp {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    match self {
+                        StoreOp::Store => f.debug_tuple("StoreOp::Store").finish(),
+                        StoreOp::Discard => f.debug_tuple("StoreOp::Discard").finish(),
+                    }
+                }
+            }
+
+            impl StoreOp {
+                #[doc(hidden)]
+                pub unsafe fn _lift(val: u8) -> StoreOp {
+                    if !cfg!(debug_assertions) {
+                        return ::core::mem::transmute(val);
+                    }
+
+                    match val {
+                        0 => StoreOp::Store,
+                        1 => StoreOp::Discard,
+
+                        _ => panic!("invalid enum discriminant"),
+                    }
+                }
+            }
+
+            /// One color attachment of a render pass.
+            #[repr(C)]
+            #[derive(Clone, Copy)]
+            pub struct RenderPassColorAttachment {
+                /// The texture view drawn into.
+                pub view: Handle,
+                /// For a 3D texture, the slice.
+                pub depth_slice: Option<u32>,
+                /// Where a multisampled view resolves to.
+                pub resolve_target: Option<Handle>,
+                /// When the pass begins.
+                pub load: ColorLoadOp,
+                /// When the pass ends.
+                pub store: StoreOp,
+            }
+            impl ::core::fmt::Debug for RenderPassColorAttachment {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    f.debug_struct("RenderPassColorAttachment")
+                        .field("view", &self.view)
+                        .field("depth-slice", &self.depth_slice)
+                        .field("resolve-target", &self.resolve_target)
+                        .field("load", &self.load)
+                        .field("store", &self.store)
+                        .finish()
+                }
+            }
+            /// What happens to depth when a pass begins.
+            #[derive(Clone, Copy)]
+            pub enum DepthLoadOp {
+                /// Clear to this depth.
+                Clear(f32),
+                /// Keep what is there.
+                Load,
+            }
+            impl ::core::fmt::Debug for DepthLoadOp {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    match self {
+                        DepthLoadOp::Clear(e) => {
+                            f.debug_tuple("DepthLoadOp::Clear").field(e).finish()
+                        }
+                        DepthLoadOp::Load => f.debug_tuple("DepthLoadOp::Load").finish(),
+                    }
+                }
+            }
+            /// What happens to stencil when a pass begins.
+            #[derive(Clone, Copy)]
+            pub enum StencilLoadOp {
+                /// Clear to this value.
+                Clear(u32),
+                /// Keep what is there.
+                Load,
+            }
+            impl ::core::fmt::Debug for StencilLoadOp {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    match self {
+                        StencilLoadOp::Clear(e) => {
+                            f.debug_tuple("StencilLoadOp::Clear").field(e).finish()
+                        }
+                        StencilLoadOp::Load => f.debug_tuple("StencilLoadOp::Load").finish(),
+                    }
+                }
+            }
+            /// Depth operations of a pass.
+            #[repr(C)]
+            #[derive(Clone, Copy)]
+            pub struct DepthOps {
+                /// When the pass begins.
+                pub load: DepthLoadOp,
+                /// When it ends.
+                pub store: StoreOp,
+            }
+            impl ::core::fmt::Debug for DepthOps {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    f.debug_struct("DepthOps")
+                        .field("load", &self.load)
+                        .field("store", &self.store)
+                        .finish()
+                }
+            }
+            /// Stencil operations of a pass.
+            #[repr(C)]
+            #[derive(Clone, Copy)]
+            pub struct StencilOps {
+                /// When the pass begins.
+                pub load: StencilLoadOp,
+                /// When it ends.
+                pub store: StoreOp,
+            }
+            impl ::core::fmt::Debug for StencilOps {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    f.debug_struct("StencilOps")
+                        .field("load", &self.load)
+                        .field("store", &self.store)
+                        .finish()
+                }
+            }
+            /// The depth-stencil attachment of a render pass.
+            #[repr(C)]
+            #[derive(Clone, Copy)]
+            pub struct RenderPassDepthStencilAttachment {
+                /// The view.
+                pub view: Handle,
+                /// Depth operations, or none for a read-only depth.
+                pub depth_ops: Option<DepthOps>,
+                /// Stencil operations, or none for a read-only stencil.
+                pub stencil_ops: Option<StencilOps>,
+            }
+            impl ::core::fmt::Debug for RenderPassDepthStencilAttachment {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    f.debug_struct("RenderPassDepthStencilAttachment")
+                        .field("view", &self.view)
+                        .field("depth-ops", &self.depth_ops)
+                        .field("stencil-ops", &self.stencil_ops)
+                        .finish()
+                }
+            }
+            /// Timestamps written at the start and end of a pass.
+            #[repr(C)]
+            #[derive(Clone, Copy)]
+            pub struct PassTimestampWrites {
+                /// The query set.
+                pub query_set: Handle,
+                /// The query written when the pass begins.
+                pub beginning_of_pass_write_index: Option<u32>,
+                /// The query written when the pass ends.
+                pub end_of_pass_write_index: Option<u32>,
+            }
+            impl ::core::fmt::Debug for PassTimestampWrites {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    f.debug_struct("PassTimestampWrites")
+                        .field("query-set", &self.query_set)
+                        .field(
+                            "beginning-of-pass-write-index",
+                            &self.beginning_of_pass_write_index,
+                        )
+                        .field("end-of-pass-write-index", &self.end_of_pass_write_index)
+                        .finish()
+                }
+            }
+            /// A render pass.
+            #[derive(Clone)]
+            pub struct RenderPassDescriptor {
+                /// A name for debugging.
+                pub label: Option<_rt::String>,
+                /// Its color attachments; none leaves a gap.
+                pub color_attachments: _rt::Vec<Option<RenderPassColorAttachment>>,
+                /// Its depth-stencil attachment.
+                pub depth_stencil_attachment: Option<RenderPassDepthStencilAttachment>,
+                /// Timestamps to write.
+                pub timestamp_writes: Option<PassTimestampWrites>,
+                /// The query set occlusion queries write to.
+                pub occlusion_query_set: Option<Handle>,
+                /// For multiview rendering, the mask of views.
+                pub multiview_mask: Option<u32>,
+            }
+            impl ::core::fmt::Debug for RenderPassDescriptor {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    f.debug_struct("RenderPassDescriptor")
+                        .field("label", &self.label)
+                        .field("color-attachments", &self.color_attachments)
+                        .field("depth-stencil-attachment", &self.depth_stencil_attachment)
+                        .field("timestamp-writes", &self.timestamp_writes)
+                        .field("occlusion-query-set", &self.occlusion_query_set)
+                        .field("multiview-mask", &self.multiview_mask)
+                        .finish()
+                }
+            }
+            /// A compute pass.
+            #[derive(Clone)]
+            pub struct ComputePassDescriptor {
+                /// A name for debugging.
+                pub label: Option<_rt::String>,
+                /// Timestamps to write.
+                pub timestamp_writes: Option<PassTimestampWrites>,
+            }
+            impl ::core::fmt::Debug for ComputePassDescriptor {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    f.debug_struct("ComputePassDescriptor")
+                        .field("label", &self.label)
+                        .field("timestamp-writes", &self.timestamp_writes)
+                        .finish()
+                }
+            }
+            /// Setting a bind group in a pass.
+            #[derive(Clone)]
+            pub struct SetBindGroup {
+                /// The group index.
+                pub index: u32,
+                /// The bind group; none unsets it.
+                pub group: Option<Handle>,
+                /// Dynamic offsets, in binding order.
+                pub offsets: _rt::Vec<u32>,
+            }
+            impl ::core::fmt::Debug for SetBindGroup {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    f.debug_struct("SetBindGroup")
+                        .field("index", &self.index)
+                        .field("group", &self.group)
+                        .field("offsets", &self.offsets)
+                        .finish()
+                }
+            }
+            /// Setting a vertex buffer in a render pass.
+            #[repr(C)]
+            #[derive(Clone, Copy)]
+            pub struct SetVertexBuffer {
+                /// The slot.
+                pub slot: u32,
+                /// The buffer.
+                pub buffer: Handle,
+                /// The first byte.
+                pub offset: u64,
+                /// How many bytes; the rest when absent.
+                pub size: Option<u64>,
+            }
+            impl ::core::fmt::Debug for SetVertexBuffer {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    f.debug_struct("SetVertexBuffer")
+                        .field("slot", &self.slot)
+                        .field("buffer", &self.buffer)
+                        .field("offset", &self.offset)
+                        .field("size", &self.size)
+                        .finish()
+                }
+            }
+            /// Setting the index buffer in a render pass.
+            #[repr(C)]
+            #[derive(Clone, Copy)]
+            pub struct SetIndexBuffer {
+                /// The buffer.
+                pub buffer: Handle,
+                /// The index width.
+                pub format: IndexFormat,
+                /// The first byte.
+                pub offset: u64,
+                /// How many bytes; the rest when absent.
+                pub size: Option<u64>,
+            }
+            impl ::core::fmt::Debug for SetIndexBuffer {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    f.debug_struct("SetIndexBuffer")
+                        .field("buffer", &self.buffer)
+                        .field("format", &self.format)
+                        .field("offset", &self.offset)
+                        .field("size", &self.size)
+                        .finish()
+                }
+            }
+            /// The viewport.
+            #[repr(C)]
+            #[derive(Clone, Copy)]
+            pub struct Viewport {
+                /// Left edge.
+                pub x: f32,
+                /// Top edge.
+                pub y: f32,
+                /// Width.
+                pub width: f32,
+                /// Height.
+                pub height: f32,
+                /// The near depth.
+                pub min_depth: f32,
+                /// The far depth.
+                pub max_depth: f32,
+            }
+            impl ::core::fmt::Debug for Viewport {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    f.debug_struct("Viewport")
+                        .field("x", &self.x)
+                        .field("y", &self.y)
+                        .field("width", &self.width)
+                        .field("height", &self.height)
+                        .field("min-depth", &self.min_depth)
+                        .field("max-depth", &self.max_depth)
+                        .finish()
+                }
+            }
+            /// A rectangle in pixels.
+            #[repr(C)]
+            #[derive(Clone, Copy)]
+            pub struct ScissorRect {
+                /// Left edge.
+                pub x: u32,
+                /// Top edge.
+                pub y: u32,
+                /// Width.
+                pub width: u32,
+                /// Height.
+                pub height: u32,
+            }
+            impl ::core::fmt::Debug for ScissorRect {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    f.debug_struct("ScissorRect")
+                        .field("x", &self.x)
+                        .field("y", &self.y)
+                        .field("width", &self.width)
+                        .field("height", &self.height)
+                        .finish()
+                }
+            }
+            /// Immediate data for the next draws or dispatches.
+            #[derive(Clone)]
+            pub struct SetImmediates {
+                /// The first byte.
+                pub offset: u32,
+                /// The bytes.
+                pub data: _rt::Vec<u8>,
+            }
+            impl ::core::fmt::Debug for SetImmediates {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    f.debug_struct("SetImmediates")
+                        .field("offset", &self.offset)
+                        .field("data", &self.data)
+                        .finish()
+                }
+            }
+            /// A draw.
+            #[repr(C)]
+            #[derive(Clone, Copy)]
+            pub struct Draw {
+                /// Vertices.
+                pub vertex_count: u32,
+                /// Instances.
+                pub instance_count: u32,
+                /// The first vertex.
+                pub first_vertex: u32,
+                /// The first instance.
+                pub first_instance: u32,
+            }
+            impl ::core::fmt::Debug for Draw {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    f.debug_struct("Draw")
+                        .field("vertex-count", &self.vertex_count)
+                        .field("instance-count", &self.instance_count)
+                        .field("first-vertex", &self.first_vertex)
+                        .field("first-instance", &self.first_instance)
+                        .finish()
+                }
+            }
+            /// An indexed draw.
+            #[repr(C)]
+            #[derive(Clone, Copy)]
+            pub struct DrawIndexed {
+                /// Indices.
+                pub index_count: u32,
+                /// Instances.
+                pub instance_count: u32,
+                /// The first index.
+                pub first_index: u32,
+                /// Added to every index.
+                pub base_vertex: i32,
+                /// The first instance.
+                pub first_instance: u32,
+            }
+            impl ::core::fmt::Debug for DrawIndexed {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    f.debug_struct("DrawIndexed")
+                        .field("index-count", &self.index_count)
+                        .field("instance-count", &self.instance_count)
+                        .field("first-index", &self.first_index)
+                        .field("base-vertex", &self.base_vertex)
+                        .field("first-instance", &self.first_instance)
+                        .finish()
+                }
+            }
+            /// Arguments read from a buffer.
+            #[repr(C)]
+            #[derive(Clone, Copy)]
+            pub struct Indirect {
+                /// The buffer.
+                pub buffer: Handle,
+                /// The first byte.
+                pub offset: u64,
+            }
+            impl ::core::fmt::Debug for Indirect {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    f.debug_struct("Indirect")
+                        .field("buffer", &self.buffer)
+                        .field("offset", &self.offset)
+                        .finish()
+                }
+            }
+            /// Several indirect draws read from a buffer.
+            #[repr(C)]
+            #[derive(Clone, Copy)]
+            pub struct MultiIndirect {
+                /// The buffer.
+                pub buffer: Handle,
+                /// The first byte.
+                pub offset: u64,
+                /// How many draws.
+                pub count: u32,
+            }
+            impl ::core::fmt::Debug for MultiIndirect {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    f.debug_struct("MultiIndirect")
+                        .field("buffer", &self.buffer)
+                        .field("offset", &self.offset)
+                        .field("count", &self.count)
+                        .finish()
+                }
+            }
+            /// Several indirect draws, their number read from a second buffer.
+            #[repr(C)]
+            #[derive(Clone, Copy)]
+            pub struct MultiIndirectCount {
+                /// The argument buffer.
+                pub buffer: Handle,
+                /// Its first byte.
+                pub offset: u64,
+                /// The buffer holding the count.
+                pub count_buffer: Handle,
+                /// Where the count is.
+                pub count_offset: u64,
+                /// The most draws.
+                pub max_count: u32,
+            }
+            impl ::core::fmt::Debug for MultiIndirectCount {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    f.debug_struct("MultiIndirectCount")
+                        .field("buffer", &self.buffer)
+                        .field("offset", &self.offset)
+                        .field("count-buffer", &self.count_buffer)
+                        .field("count-offset", &self.count_offset)
+                        .field("max-count", &self.max_count)
+                        .finish()
+                }
+            }
+            /// A query write inside a pass.
+            #[repr(C)]
+            #[derive(Clone, Copy)]
+            pub struct QueryWrite {
+                /// The query set.
+                pub query_set: Handle,
+                /// The query.
+                pub index: u32,
+            }
+            impl ::core::fmt::Debug for QueryWrite {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    f.debug_struct("QueryWrite")
+                        .field("query-set", &self.query_set)
+                        .field("index", &self.index)
+                        .finish()
+                }
+            }
+            /// One command of a render pass.
+            #[derive(Clone)]
+            pub enum RenderCommand {
+                /// Use a render pipeline.
+                SetPipeline(Handle),
+                /// Set a bind group.
+                SetBindGroup(SetBindGroup),
+                /// Set a vertex buffer.
+                SetVertexBuffer(SetVertexBuffer),
+                /// Set the index buffer.
+                SetIndexBuffer(SetIndexBuffer),
+                /// Set the viewport.
+                SetViewport(Viewport),
+                /// Set the scissor rectangle.
+                SetScissorRect(ScissorRect),
+                /// Set the blend constant.
+                SetBlendConstant(Color),
+                /// Set the stencil reference.
+                SetStencilReference(u32),
+                /// Set immediate data.
+                SetImmediates(SetImmediates),
+                /// Draw.
+                Draw(Draw),
+                /// Draw indexed.
+                DrawIndexed(DrawIndexed),
+                /// Draw with arguments from a buffer.
+                DrawIndirect(Indirect),
+                /// Draw indexed with arguments from a buffer.
+                DrawIndexedIndirect(Indirect),
+                /// Several draws with arguments from a buffer.
+                MultiDrawIndirect(MultiIndirect),
+                /// Several indexed draws with arguments from a buffer.
+                MultiDrawIndexedIndirect(MultiIndirect),
+                /// Several draws, counted by a buffer.
+                MultiDrawIndirectCount(MultiIndirectCount),
+                /// Several indexed draws, counted by a buffer.
+                MultiDrawIndexedIndirectCount(MultiIndirectCount),
+                /// Begin an occlusion query.
+                BeginOcclusionQuery(u32),
+                /// End the occlusion query.
+                EndOcclusionQuery,
+                /// Write a timestamp.
+                WriteTimestamp(QueryWrite),
+                /// Open a debug group.
+                PushDebugGroup(_rt::String),
+                /// Close a debug group.
+                PopDebugGroup,
+                /// Mark a point for a debugger.
+                InsertDebugMarker(_rt::String),
+            }
+            impl ::core::fmt::Debug for RenderCommand {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    match self {
+                        RenderCommand::SetPipeline(e) => f
+                            .debug_tuple("RenderCommand::SetPipeline")
+                            .field(e)
+                            .finish(),
+                        RenderCommand::SetBindGroup(e) => f
+                            .debug_tuple("RenderCommand::SetBindGroup")
+                            .field(e)
+                            .finish(),
+                        RenderCommand::SetVertexBuffer(e) => f
+                            .debug_tuple("RenderCommand::SetVertexBuffer")
+                            .field(e)
+                            .finish(),
+                        RenderCommand::SetIndexBuffer(e) => f
+                            .debug_tuple("RenderCommand::SetIndexBuffer")
+                            .field(e)
+                            .finish(),
+                        RenderCommand::SetViewport(e) => f
+                            .debug_tuple("RenderCommand::SetViewport")
+                            .field(e)
+                            .finish(),
+                        RenderCommand::SetScissorRect(e) => f
+                            .debug_tuple("RenderCommand::SetScissorRect")
+                            .field(e)
+                            .finish(),
+                        RenderCommand::SetBlendConstant(e) => f
+                            .debug_tuple("RenderCommand::SetBlendConstant")
+                            .field(e)
+                            .finish(),
+                        RenderCommand::SetStencilReference(e) => f
+                            .debug_tuple("RenderCommand::SetStencilReference")
+                            .field(e)
+                            .finish(),
+                        RenderCommand::SetImmediates(e) => f
+                            .debug_tuple("RenderCommand::SetImmediates")
+                            .field(e)
+                            .finish(),
+                        RenderCommand::Draw(e) => {
+                            f.debug_tuple("RenderCommand::Draw").field(e).finish()
+                        }
+                        RenderCommand::DrawIndexed(e) => f
+                            .debug_tuple("RenderCommand::DrawIndexed")
+                            .field(e)
+                            .finish(),
+                        RenderCommand::DrawIndirect(e) => f
+                            .debug_tuple("RenderCommand::DrawIndirect")
+                            .field(e)
+                            .finish(),
+                        RenderCommand::DrawIndexedIndirect(e) => f
+                            .debug_tuple("RenderCommand::DrawIndexedIndirect")
+                            .field(e)
+                            .finish(),
+                        RenderCommand::MultiDrawIndirect(e) => f
+                            .debug_tuple("RenderCommand::MultiDrawIndirect")
+                            .field(e)
+                            .finish(),
+                        RenderCommand::MultiDrawIndexedIndirect(e) => f
+                            .debug_tuple("RenderCommand::MultiDrawIndexedIndirect")
+                            .field(e)
+                            .finish(),
+                        RenderCommand::MultiDrawIndirectCount(e) => f
+                            .debug_tuple("RenderCommand::MultiDrawIndirectCount")
+                            .field(e)
+                            .finish(),
+                        RenderCommand::MultiDrawIndexedIndirectCount(e) => f
+                            .debug_tuple("RenderCommand::MultiDrawIndexedIndirectCount")
+                            .field(e)
+                            .finish(),
+                        RenderCommand::BeginOcclusionQuery(e) => f
+                            .debug_tuple("RenderCommand::BeginOcclusionQuery")
+                            .field(e)
+                            .finish(),
+                        RenderCommand::EndOcclusionQuery => {
+                            f.debug_tuple("RenderCommand::EndOcclusionQuery").finish()
+                        }
+                        RenderCommand::WriteTimestamp(e) => f
+                            .debug_tuple("RenderCommand::WriteTimestamp")
+                            .field(e)
+                            .finish(),
+                        RenderCommand::PushDebugGroup(e) => f
+                            .debug_tuple("RenderCommand::PushDebugGroup")
+                            .field(e)
+                            .finish(),
+                        RenderCommand::PopDebugGroup => {
+                            f.debug_tuple("RenderCommand::PopDebugGroup").finish()
+                        }
+                        RenderCommand::InsertDebugMarker(e) => f
+                            .debug_tuple("RenderCommand::InsertDebugMarker")
+                            .field(e)
+                            .finish(),
+                    }
+                }
+            }
+            /// One command of a compute pass.
+            #[derive(Clone)]
+            pub enum ComputeCommand {
+                /// Use a compute pipeline.
+                SetPipeline(Handle),
+                /// Set a bind group.
+                SetBindGroup(SetBindGroup),
+                /// Set immediate data.
+                SetImmediates(SetImmediates),
+                /// Dispatch workgroups (x, y, z).
+                Dispatch(Origin3d),
+                /// Dispatch with the counts read from a buffer.
+                DispatchIndirect(Indirect),
+                /// Write a timestamp.
+                WriteTimestamp(QueryWrite),
+                /// Open a debug group.
+                PushDebugGroup(_rt::String),
+                /// Close a debug group.
+                PopDebugGroup,
+                /// Mark a point for a debugger.
+                InsertDebugMarker(_rt::String),
+            }
+            impl ::core::fmt::Debug for ComputeCommand {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    match self {
+                        ComputeCommand::SetPipeline(e) => f
+                            .debug_tuple("ComputeCommand::SetPipeline")
+                            .field(e)
+                            .finish(),
+                        ComputeCommand::SetBindGroup(e) => f
+                            .debug_tuple("ComputeCommand::SetBindGroup")
+                            .field(e)
+                            .finish(),
+                        ComputeCommand::SetImmediates(e) => f
+                            .debug_tuple("ComputeCommand::SetImmediates")
+                            .field(e)
+                            .finish(),
+                        ComputeCommand::Dispatch(e) => {
+                            f.debug_tuple("ComputeCommand::Dispatch").field(e).finish()
+                        }
+                        ComputeCommand::DispatchIndirect(e) => f
+                            .debug_tuple("ComputeCommand::DispatchIndirect")
+                            .field(e)
+                            .finish(),
+                        ComputeCommand::WriteTimestamp(e) => f
+                            .debug_tuple("ComputeCommand::WriteTimestamp")
+                            .field(e)
+                            .finish(),
+                        ComputeCommand::PushDebugGroup(e) => f
+                            .debug_tuple("ComputeCommand::PushDebugGroup")
+                            .field(e)
+                            .finish(),
+                        ComputeCommand::PopDebugGroup => {
+                            f.debug_tuple("ComputeCommand::PopDebugGroup").finish()
+                        }
+                        ComputeCommand::InsertDebugMarker(e) => f
+                            .debug_tuple("ComputeCommand::InsertDebugMarker")
+                            .field(e)
+                            .finish(),
+                    }
+                }
+            }
+            /// Reading or writing, for a buffer map.
+            #[repr(u8)]
+            #[derive(Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
+            pub enum MapMode {
+                /// Map to read.
+                Read,
+                /// Map to write.
+                Write,
+            }
+            impl ::core::fmt::Debug for MapMode {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    match self {
+                        MapMode::Read => f.debug_tuple("MapMode::Read").finish(),
+                        MapMode::Write => f.debug_tuple("MapMode::Write").finish(),
+                    }
+                }
+            }
+
+            impl MapMode {
+                #[doc(hidden)]
+                pub unsafe fn _lift(val: u8) -> MapMode {
+                    if !cfg!(debug_assertions) {
+                        return ::core::mem::transmute(val);
+                    }
+
+                    match val {
+                        0 => MapMode::Read,
+                        1 => MapMode::Write,
+
+                        _ => panic!("invalid enum discriminant"),
+                    }
+                }
+            }
+
+            /// How a surface waits for the display.
+            #[repr(u8)]
+            #[derive(Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
+            pub enum PresentMode {
+                /// Wait for vertical blank, queueing frames.
+                Fifo,
+                /// Wait for vertical blank; a late frame tears.
+                FifoRelaxed,
+                /// Show at once; may tear.
+                Immediate,
+                /// Replace the queued frame.
+                Mailbox,
+            }
+            impl ::core::fmt::Debug for PresentMode {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    match self {
+                        PresentMode::Fifo => f.debug_tuple("PresentMode::Fifo").finish(),
+                        PresentMode::FifoRelaxed => {
+                            f.debug_tuple("PresentMode::FifoRelaxed").finish()
+                        }
+                        PresentMode::Immediate => f.debug_tuple("PresentMode::Immediate").finish(),
+                        PresentMode::Mailbox => f.debug_tuple("PresentMode::Mailbox").finish(),
+                    }
+                }
+            }
+
+            impl PresentMode {
+                #[doc(hidden)]
+                pub unsafe fn _lift(val: u8) -> PresentMode {
+                    if !cfg!(debug_assertions) {
+                        return ::core::mem::transmute(val);
+                    }
+
+                    match val {
+                        0 => PresentMode::Fifo,
+                        1 => PresentMode::FifoRelaxed,
+                        2 => PresentMode::Immediate,
+                        3 => PresentMode::Mailbox,
+
+                        _ => panic!("invalid enum discriminant"),
+                    }
+                }
+            }
+
+            /// How a surface's alpha is composited.
+            #[repr(u8)]
+            #[derive(Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
+            pub enum CompositeAlphaMode {
+                /// Ignore alpha.
+                Opaque,
+                /// Alpha is premultiplied.
+                PreMultiplied,
+                /// Alpha is not premultiplied.
+                PostMultiplied,
+                /// Inherit from the window system.
+                Inherit,
+            }
+            impl ::core::fmt::Debug for CompositeAlphaMode {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    match self {
+                        CompositeAlphaMode::Opaque => {
+                            f.debug_tuple("CompositeAlphaMode::Opaque").finish()
+                        }
+                        CompositeAlphaMode::PreMultiplied => {
+                            f.debug_tuple("CompositeAlphaMode::PreMultiplied").finish()
+                        }
+                        CompositeAlphaMode::PostMultiplied => {
+                            f.debug_tuple("CompositeAlphaMode::PostMultiplied").finish()
+                        }
+                        CompositeAlphaMode::Inherit => {
+                            f.debug_tuple("CompositeAlphaMode::Inherit").finish()
+                        }
+                    }
+                }
+            }
+
+            impl CompositeAlphaMode {
+                #[doc(hidden)]
+                pub unsafe fn _lift(val: u8) -> CompositeAlphaMode {
+                    if !cfg!(debug_assertions) {
+                        return ::core::mem::transmute(val);
+                    }
+
+                    match val {
+                        0 => CompositeAlphaMode::Opaque,
+                        1 => CompositeAlphaMode::PreMultiplied,
+                        2 => CompositeAlphaMode::PostMultiplied,
+                        3 => CompositeAlphaMode::Inherit,
+
+                        _ => panic!("invalid enum discriminant"),
+                    }
+                }
+            }
+
+            /// What a surface can do with a given adapter.
+            #[derive(Clone)]
+            pub struct SurfaceCapabilities {
+                /// Formats it can show, best first.
+                pub formats: _rt::Vec<_rt::String>,
+                /// Present modes it supports.
+                pub present_modes: _rt::Vec<PresentMode>,
+                /// Alpha modes it supports.
+                pub alpha_modes: _rt::Vec<CompositeAlphaMode>,
+                /// Usages its textures may have.
+                pub usages: TextureUsages,
+            }
+            impl ::core::fmt::Debug for SurfaceCapabilities {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    f.debug_struct("SurfaceCapabilities")
+                        .field("formats", &self.formats)
+                        .field("present-modes", &self.present_modes)
+                        .field("alpha-modes", &self.alpha_modes)
+                        .field("usages", &self.usages)
+                        .finish()
+                }
+            }
+            /// How a surface is set up.
+            #[derive(Clone)]
+            pub struct SurfaceConfiguration {
+                /// How its textures will be used.
+                pub usage: TextureUsages,
+                /// Its format.
+                pub format: _rt::String,
+                /// Width in pixels.
+                pub width: u32,
+                /// Height in pixels.
+                pub height: u32,
+                /// How it waits for the display.
+                pub present_mode: PresentMode,
+                /// How alpha is composited.
+                pub alpha_mode: CompositeAlphaMode,
+                /// Other formats views of its textures may take.
+                pub view_formats: _rt::Vec<_rt::String>,
+                /// How many frames may be queued.
+                pub desired_maximum_frame_latency: u32,
+            }
+            impl ::core::fmt::Debug for SurfaceConfiguration {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    f.debug_struct("SurfaceConfiguration")
+                        .field("usage", &self.usage)
+                        .field("format", &self.format)
+                        .field("width", &self.width)
+                        .field("height", &self.height)
+                        .field("present-mode", &self.present_mode)
+                        .field("alpha-mode", &self.alpha_mode)
+                        .field("view-formats", &self.view_formats)
+                        .field(
+                            "desired-maximum-frame-latency",
+                            &self.desired_maximum_frame_latency,
+                        )
+                        .finish()
+                }
+            }
+            /// The texture a surface hands out for one frame.
+            #[repr(C)]
+            #[derive(Clone, Copy)]
+            pub struct SurfaceFrame {
+                /// The texture to draw into.
+                pub texture: Handle,
+                /// The surface changed (a resize) and should be configured again.
+                pub suboptimal: bool,
+            }
+            impl ::core::fmt::Debug for SurfaceFrame {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    f.debug_struct("SurfaceFrame")
+                        .field("texture", &self.texture)
+                        .field("suboptimal", &self.suboptimal)
+                        .finish()
+                }
+            }
+            /// Why a surface had no frame to give.
+            #[derive(Clone)]
+            pub enum SurfaceError {
+                /// Not configured, or configured for a device that is gone.
+                NotConfigured,
+                /// The surface no longer matches its window; configure it again.
+                Outdated,
+                /// The window is hidden; skip this frame.
+                Occluded,
+                /// The surface or its device is lost.
+                Lost(_rt::String),
+                /// Something else, as text.
+                Other(_rt::String),
+            }
+            impl ::core::fmt::Debug for SurfaceError {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    match self {
+                        SurfaceError::NotConfigured => {
+                            f.debug_tuple("SurfaceError::NotConfigured").finish()
+                        }
+                        SurfaceError::Outdated => f.debug_tuple("SurfaceError::Outdated").finish(),
+                        SurfaceError::Occluded => f.debug_tuple("SurfaceError::Occluded").finish(),
+                        SurfaceError::Lost(e) => {
+                            f.debug_tuple("SurfaceError::Lost").field(e).finish()
+                        }
+                        SurfaceError::Other(e) => {
+                            f.debug_tuple("SurfaceError::Other").field(e).finish()
+                        }
+                    }
+                }
+            }
+            impl ::core::fmt::Display for SurfaceError {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    write!(f, "{:?}", self)
+                }
+            }
+
+            #[cfg(feature = "std")]
+            impl std::error::Error for SurfaceError {}
+            /// What a format can do on an adapter.
+            #[derive(Clone)]
+            pub struct FormatFeatures {
+                /// The usages a texture of this format may have.
+                pub allowed_usages: TextureUsages,
+                /// Sample counts it supports for multisampling.
+                pub sample_counts: _rt::Vec<u32>,
+                /// It may be filtered when sampled.
+                pub filterable: bool,
+                /// It may be blended as a color target.
+                pub blendable: bool,
+                /// It may be a storage texture with read-write access.
+                pub storage_read_write: bool,
+            }
+            impl ::core::fmt::Debug for FormatFeatures {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    f.debug_struct("FormatFeatures")
+                        .field("allowed-usages", &self.allowed_usages)
+                        .field("sample-counts", &self.sample_counts)
+                        .field("filterable", &self.filterable)
+                        .field("blendable", &self.blendable)
+                        .field("storage-read-write", &self.storage_read_write)
+                        .finish()
+                }
+            }
+        }
+
+        /// The calls. All of them, in one interface, in WebGPU's order: adapter,
+        /// device, resources, shaders and pipelines, commands, queue, surfaces.
+        #[allow(dead_code, async_fn_in_trait, unused_imports, clippy::all)]
+        pub mod gpu {
+            #[used]
+            #[doc(hidden)]
+            static __FORCE_SECTION_REF: fn() =
+                super::super::super::__link_custom_section_describing_imports;
+
+            use super::super::super::_rt;
+            pub type Handle = super::super::super::krate::gpu::types::Handle;
+            pub type GpuError = super::super::super::krate::gpu::types::GpuError;
+            pub type ShaderError = super::super::super::krate::gpu::types::ShaderError;
+            pub type CompilationMessage =
+                super::super::super::krate::gpu::types::CompilationMessage;
+            pub type Limit = super::super::super::krate::gpu::types::Limit;
+            pub type AdapterOptions = super::super::super::krate::gpu::types::AdapterOptions;
+            pub type AdapterInfo = super::super::super::krate::gpu::types::AdapterInfo;
+            pub type DeviceDescriptor = super::super::super::krate::gpu::types::DeviceDescriptor;
+            pub type BufferDescriptor = super::super::super::krate::gpu::types::BufferDescriptor;
+            pub type TextureDescriptor = super::super::super::krate::gpu::types::TextureDescriptor;
+            pub type TextureViewDescriptor =
+                super::super::super::krate::gpu::types::TextureViewDescriptor;
+            pub type SamplerDescriptor = super::super::super::krate::gpu::types::SamplerDescriptor;
+            pub type BindGroupLayoutDescriptor =
+                super::super::super::krate::gpu::types::BindGroupLayoutDescriptor;
+            pub type BindGroupDescriptor =
+                super::super::super::krate::gpu::types::BindGroupDescriptor;
+            pub type PipelineLayoutDescriptor =
+                super::super::super::krate::gpu::types::PipelineLayoutDescriptor;
+            pub type ShaderModuleDescriptor =
+                super::super::super::krate::gpu::types::ShaderModuleDescriptor;
+            pub type RenderPipelineDescriptor =
+                super::super::super::krate::gpu::types::RenderPipelineDescriptor;
+            pub type ComputePipelineDescriptor =
+                super::super::super::krate::gpu::types::ComputePipelineDescriptor;
+            pub type QuerySetDescriptor =
+                super::super::super::krate::gpu::types::QuerySetDescriptor;
+            pub type TexelCopyTextureInfo =
+                super::super::super::krate::gpu::types::TexelCopyTextureInfo;
+            pub type TexelCopyBufferLayout =
+                super::super::super::krate::gpu::types::TexelCopyBufferLayout;
+            pub type TexelCopyBufferInfo =
+                super::super::super::krate::gpu::types::TexelCopyBufferInfo;
+            pub type Extent3d = super::super::super::krate::gpu::types::Extent3d;
+            pub type RenderPassDescriptor =
+                super::super::super::krate::gpu::types::RenderPassDescriptor;
+            pub type RenderCommand = super::super::super::krate::gpu::types::RenderCommand;
+            pub type ComputePassDescriptor =
+                super::super::super::krate::gpu::types::ComputePassDescriptor;
+            pub type ComputeCommand = super::super::super::krate::gpu::types::ComputeCommand;
+            pub type MapMode = super::super::super::krate::gpu::types::MapMode;
+            pub type SurfaceCapabilities =
+                super::super::super::krate::gpu::types::SurfaceCapabilities;
+            pub type SurfaceConfiguration =
+                super::super::super::krate::gpu::types::SurfaceConfiguration;
+            pub type SurfaceFrame = super::super::super::krate::gpu::types::SurfaceFrame;
+            pub type SurfaceError = super::super::super::krate::gpu::types::SurfaceError;
+            pub type FormatFeatures = super::super::super::krate::gpu::types::FormatFeatures;
+            #[allow(unused_unsafe, clippy::all)]
+            /// Choose a GPU. Fails when there is no GPU that fits the options.
+            pub fn request_adapter(options: AdapterOptions) -> Result<Handle, GpuError> {
+                unsafe {
+                    #[repr(align(8))]
+                    struct RetArea(
+                        [::core::mem::MaybeUninit<u8>;
+                            16 + 2 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let mut ret_area = RetArea(
+                        [::core::mem::MaybeUninit::uninit();
+                            16 + 2 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let super::super::super::krate::gpu::types::AdapterOptions {
+                        power_preference: power_preference0,
+                        force_fallback_adapter: force_fallback_adapter0,
+                        compatible_surface: compatible_surface0,
+                    } = options;
+                    let (result1_0, result1_1) = match compatible_surface0 {
+                        Some(e) => (1i32, _rt::as_i64(e)),
+                        None => (0i32, 0i64),
+                    };
+                    let ptr2 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:gpu/gpu@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "request-adapter"]
+                        fn wit_import3(_: i32, _: i32, _: i32, _: i64, _: *mut u8);
+                    }
+
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import3(_: i32, _: i32, _: i32, _: i64, _: *mut u8) {
+                        unreachable!()
+                    }
+                    unsafe {
+                        wit_import3(
+                            power_preference0.clone() as i32,
+                            match force_fallback_adapter0 {
+                                true => 1,
+                                false => 0,
+                            },
+                            result1_0,
+                            result1_1,
+                            ptr2,
+                        )
+                    };
+                    let l4 = i32::from(*ptr2.add(0).cast::<u8>());
+                    let result23 = match l4 {
+                        0 => {
+                            let e = {
+                                let l5 = *ptr2.add(8).cast::<i64>();
+
+                                l5 as u64
+                            };
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l6 = i32::from(*ptr2.add(8).cast::<u8>());
+                                use super::super::super::krate::gpu::types::GpuError as V22;
+                                let v22 = match l6 {
+                                    0 => {
+                                        let e22 = {
+                                            let l7 = *ptr2
+                                                .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l8 = *ptr2
+                                                .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len9 = l8;
+                                            let bytes9 =
+                                                _rt::Vec::from_raw_parts(l7.cast(), len9, len9);
+
+                                            _rt::string_lift(bytes9)
+                                        };
+                                        V22::InvalidHandle(e22)
+                                    }
+                                    1 => {
+                                        let e22 = {
+                                            let l10 = *ptr2
+                                                .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l11 = *ptr2
+                                                .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len12 = l11;
+                                            let bytes12 =
+                                                _rt::Vec::from_raw_parts(l10.cast(), len12, len12);
+
+                                            _rt::string_lift(bytes12)
+                                        };
+                                        V22::Validation(e22)
+                                    }
+                                    2 => V22::OutOfMemory,
+                                    3 => {
+                                        let e22 = {
+                                            let l13 = *ptr2
+                                                .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l14 = *ptr2
+                                                .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len15 = l14;
+                                            let bytes15 =
+                                                _rt::Vec::from_raw_parts(l13.cast(), len15, len15);
+
+                                            _rt::string_lift(bytes15)
+                                        };
+                                        V22::Lost(e22)
+                                    }
+                                    4 => {
+                                        let e22 = {
+                                            let l16 = *ptr2
+                                                .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l17 = *ptr2
+                                                .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len18 = l17;
+                                            let bytes18 =
+                                                _rt::Vec::from_raw_parts(l16.cast(), len18, len18);
+
+                                            _rt::string_lift(bytes18)
+                                        };
+                                        V22::Unsupported(e22)
+                                    }
+                                    n => {
+                                        debug_assert_eq!(n, 5, "invalid enum discriminant");
+                                        let e22 = {
+                                            let l19 = *ptr2
+                                                .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l20 = *ptr2
+                                                .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len21 = l20;
+                                            let bytes21 =
+                                                _rt::Vec::from_raw_parts(l19.cast(), len21, len21);
+
+                                            _rt::string_lift(bytes21)
+                                        };
+                                        V22::Internal(e22)
+                                    }
+                                };
+
+                                v22
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    };
+                    result23
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// What the adapter says about itself.
+            pub fn describe_adapter(adapter: Handle) -> Result<AdapterInfo, GpuError> {
+                unsafe {
+                    #[cfg_attr(target_pointer_width = "64", repr(align(8)))]
+                    #[cfg_attr(target_pointer_width = "32", repr(align(4)))]
+                    struct RetArea(
+                        [::core::mem::MaybeUninit<u8>;
+                            8 + 10 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let mut ret_area = RetArea(
+                        [::core::mem::MaybeUninit::uninit();
+                            8 + 10 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:gpu/gpu@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "describe-adapter"]
+                        fn wit_import1(_: i64, _: *mut u8);
+                    }
+
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import1(_: i64, _: *mut u8) {
+                        unreachable!()
+                    }
+                    unsafe { wit_import1(_rt::as_i64(adapter), ptr0) };
+                    let l2 = i32::from(*ptr0.add(0).cast::<u8>());
+                    let result35 = match l2 {
+                        0 => {
+                            let e = {
+                                let l3 = *ptr0
+                                    .add(::core::mem::size_of::<*const u8>())
+                                    .cast::<*mut u8>();
+                                let l4 = *ptr0
+                                    .add(2 * ::core::mem::size_of::<*const u8>())
+                                    .cast::<usize>();
+                                let len5 = l4;
+                                let bytes5 = _rt::Vec::from_raw_parts(l3.cast(), len5, len5);
+                                let l6 = *ptr0
+                                    .add(3 * ::core::mem::size_of::<*const u8>())
+                                    .cast::<i32>();
+                                let l7 = *ptr0
+                                    .add(4 + 3 * ::core::mem::size_of::<*const u8>())
+                                    .cast::<i32>();
+                                let l8 = i32::from(
+                                    *ptr0
+                                        .add(8 + 3 * ::core::mem::size_of::<*const u8>())
+                                        .cast::<u8>(),
+                                );
+                                let l9 = *ptr0
+                                    .add(8 + 4 * ::core::mem::size_of::<*const u8>())
+                                    .cast::<*mut u8>();
+                                let l10 = *ptr0
+                                    .add(8 + 5 * ::core::mem::size_of::<*const u8>())
+                                    .cast::<usize>();
+                                let len11 = l10;
+                                let bytes11 = _rt::Vec::from_raw_parts(l9.cast(), len11, len11);
+                                let l12 = *ptr0
+                                    .add(8 + 6 * ::core::mem::size_of::<*const u8>())
+                                    .cast::<*mut u8>();
+                                let l13 = *ptr0
+                                    .add(8 + 7 * ::core::mem::size_of::<*const u8>())
+                                    .cast::<usize>();
+                                let len14 = l13;
+                                let bytes14 = _rt::Vec::from_raw_parts(l12.cast(), len14, len14);
+                                let l15 = *ptr0
+                                    .add(8 + 8 * ::core::mem::size_of::<*const u8>())
+                                    .cast::<*mut u8>();
+                                let l16 = *ptr0
+                                    .add(8 + 9 * ::core::mem::size_of::<*const u8>())
+                                    .cast::<usize>();
+                                let len17 = l16;
+                                let bytes17 = _rt::Vec::from_raw_parts(l15.cast(), len17, len17);
+
+                                super::super::super::krate::gpu::types::AdapterInfo {
+                                    name: _rt::string_lift(bytes5),
+                                    vendor: l6 as u32,
+                                    device: l7 as u32,
+                                    device_type:
+                                        super::super::super::krate::gpu::types::DeviceType::_lift(
+                                            l8 as u8,
+                                        ),
+                                    backend: _rt::string_lift(bytes11),
+                                    driver: _rt::string_lift(bytes14),
+                                    driver_info: _rt::string_lift(bytes17),
+                                }
+                            };
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l18 = i32::from(
+                                    *ptr0.add(::core::mem::size_of::<*const u8>()).cast::<u8>(),
+                                );
+                                use super::super::super::krate::gpu::types::GpuError as V34;
+                                let v34 = match l18 {
+                                    0 => {
+                                        let e34 = {
+                                            let l19 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l20 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len21 = l20;
+                                            let bytes21 =
+                                                _rt::Vec::from_raw_parts(l19.cast(), len21, len21);
+
+                                            _rt::string_lift(bytes21)
+                                        };
+                                        V34::InvalidHandle(e34)
+                                    }
+                                    1 => {
+                                        let e34 = {
+                                            let l22 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l23 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len24 = l23;
+                                            let bytes24 =
+                                                _rt::Vec::from_raw_parts(l22.cast(), len24, len24);
+
+                                            _rt::string_lift(bytes24)
+                                        };
+                                        V34::Validation(e34)
+                                    }
+                                    2 => V34::OutOfMemory,
+                                    3 => {
+                                        let e34 = {
+                                            let l25 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l26 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len27 = l26;
+                                            let bytes27 =
+                                                _rt::Vec::from_raw_parts(l25.cast(), len27, len27);
+
+                                            _rt::string_lift(bytes27)
+                                        };
+                                        V34::Lost(e34)
+                                    }
+                                    4 => {
+                                        let e34 = {
+                                            let l28 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l29 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len30 = l29;
+                                            let bytes30 =
+                                                _rt::Vec::from_raw_parts(l28.cast(), len30, len30);
+
+                                            _rt::string_lift(bytes30)
+                                        };
+                                        V34::Unsupported(e34)
+                                    }
+                                    n => {
+                                        debug_assert_eq!(n, 5, "invalid enum discriminant");
+                                        let e34 = {
+                                            let l31 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l32 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len33 = l32;
+                                            let bytes33 =
+                                                _rt::Vec::from_raw_parts(l31.cast(), len33, len33);
+
+                                            _rt::string_lift(bytes33)
+                                        };
+                                        V34::Internal(e34)
+                                    }
+                                };
+
+                                v34
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    };
+                    result35
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// The features the adapter offers, by WebGPU name.
+            pub fn adapter_features(adapter: Handle) -> Result<_rt::Vec<_rt::String>, GpuError> {
+                unsafe {
+                    #[cfg_attr(target_pointer_width = "64", repr(align(8)))]
+                    #[cfg_attr(target_pointer_width = "32", repr(align(4)))]
+                    struct RetArea(
+                        [::core::mem::MaybeUninit<u8>; 4 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let mut ret_area = RetArea(
+                        [::core::mem::MaybeUninit::uninit();
+                            4 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:gpu/gpu@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "adapter-features"]
+                        fn wit_import1(_: i64, _: *mut u8);
+                    }
+
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import1(_: i64, _: *mut u8) {
+                        unreachable!()
+                    }
+                    unsafe { wit_import1(_rt::as_i64(adapter), ptr0) };
+                    let l2 = i32::from(*ptr0.add(0).cast::<u8>());
+                    let result26 = match l2 {
+                        0 => {
+                            let e = {
+                                let l3 = *ptr0
+                                    .add(::core::mem::size_of::<*const u8>())
+                                    .cast::<*mut u8>();
+                                let l4 = *ptr0
+                                    .add(2 * ::core::mem::size_of::<*const u8>())
+                                    .cast::<usize>();
+                                let base8 = l3;
+                                let len8 = l4;
+                                let mut result8 = _rt::Vec::with_capacity(len8);
+                                for i in 0..len8 {
+                                    let base =
+                                        base8.add(i * (2 * ::core::mem::size_of::<*const u8>()));
+                                    let e8 = {
+                                        let l5 = *base.add(0).cast::<*mut u8>();
+                                        let l6 = *base
+                                            .add(::core::mem::size_of::<*const u8>())
+                                            .cast::<usize>();
+                                        let len7 = l6;
+                                        let bytes7 =
+                                            _rt::Vec::from_raw_parts(l5.cast(), len7, len7);
+
+                                        _rt::string_lift(bytes7)
+                                    };
+                                    result8.push(e8);
+                                }
+                                _rt::cabi_dealloc(
+                                    base8,
+                                    len8 * (2 * ::core::mem::size_of::<*const u8>()),
+                                    ::core::mem::size_of::<*const u8>(),
+                                );
+
+                                result8
+                            };
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l9 = i32::from(
+                                    *ptr0.add(::core::mem::size_of::<*const u8>()).cast::<u8>(),
+                                );
+                                use super::super::super::krate::gpu::types::GpuError as V25;
+                                let v25 = match l9 {
+                                    0 => {
+                                        let e25 = {
+                                            let l10 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l11 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len12 = l11;
+                                            let bytes12 =
+                                                _rt::Vec::from_raw_parts(l10.cast(), len12, len12);
+
+                                            _rt::string_lift(bytes12)
+                                        };
+                                        V25::InvalidHandle(e25)
+                                    }
+                                    1 => {
+                                        let e25 = {
+                                            let l13 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l14 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len15 = l14;
+                                            let bytes15 =
+                                                _rt::Vec::from_raw_parts(l13.cast(), len15, len15);
+
+                                            _rt::string_lift(bytes15)
+                                        };
+                                        V25::Validation(e25)
+                                    }
+                                    2 => V25::OutOfMemory,
+                                    3 => {
+                                        let e25 = {
+                                            let l16 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l17 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len18 = l17;
+                                            let bytes18 =
+                                                _rt::Vec::from_raw_parts(l16.cast(), len18, len18);
+
+                                            _rt::string_lift(bytes18)
+                                        };
+                                        V25::Lost(e25)
+                                    }
+                                    4 => {
+                                        let e25 = {
+                                            let l19 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l20 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len21 = l20;
+                                            let bytes21 =
+                                                _rt::Vec::from_raw_parts(l19.cast(), len21, len21);
+
+                                            _rt::string_lift(bytes21)
+                                        };
+                                        V25::Unsupported(e25)
+                                    }
+                                    n => {
+                                        debug_assert_eq!(n, 5, "invalid enum discriminant");
+                                        let e25 = {
+                                            let l22 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l23 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len24 = l23;
+                                            let bytes24 =
+                                                _rt::Vec::from_raw_parts(l22.cast(), len24, len24);
+
+                                            _rt::string_lift(bytes24)
+                                        };
+                                        V25::Internal(e25)
+                                    }
+                                };
+
+                                v25
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    };
+                    result26
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// The best limits the adapter offers.
+            pub fn adapter_limits(adapter: Handle) -> Result<_rt::Vec<Limit>, GpuError> {
+                unsafe {
+                    #[cfg_attr(target_pointer_width = "64", repr(align(8)))]
+                    #[cfg_attr(target_pointer_width = "32", repr(align(4)))]
+                    struct RetArea(
+                        [::core::mem::MaybeUninit<u8>; 4 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let mut ret_area = RetArea(
+                        [::core::mem::MaybeUninit::uninit();
+                            4 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:gpu/gpu@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "adapter-limits"]
+                        fn wit_import1(_: i64, _: *mut u8);
+                    }
+
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import1(_: i64, _: *mut u8) {
+                        unreachable!()
+                    }
+                    unsafe { wit_import1(_rt::as_i64(adapter), ptr0) };
+                    let l2 = i32::from(*ptr0.add(0).cast::<u8>());
+                    let result27 = match l2 {
+                        0 => {
+                            let e = {
+                                let l3 = *ptr0
+                                    .add(::core::mem::size_of::<*const u8>())
+                                    .cast::<*mut u8>();
+                                let l4 = *ptr0
+                                    .add(2 * ::core::mem::size_of::<*const u8>())
+                                    .cast::<usize>();
+                                let base9 = l3;
+                                let len9 = l4;
+                                let mut result9 = _rt::Vec::with_capacity(len9);
+                                for i in 0..len9 {
+                                    let base = base9
+                                        .add(i * (8 + 2 * ::core::mem::size_of::<*const u8>()));
+                                    let e9 = {
+                                        let l5 = *base.add(0).cast::<*mut u8>();
+                                        let l6 = *base
+                                            .add(::core::mem::size_of::<*const u8>())
+                                            .cast::<usize>();
+                                        let len7 = l6;
+                                        let bytes7 =
+                                            _rt::Vec::from_raw_parts(l5.cast(), len7, len7);
+                                        let l8 = *base
+                                            .add(2 * ::core::mem::size_of::<*const u8>())
+                                            .cast::<i64>();
+
+                                        super::super::super::krate::gpu::types::Limit {
+                                            name: _rt::string_lift(bytes7),
+                                            value: l8 as u64,
+                                        }
+                                    };
+                                    result9.push(e9);
+                                }
+                                _rt::cabi_dealloc(
+                                    base9,
+                                    len9 * (8 + 2 * ::core::mem::size_of::<*const u8>()),
+                                    8,
+                                );
+
+                                result9
+                            };
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l10 = i32::from(
+                                    *ptr0.add(::core::mem::size_of::<*const u8>()).cast::<u8>(),
+                                );
+                                use super::super::super::krate::gpu::types::GpuError as V26;
+                                let v26 = match l10 {
+                                    0 => {
+                                        let e26 = {
+                                            let l11 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l12 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len13 = l12;
+                                            let bytes13 =
+                                                _rt::Vec::from_raw_parts(l11.cast(), len13, len13);
+
+                                            _rt::string_lift(bytes13)
+                                        };
+                                        V26::InvalidHandle(e26)
+                                    }
+                                    1 => {
+                                        let e26 = {
+                                            let l14 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l15 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len16 = l15;
+                                            let bytes16 =
+                                                _rt::Vec::from_raw_parts(l14.cast(), len16, len16);
+
+                                            _rt::string_lift(bytes16)
+                                        };
+                                        V26::Validation(e26)
+                                    }
+                                    2 => V26::OutOfMemory,
+                                    3 => {
+                                        let e26 = {
+                                            let l17 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l18 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len19 = l18;
+                                            let bytes19 =
+                                                _rt::Vec::from_raw_parts(l17.cast(), len19, len19);
+
+                                            _rt::string_lift(bytes19)
+                                        };
+                                        V26::Lost(e26)
+                                    }
+                                    4 => {
+                                        let e26 = {
+                                            let l20 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l21 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len22 = l21;
+                                            let bytes22 =
+                                                _rt::Vec::from_raw_parts(l20.cast(), len22, len22);
+
+                                            _rt::string_lift(bytes22)
+                                        };
+                                        V26::Unsupported(e26)
+                                    }
+                                    n => {
+                                        debug_assert_eq!(n, 5, "invalid enum discriminant");
+                                        let e26 = {
+                                            let l23 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l24 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len25 = l24;
+                                            let bytes25 =
+                                                _rt::Vec::from_raw_parts(l23.cast(), len25, len25);
+
+                                            _rt::string_lift(bytes25)
+                                        };
+                                        V26::Internal(e26)
+                                    }
+                                };
+
+                                v26
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    };
+                    result27
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// What a texture format can do on this adapter.
+            pub fn adapter_format_features(
+                adapter: Handle,
+                format: &str,
+            ) -> Result<FormatFeatures, GpuError> {
+                unsafe {
+                    #[cfg_attr(target_pointer_width = "64", repr(align(8)))]
+                    #[cfg_attr(target_pointer_width = "32", repr(align(4)))]
+                    struct RetArea(
+                        [::core::mem::MaybeUninit<u8>; 5 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let mut ret_area = RetArea(
+                        [::core::mem::MaybeUninit::uninit();
+                            5 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let vec0 = format;
+                    let ptr0 = vec0.as_ptr().cast::<u8>();
+                    let len0 = vec0.len();
+                    let ptr1 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:gpu/gpu@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "adapter-format-features"]
+                        fn wit_import2(_: i64, _: *mut u8, _: usize, _: *mut u8);
+                    }
+
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import2(_: i64, _: *mut u8, _: usize, _: *mut u8) {
+                        unreachable!()
+                    }
+                    unsafe { wit_import2(_rt::as_i64(adapter), ptr0.cast_mut(), len0, ptr1) };
+                    let l3 = i32::from(*ptr1.add(0).cast::<u8>());
+                    let result28 = match l3 {
+                        0 => {
+                            let e = {
+                                let l4 = i32::from(
+                                    *ptr1.add(::core::mem::size_of::<*const u8>()).cast::<u8>(),
+                                );
+                                let l5 = *ptr1
+                                    .add(2 * ::core::mem::size_of::<*const u8>())
+                                    .cast::<*mut u8>();
+                                let l6 = *ptr1
+                                    .add(3 * ::core::mem::size_of::<*const u8>())
+                                    .cast::<usize>();
+                                let len7 = l6;
+                                let l8 = i32::from(
+                                    *ptr1
+                                        .add(4 * ::core::mem::size_of::<*const u8>())
+                                        .cast::<u8>(),
+                                );
+                                let l9 = i32::from(
+                                    *ptr1
+                                        .add(1 + 4 * ::core::mem::size_of::<*const u8>())
+                                        .cast::<u8>(),
+                                );
+                                let l10 = i32::from(
+                                    *ptr1
+                                        .add(2 + 4 * ::core::mem::size_of::<*const u8>())
+                                        .cast::<u8>(),
+                                );
+
+                                super::super::super::krate::gpu::types::FormatFeatures{
+                  allowed_usages: super::super::super::krate::gpu::types::TextureUsages::empty() | super::super::super::krate::gpu::types::TextureUsages::from_bits_retain(((l4 as u8) << 0) as _),
+                  sample_counts: _rt::Vec::from_raw_parts(l5.cast(), len7, len7),
+                  filterable: _rt::bool_lift(l8 as u8),
+                  blendable: _rt::bool_lift(l9 as u8),
+                  storage_read_write: _rt::bool_lift(l10 as u8),
+                }
+                            };
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l11 = i32::from(
+                                    *ptr1.add(::core::mem::size_of::<*const u8>()).cast::<u8>(),
+                                );
+                                use super::super::super::krate::gpu::types::GpuError as V27;
+                                let v27 = match l11 {
+                                    0 => {
+                                        let e27 = {
+                                            let l12 = *ptr1
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l13 = *ptr1
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len14 = l13;
+                                            let bytes14 =
+                                                _rt::Vec::from_raw_parts(l12.cast(), len14, len14);
+
+                                            _rt::string_lift(bytes14)
+                                        };
+                                        V27::InvalidHandle(e27)
+                                    }
+                                    1 => {
+                                        let e27 = {
+                                            let l15 = *ptr1
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l16 = *ptr1
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len17 = l16;
+                                            let bytes17 =
+                                                _rt::Vec::from_raw_parts(l15.cast(), len17, len17);
+
+                                            _rt::string_lift(bytes17)
+                                        };
+                                        V27::Validation(e27)
+                                    }
+                                    2 => V27::OutOfMemory,
+                                    3 => {
+                                        let e27 = {
+                                            let l18 = *ptr1
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l19 = *ptr1
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len20 = l19;
+                                            let bytes20 =
+                                                _rt::Vec::from_raw_parts(l18.cast(), len20, len20);
+
+                                            _rt::string_lift(bytes20)
+                                        };
+                                        V27::Lost(e27)
+                                    }
+                                    4 => {
+                                        let e27 = {
+                                            let l21 = *ptr1
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l22 = *ptr1
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len23 = l22;
+                                            let bytes23 =
+                                                _rt::Vec::from_raw_parts(l21.cast(), len23, len23);
+
+                                            _rt::string_lift(bytes23)
+                                        };
+                                        V27::Unsupported(e27)
+                                    }
+                                    n => {
+                                        debug_assert_eq!(n, 5, "invalid enum discriminant");
+                                        let e27 = {
+                                            let l24 = *ptr1
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l25 = *ptr1
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len26 = l25;
+                                            let bytes26 =
+                                                _rt::Vec::from_raw_parts(l24.cast(), len26, len26);
+
+                                            _rt::string_lift(bytes26)
+                                        };
+                                        V27::Internal(e27)
+                                    }
+                                };
+
+                                v27
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    };
+                    result28
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Make a device (and its queue) on the adapter.
+            pub fn request_device(
+                adapter: Handle,
+                descriptor: &DeviceDescriptor,
+            ) -> Result<Handle, GpuError> {
+                unsafe {
+                    #[repr(align(8))]
+                    struct RetArea(
+                        [::core::mem::MaybeUninit<u8>;
+                            16 + 2 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let mut ret_area = RetArea(
+                        [::core::mem::MaybeUninit::uninit();
+                            16 + 2 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let super::super::super::krate::gpu::types::DeviceDescriptor {
+                        label: label0,
+                        required_features: required_features0,
+                        required_limits: required_limits0,
+                    } = descriptor;
+                    let (result2_0, result2_1, result2_2) = match label0 {
+                        Some(e) => {
+                            let vec1 = e;
+                            let ptr1 = vec1.as_ptr().cast::<u8>();
+                            let len1 = vec1.len();
+
+                            (1i32, ptr1.cast_mut(), len1)
+                        }
+                        None => (0i32, ::core::ptr::null_mut(), 0usize),
+                    };
+                    let vec4 = required_features0;
+                    let len4 = vec4.len();
+                    let layout4 = _rt::alloc::Layout::from_size_align_unchecked(
+                        vec4.len() * (2 * ::core::mem::size_of::<*const u8>()),
+                        ::core::mem::size_of::<*const u8>(),
+                    );
+                    let result4 = if layout4.size() != 0 {
+                        let ptr = _rt::alloc::alloc(layout4).cast::<u8>();
+                        if ptr.is_null() {
+                            _rt::alloc::handle_alloc_error(layout4);
+                        }
+                        ptr
+                    } else {
+                        ::core::ptr::null_mut()
+                    };
+                    for (i, e) in vec4.into_iter().enumerate() {
+                        let base = result4.add(i * (2 * ::core::mem::size_of::<*const u8>()));
+                        {
+                            let vec3 = e;
+                            let ptr3 = vec3.as_ptr().cast::<u8>();
+                            let len3 = vec3.len();
+                            *base
+                                .add(::core::mem::size_of::<*const u8>())
+                                .cast::<usize>() = len3;
+                            *base.add(0).cast::<*mut u8>() = ptr3.cast_mut();
+                        }
+                    }
+                    let vec7 = required_limits0;
+                    let len7 = vec7.len();
+                    let layout7 = _rt::alloc::Layout::from_size_align_unchecked(
+                        vec7.len() * (8 + 2 * ::core::mem::size_of::<*const u8>()),
+                        8,
+                    );
+                    let result7 = if layout7.size() != 0 {
+                        let ptr = _rt::alloc::alloc(layout7).cast::<u8>();
+                        if ptr.is_null() {
+                            _rt::alloc::handle_alloc_error(layout7);
+                        }
+                        ptr
+                    } else {
+                        ::core::ptr::null_mut()
+                    };
+                    for (i, e) in vec7.into_iter().enumerate() {
+                        let base = result7.add(i * (8 + 2 * ::core::mem::size_of::<*const u8>()));
+                        {
+                            let super::super::super::krate::gpu::types::Limit {
+                                name: name5,
+                                value: value5,
+                            } = e;
+                            let vec6 = name5;
+                            let ptr6 = vec6.as_ptr().cast::<u8>();
+                            let len6 = vec6.len();
+                            *base
+                                .add(::core::mem::size_of::<*const u8>())
+                                .cast::<usize>() = len6;
+                            *base.add(0).cast::<*mut u8>() = ptr6.cast_mut();
+                            *base
+                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                .cast::<i64>() = _rt::as_i64(value5);
+                        }
+                    }
+                    let ptr8 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:gpu/gpu@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "request-device"]
+                        fn wit_import9(
+                            _: i64,
+                            _: i32,
+                            _: *mut u8,
+                            _: usize,
+                            _: *mut u8,
+                            _: usize,
+                            _: *mut u8,
+                            _: usize,
+                            _: *mut u8,
+                        );
+                    }
+
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import9(
+                        _: i64,
+                        _: i32,
+                        _: *mut u8,
+                        _: usize,
+                        _: *mut u8,
+                        _: usize,
+                        _: *mut u8,
+                        _: usize,
+                        _: *mut u8,
+                    ) {
+                        unreachable!()
+                    }
+                    unsafe {
+                        wit_import9(
+                            _rt::as_i64(adapter),
+                            result2_0,
+                            result2_1,
+                            result2_2,
+                            result4,
+                            len4,
+                            result7,
+                            len7,
+                            ptr8,
+                        )
+                    };
+                    let l10 = i32::from(*ptr8.add(0).cast::<u8>());
+                    let result29 = match l10 {
+                        0 => {
+                            let e = {
+                                let l11 = *ptr8.add(8).cast::<i64>();
+
+                                l11 as u64
+                            };
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l12 = i32::from(*ptr8.add(8).cast::<u8>());
+                                use super::super::super::krate::gpu::types::GpuError as V28;
+                                let v28 = match l12 {
+                                    0 => {
+                                        let e28 = {
+                                            let l13 = *ptr8
+                                                .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l14 = *ptr8
+                                                .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len15 = l14;
+                                            let bytes15 =
+                                                _rt::Vec::from_raw_parts(l13.cast(), len15, len15);
+
+                                            _rt::string_lift(bytes15)
+                                        };
+                                        V28::InvalidHandle(e28)
+                                    }
+                                    1 => {
+                                        let e28 = {
+                                            let l16 = *ptr8
+                                                .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l17 = *ptr8
+                                                .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len18 = l17;
+                                            let bytes18 =
+                                                _rt::Vec::from_raw_parts(l16.cast(), len18, len18);
+
+                                            _rt::string_lift(bytes18)
+                                        };
+                                        V28::Validation(e28)
+                                    }
+                                    2 => V28::OutOfMemory,
+                                    3 => {
+                                        let e28 = {
+                                            let l19 = *ptr8
+                                                .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l20 = *ptr8
+                                                .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len21 = l20;
+                                            let bytes21 =
+                                                _rt::Vec::from_raw_parts(l19.cast(), len21, len21);
+
+                                            _rt::string_lift(bytes21)
+                                        };
+                                        V28::Lost(e28)
+                                    }
+                                    4 => {
+                                        let e28 = {
+                                            let l22 = *ptr8
+                                                .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l23 = *ptr8
+                                                .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len24 = l23;
+                                            let bytes24 =
+                                                _rt::Vec::from_raw_parts(l22.cast(), len24, len24);
+
+                                            _rt::string_lift(bytes24)
+                                        };
+                                        V28::Unsupported(e28)
+                                    }
+                                    n => {
+                                        debug_assert_eq!(n, 5, "invalid enum discriminant");
+                                        let e28 = {
+                                            let l25 = *ptr8
+                                                .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l26 = *ptr8
+                                                .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len27 = l26;
+                                            let bytes27 =
+                                                _rt::Vec::from_raw_parts(l25.cast(), len27, len27);
+
+                                            _rt::string_lift(bytes27)
+                                        };
+                                        V28::Internal(e28)
+                                    }
+                                };
+
+                                v28
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    };
+                    if layout4.size() != 0 {
+                        _rt::alloc::dealloc(result4.cast(), layout4);
+                    }
+                    if layout7.size() != 0 {
+                        _rt::alloc::dealloc(result7.cast(), layout7);
+                    }
+                    result29
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// The features the device was made with.
+            pub fn device_features(device: Handle) -> Result<_rt::Vec<_rt::String>, GpuError> {
+                unsafe {
+                    #[cfg_attr(target_pointer_width = "64", repr(align(8)))]
+                    #[cfg_attr(target_pointer_width = "32", repr(align(4)))]
+                    struct RetArea(
+                        [::core::mem::MaybeUninit<u8>; 4 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let mut ret_area = RetArea(
+                        [::core::mem::MaybeUninit::uninit();
+                            4 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:gpu/gpu@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "device-features"]
+                        fn wit_import1(_: i64, _: *mut u8);
+                    }
+
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import1(_: i64, _: *mut u8) {
+                        unreachable!()
+                    }
+                    unsafe { wit_import1(_rt::as_i64(device), ptr0) };
+                    let l2 = i32::from(*ptr0.add(0).cast::<u8>());
+                    let result26 = match l2 {
+                        0 => {
+                            let e = {
+                                let l3 = *ptr0
+                                    .add(::core::mem::size_of::<*const u8>())
+                                    .cast::<*mut u8>();
+                                let l4 = *ptr0
+                                    .add(2 * ::core::mem::size_of::<*const u8>())
+                                    .cast::<usize>();
+                                let base8 = l3;
+                                let len8 = l4;
+                                let mut result8 = _rt::Vec::with_capacity(len8);
+                                for i in 0..len8 {
+                                    let base =
+                                        base8.add(i * (2 * ::core::mem::size_of::<*const u8>()));
+                                    let e8 = {
+                                        let l5 = *base.add(0).cast::<*mut u8>();
+                                        let l6 = *base
+                                            .add(::core::mem::size_of::<*const u8>())
+                                            .cast::<usize>();
+                                        let len7 = l6;
+                                        let bytes7 =
+                                            _rt::Vec::from_raw_parts(l5.cast(), len7, len7);
+
+                                        _rt::string_lift(bytes7)
+                                    };
+                                    result8.push(e8);
+                                }
+                                _rt::cabi_dealloc(
+                                    base8,
+                                    len8 * (2 * ::core::mem::size_of::<*const u8>()),
+                                    ::core::mem::size_of::<*const u8>(),
+                                );
+
+                                result8
+                            };
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l9 = i32::from(
+                                    *ptr0.add(::core::mem::size_of::<*const u8>()).cast::<u8>(),
+                                );
+                                use super::super::super::krate::gpu::types::GpuError as V25;
+                                let v25 = match l9 {
+                                    0 => {
+                                        let e25 = {
+                                            let l10 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l11 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len12 = l11;
+                                            let bytes12 =
+                                                _rt::Vec::from_raw_parts(l10.cast(), len12, len12);
+
+                                            _rt::string_lift(bytes12)
+                                        };
+                                        V25::InvalidHandle(e25)
+                                    }
+                                    1 => {
+                                        let e25 = {
+                                            let l13 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l14 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len15 = l14;
+                                            let bytes15 =
+                                                _rt::Vec::from_raw_parts(l13.cast(), len15, len15);
+
+                                            _rt::string_lift(bytes15)
+                                        };
+                                        V25::Validation(e25)
+                                    }
+                                    2 => V25::OutOfMemory,
+                                    3 => {
+                                        let e25 = {
+                                            let l16 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l17 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len18 = l17;
+                                            let bytes18 =
+                                                _rt::Vec::from_raw_parts(l16.cast(), len18, len18);
+
+                                            _rt::string_lift(bytes18)
+                                        };
+                                        V25::Lost(e25)
+                                    }
+                                    4 => {
+                                        let e25 = {
+                                            let l19 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l20 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len21 = l20;
+                                            let bytes21 =
+                                                _rt::Vec::from_raw_parts(l19.cast(), len21, len21);
+
+                                            _rt::string_lift(bytes21)
+                                        };
+                                        V25::Unsupported(e25)
+                                    }
+                                    n => {
+                                        debug_assert_eq!(n, 5, "invalid enum discriminant");
+                                        let e25 = {
+                                            let l22 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l23 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len24 = l23;
+                                            let bytes24 =
+                                                _rt::Vec::from_raw_parts(l22.cast(), len24, len24);
+
+                                            _rt::string_lift(bytes24)
+                                        };
+                                        V25::Internal(e25)
+                                    }
+                                };
+
+                                v25
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    };
+                    result26
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// The limits the device was made with.
+            pub fn device_limits(device: Handle) -> Result<_rt::Vec<Limit>, GpuError> {
+                unsafe {
+                    #[cfg_attr(target_pointer_width = "64", repr(align(8)))]
+                    #[cfg_attr(target_pointer_width = "32", repr(align(4)))]
+                    struct RetArea(
+                        [::core::mem::MaybeUninit<u8>; 4 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let mut ret_area = RetArea(
+                        [::core::mem::MaybeUninit::uninit();
+                            4 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:gpu/gpu@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "device-limits"]
+                        fn wit_import1(_: i64, _: *mut u8);
+                    }
+
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import1(_: i64, _: *mut u8) {
+                        unreachable!()
+                    }
+                    unsafe { wit_import1(_rt::as_i64(device), ptr0) };
+                    let l2 = i32::from(*ptr0.add(0).cast::<u8>());
+                    let result27 = match l2 {
+                        0 => {
+                            let e = {
+                                let l3 = *ptr0
+                                    .add(::core::mem::size_of::<*const u8>())
+                                    .cast::<*mut u8>();
+                                let l4 = *ptr0
+                                    .add(2 * ::core::mem::size_of::<*const u8>())
+                                    .cast::<usize>();
+                                let base9 = l3;
+                                let len9 = l4;
+                                let mut result9 = _rt::Vec::with_capacity(len9);
+                                for i in 0..len9 {
+                                    let base = base9
+                                        .add(i * (8 + 2 * ::core::mem::size_of::<*const u8>()));
+                                    let e9 = {
+                                        let l5 = *base.add(0).cast::<*mut u8>();
+                                        let l6 = *base
+                                            .add(::core::mem::size_of::<*const u8>())
+                                            .cast::<usize>();
+                                        let len7 = l6;
+                                        let bytes7 =
+                                            _rt::Vec::from_raw_parts(l5.cast(), len7, len7);
+                                        let l8 = *base
+                                            .add(2 * ::core::mem::size_of::<*const u8>())
+                                            .cast::<i64>();
+
+                                        super::super::super::krate::gpu::types::Limit {
+                                            name: _rt::string_lift(bytes7),
+                                            value: l8 as u64,
+                                        }
+                                    };
+                                    result9.push(e9);
+                                }
+                                _rt::cabi_dealloc(
+                                    base9,
+                                    len9 * (8 + 2 * ::core::mem::size_of::<*const u8>()),
+                                    8,
+                                );
+
+                                result9
+                            };
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l10 = i32::from(
+                                    *ptr0.add(::core::mem::size_of::<*const u8>()).cast::<u8>(),
+                                );
+                                use super::super::super::krate::gpu::types::GpuError as V26;
+                                let v26 = match l10 {
+                                    0 => {
+                                        let e26 = {
+                                            let l11 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l12 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len13 = l12;
+                                            let bytes13 =
+                                                _rt::Vec::from_raw_parts(l11.cast(), len13, len13);
+
+                                            _rt::string_lift(bytes13)
+                                        };
+                                        V26::InvalidHandle(e26)
+                                    }
+                                    1 => {
+                                        let e26 = {
+                                            let l14 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l15 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len16 = l15;
+                                            let bytes16 =
+                                                _rt::Vec::from_raw_parts(l14.cast(), len16, len16);
+
+                                            _rt::string_lift(bytes16)
+                                        };
+                                        V26::Validation(e26)
+                                    }
+                                    2 => V26::OutOfMemory,
+                                    3 => {
+                                        let e26 = {
+                                            let l17 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l18 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len19 = l18;
+                                            let bytes19 =
+                                                _rt::Vec::from_raw_parts(l17.cast(), len19, len19);
+
+                                            _rt::string_lift(bytes19)
+                                        };
+                                        V26::Lost(e26)
+                                    }
+                                    4 => {
+                                        let e26 = {
+                                            let l20 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l21 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len22 = l21;
+                                            let bytes22 =
+                                                _rt::Vec::from_raw_parts(l20.cast(), len22, len22);
+
+                                            _rt::string_lift(bytes22)
+                                        };
+                                        V26::Unsupported(e26)
+                                    }
+                                    n => {
+                                        debug_assert_eq!(n, 5, "invalid enum discriminant");
+                                        let e26 = {
+                                            let l23 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l24 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len25 = l24;
+                                            let bytes25 =
+                                                _rt::Vec::from_raw_parts(l23.cast(), len25, len25);
+
+                                            _rt::string_lift(bytes25)
+                                        };
+                                        V26::Internal(e26)
+                                    }
+                                };
+
+                                v26
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    };
+                    result27
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Lose the device on purpose: every call on it fails with `lost` from now on.
+            pub fn destroy_device(device: Handle) -> Result<(), GpuError> {
+                unsafe {
+                    #[cfg_attr(target_pointer_width = "64", repr(align(8)))]
+                    #[cfg_attr(target_pointer_width = "32", repr(align(4)))]
+                    struct RetArea(
+                        [::core::mem::MaybeUninit<u8>; 4 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let mut ret_area = RetArea(
+                        [::core::mem::MaybeUninit::uninit();
+                            4 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:gpu/gpu@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "destroy-device"]
+                        fn wit_import1(_: i64, _: *mut u8);
+                    }
+
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import1(_: i64, _: *mut u8) {
+                        unreachable!()
+                    }
+                    unsafe { wit_import1(_rt::as_i64(device), ptr0) };
+                    let l2 = i32::from(*ptr0.add(0).cast::<u8>());
+                    let result20 = match l2 {
+                        0 => {
+                            let e = ();
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l3 = i32::from(
+                                    *ptr0.add(::core::mem::size_of::<*const u8>()).cast::<u8>(),
+                                );
+                                use super::super::super::krate::gpu::types::GpuError as V19;
+                                let v19 = match l3 {
+                                    0 => {
+                                        let e19 = {
+                                            let l4 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l5 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len6 = l5;
+                                            let bytes6 =
+                                                _rt::Vec::from_raw_parts(l4.cast(), len6, len6);
+
+                                            _rt::string_lift(bytes6)
+                                        };
+                                        V19::InvalidHandle(e19)
+                                    }
+                                    1 => {
+                                        let e19 = {
+                                            let l7 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l8 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len9 = l8;
+                                            let bytes9 =
+                                                _rt::Vec::from_raw_parts(l7.cast(), len9, len9);
+
+                                            _rt::string_lift(bytes9)
+                                        };
+                                        V19::Validation(e19)
+                                    }
+                                    2 => V19::OutOfMemory,
+                                    3 => {
+                                        let e19 = {
+                                            let l10 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l11 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len12 = l11;
+                                            let bytes12 =
+                                                _rt::Vec::from_raw_parts(l10.cast(), len12, len12);
+
+                                            _rt::string_lift(bytes12)
+                                        };
+                                        V19::Lost(e19)
+                                    }
+                                    4 => {
+                                        let e19 = {
+                                            let l13 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l14 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len15 = l14;
+                                            let bytes15 =
+                                                _rt::Vec::from_raw_parts(l13.cast(), len15, len15);
+
+                                            _rt::string_lift(bytes15)
+                                        };
+                                        V19::Unsupported(e19)
+                                    }
+                                    n => {
+                                        debug_assert_eq!(n, 5, "invalid enum discriminant");
+                                        let e19 = {
+                                            let l16 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l17 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len18 = l17;
+                                            let bytes18 =
+                                                _rt::Vec::from_raw_parts(l16.cast(), len18, len18);
+
+                                            _rt::string_lift(bytes18)
+                                        };
+                                        V19::Internal(e19)
+                                    }
+                                };
+
+                                v19
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    };
+                    result20
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Why the device was lost, or none while it is not.
+            pub fn device_lost_reason(device: Handle) -> Option<_rt::String> {
+                unsafe {
+                    #[cfg_attr(target_pointer_width = "64", repr(align(8)))]
+                    #[cfg_attr(target_pointer_width = "32", repr(align(4)))]
+                    struct RetArea(
+                        [::core::mem::MaybeUninit<u8>; 3 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let mut ret_area = RetArea(
+                        [::core::mem::MaybeUninit::uninit();
+                            3 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:gpu/gpu@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "device-lost-reason"]
+                        fn wit_import1(_: i64, _: *mut u8);
+                    }
+
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import1(_: i64, _: *mut u8) {
+                        unreachable!()
+                    }
+                    unsafe { wit_import1(_rt::as_i64(device), ptr0) };
+                    let l2 = i32::from(*ptr0.add(0).cast::<u8>());
+                    let result6 = match l2 {
+                        0 => None,
+                        1 => {
+                            let e = {
+                                let l3 = *ptr0
+                                    .add(::core::mem::size_of::<*const u8>())
+                                    .cast::<*mut u8>();
+                                let l4 = *ptr0
+                                    .add(2 * ::core::mem::size_of::<*const u8>())
+                                    .cast::<usize>();
+                                let len5 = l4;
+                                let bytes5 = _rt::Vec::from_raw_parts(l3.cast(), len5, len5);
+
+                                _rt::string_lift(bytes5)
+                            };
+                            Some(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    };
+                    result6
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Let finished GPU work complete; with `wait`, block until the queue is idle.
+            /// True when no work is left.
+            pub fn poll(device: Handle, wait: bool) -> Result<bool, GpuError> {
+                unsafe {
+                    #[cfg_attr(target_pointer_width = "64", repr(align(8)))]
+                    #[cfg_attr(target_pointer_width = "32", repr(align(4)))]
+                    struct RetArea(
+                        [::core::mem::MaybeUninit<u8>; 4 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let mut ret_area = RetArea(
+                        [::core::mem::MaybeUninit::uninit();
+                            4 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:gpu/gpu@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "poll"]
+                        fn wit_import1(_: i64, _: i32, _: *mut u8);
+                    }
+
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import1(_: i64, _: i32, _: *mut u8) {
+                        unreachable!()
+                    }
+                    unsafe {
+                        wit_import1(
+                            _rt::as_i64(device),
+                            match &wait {
+                                true => 1,
+                                false => 0,
+                            },
+                            ptr0,
+                        )
+                    };
+                    let l2 = i32::from(*ptr0.add(0).cast::<u8>());
+                    let result21 = match l2 {
+                        0 => {
+                            let e = {
+                                let l3 = i32::from(
+                                    *ptr0.add(::core::mem::size_of::<*const u8>()).cast::<u8>(),
+                                );
+
+                                _rt::bool_lift(l3 as u8)
+                            };
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l4 = i32::from(
+                                    *ptr0.add(::core::mem::size_of::<*const u8>()).cast::<u8>(),
+                                );
+                                use super::super::super::krate::gpu::types::GpuError as V20;
+                                let v20 = match l4 {
+                                    0 => {
+                                        let e20 = {
+                                            let l5 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l6 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len7 = l6;
+                                            let bytes7 =
+                                                _rt::Vec::from_raw_parts(l5.cast(), len7, len7);
+
+                                            _rt::string_lift(bytes7)
+                                        };
+                                        V20::InvalidHandle(e20)
+                                    }
+                                    1 => {
+                                        let e20 = {
+                                            let l8 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l9 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len10 = l9;
+                                            let bytes10 =
+                                                _rt::Vec::from_raw_parts(l8.cast(), len10, len10);
+
+                                            _rt::string_lift(bytes10)
+                                        };
+                                        V20::Validation(e20)
+                                    }
+                                    2 => V20::OutOfMemory,
+                                    3 => {
+                                        let e20 = {
+                                            let l11 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l12 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len13 = l12;
+                                            let bytes13 =
+                                                _rt::Vec::from_raw_parts(l11.cast(), len13, len13);
+
+                                            _rt::string_lift(bytes13)
+                                        };
+                                        V20::Lost(e20)
+                                    }
+                                    4 => {
+                                        let e20 = {
+                                            let l14 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l15 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len16 = l15;
+                                            let bytes16 =
+                                                _rt::Vec::from_raw_parts(l14.cast(), len16, len16);
+
+                                            _rt::string_lift(bytes16)
+                                        };
+                                        V20::Unsupported(e20)
+                                    }
+                                    n => {
+                                        debug_assert_eq!(n, 5, "invalid enum discriminant");
+                                        let e20 = {
+                                            let l17 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l18 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len19 = l18;
+                                            let bytes19 =
+                                                _rt::Vec::from_raw_parts(l17.cast(), len19, len19);
+
+                                            _rt::string_lift(bytes19)
+                                        };
+                                        V20::Internal(e20)
+                                    }
+                                };
+
+                                v20
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    };
+                    result21
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Make a buffer.
+            pub fn create_buffer(
+                device: Handle,
+                descriptor: &BufferDescriptor,
+            ) -> Result<Handle, GpuError> {
+                unsafe {
+                    #[repr(align(8))]
+                    struct RetArea(
+                        [::core::mem::MaybeUninit<u8>;
+                            16 + 2 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let mut ret_area = RetArea(
+                        [::core::mem::MaybeUninit::uninit();
+                            16 + 2 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let super::super::super::krate::gpu::types::BufferDescriptor {
+                        label: label0,
+                        size: size0,
+                        usage: usage0,
+                        mapped_at_creation: mapped_at_creation0,
+                    } = descriptor;
+                    let (result2_0, result2_1, result2_2) = match label0 {
+                        Some(e) => {
+                            let vec1 = e;
+                            let ptr1 = vec1.as_ptr().cast::<u8>();
+                            let len1 = vec1.len();
+
+                            (1i32, ptr1.cast_mut(), len1)
+                        }
+                        None => (0i32, ::core::ptr::null_mut(), 0usize),
+                    };
+                    let flags3 = usage0;
+                    let ptr4 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:gpu/gpu@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "create-buffer"]
+                        fn wit_import5(
+                            _: i64,
+                            _: i32,
+                            _: *mut u8,
+                            _: usize,
+                            _: i64,
+                            _: i32,
+                            _: i32,
+                            _: *mut u8,
+                        );
+                    }
+
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import5(
+                        _: i64,
+                        _: i32,
+                        _: *mut u8,
+                        _: usize,
+                        _: i64,
+                        _: i32,
+                        _: i32,
+                        _: *mut u8,
+                    ) {
+                        unreachable!()
+                    }
+                    unsafe {
+                        wit_import5(
+                            _rt::as_i64(device),
+                            result2_0,
+                            result2_1,
+                            result2_2,
+                            _rt::as_i64(size0),
+                            (flags3.bits() >> 0) as i32,
+                            match mapped_at_creation0 {
+                                true => 1,
+                                false => 0,
+                            },
+                            ptr4,
+                        )
+                    };
+                    let l6 = i32::from(*ptr4.add(0).cast::<u8>());
+                    let result25 = match l6 {
+                        0 => {
+                            let e = {
+                                let l7 = *ptr4.add(8).cast::<i64>();
+
+                                l7 as u64
+                            };
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l8 = i32::from(*ptr4.add(8).cast::<u8>());
+                                use super::super::super::krate::gpu::types::GpuError as V24;
+                                let v24 = match l8 {
+                                    0 => {
+                                        let e24 = {
+                                            let l9 = *ptr4
+                                                .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l10 = *ptr4
+                                                .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len11 = l10;
+                                            let bytes11 =
+                                                _rt::Vec::from_raw_parts(l9.cast(), len11, len11);
+
+                                            _rt::string_lift(bytes11)
+                                        };
+                                        V24::InvalidHandle(e24)
+                                    }
+                                    1 => {
+                                        let e24 = {
+                                            let l12 = *ptr4
+                                                .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l13 = *ptr4
+                                                .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len14 = l13;
+                                            let bytes14 =
+                                                _rt::Vec::from_raw_parts(l12.cast(), len14, len14);
+
+                                            _rt::string_lift(bytes14)
+                                        };
+                                        V24::Validation(e24)
+                                    }
+                                    2 => V24::OutOfMemory,
+                                    3 => {
+                                        let e24 = {
+                                            let l15 = *ptr4
+                                                .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l16 = *ptr4
+                                                .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len17 = l16;
+                                            let bytes17 =
+                                                _rt::Vec::from_raw_parts(l15.cast(), len17, len17);
+
+                                            _rt::string_lift(bytes17)
+                                        };
+                                        V24::Lost(e24)
+                                    }
+                                    4 => {
+                                        let e24 = {
+                                            let l18 = *ptr4
+                                                .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l19 = *ptr4
+                                                .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len20 = l19;
+                                            let bytes20 =
+                                                _rt::Vec::from_raw_parts(l18.cast(), len20, len20);
+
+                                            _rt::string_lift(bytes20)
+                                        };
+                                        V24::Unsupported(e24)
+                                    }
+                                    n => {
+                                        debug_assert_eq!(n, 5, "invalid enum discriminant");
+                                        let e24 = {
+                                            let l21 = *ptr4
+                                                .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l22 = *ptr4
+                                                .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len23 = l22;
+                                            let bytes23 =
+                                                _rt::Vec::from_raw_parts(l21.cast(), len23, len23);
+
+                                            _rt::string_lift(bytes23)
+                                        };
+                                        V24::Internal(e24)
+                                    }
+                                };
+
+                                v24
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    };
+                    result25
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Map part of a buffer for the app to read or write. Returns once it is mapped.
+            pub fn map_buffer(
+                buffer: Handle,
+                mode: MapMode,
+                offset: u64,
+                size: u64,
+            ) -> Result<(), GpuError> {
+                unsafe {
+                    #[cfg_attr(target_pointer_width = "64", repr(align(8)))]
+                    #[cfg_attr(target_pointer_width = "32", repr(align(4)))]
+                    struct RetArea(
+                        [::core::mem::MaybeUninit<u8>; 4 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let mut ret_area = RetArea(
+                        [::core::mem::MaybeUninit::uninit();
+                            4 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:gpu/gpu@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "map-buffer"]
+                        fn wit_import1(_: i64, _: i32, _: i64, _: i64, _: *mut u8);
+                    }
+
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import1(_: i64, _: i32, _: i64, _: i64, _: *mut u8) {
+                        unreachable!()
+                    }
+                    unsafe {
+                        wit_import1(
+                            _rt::as_i64(buffer),
+                            mode.clone() as i32,
+                            _rt::as_i64(&offset),
+                            _rt::as_i64(&size),
+                            ptr0,
+                        )
+                    };
+                    let l2 = i32::from(*ptr0.add(0).cast::<u8>());
+                    let result20 = match l2 {
+                        0 => {
+                            let e = ();
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l3 = i32::from(
+                                    *ptr0.add(::core::mem::size_of::<*const u8>()).cast::<u8>(),
+                                );
+                                use super::super::super::krate::gpu::types::GpuError as V19;
+                                let v19 = match l3 {
+                                    0 => {
+                                        let e19 = {
+                                            let l4 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l5 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len6 = l5;
+                                            let bytes6 =
+                                                _rt::Vec::from_raw_parts(l4.cast(), len6, len6);
+
+                                            _rt::string_lift(bytes6)
+                                        };
+                                        V19::InvalidHandle(e19)
+                                    }
+                                    1 => {
+                                        let e19 = {
+                                            let l7 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l8 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len9 = l8;
+                                            let bytes9 =
+                                                _rt::Vec::from_raw_parts(l7.cast(), len9, len9);
+
+                                            _rt::string_lift(bytes9)
+                                        };
+                                        V19::Validation(e19)
+                                    }
+                                    2 => V19::OutOfMemory,
+                                    3 => {
+                                        let e19 = {
+                                            let l10 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l11 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len12 = l11;
+                                            let bytes12 =
+                                                _rt::Vec::from_raw_parts(l10.cast(), len12, len12);
+
+                                            _rt::string_lift(bytes12)
+                                        };
+                                        V19::Lost(e19)
+                                    }
+                                    4 => {
+                                        let e19 = {
+                                            let l13 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l14 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len15 = l14;
+                                            let bytes15 =
+                                                _rt::Vec::from_raw_parts(l13.cast(), len15, len15);
+
+                                            _rt::string_lift(bytes15)
+                                        };
+                                        V19::Unsupported(e19)
+                                    }
+                                    n => {
+                                        debug_assert_eq!(n, 5, "invalid enum discriminant");
+                                        let e19 = {
+                                            let l16 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l17 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len18 = l17;
+                                            let bytes18 =
+                                                _rt::Vec::from_raw_parts(l16.cast(), len18, len18);
+
+                                            _rt::string_lift(bytes18)
+                                        };
+                                        V19::Internal(e19)
+                                    }
+                                };
+
+                                v19
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    };
+                    result20
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Read bytes from a mapped buffer.
+            pub fn read_mapped(
+                buffer: Handle,
+                offset: u64,
+                size: u64,
+            ) -> Result<_rt::Vec<u8>, GpuError> {
+                unsafe {
+                    #[cfg_attr(target_pointer_width = "64", repr(align(8)))]
+                    #[cfg_attr(target_pointer_width = "32", repr(align(4)))]
+                    struct RetArea(
+                        [::core::mem::MaybeUninit<u8>; 4 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let mut ret_area = RetArea(
+                        [::core::mem::MaybeUninit::uninit();
+                            4 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:gpu/gpu@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "read-mapped"]
+                        fn wit_import1(_: i64, _: i64, _: i64, _: *mut u8);
+                    }
+
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import1(_: i64, _: i64, _: i64, _: *mut u8) {
+                        unreachable!()
+                    }
+                    unsafe {
+                        wit_import1(
+                            _rt::as_i64(buffer),
+                            _rt::as_i64(&offset),
+                            _rt::as_i64(&size),
+                            ptr0,
+                        )
+                    };
+                    let l2 = i32::from(*ptr0.add(0).cast::<u8>());
+                    let result23 = match l2 {
+                        0 => {
+                            let e = {
+                                let l3 = *ptr0
+                                    .add(::core::mem::size_of::<*const u8>())
+                                    .cast::<*mut u8>();
+                                let l4 = *ptr0
+                                    .add(2 * ::core::mem::size_of::<*const u8>())
+                                    .cast::<usize>();
+                                let len5 = l4;
+
+                                _rt::Vec::from_raw_parts(l3.cast(), len5, len5)
+                            };
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l6 = i32::from(
+                                    *ptr0.add(::core::mem::size_of::<*const u8>()).cast::<u8>(),
+                                );
+                                use super::super::super::krate::gpu::types::GpuError as V22;
+                                let v22 = match l6 {
+                                    0 => {
+                                        let e22 = {
+                                            let l7 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l8 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len9 = l8;
+                                            let bytes9 =
+                                                _rt::Vec::from_raw_parts(l7.cast(), len9, len9);
+
+                                            _rt::string_lift(bytes9)
+                                        };
+                                        V22::InvalidHandle(e22)
+                                    }
+                                    1 => {
+                                        let e22 = {
+                                            let l10 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l11 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len12 = l11;
+                                            let bytes12 =
+                                                _rt::Vec::from_raw_parts(l10.cast(), len12, len12);
+
+                                            _rt::string_lift(bytes12)
+                                        };
+                                        V22::Validation(e22)
+                                    }
+                                    2 => V22::OutOfMemory,
+                                    3 => {
+                                        let e22 = {
+                                            let l13 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l14 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len15 = l14;
+                                            let bytes15 =
+                                                _rt::Vec::from_raw_parts(l13.cast(), len15, len15);
+
+                                            _rt::string_lift(bytes15)
+                                        };
+                                        V22::Lost(e22)
+                                    }
+                                    4 => {
+                                        let e22 = {
+                                            let l16 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l17 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len18 = l17;
+                                            let bytes18 =
+                                                _rt::Vec::from_raw_parts(l16.cast(), len18, len18);
+
+                                            _rt::string_lift(bytes18)
+                                        };
+                                        V22::Unsupported(e22)
+                                    }
+                                    n => {
+                                        debug_assert_eq!(n, 5, "invalid enum discriminant");
+                                        let e22 = {
+                                            let l19 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l20 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len21 = l20;
+                                            let bytes21 =
+                                                _rt::Vec::from_raw_parts(l19.cast(), len21, len21);
+
+                                            _rt::string_lift(bytes21)
+                                        };
+                                        V22::Internal(e22)
+                                    }
+                                };
+
+                                v22
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    };
+                    result23
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Write bytes into a buffer mapped for writing.
+            pub fn write_mapped(buffer: Handle, offset: u64, data: &[u8]) -> Result<(), GpuError> {
+                unsafe {
+                    #[cfg_attr(target_pointer_width = "64", repr(align(8)))]
+                    #[cfg_attr(target_pointer_width = "32", repr(align(4)))]
+                    struct RetArea(
+                        [::core::mem::MaybeUninit<u8>; 4 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let mut ret_area = RetArea(
+                        [::core::mem::MaybeUninit::uninit();
+                            4 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let vec0 = data;
+                    let ptr0 = vec0.as_ptr().cast::<u8>();
+                    let len0 = vec0.len();
+                    let ptr1 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:gpu/gpu@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "write-mapped"]
+                        fn wit_import2(_: i64, _: i64, _: *mut u8, _: usize, _: *mut u8);
+                    }
+
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import2(
+                        _: i64,
+                        _: i64,
+                        _: *mut u8,
+                        _: usize,
+                        _: *mut u8,
+                    ) {
+                        unreachable!()
+                    }
+                    unsafe {
+                        wit_import2(
+                            _rt::as_i64(buffer),
+                            _rt::as_i64(&offset),
+                            ptr0.cast_mut(),
+                            len0,
+                            ptr1,
+                        )
+                    };
+                    let l3 = i32::from(*ptr1.add(0).cast::<u8>());
+                    let result21 = match l3 {
+                        0 => {
+                            let e = ();
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l4 = i32::from(
+                                    *ptr1.add(::core::mem::size_of::<*const u8>()).cast::<u8>(),
+                                );
+                                use super::super::super::krate::gpu::types::GpuError as V20;
+                                let v20 = match l4 {
+                                    0 => {
+                                        let e20 = {
+                                            let l5 = *ptr1
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l6 = *ptr1
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len7 = l6;
+                                            let bytes7 =
+                                                _rt::Vec::from_raw_parts(l5.cast(), len7, len7);
+
+                                            _rt::string_lift(bytes7)
+                                        };
+                                        V20::InvalidHandle(e20)
+                                    }
+                                    1 => {
+                                        let e20 = {
+                                            let l8 = *ptr1
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l9 = *ptr1
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len10 = l9;
+                                            let bytes10 =
+                                                _rt::Vec::from_raw_parts(l8.cast(), len10, len10);
+
+                                            _rt::string_lift(bytes10)
+                                        };
+                                        V20::Validation(e20)
+                                    }
+                                    2 => V20::OutOfMemory,
+                                    3 => {
+                                        let e20 = {
+                                            let l11 = *ptr1
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l12 = *ptr1
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len13 = l12;
+                                            let bytes13 =
+                                                _rt::Vec::from_raw_parts(l11.cast(), len13, len13);
+
+                                            _rt::string_lift(bytes13)
+                                        };
+                                        V20::Lost(e20)
+                                    }
+                                    4 => {
+                                        let e20 = {
+                                            let l14 = *ptr1
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l15 = *ptr1
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len16 = l15;
+                                            let bytes16 =
+                                                _rt::Vec::from_raw_parts(l14.cast(), len16, len16);
+
+                                            _rt::string_lift(bytes16)
+                                        };
+                                        V20::Unsupported(e20)
+                                    }
+                                    n => {
+                                        debug_assert_eq!(n, 5, "invalid enum discriminant");
+                                        let e20 = {
+                                            let l17 = *ptr1
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l18 = *ptr1
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len19 = l18;
+                                            let bytes19 =
+                                                _rt::Vec::from_raw_parts(l17.cast(), len19, len19);
+
+                                            _rt::string_lift(bytes19)
+                                        };
+                                        V20::Internal(e20)
+                                    }
+                                };
+
+                                v20
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    };
+                    result21
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Give a mapped buffer back to the GPU.
+            pub fn unmap_buffer(buffer: Handle) -> Result<(), GpuError> {
+                unsafe {
+                    #[cfg_attr(target_pointer_width = "64", repr(align(8)))]
+                    #[cfg_attr(target_pointer_width = "32", repr(align(4)))]
+                    struct RetArea(
+                        [::core::mem::MaybeUninit<u8>; 4 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let mut ret_area = RetArea(
+                        [::core::mem::MaybeUninit::uninit();
+                            4 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:gpu/gpu@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "unmap-buffer"]
+                        fn wit_import1(_: i64, _: *mut u8);
+                    }
+
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import1(_: i64, _: *mut u8) {
+                        unreachable!()
+                    }
+                    unsafe { wit_import1(_rt::as_i64(buffer), ptr0) };
+                    let l2 = i32::from(*ptr0.add(0).cast::<u8>());
+                    let result20 = match l2 {
+                        0 => {
+                            let e = ();
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l3 = i32::from(
+                                    *ptr0.add(::core::mem::size_of::<*const u8>()).cast::<u8>(),
+                                );
+                                use super::super::super::krate::gpu::types::GpuError as V19;
+                                let v19 = match l3 {
+                                    0 => {
+                                        let e19 = {
+                                            let l4 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l5 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len6 = l5;
+                                            let bytes6 =
+                                                _rt::Vec::from_raw_parts(l4.cast(), len6, len6);
+
+                                            _rt::string_lift(bytes6)
+                                        };
+                                        V19::InvalidHandle(e19)
+                                    }
+                                    1 => {
+                                        let e19 = {
+                                            let l7 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l8 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len9 = l8;
+                                            let bytes9 =
+                                                _rt::Vec::from_raw_parts(l7.cast(), len9, len9);
+
+                                            _rt::string_lift(bytes9)
+                                        };
+                                        V19::Validation(e19)
+                                    }
+                                    2 => V19::OutOfMemory,
+                                    3 => {
+                                        let e19 = {
+                                            let l10 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l11 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len12 = l11;
+                                            let bytes12 =
+                                                _rt::Vec::from_raw_parts(l10.cast(), len12, len12);
+
+                                            _rt::string_lift(bytes12)
+                                        };
+                                        V19::Lost(e19)
+                                    }
+                                    4 => {
+                                        let e19 = {
+                                            let l13 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l14 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len15 = l14;
+                                            let bytes15 =
+                                                _rt::Vec::from_raw_parts(l13.cast(), len15, len15);
+
+                                            _rt::string_lift(bytes15)
+                                        };
+                                        V19::Unsupported(e19)
+                                    }
+                                    n => {
+                                        debug_assert_eq!(n, 5, "invalid enum discriminant");
+                                        let e19 = {
+                                            let l16 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l17 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len18 = l17;
+                                            let bytes18 =
+                                                _rt::Vec::from_raw_parts(l16.cast(), len18, len18);
+
+                                            _rt::string_lift(bytes18)
+                                        };
+                                        V19::Internal(e19)
+                                    }
+                                };
+
+                                v19
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    };
+                    result20
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Free a buffer's memory now; the handle stays valid and unusable.
+            pub fn destroy_buffer(buffer: Handle) -> Result<(), GpuError> {
+                unsafe {
+                    #[cfg_attr(target_pointer_width = "64", repr(align(8)))]
+                    #[cfg_attr(target_pointer_width = "32", repr(align(4)))]
+                    struct RetArea(
+                        [::core::mem::MaybeUninit<u8>; 4 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let mut ret_area = RetArea(
+                        [::core::mem::MaybeUninit::uninit();
+                            4 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:gpu/gpu@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "destroy-buffer"]
+                        fn wit_import1(_: i64, _: *mut u8);
+                    }
+
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import1(_: i64, _: *mut u8) {
+                        unreachable!()
+                    }
+                    unsafe { wit_import1(_rt::as_i64(buffer), ptr0) };
+                    let l2 = i32::from(*ptr0.add(0).cast::<u8>());
+                    let result20 = match l2 {
+                        0 => {
+                            let e = ();
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l3 = i32::from(
+                                    *ptr0.add(::core::mem::size_of::<*const u8>()).cast::<u8>(),
+                                );
+                                use super::super::super::krate::gpu::types::GpuError as V19;
+                                let v19 = match l3 {
+                                    0 => {
+                                        let e19 = {
+                                            let l4 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l5 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len6 = l5;
+                                            let bytes6 =
+                                                _rt::Vec::from_raw_parts(l4.cast(), len6, len6);
+
+                                            _rt::string_lift(bytes6)
+                                        };
+                                        V19::InvalidHandle(e19)
+                                    }
+                                    1 => {
+                                        let e19 = {
+                                            let l7 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l8 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len9 = l8;
+                                            let bytes9 =
+                                                _rt::Vec::from_raw_parts(l7.cast(), len9, len9);
+
+                                            _rt::string_lift(bytes9)
+                                        };
+                                        V19::Validation(e19)
+                                    }
+                                    2 => V19::OutOfMemory,
+                                    3 => {
+                                        let e19 = {
+                                            let l10 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l11 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len12 = l11;
+                                            let bytes12 =
+                                                _rt::Vec::from_raw_parts(l10.cast(), len12, len12);
+
+                                            _rt::string_lift(bytes12)
+                                        };
+                                        V19::Lost(e19)
+                                    }
+                                    4 => {
+                                        let e19 = {
+                                            let l13 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l14 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len15 = l14;
+                                            let bytes15 =
+                                                _rt::Vec::from_raw_parts(l13.cast(), len15, len15);
+
+                                            _rt::string_lift(bytes15)
+                                        };
+                                        V19::Unsupported(e19)
+                                    }
+                                    n => {
+                                        debug_assert_eq!(n, 5, "invalid enum discriminant");
+                                        let e19 = {
+                                            let l16 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l17 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len18 = l17;
+                                            let bytes18 =
+                                                _rt::Vec::from_raw_parts(l16.cast(), len18, len18);
+
+                                            _rt::string_lift(bytes18)
+                                        };
+                                        V19::Internal(e19)
+                                    }
+                                };
+
+                                v19
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    };
+                    result20
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Make a texture.
+            pub fn create_texture(
+                device: Handle,
+                descriptor: &TextureDescriptor,
+            ) -> Result<Handle, GpuError> {
+                unsafe {
+                    #[repr(align(8))]
+                    struct RetArea(
+                        [::core::mem::MaybeUninit<u8>;
+                            16 + 2 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let mut ret_area = RetArea(
+                        [::core::mem::MaybeUninit::uninit();
+                            16 + 2 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let super::super::super::krate::gpu::types::TextureDescriptor {
+                        label: label0,
+                        size: size0,
+                        mip_level_count: mip_level_count0,
+                        sample_count: sample_count0,
+                        dimension: dimension0,
+                        format: format0,
+                        usage: usage0,
+                        view_formats: view_formats0,
+                    } = descriptor;
+                    let (result2_0, result2_1, result2_2) = match label0 {
+                        Some(e) => {
+                            let vec1 = e;
+                            let ptr1 = vec1.as_ptr().cast::<u8>();
+                            let len1 = vec1.len();
+
+                            (1i32, ptr1.cast_mut(), len1)
+                        }
+                        None => (0i32, ::core::ptr::null_mut(), 0usize),
+                    };
+                    let super::super::super::krate::gpu::types::Extent3d {
+                        width: width3,
+                        height: height3,
+                        depth_or_array_layers: depth_or_array_layers3,
+                    } = size0;
+                    let vec4 = format0;
+                    let ptr4 = vec4.as_ptr().cast::<u8>();
+                    let len4 = vec4.len();
+                    let flags5 = usage0;
+                    let vec7 = view_formats0;
+                    let len7 = vec7.len();
+                    let layout7 = _rt::alloc::Layout::from_size_align_unchecked(
+                        vec7.len() * (2 * ::core::mem::size_of::<*const u8>()),
+                        ::core::mem::size_of::<*const u8>(),
+                    );
+                    let result7 = if layout7.size() != 0 {
+                        let ptr = _rt::alloc::alloc(layout7).cast::<u8>();
+                        if ptr.is_null() {
+                            _rt::alloc::handle_alloc_error(layout7);
+                        }
+                        ptr
+                    } else {
+                        ::core::ptr::null_mut()
+                    };
+                    for (i, e) in vec7.into_iter().enumerate() {
+                        let base = result7.add(i * (2 * ::core::mem::size_of::<*const u8>()));
+                        {
+                            let vec6 = e;
+                            let ptr6 = vec6.as_ptr().cast::<u8>();
+                            let len6 = vec6.len();
+                            *base
+                                .add(::core::mem::size_of::<*const u8>())
+                                .cast::<usize>() = len6;
+                            *base.add(0).cast::<*mut u8>() = ptr6.cast_mut();
+                        }
+                    }
+                    let ptr8 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:gpu/gpu@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "create-texture"]
+                        fn wit_import9(
+                            _: i64,
+                            _: i32,
+                            _: *mut u8,
+                            _: usize,
+                            _: i32,
+                            _: i32,
+                            _: i32,
+                            _: i32,
+                            _: i32,
+                            _: i32,
+                            _: *mut u8,
+                            _: usize,
+                            _: i32,
+                            _: *mut u8,
+                            _: usize,
+                            _: *mut u8,
+                        );
+                    }
+
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import9(
+                        _: i64,
+                        _: i32,
+                        _: *mut u8,
+                        _: usize,
+                        _: i32,
+                        _: i32,
+                        _: i32,
+                        _: i32,
+                        _: i32,
+                        _: i32,
+                        _: *mut u8,
+                        _: usize,
+                        _: i32,
+                        _: *mut u8,
+                        _: usize,
+                        _: *mut u8,
+                    ) {
+                        unreachable!()
+                    }
+                    unsafe {
+                        wit_import9(
+                            _rt::as_i64(device),
+                            result2_0,
+                            result2_1,
+                            result2_2,
+                            _rt::as_i32(width3),
+                            _rt::as_i32(height3),
+                            _rt::as_i32(depth_or_array_layers3),
+                            _rt::as_i32(mip_level_count0),
+                            _rt::as_i32(sample_count0),
+                            dimension0.clone() as i32,
+                            ptr4.cast_mut(),
+                            len4,
+                            (flags5.bits() >> 0) as i32,
+                            result7,
+                            len7,
+                            ptr8,
+                        )
+                    };
+                    let l10 = i32::from(*ptr8.add(0).cast::<u8>());
+                    let result29 = match l10 {
+                        0 => {
+                            let e = {
+                                let l11 = *ptr8.add(8).cast::<i64>();
+
+                                l11 as u64
+                            };
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l12 = i32::from(*ptr8.add(8).cast::<u8>());
+                                use super::super::super::krate::gpu::types::GpuError as V28;
+                                let v28 = match l12 {
+                                    0 => {
+                                        let e28 = {
+                                            let l13 = *ptr8
+                                                .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l14 = *ptr8
+                                                .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len15 = l14;
+                                            let bytes15 =
+                                                _rt::Vec::from_raw_parts(l13.cast(), len15, len15);
+
+                                            _rt::string_lift(bytes15)
+                                        };
+                                        V28::InvalidHandle(e28)
+                                    }
+                                    1 => {
+                                        let e28 = {
+                                            let l16 = *ptr8
+                                                .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l17 = *ptr8
+                                                .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len18 = l17;
+                                            let bytes18 =
+                                                _rt::Vec::from_raw_parts(l16.cast(), len18, len18);
+
+                                            _rt::string_lift(bytes18)
+                                        };
+                                        V28::Validation(e28)
+                                    }
+                                    2 => V28::OutOfMemory,
+                                    3 => {
+                                        let e28 = {
+                                            let l19 = *ptr8
+                                                .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l20 = *ptr8
+                                                .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len21 = l20;
+                                            let bytes21 =
+                                                _rt::Vec::from_raw_parts(l19.cast(), len21, len21);
+
+                                            _rt::string_lift(bytes21)
+                                        };
+                                        V28::Lost(e28)
+                                    }
+                                    4 => {
+                                        let e28 = {
+                                            let l22 = *ptr8
+                                                .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l23 = *ptr8
+                                                .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len24 = l23;
+                                            let bytes24 =
+                                                _rt::Vec::from_raw_parts(l22.cast(), len24, len24);
+
+                                            _rt::string_lift(bytes24)
+                                        };
+                                        V28::Unsupported(e28)
+                                    }
+                                    n => {
+                                        debug_assert_eq!(n, 5, "invalid enum discriminant");
+                                        let e28 = {
+                                            let l25 = *ptr8
+                                                .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l26 = *ptr8
+                                                .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len27 = l26;
+                                            let bytes27 =
+                                                _rt::Vec::from_raw_parts(l25.cast(), len27, len27);
+
+                                            _rt::string_lift(bytes27)
+                                        };
+                                        V28::Internal(e28)
+                                    }
+                                };
+
+                                v28
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    };
+                    if layout7.size() != 0 {
+                        _rt::alloc::dealloc(result7.cast(), layout7);
+                    }
+                    result29
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Free a texture's memory now.
+            pub fn destroy_texture(texture: Handle) -> Result<(), GpuError> {
+                unsafe {
+                    #[cfg_attr(target_pointer_width = "64", repr(align(8)))]
+                    #[cfg_attr(target_pointer_width = "32", repr(align(4)))]
+                    struct RetArea(
+                        [::core::mem::MaybeUninit<u8>; 4 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let mut ret_area = RetArea(
+                        [::core::mem::MaybeUninit::uninit();
+                            4 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:gpu/gpu@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "destroy-texture"]
+                        fn wit_import1(_: i64, _: *mut u8);
+                    }
+
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import1(_: i64, _: *mut u8) {
+                        unreachable!()
+                    }
+                    unsafe { wit_import1(_rt::as_i64(texture), ptr0) };
+                    let l2 = i32::from(*ptr0.add(0).cast::<u8>());
+                    let result20 = match l2 {
+                        0 => {
+                            let e = ();
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l3 = i32::from(
+                                    *ptr0.add(::core::mem::size_of::<*const u8>()).cast::<u8>(),
+                                );
+                                use super::super::super::krate::gpu::types::GpuError as V19;
+                                let v19 = match l3 {
+                                    0 => {
+                                        let e19 = {
+                                            let l4 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l5 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len6 = l5;
+                                            let bytes6 =
+                                                _rt::Vec::from_raw_parts(l4.cast(), len6, len6);
+
+                                            _rt::string_lift(bytes6)
+                                        };
+                                        V19::InvalidHandle(e19)
+                                    }
+                                    1 => {
+                                        let e19 = {
+                                            let l7 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l8 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len9 = l8;
+                                            let bytes9 =
+                                                _rt::Vec::from_raw_parts(l7.cast(), len9, len9);
+
+                                            _rt::string_lift(bytes9)
+                                        };
+                                        V19::Validation(e19)
+                                    }
+                                    2 => V19::OutOfMemory,
+                                    3 => {
+                                        let e19 = {
+                                            let l10 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l11 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len12 = l11;
+                                            let bytes12 =
+                                                _rt::Vec::from_raw_parts(l10.cast(), len12, len12);
+
+                                            _rt::string_lift(bytes12)
+                                        };
+                                        V19::Lost(e19)
+                                    }
+                                    4 => {
+                                        let e19 = {
+                                            let l13 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l14 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len15 = l14;
+                                            let bytes15 =
+                                                _rt::Vec::from_raw_parts(l13.cast(), len15, len15);
+
+                                            _rt::string_lift(bytes15)
+                                        };
+                                        V19::Unsupported(e19)
+                                    }
+                                    n => {
+                                        debug_assert_eq!(n, 5, "invalid enum discriminant");
+                                        let e19 = {
+                                            let l16 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l17 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len18 = l17;
+                                            let bytes18 =
+                                                _rt::Vec::from_raw_parts(l16.cast(), len18, len18);
+
+                                            _rt::string_lift(bytes18)
+                                        };
+                                        V19::Internal(e19)
+                                    }
+                                };
+
+                                v19
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    };
+                    result20
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Make a view of a texture.
+            pub fn create_texture_view(
+                texture: Handle,
+                descriptor: &TextureViewDescriptor,
+            ) -> Result<Handle, GpuError> {
+                unsafe {
+                    #[repr(align(8))]
+                    struct RetArea(
+                        [::core::mem::MaybeUninit<u8>;
+                            40 + 6 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let mut ret_area = RetArea(
+                        [::core::mem::MaybeUninit::uninit();
+                            40 + 6 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    *ptr0.add(0).cast::<i64>() = _rt::as_i64(texture);
+                    let super::super::super::krate::gpu::types::TextureViewDescriptor {
+                        label: label1,
+                        format: format1,
+                        dimension: dimension1,
+                        usage: usage1,
+                        aspect: aspect1,
+                        base_mip_level: base_mip_level1,
+                        mip_level_count: mip_level_count1,
+                        base_array_layer: base_array_layer1,
+                        array_layer_count: array_layer_count1,
+                    } = descriptor;
+                    match label1 {
+                        Some(e) => {
+                            *ptr0.add(8).cast::<u8>() = (1i32) as u8;
+                            let vec2 = e;
+                            let ptr2 = vec2.as_ptr().cast::<u8>();
+                            let len2 = vec2.len();
+                            *ptr0
+                                .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                .cast::<usize>() = len2;
+                            *ptr0
+                                .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                .cast::<*mut u8>() = ptr2.cast_mut();
+                        }
+                        None => {
+                            *ptr0.add(8).cast::<u8>() = (0i32) as u8;
+                        }
+                    };
+                    match format1 {
+                        Some(e) => {
+                            *ptr0
+                                .add(8 + 3 * ::core::mem::size_of::<*const u8>())
+                                .cast::<u8>() = (1i32) as u8;
+                            let vec3 = e;
+                            let ptr3 = vec3.as_ptr().cast::<u8>();
+                            let len3 = vec3.len();
+                            *ptr0
+                                .add(8 + 5 * ::core::mem::size_of::<*const u8>())
+                                .cast::<usize>() = len3;
+                            *ptr0
+                                .add(8 + 4 * ::core::mem::size_of::<*const u8>())
+                                .cast::<*mut u8>() = ptr3.cast_mut();
+                        }
+                        None => {
+                            *ptr0
+                                .add(8 + 3 * ::core::mem::size_of::<*const u8>())
+                                .cast::<u8>() = (0i32) as u8;
+                        }
+                    };
+                    match dimension1 {
+                        Some(e) => {
+                            *ptr0
+                                .add(8 + 6 * ::core::mem::size_of::<*const u8>())
+                                .cast::<u8>() = (1i32) as u8;
+                            *ptr0
+                                .add(9 + 6 * ::core::mem::size_of::<*const u8>())
+                                .cast::<u8>() = (e.clone() as i32) as u8;
+                        }
+                        None => {
+                            *ptr0
+                                .add(8 + 6 * ::core::mem::size_of::<*const u8>())
+                                .cast::<u8>() = (0i32) as u8;
+                        }
+                    };
+                    match usage1 {
+                        Some(e) => {
+                            *ptr0
+                                .add(10 + 6 * ::core::mem::size_of::<*const u8>())
+                                .cast::<u8>() = (1i32) as u8;
+                            let flags4 = e;
+                            *ptr0
+                                .add(11 + 6 * ::core::mem::size_of::<*const u8>())
+                                .cast::<u8>() = ((flags4.bits() >> 0) as i32) as u8;
+                        }
+                        None => {
+                            *ptr0
+                                .add(10 + 6 * ::core::mem::size_of::<*const u8>())
+                                .cast::<u8>() = (0i32) as u8;
+                        }
+                    };
+                    *ptr0
+                        .add(12 + 6 * ::core::mem::size_of::<*const u8>())
+                        .cast::<u8>() = (aspect1.clone() as i32) as u8;
+                    *ptr0
+                        .add(16 + 6 * ::core::mem::size_of::<*const u8>())
+                        .cast::<i32>() = _rt::as_i32(base_mip_level1);
+                    match mip_level_count1 {
+                        Some(e) => {
+                            *ptr0
+                                .add(20 + 6 * ::core::mem::size_of::<*const u8>())
+                                .cast::<u8>() = (1i32) as u8;
+                            *ptr0
+                                .add(24 + 6 * ::core::mem::size_of::<*const u8>())
+                                .cast::<i32>() = _rt::as_i32(e);
+                        }
+                        None => {
+                            *ptr0
+                                .add(20 + 6 * ::core::mem::size_of::<*const u8>())
+                                .cast::<u8>() = (0i32) as u8;
+                        }
+                    };
+                    *ptr0
+                        .add(28 + 6 * ::core::mem::size_of::<*const u8>())
+                        .cast::<i32>() = _rt::as_i32(base_array_layer1);
+                    match array_layer_count1 {
+                        Some(e) => {
+                            *ptr0
+                                .add(32 + 6 * ::core::mem::size_of::<*const u8>())
+                                .cast::<u8>() = (1i32) as u8;
+                            *ptr0
+                                .add(36 + 6 * ::core::mem::size_of::<*const u8>())
+                                .cast::<i32>() = _rt::as_i32(e);
+                        }
+                        None => {
+                            *ptr0
+                                .add(32 + 6 * ::core::mem::size_of::<*const u8>())
+                                .cast::<u8>() = (0i32) as u8;
+                        }
+                    };
+                    let ptr5 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:gpu/gpu@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "create-texture-view"]
+                        fn wit_import6(_: *mut u8, _: *mut u8);
+                    }
+
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import6(_: *mut u8, _: *mut u8) {
+                        unreachable!()
+                    }
+                    unsafe { wit_import6(ptr0, ptr5) };
+                    let l7 = i32::from(*ptr5.add(0).cast::<u8>());
+                    let result26 = match l7 {
+                        0 => {
+                            let e = {
+                                let l8 = *ptr5.add(8).cast::<i64>();
+
+                                l8 as u64
+                            };
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l9 = i32::from(*ptr5.add(8).cast::<u8>());
+                                use super::super::super::krate::gpu::types::GpuError as V25;
+                                let v25 = match l9 {
+                                    0 => {
+                                        let e25 = {
+                                            let l10 = *ptr5
+                                                .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l11 = *ptr5
+                                                .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len12 = l11;
+                                            let bytes12 =
+                                                _rt::Vec::from_raw_parts(l10.cast(), len12, len12);
+
+                                            _rt::string_lift(bytes12)
+                                        };
+                                        V25::InvalidHandle(e25)
+                                    }
+                                    1 => {
+                                        let e25 = {
+                                            let l13 = *ptr5
+                                                .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l14 = *ptr5
+                                                .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len15 = l14;
+                                            let bytes15 =
+                                                _rt::Vec::from_raw_parts(l13.cast(), len15, len15);
+
+                                            _rt::string_lift(bytes15)
+                                        };
+                                        V25::Validation(e25)
+                                    }
+                                    2 => V25::OutOfMemory,
+                                    3 => {
+                                        let e25 = {
+                                            let l16 = *ptr5
+                                                .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l17 = *ptr5
+                                                .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len18 = l17;
+                                            let bytes18 =
+                                                _rt::Vec::from_raw_parts(l16.cast(), len18, len18);
+
+                                            _rt::string_lift(bytes18)
+                                        };
+                                        V25::Lost(e25)
+                                    }
+                                    4 => {
+                                        let e25 = {
+                                            let l19 = *ptr5
+                                                .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l20 = *ptr5
+                                                .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len21 = l20;
+                                            let bytes21 =
+                                                _rt::Vec::from_raw_parts(l19.cast(), len21, len21);
+
+                                            _rt::string_lift(bytes21)
+                                        };
+                                        V25::Unsupported(e25)
+                                    }
+                                    n => {
+                                        debug_assert_eq!(n, 5, "invalid enum discriminant");
+                                        let e25 = {
+                                            let l22 = *ptr5
+                                                .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l23 = *ptr5
+                                                .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len24 = l23;
+                                            let bytes24 =
+                                                _rt::Vec::from_raw_parts(l22.cast(), len24, len24);
+
+                                            _rt::string_lift(bytes24)
+                                        };
+                                        V25::Internal(e25)
+                                    }
+                                };
+
+                                v25
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    };
+                    result26
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Make a sampler.
+            pub fn create_sampler(
+                device: Handle,
+                descriptor: &SamplerDescriptor,
+            ) -> Result<Handle, GpuError> {
+                unsafe {
+                    #[repr(align(8))]
+                    struct RetArea(
+                        [::core::mem::MaybeUninit<u8>;
+                            40 + 2 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let mut ret_area = RetArea(
+                        [::core::mem::MaybeUninit::uninit();
+                            40 + 2 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    *ptr0.add(0).cast::<i64>() = _rt::as_i64(device);
+                    let super::super::super::krate::gpu::types::SamplerDescriptor {
+                        label: label1,
+                        address_mode_u: address_mode_u1,
+                        address_mode_v: address_mode_v1,
+                        address_mode_w: address_mode_w1,
+                        mag_filter: mag_filter1,
+                        min_filter: min_filter1,
+                        mipmap_filter: mipmap_filter1,
+                        lod_min_clamp: lod_min_clamp1,
+                        lod_max_clamp: lod_max_clamp1,
+                        compare: compare1,
+                        anisotropy_clamp: anisotropy_clamp1,
+                        border_color: border_color1,
+                    } = descriptor;
+                    match label1 {
+                        Some(e) => {
+                            *ptr0.add(8).cast::<u8>() = (1i32) as u8;
+                            let vec2 = e;
+                            let ptr2 = vec2.as_ptr().cast::<u8>();
+                            let len2 = vec2.len();
+                            *ptr0
+                                .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                .cast::<usize>() = len2;
+                            *ptr0
+                                .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                .cast::<*mut u8>() = ptr2.cast_mut();
+                        }
+                        None => {
+                            *ptr0.add(8).cast::<u8>() = (0i32) as u8;
+                        }
+                    };
+                    *ptr0
+                        .add(8 + 3 * ::core::mem::size_of::<*const u8>())
+                        .cast::<u8>() = (address_mode_u1.clone() as i32) as u8;
+                    *ptr0
+                        .add(9 + 3 * ::core::mem::size_of::<*const u8>())
+                        .cast::<u8>() = (address_mode_v1.clone() as i32) as u8;
+                    *ptr0
+                        .add(10 + 3 * ::core::mem::size_of::<*const u8>())
+                        .cast::<u8>() = (address_mode_w1.clone() as i32) as u8;
+                    *ptr0
+                        .add(11 + 3 * ::core::mem::size_of::<*const u8>())
+                        .cast::<u8>() = (mag_filter1.clone() as i32) as u8;
+                    *ptr0
+                        .add(12 + 3 * ::core::mem::size_of::<*const u8>())
+                        .cast::<u8>() = (min_filter1.clone() as i32) as u8;
+                    *ptr0
+                        .add(13 + 3 * ::core::mem::size_of::<*const u8>())
+                        .cast::<u8>() = (mipmap_filter1.clone() as i32) as u8;
+                    *ptr0
+                        .add(16 + 3 * ::core::mem::size_of::<*const u8>())
+                        .cast::<f32>() = _rt::as_f32(lod_min_clamp1);
+                    *ptr0
+                        .add(20 + 3 * ::core::mem::size_of::<*const u8>())
+                        .cast::<f32>() = _rt::as_f32(lod_max_clamp1);
+                    match compare1 {
+                        Some(e) => {
+                            *ptr0
+                                .add(24 + 3 * ::core::mem::size_of::<*const u8>())
+                                .cast::<u8>() = (1i32) as u8;
+                            *ptr0
+                                .add(25 + 3 * ::core::mem::size_of::<*const u8>())
+                                .cast::<u8>() = (e.clone() as i32) as u8;
+                        }
+                        None => {
+                            *ptr0
+                                .add(24 + 3 * ::core::mem::size_of::<*const u8>())
+                                .cast::<u8>() = (0i32) as u8;
+                        }
+                    };
+                    *ptr0
+                        .add(26 + 3 * ::core::mem::size_of::<*const u8>())
+                        .cast::<u16>() = (_rt::as_i32(anisotropy_clamp1)) as u16;
+                    match border_color1 {
+                        Some(e) => {
+                            *ptr0
+                                .add(28 + 3 * ::core::mem::size_of::<*const u8>())
+                                .cast::<u8>() = (1i32) as u8;
+                            *ptr0
+                                .add(29 + 3 * ::core::mem::size_of::<*const u8>())
+                                .cast::<u8>() = (e.clone() as i32) as u8;
+                        }
+                        None => {
+                            *ptr0
+                                .add(28 + 3 * ::core::mem::size_of::<*const u8>())
+                                .cast::<u8>() = (0i32) as u8;
+                        }
+                    };
+                    let ptr3 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:gpu/gpu@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "create-sampler"]
+                        fn wit_import4(_: *mut u8, _: *mut u8);
+                    }
+
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import4(_: *mut u8, _: *mut u8) {
+                        unreachable!()
+                    }
+                    unsafe { wit_import4(ptr0, ptr3) };
+                    let l5 = i32::from(*ptr3.add(0).cast::<u8>());
+                    let result24 = match l5 {
+                        0 => {
+                            let e = {
+                                let l6 = *ptr3.add(8).cast::<i64>();
+
+                                l6 as u64
+                            };
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l7 = i32::from(*ptr3.add(8).cast::<u8>());
+                                use super::super::super::krate::gpu::types::GpuError as V23;
+                                let v23 = match l7 {
+                                    0 => {
+                                        let e23 = {
+                                            let l8 = *ptr3
+                                                .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l9 = *ptr3
+                                                .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len10 = l9;
+                                            let bytes10 =
+                                                _rt::Vec::from_raw_parts(l8.cast(), len10, len10);
+
+                                            _rt::string_lift(bytes10)
+                                        };
+                                        V23::InvalidHandle(e23)
+                                    }
+                                    1 => {
+                                        let e23 = {
+                                            let l11 = *ptr3
+                                                .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l12 = *ptr3
+                                                .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len13 = l12;
+                                            let bytes13 =
+                                                _rt::Vec::from_raw_parts(l11.cast(), len13, len13);
+
+                                            _rt::string_lift(bytes13)
+                                        };
+                                        V23::Validation(e23)
+                                    }
+                                    2 => V23::OutOfMemory,
+                                    3 => {
+                                        let e23 = {
+                                            let l14 = *ptr3
+                                                .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l15 = *ptr3
+                                                .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len16 = l15;
+                                            let bytes16 =
+                                                _rt::Vec::from_raw_parts(l14.cast(), len16, len16);
+
+                                            _rt::string_lift(bytes16)
+                                        };
+                                        V23::Lost(e23)
+                                    }
+                                    4 => {
+                                        let e23 = {
+                                            let l17 = *ptr3
+                                                .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l18 = *ptr3
+                                                .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len19 = l18;
+                                            let bytes19 =
+                                                _rt::Vec::from_raw_parts(l17.cast(), len19, len19);
+
+                                            _rt::string_lift(bytes19)
+                                        };
+                                        V23::Unsupported(e23)
+                                    }
+                                    n => {
+                                        debug_assert_eq!(n, 5, "invalid enum discriminant");
+                                        let e23 = {
+                                            let l20 = *ptr3
+                                                .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l21 = *ptr3
+                                                .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len22 = l21;
+                                            let bytes22 =
+                                                _rt::Vec::from_raw_parts(l20.cast(), len22, len22);
+
+                                            _rt::string_lift(bytes22)
+                                        };
+                                        V23::Internal(e23)
+                                    }
+                                };
+
+                                v23
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    };
+                    result24
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Make a query set.
+            pub fn create_query_set(
+                device: Handle,
+                descriptor: &QuerySetDescriptor,
+            ) -> Result<Handle, GpuError> {
+                unsafe {
+                    #[repr(align(8))]
+                    struct RetArea(
+                        [::core::mem::MaybeUninit<u8>;
+                            16 + 2 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let mut ret_area = RetArea(
+                        [::core::mem::MaybeUninit::uninit();
+                            16 + 2 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let super::super::super::krate::gpu::types::QuerySetDescriptor {
+                        label: label0,
+                        kind: kind0,
+                        count: count0,
+                    } = descriptor;
+                    let (result2_0, result2_1, result2_2) = match label0 {
+                        Some(e) => {
+                            let vec1 = e;
+                            let ptr1 = vec1.as_ptr().cast::<u8>();
+                            let len1 = vec1.len();
+
+                            (1i32, ptr1.cast_mut(), len1)
+                        }
+                        None => (0i32, ::core::ptr::null_mut(), 0usize),
+                    };
+                    let ptr3 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:gpu/gpu@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "create-query-set"]
+                        fn wit_import4(
+                            _: i64,
+                            _: i32,
+                            _: *mut u8,
+                            _: usize,
+                            _: i32,
+                            _: i32,
+                            _: *mut u8,
+                        );
+                    }
+
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import4(
+                        _: i64,
+                        _: i32,
+                        _: *mut u8,
+                        _: usize,
+                        _: i32,
+                        _: i32,
+                        _: *mut u8,
+                    ) {
+                        unreachable!()
+                    }
+                    unsafe {
+                        wit_import4(
+                            _rt::as_i64(device),
+                            result2_0,
+                            result2_1,
+                            result2_2,
+                            kind0.clone() as i32,
+                            _rt::as_i32(count0),
+                            ptr3,
+                        )
+                    };
+                    let l5 = i32::from(*ptr3.add(0).cast::<u8>());
+                    let result24 = match l5 {
+                        0 => {
+                            let e = {
+                                let l6 = *ptr3.add(8).cast::<i64>();
+
+                                l6 as u64
+                            };
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l7 = i32::from(*ptr3.add(8).cast::<u8>());
+                                use super::super::super::krate::gpu::types::GpuError as V23;
+                                let v23 = match l7 {
+                                    0 => {
+                                        let e23 = {
+                                            let l8 = *ptr3
+                                                .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l9 = *ptr3
+                                                .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len10 = l9;
+                                            let bytes10 =
+                                                _rt::Vec::from_raw_parts(l8.cast(), len10, len10);
+
+                                            _rt::string_lift(bytes10)
+                                        };
+                                        V23::InvalidHandle(e23)
+                                    }
+                                    1 => {
+                                        let e23 = {
+                                            let l11 = *ptr3
+                                                .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l12 = *ptr3
+                                                .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len13 = l12;
+                                            let bytes13 =
+                                                _rt::Vec::from_raw_parts(l11.cast(), len13, len13);
+
+                                            _rt::string_lift(bytes13)
+                                        };
+                                        V23::Validation(e23)
+                                    }
+                                    2 => V23::OutOfMemory,
+                                    3 => {
+                                        let e23 = {
+                                            let l14 = *ptr3
+                                                .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l15 = *ptr3
+                                                .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len16 = l15;
+                                            let bytes16 =
+                                                _rt::Vec::from_raw_parts(l14.cast(), len16, len16);
+
+                                            _rt::string_lift(bytes16)
+                                        };
+                                        V23::Lost(e23)
+                                    }
+                                    4 => {
+                                        let e23 = {
+                                            let l17 = *ptr3
+                                                .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l18 = *ptr3
+                                                .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len19 = l18;
+                                            let bytes19 =
+                                                _rt::Vec::from_raw_parts(l17.cast(), len19, len19);
+
+                                            _rt::string_lift(bytes19)
+                                        };
+                                        V23::Unsupported(e23)
+                                    }
+                                    n => {
+                                        debug_assert_eq!(n, 5, "invalid enum discriminant");
+                                        let e23 = {
+                                            let l20 = *ptr3
+                                                .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l21 = *ptr3
+                                                .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len22 = l21;
+                                            let bytes22 =
+                                                _rt::Vec::from_raw_parts(l20.cast(), len22, len22);
+
+                                            _rt::string_lift(bytes22)
+                                        };
+                                        V23::Internal(e23)
+                                    }
+                                };
+
+                                v23
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    };
+                    result24
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Make a bind group layout.
+            pub fn create_bind_group_layout(
+                device: Handle,
+                descriptor: &BindGroupLayoutDescriptor,
+            ) -> Result<Handle, GpuError> {
+                unsafe {
+                    #[repr(align(8))]
+                    struct RetArea(
+                        [::core::mem::MaybeUninit<u8>;
+                            16 + 2 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let mut ret_area = RetArea(
+                        [::core::mem::MaybeUninit::uninit();
+                            16 + 2 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let super::super::super::krate::gpu::types::BindGroupLayoutDescriptor {
+                        label: label0,
+                        entries: entries0,
+                    } = descriptor;
+                    let (result2_0, result2_1, result2_2) = match label0 {
+                        Some(e) => {
+                            let vec1 = e;
+                            let ptr1 = vec1.as_ptr().cast::<u8>();
+                            let len1 = vec1.len();
+
+                            (1i32, ptr1.cast_mut(), len1)
+                        }
+                        None => (0i32, ::core::ptr::null_mut(), 0usize),
+                    };
+                    let vec12 = entries0;
+                    let len12 = vec12.len();
+                    let layout12 = _rt::alloc::Layout::from_size_align_unchecked(
+                        vec12.len() * (24 + 4 * ::core::mem::size_of::<*const u8>()),
+                        8,
+                    );
+                    let result12 = if layout12.size() != 0 {
+                        let ptr = _rt::alloc::alloc(layout12).cast::<u8>();
+                        if ptr.is_null() {
+                            _rt::alloc::handle_alloc_error(layout12);
+                        }
+                        ptr
+                    } else {
+                        ::core::ptr::null_mut()
+                    };
+                    for (i, e) in vec12.into_iter().enumerate() {
+                        let base = result12.add(i * (24 + 4 * ::core::mem::size_of::<*const u8>()));
+                        {
+                            let super::super::super::krate::gpu::types::BindGroupLayoutEntry {
+                                binding: binding3,
+                                visibility: visibility3,
+                                kind: kind3,
+                                count: count3,
+                            } = e;
+                            *base.add(0).cast::<i32>() = _rt::as_i32(binding3);
+                            let flags4 = visibility3;
+                            *base.add(4).cast::<u8>() = ((flags4.bits() >> 0) as i32) as u8;
+                            use super::super::super::krate::gpu::types::BindingType as V11;
+                            match kind3 {
+                                V11::Buffer(e) => {
+                                    *base.add(8).cast::<u8>() = (0i32) as u8;
+                                    let super::super::super::krate::gpu::types::BufferBindingLayout{ kind:kind5, has_dynamic_offset:has_dynamic_offset5, min_binding_size:min_binding_size5, } = e;
+                                    use super::super::super::krate::gpu::types::BufferBindingType as V6;
+                                    match kind5 {
+                                        V6::Uniform => {
+                                            *base.add(16).cast::<u8>() = (0i32) as u8;
+                                        }
+                                        V6::Storage(e) => {
+                                            *base.add(16).cast::<u8>() = (1i32) as u8;
+                                            *base.add(17).cast::<u8>() = (match e {
+                                                true => 1,
+                                                false => 0,
+                                            })
+                                                as u8;
+                                        }
+                                    }
+                                    *base.add(18).cast::<u8>() = (match has_dynamic_offset5 {
+                                        true => 1,
+                                        false => 0,
+                                    })
+                                        as u8;
+                                    *base.add(24).cast::<i64>() = _rt::as_i64(min_binding_size5);
+                                }
+                                V11::Sampler(e) => {
+                                    *base.add(8).cast::<u8>() = (1i32) as u8;
+                                    *base.add(16).cast::<u8>() = (e.clone() as i32) as u8;
+                                }
+                                V11::Texture(e) => {
+                                    *base.add(8).cast::<u8>() = (2i32) as u8;
+                                    let super::super::super::krate::gpu::types::TextureBindingLayout{ sample_type:sample_type7, view_dimension:view_dimension7, multisampled:multisampled7, } = e;
+                                    use super::super::super::krate::gpu::types::TextureSampleType as V8;
+                                    match sample_type7 {
+                                        V8::Float(e) => {
+                                            *base.add(16).cast::<u8>() = (0i32) as u8;
+                                            *base.add(17).cast::<u8>() = (match e {
+                                                true => 1,
+                                                false => 0,
+                                            })
+                                                as u8;
+                                        }
+                                        V8::Depth => {
+                                            *base.add(16).cast::<u8>() = (1i32) as u8;
+                                        }
+                                        V8::Sint => {
+                                            *base.add(16).cast::<u8>() = (2i32) as u8;
+                                        }
+                                        V8::Uint => {
+                                            *base.add(16).cast::<u8>() = (3i32) as u8;
+                                        }
+                                    }
+                                    *base.add(18).cast::<u8>() =
+                                        (view_dimension7.clone() as i32) as u8;
+                                    *base.add(19).cast::<u8>() = (match multisampled7 {
+                                        true => 1,
+                                        false => 0,
+                                    })
+                                        as u8;
+                                }
+                                V11::StorageTexture(e) => {
+                                    *base.add(8).cast::<u8>() = (3i32) as u8;
+                                    let super::super::super::krate::gpu::types::StorageTextureBindingLayout{ access:access9, format:format9, view_dimension:view_dimension9, } = e;
+                                    *base.add(16).cast::<u8>() = (access9.clone() as i32) as u8;
+                                    let vec10 = format9;
+                                    let ptr10 = vec10.as_ptr().cast::<u8>();
+                                    let len10 = vec10.len();
+                                    *base
+                                        .add(16 + 2 * ::core::mem::size_of::<*const u8>())
+                                        .cast::<usize>() = len10;
+                                    *base
+                                        .add(16 + 1 * ::core::mem::size_of::<*const u8>())
+                                        .cast::<*mut u8>() = ptr10.cast_mut();
+                                    *base
+                                        .add(16 + 3 * ::core::mem::size_of::<*const u8>())
+                                        .cast::<u8>() = (view_dimension9.clone() as i32) as u8;
+                                }
+                            }
+                            match count3 {
+                                Some(e) => {
+                                    *base
+                                        .add(16 + 4 * ::core::mem::size_of::<*const u8>())
+                                        .cast::<u8>() = (1i32) as u8;
+                                    *base
+                                        .add(20 + 4 * ::core::mem::size_of::<*const u8>())
+                                        .cast::<i32>() = _rt::as_i32(e);
+                                }
+                                None => {
+                                    *base
+                                        .add(16 + 4 * ::core::mem::size_of::<*const u8>())
+                                        .cast::<u8>() = (0i32) as u8;
+                                }
+                            };
+                        }
+                    }
+                    let ptr13 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:gpu/gpu@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "create-bind-group-layout"]
+                        fn wit_import14(
+                            _: i64,
+                            _: i32,
+                            _: *mut u8,
+                            _: usize,
+                            _: *mut u8,
+                            _: usize,
+                            _: *mut u8,
+                        );
+                    }
+
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import14(
+                        _: i64,
+                        _: i32,
+                        _: *mut u8,
+                        _: usize,
+                        _: *mut u8,
+                        _: usize,
+                        _: *mut u8,
+                    ) {
+                        unreachable!()
+                    }
+                    unsafe {
+                        wit_import14(
+                            _rt::as_i64(device),
+                            result2_0,
+                            result2_1,
+                            result2_2,
+                            result12,
+                            len12,
+                            ptr13,
+                        )
+                    };
+                    let l15 = i32::from(*ptr13.add(0).cast::<u8>());
+                    let result34 = match l15 {
+                        0 => {
+                            let e = {
+                                let l16 = *ptr13.add(8).cast::<i64>();
+
+                                l16 as u64
+                            };
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l17 = i32::from(*ptr13.add(8).cast::<u8>());
+                                use super::super::super::krate::gpu::types::GpuError as V33;
+                                let v33 = match l17 {
+                                    0 => {
+                                        let e33 = {
+                                            let l18 = *ptr13
+                                                .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l19 = *ptr13
+                                                .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len20 = l19;
+                                            let bytes20 =
+                                                _rt::Vec::from_raw_parts(l18.cast(), len20, len20);
+
+                                            _rt::string_lift(bytes20)
+                                        };
+                                        V33::InvalidHandle(e33)
+                                    }
+                                    1 => {
+                                        let e33 = {
+                                            let l21 = *ptr13
+                                                .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l22 = *ptr13
+                                                .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len23 = l22;
+                                            let bytes23 =
+                                                _rt::Vec::from_raw_parts(l21.cast(), len23, len23);
+
+                                            _rt::string_lift(bytes23)
+                                        };
+                                        V33::Validation(e33)
+                                    }
+                                    2 => V33::OutOfMemory,
+                                    3 => {
+                                        let e33 = {
+                                            let l24 = *ptr13
+                                                .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l25 = *ptr13
+                                                .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len26 = l25;
+                                            let bytes26 =
+                                                _rt::Vec::from_raw_parts(l24.cast(), len26, len26);
+
+                                            _rt::string_lift(bytes26)
+                                        };
+                                        V33::Lost(e33)
+                                    }
+                                    4 => {
+                                        let e33 = {
+                                            let l27 = *ptr13
+                                                .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l28 = *ptr13
+                                                .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len29 = l28;
+                                            let bytes29 =
+                                                _rt::Vec::from_raw_parts(l27.cast(), len29, len29);
+
+                                            _rt::string_lift(bytes29)
+                                        };
+                                        V33::Unsupported(e33)
+                                    }
+                                    n => {
+                                        debug_assert_eq!(n, 5, "invalid enum discriminant");
+                                        let e33 = {
+                                            let l30 = *ptr13
+                                                .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l31 = *ptr13
+                                                .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len32 = l31;
+                                            let bytes32 =
+                                                _rt::Vec::from_raw_parts(l30.cast(), len32, len32);
+
+                                            _rt::string_lift(bytes32)
+                                        };
+                                        V33::Internal(e33)
+                                    }
+                                };
+
+                                v33
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    };
+                    if layout12.size() != 0 {
+                        _rt::alloc::dealloc(result12.cast(), layout12);
+                    }
+                    result34
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Make a bind group.
+            pub fn create_bind_group(
+                device: Handle,
+                descriptor: &BindGroupDescriptor,
+            ) -> Result<Handle, GpuError> {
+                unsafe {
+                    let mut cleanup_list = _rt::Vec::new();
+
+                    #[repr(align(8))]
+                    struct RetArea(
+                        [::core::mem::MaybeUninit<u8>;
+                            16 + 2 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let mut ret_area = RetArea(
+                        [::core::mem::MaybeUninit::uninit();
+                            16 + 2 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let super::super::super::krate::gpu::types::BindGroupDescriptor {
+                        label: label0,
+                        layout: layout0,
+                        entries: entries0,
+                    } = descriptor;
+                    let (result2_0, result2_1, result2_2) = match label0 {
+                        Some(e) => {
+                            let vec1 = e;
+                            let ptr1 = vec1.as_ptr().cast::<u8>();
+                            let len1 = vec1.len();
+
+                            (1i32, ptr1.cast_mut(), len1)
+                        }
+                        None => (0i32, ::core::ptr::null_mut(), 0usize),
+                    };
+                    let vec10 = entries0;
+                    let len10 = vec10.len();
+                    let layout10 =
+                        _rt::alloc::Layout::from_size_align_unchecked(vec10.len() * 48, 8);
+                    let result10 = if layout10.size() != 0 {
+                        let ptr = _rt::alloc::alloc(layout10).cast::<u8>();
+                        if ptr.is_null() {
+                            _rt::alloc::handle_alloc_error(layout10);
+                        }
+                        ptr
+                    } else {
+                        ::core::ptr::null_mut()
+                    };
+                    for (i, e) in vec10.into_iter().enumerate() {
+                        let base = result10.add(i * 48);
+                        {
+                            let super::super::super::krate::gpu::types::BindGroupEntry {
+                                binding: binding3,
+                                resource: resource3,
+                            } = e;
+                            *base.add(0).cast::<i32>() = _rt::as_i32(binding3);
+                            use super::super::super::krate::gpu::types::BindingResource as V9;
+                            match resource3 {
+                                V9::Buffer(e) => {
+                                    *base.add(8).cast::<u8>() = (0i32) as u8;
+                                    let super::super::super::krate::gpu::types::BufferBinding {
+                                        buffer: buffer4,
+                                        offset: offset4,
+                                        size: size4,
+                                    } = e;
+                                    *base.add(16).cast::<i64>() = _rt::as_i64(buffer4);
+                                    *base.add(24).cast::<i64>() = _rt::as_i64(offset4);
+                                    match size4 {
+                                        Some(e) => {
+                                            *base.add(32).cast::<u8>() = (1i32) as u8;
+                                            *base.add(40).cast::<i64>() = _rt::as_i64(e);
+                                        }
+                                        None => {
+                                            *base.add(32).cast::<u8>() = (0i32) as u8;
+                                        }
+                                    };
+                                }
+                                V9::BufferArray(e) => {
+                                    *base.add(8).cast::<u8>() = (1i32) as u8;
+                                    let vec6 = e;
+                                    let len6 = vec6.len();
+                                    let layout6 = _rt::alloc::Layout::from_size_align_unchecked(
+                                        vec6.len() * 32,
+                                        8,
+                                    );
+                                    let result6 = if layout6.size() != 0 {
+                                        let ptr = _rt::alloc::alloc(layout6).cast::<u8>();
+                                        if ptr.is_null() {
+                                            _rt::alloc::handle_alloc_error(layout6);
+                                        }
+                                        ptr
+                                    } else {
+                                        ::core::ptr::null_mut()
+                                    };
+                                    for (i, e) in vec6.into_iter().enumerate() {
+                                        let base = result6.add(i * 32);
+                                        {
+                                            let super::super::super::krate::gpu::types::BufferBinding{ buffer:buffer5, offset:offset5, size:size5, } = e;
+                                            *base.add(0).cast::<i64>() = _rt::as_i64(buffer5);
+                                            *base.add(8).cast::<i64>() = _rt::as_i64(offset5);
+                                            match size5 {
+                                                Some(e) => {
+                                                    *base.add(16).cast::<u8>() = (1i32) as u8;
+                                                    *base.add(24).cast::<i64>() = _rt::as_i64(e);
+                                                }
+                                                None => {
+                                                    *base.add(16).cast::<u8>() = (0i32) as u8;
+                                                }
+                                            };
+                                        }
+                                    }
+                                    *base
+                                        .add(16 + 1 * ::core::mem::size_of::<*const u8>())
+                                        .cast::<usize>() = len6;
+                                    *base.add(16).cast::<*mut u8>() = result6;
+                                    cleanup_list.extend_from_slice(&[(result6, layout6)]);
+                                }
+                                V9::Sampler(e) => {
+                                    *base.add(8).cast::<u8>() = (2i32) as u8;
+                                    *base.add(16).cast::<i64>() = _rt::as_i64(e);
+                                }
+                                V9::SamplerArray(e) => {
+                                    *base.add(8).cast::<u8>() = (3i32) as u8;
+                                    let vec7 = e;
+                                    let ptr7 = vec7.as_ptr().cast::<u8>();
+                                    let len7 = vec7.len();
+                                    *base
+                                        .add(16 + 1 * ::core::mem::size_of::<*const u8>())
+                                        .cast::<usize>() = len7;
+                                    *base.add(16).cast::<*mut u8>() = ptr7.cast_mut();
+                                }
+                                V9::TextureView(e) => {
+                                    *base.add(8).cast::<u8>() = (4i32) as u8;
+                                    *base.add(16).cast::<i64>() = _rt::as_i64(e);
+                                }
+                                V9::TextureViewArray(e) => {
+                                    *base.add(8).cast::<u8>() = (5i32) as u8;
+                                    let vec8 = e;
+                                    let ptr8 = vec8.as_ptr().cast::<u8>();
+                                    let len8 = vec8.len();
+                                    *base
+                                        .add(16 + 1 * ::core::mem::size_of::<*const u8>())
+                                        .cast::<usize>() = len8;
+                                    *base.add(16).cast::<*mut u8>() = ptr8.cast_mut();
+                                }
+                            }
+                        }
+                    }
+                    let ptr11 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:gpu/gpu@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "create-bind-group"]
+                        fn wit_import12(
+                            _: i64,
+                            _: i32,
+                            _: *mut u8,
+                            _: usize,
+                            _: i64,
+                            _: *mut u8,
+                            _: usize,
+                            _: *mut u8,
+                        );
+                    }
+
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import12(
+                        _: i64,
+                        _: i32,
+                        _: *mut u8,
+                        _: usize,
+                        _: i64,
+                        _: *mut u8,
+                        _: usize,
+                        _: *mut u8,
+                    ) {
+                        unreachable!()
+                    }
+                    unsafe {
+                        wit_import12(
+                            _rt::as_i64(device),
+                            result2_0,
+                            result2_1,
+                            result2_2,
+                            _rt::as_i64(layout0),
+                            result10,
+                            len10,
+                            ptr11,
+                        )
+                    };
+                    let l13 = i32::from(*ptr11.add(0).cast::<u8>());
+                    let result32 = match l13 {
+                        0 => {
+                            let e = {
+                                let l14 = *ptr11.add(8).cast::<i64>();
+
+                                l14 as u64
+                            };
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l15 = i32::from(*ptr11.add(8).cast::<u8>());
+                                use super::super::super::krate::gpu::types::GpuError as V31;
+                                let v31 = match l15 {
+                                    0 => {
+                                        let e31 = {
+                                            let l16 = *ptr11
+                                                .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l17 = *ptr11
+                                                .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len18 = l17;
+                                            let bytes18 =
+                                                _rt::Vec::from_raw_parts(l16.cast(), len18, len18);
+
+                                            _rt::string_lift(bytes18)
+                                        };
+                                        V31::InvalidHandle(e31)
+                                    }
+                                    1 => {
+                                        let e31 = {
+                                            let l19 = *ptr11
+                                                .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l20 = *ptr11
+                                                .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len21 = l20;
+                                            let bytes21 =
+                                                _rt::Vec::from_raw_parts(l19.cast(), len21, len21);
+
+                                            _rt::string_lift(bytes21)
+                                        };
+                                        V31::Validation(e31)
+                                    }
+                                    2 => V31::OutOfMemory,
+                                    3 => {
+                                        let e31 = {
+                                            let l22 = *ptr11
+                                                .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l23 = *ptr11
+                                                .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len24 = l23;
+                                            let bytes24 =
+                                                _rt::Vec::from_raw_parts(l22.cast(), len24, len24);
+
+                                            _rt::string_lift(bytes24)
+                                        };
+                                        V31::Lost(e31)
+                                    }
+                                    4 => {
+                                        let e31 = {
+                                            let l25 = *ptr11
+                                                .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l26 = *ptr11
+                                                .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len27 = l26;
+                                            let bytes27 =
+                                                _rt::Vec::from_raw_parts(l25.cast(), len27, len27);
+
+                                            _rt::string_lift(bytes27)
+                                        };
+                                        V31::Unsupported(e31)
+                                    }
+                                    n => {
+                                        debug_assert_eq!(n, 5, "invalid enum discriminant");
+                                        let e31 = {
+                                            let l28 = *ptr11
+                                                .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l29 = *ptr11
+                                                .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len30 = l29;
+                                            let bytes30 =
+                                                _rt::Vec::from_raw_parts(l28.cast(), len30, len30);
+
+                                            _rt::string_lift(bytes30)
+                                        };
+                                        V31::Internal(e31)
+                                    }
+                                };
+
+                                v31
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    };
+                    if layout10.size() != 0 {
+                        _rt::alloc::dealloc(result10.cast(), layout10);
+                    }
+                    for (ptr, layout) in cleanup_list {
+                        if layout.size() != 0 {
+                            _rt::alloc::dealloc(ptr.cast(), layout);
+                        }
+                    }
+                    result32
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Make a pipeline layout.
+            pub fn create_pipeline_layout(
+                device: Handle,
+                descriptor: &PipelineLayoutDescriptor,
+            ) -> Result<Handle, GpuError> {
+                unsafe {
+                    #[repr(align(8))]
+                    struct RetArea(
+                        [::core::mem::MaybeUninit<u8>;
+                            16 + 2 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let mut ret_area = RetArea(
+                        [::core::mem::MaybeUninit::uninit();
+                            16 + 2 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let super::super::super::krate::gpu::types::PipelineLayoutDescriptor {
+                        label: label0,
+                        bind_group_layouts: bind_group_layouts0,
+                        immediate_size: immediate_size0,
+                    } = descriptor;
+                    let (result2_0, result2_1, result2_2) = match label0 {
+                        Some(e) => {
+                            let vec1 = e;
+                            let ptr1 = vec1.as_ptr().cast::<u8>();
+                            let len1 = vec1.len();
+
+                            (1i32, ptr1.cast_mut(), len1)
+                        }
+                        None => (0i32, ::core::ptr::null_mut(), 0usize),
+                    };
+                    let vec3 = bind_group_layouts0;
+                    let len3 = vec3.len();
+                    let layout3 = _rt::alloc::Layout::from_size_align_unchecked(vec3.len() * 16, 8);
+                    let result3 = if layout3.size() != 0 {
+                        let ptr = _rt::alloc::alloc(layout3).cast::<u8>();
+                        if ptr.is_null() {
+                            _rt::alloc::handle_alloc_error(layout3);
+                        }
+                        ptr
+                    } else {
+                        ::core::ptr::null_mut()
+                    };
+                    for (i, e) in vec3.into_iter().enumerate() {
+                        let base = result3.add(i * 16);
+                        {
+                            match e {
+                                Some(e) => {
+                                    *base.add(0).cast::<u8>() = (1i32) as u8;
+                                    *base.add(8).cast::<i64>() = _rt::as_i64(e);
+                                }
+                                None => {
+                                    *base.add(0).cast::<u8>() = (0i32) as u8;
+                                }
+                            };
+                        }
+                    }
+                    let ptr4 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:gpu/gpu@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "create-pipeline-layout"]
+                        fn wit_import5(
+                            _: i64,
+                            _: i32,
+                            _: *mut u8,
+                            _: usize,
+                            _: *mut u8,
+                            _: usize,
+                            _: i32,
+                            _: *mut u8,
+                        );
+                    }
+
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import5(
+                        _: i64,
+                        _: i32,
+                        _: *mut u8,
+                        _: usize,
+                        _: *mut u8,
+                        _: usize,
+                        _: i32,
+                        _: *mut u8,
+                    ) {
+                        unreachable!()
+                    }
+                    unsafe {
+                        wit_import5(
+                            _rt::as_i64(device),
+                            result2_0,
+                            result2_1,
+                            result2_2,
+                            result3,
+                            len3,
+                            _rt::as_i32(immediate_size0),
+                            ptr4,
+                        )
+                    };
+                    let l6 = i32::from(*ptr4.add(0).cast::<u8>());
+                    let result25 = match l6 {
+                        0 => {
+                            let e = {
+                                let l7 = *ptr4.add(8).cast::<i64>();
+
+                                l7 as u64
+                            };
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l8 = i32::from(*ptr4.add(8).cast::<u8>());
+                                use super::super::super::krate::gpu::types::GpuError as V24;
+                                let v24 = match l8 {
+                                    0 => {
+                                        let e24 = {
+                                            let l9 = *ptr4
+                                                .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l10 = *ptr4
+                                                .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len11 = l10;
+                                            let bytes11 =
+                                                _rt::Vec::from_raw_parts(l9.cast(), len11, len11);
+
+                                            _rt::string_lift(bytes11)
+                                        };
+                                        V24::InvalidHandle(e24)
+                                    }
+                                    1 => {
+                                        let e24 = {
+                                            let l12 = *ptr4
+                                                .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l13 = *ptr4
+                                                .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len14 = l13;
+                                            let bytes14 =
+                                                _rt::Vec::from_raw_parts(l12.cast(), len14, len14);
+
+                                            _rt::string_lift(bytes14)
+                                        };
+                                        V24::Validation(e24)
+                                    }
+                                    2 => V24::OutOfMemory,
+                                    3 => {
+                                        let e24 = {
+                                            let l15 = *ptr4
+                                                .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l16 = *ptr4
+                                                .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len17 = l16;
+                                            let bytes17 =
+                                                _rt::Vec::from_raw_parts(l15.cast(), len17, len17);
+
+                                            _rt::string_lift(bytes17)
+                                        };
+                                        V24::Lost(e24)
+                                    }
+                                    4 => {
+                                        let e24 = {
+                                            let l18 = *ptr4
+                                                .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l19 = *ptr4
+                                                .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len20 = l19;
+                                            let bytes20 =
+                                                _rt::Vec::from_raw_parts(l18.cast(), len20, len20);
+
+                                            _rt::string_lift(bytes20)
+                                        };
+                                        V24::Unsupported(e24)
+                                    }
+                                    n => {
+                                        debug_assert_eq!(n, 5, "invalid enum discriminant");
+                                        let e24 = {
+                                            let l21 = *ptr4
+                                                .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l22 = *ptr4
+                                                .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len23 = l22;
+                                            let bytes23 =
+                                                _rt::Vec::from_raw_parts(l21.cast(), len23, len23);
+
+                                            _rt::string_lift(bytes23)
+                                        };
+                                        V24::Internal(e24)
+                                    }
+                                };
+
+                                v24
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    };
+                    if layout3.size() != 0 {
+                        _rt::alloc::dealloc(result3.cast(), layout3);
+                    }
+                    result25
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Make a shader module from WGSL. The source is validated first; a shader
+            /// that fails is refused with the reason and where, and never reaches the
+            /// driver.
+            pub fn create_shader_module(
+                device: Handle,
+                descriptor: &ShaderModuleDescriptor,
+            ) -> Result<Handle, ShaderError> {
+                unsafe {
+                    #[repr(align(8))]
+                    struct RetArea(
+                        [::core::mem::MaybeUninit<u8>;
+                            24 + 2 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let mut ret_area = RetArea(
+                        [::core::mem::MaybeUninit::uninit();
+                            24 + 2 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let super::super::super::krate::gpu::types::ShaderModuleDescriptor {
+                        label: label0,
+                        code: code0,
+                    } = descriptor;
+                    let (result2_0, result2_1, result2_2) = match label0 {
+                        Some(e) => {
+                            let vec1 = e;
+                            let ptr1 = vec1.as_ptr().cast::<u8>();
+                            let len1 = vec1.len();
+
+                            (1i32, ptr1.cast_mut(), len1)
+                        }
+                        None => (0i32, ::core::ptr::null_mut(), 0usize),
+                    };
+                    let vec3 = code0;
+                    let ptr3 = vec3.as_ptr().cast::<u8>();
+                    let len3 = vec3.len();
+                    let ptr4 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:gpu/gpu@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "create-shader-module"]
+                        fn wit_import5(
+                            _: i64,
+                            _: i32,
+                            _: *mut u8,
+                            _: usize,
+                            _: *mut u8,
+                            _: usize,
+                            _: *mut u8,
+                        );
+                    }
+
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import5(
+                        _: i64,
+                        _: i32,
+                        _: *mut u8,
+                        _: usize,
+                        _: *mut u8,
+                        _: usize,
+                        _: *mut u8,
+                    ) {
+                        unreachable!()
+                    }
+                    unsafe {
+                        wit_import5(
+                            _rt::as_i64(device),
+                            result2_0,
+                            result2_1,
+                            result2_2,
+                            ptr3.cast_mut(),
+                            len3,
+                            ptr4,
+                        )
+                    };
+                    let l6 = i32::from(*ptr4.add(0).cast::<u8>());
+                    let result15 = match l6 {
+                        0 => {
+                            let e = {
+                                let l7 = *ptr4.add(8).cast::<i64>();
+
+                                l7 as u64
+                            };
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l8 = *ptr4.add(8).cast::<*mut u8>();
+                                let l9 = *ptr4
+                                    .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                    .cast::<usize>();
+                                let len10 = l9;
+                                let bytes10 = _rt::Vec::from_raw_parts(l8.cast(), len10, len10);
+                                let l11 = *ptr4
+                                    .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                    .cast::<i32>();
+                                let l12 = *ptr4
+                                    .add(12 + 2 * ::core::mem::size_of::<*const u8>())
+                                    .cast::<i32>();
+                                let l13 = *ptr4
+                                    .add(16 + 2 * ::core::mem::size_of::<*const u8>())
+                                    .cast::<i32>();
+                                let l14 = *ptr4
+                                    .add(20 + 2 * ::core::mem::size_of::<*const u8>())
+                                    .cast::<i32>();
+
+                                super::super::super::krate::gpu::types::ShaderError {
+                                    message: _rt::string_lift(bytes10),
+                                    line: l11 as u32,
+                                    column: l12 as u32,
+                                    offset: l13 as u32,
+                                    length: l14 as u32,
+                                }
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    };
+                    result15
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Warnings and notes about an accepted shader.
+            pub fn shader_compilation_info(
+                module: Handle,
+            ) -> Result<_rt::Vec<CompilationMessage>, GpuError> {
+                unsafe {
+                    #[cfg_attr(target_pointer_width = "64", repr(align(8)))]
+                    #[cfg_attr(target_pointer_width = "32", repr(align(4)))]
+                    struct RetArea(
+                        [::core::mem::MaybeUninit<u8>; 4 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let mut ret_area = RetArea(
+                        [::core::mem::MaybeUninit::uninit();
+                            4 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:gpu/gpu@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "shader-compilation-info"]
+                        fn wit_import1(_: i64, _: *mut u8);
+                    }
+
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import1(_: i64, _: *mut u8) {
+                        unreachable!()
+                    }
+                    unsafe { wit_import1(_rt::as_i64(module), ptr0) };
+                    let l2 = i32::from(*ptr0.add(0).cast::<u8>());
+                    let result33 = match l2 {
+                        0 => {
+                            let e = {
+                                let l3 = *ptr0
+                                    .add(::core::mem::size_of::<*const u8>())
+                                    .cast::<*mut u8>();
+                                let l4 = *ptr0
+                                    .add(2 * ::core::mem::size_of::<*const u8>())
+                                    .cast::<usize>();
+                                let base15 = l3;
+                                let len15 = l4;
+                                let mut result15 = _rt::Vec::with_capacity(len15);
+                                for i in 0..len15 {
+                                    let base = base15
+                                        .add(i * (16 + 4 * ::core::mem::size_of::<*const u8>()));
+                                    let e15 = {
+                                        let l5 = *base.add(0).cast::<*mut u8>();
+                                        let l6 = *base
+                                            .add(::core::mem::size_of::<*const u8>())
+                                            .cast::<usize>();
+                                        let len7 = l6;
+                                        let bytes7 =
+                                            _rt::Vec::from_raw_parts(l5.cast(), len7, len7);
+                                        let l8 = *base
+                                            .add(2 * ::core::mem::size_of::<*const u8>())
+                                            .cast::<*mut u8>();
+                                        let l9 = *base
+                                            .add(3 * ::core::mem::size_of::<*const u8>())
+                                            .cast::<usize>();
+                                        let len10 = l9;
+                                        let bytes10 =
+                                            _rt::Vec::from_raw_parts(l8.cast(), len10, len10);
+                                        let l11 = *base
+                                            .add(4 * ::core::mem::size_of::<*const u8>())
+                                            .cast::<i32>();
+                                        let l12 = *base
+                                            .add(4 + 4 * ::core::mem::size_of::<*const u8>())
+                                            .cast::<i32>();
+                                        let l13 = *base
+                                            .add(8 + 4 * ::core::mem::size_of::<*const u8>())
+                                            .cast::<i32>();
+                                        let l14 = *base
+                                            .add(12 + 4 * ::core::mem::size_of::<*const u8>())
+                                            .cast::<i32>();
+
+                                        super::super::super::krate::gpu::types::CompilationMessage {
+                                            message: _rt::string_lift(bytes7),
+                                            kind: _rt::string_lift(bytes10),
+                                            line: l11 as u32,
+                                            column: l12 as u32,
+                                            offset: l13 as u32,
+                                            length: l14 as u32,
+                                        }
+                                    };
+                                    result15.push(e15);
+                                }
+                                _rt::cabi_dealloc(
+                                    base15,
+                                    len15 * (16 + 4 * ::core::mem::size_of::<*const u8>()),
+                                    ::core::mem::size_of::<*const u8>(),
+                                );
+
+                                result15
+                            };
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l16 = i32::from(
+                                    *ptr0.add(::core::mem::size_of::<*const u8>()).cast::<u8>(),
+                                );
+                                use super::super::super::krate::gpu::types::GpuError as V32;
+                                let v32 = match l16 {
+                                    0 => {
+                                        let e32 = {
+                                            let l17 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l18 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len19 = l18;
+                                            let bytes19 =
+                                                _rt::Vec::from_raw_parts(l17.cast(), len19, len19);
+
+                                            _rt::string_lift(bytes19)
+                                        };
+                                        V32::InvalidHandle(e32)
+                                    }
+                                    1 => {
+                                        let e32 = {
+                                            let l20 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l21 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len22 = l21;
+                                            let bytes22 =
+                                                _rt::Vec::from_raw_parts(l20.cast(), len22, len22);
+
+                                            _rt::string_lift(bytes22)
+                                        };
+                                        V32::Validation(e32)
+                                    }
+                                    2 => V32::OutOfMemory,
+                                    3 => {
+                                        let e32 = {
+                                            let l23 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l24 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len25 = l24;
+                                            let bytes25 =
+                                                _rt::Vec::from_raw_parts(l23.cast(), len25, len25);
+
+                                            _rt::string_lift(bytes25)
+                                        };
+                                        V32::Lost(e32)
+                                    }
+                                    4 => {
+                                        let e32 = {
+                                            let l26 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l27 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len28 = l27;
+                                            let bytes28 =
+                                                _rt::Vec::from_raw_parts(l26.cast(), len28, len28);
+
+                                            _rt::string_lift(bytes28)
+                                        };
+                                        V32::Unsupported(e32)
+                                    }
+                                    n => {
+                                        debug_assert_eq!(n, 5, "invalid enum discriminant");
+                                        let e32 = {
+                                            let l29 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l30 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len31 = l30;
+                                            let bytes31 =
+                                                _rt::Vec::from_raw_parts(l29.cast(), len31, len31);
+
+                                            _rt::string_lift(bytes31)
+                                        };
+                                        V32::Internal(e32)
+                                    }
+                                };
+
+                                v32
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    };
+                    result33
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Make a render pipeline.
+            pub fn create_render_pipeline(
+                device: Handle,
+                descriptor: &RenderPipelineDescriptor,
+            ) -> Result<Handle, GpuError> {
+                unsafe {
+                    let mut cleanup_list = _rt::Vec::new();
+
+                    #[repr(align(8))]
+                    struct RetArea(
+                        [::core::mem::MaybeUninit<u8>;
+                            152 + 16 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let mut ret_area = RetArea(
+                        [::core::mem::MaybeUninit::uninit();
+                            152 + 16 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    *ptr0.add(0).cast::<i64>() = _rt::as_i64(device);
+                    let super::super::super::krate::gpu::types::RenderPipelineDescriptor {
+                        label: label1,
+                        layout: layout1,
+                        vertex: vertex1,
+                        primitive: primitive1,
+                        depth_stencil: depth_stencil1,
+                        multisample: multisample1,
+                        fragment: fragment1,
+                        multiview_mask: multiview_mask1,
+                    } = descriptor;
+                    match label1 {
+                        Some(e) => {
+                            *ptr0.add(8).cast::<u8>() = (1i32) as u8;
+                            let vec2 = e;
+                            let ptr2 = vec2.as_ptr().cast::<u8>();
+                            let len2 = vec2.len();
+                            *ptr0
+                                .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                .cast::<usize>() = len2;
+                            *ptr0
+                                .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                .cast::<*mut u8>() = ptr2.cast_mut();
+                        }
+                        None => {
+                            *ptr0.add(8).cast::<u8>() = (0i32) as u8;
+                        }
+                    };
+                    match layout1 {
+                        Some(e) => {
+                            *ptr0
+                                .add(16 + 2 * ::core::mem::size_of::<*const u8>())
+                                .cast::<u8>() = (1i32) as u8;
+                            *ptr0
+                                .add(24 + 2 * ::core::mem::size_of::<*const u8>())
+                                .cast::<i64>() = _rt::as_i64(e);
+                        }
+                        None => {
+                            *ptr0
+                                .add(16 + 2 * ::core::mem::size_of::<*const u8>())
+                                .cast::<u8>() = (0i32) as u8;
+                        }
+                    };
+                    let super::super::super::krate::gpu::types::VertexState {
+                        stage: stage3,
+                        buffers: buffers3,
+                    } = vertex1;
+                    let super::super::super::krate::gpu::types::ProgrammableStage {
+                        module: module4,
+                        entry_point: entry_point4,
+                        constants: constants4,
+                    } = stage3;
+                    *ptr0
+                        .add(32 + 2 * ::core::mem::size_of::<*const u8>())
+                        .cast::<i64>() = _rt::as_i64(module4);
+                    match entry_point4 {
+                        Some(e) => {
+                            *ptr0
+                                .add(40 + 2 * ::core::mem::size_of::<*const u8>())
+                                .cast::<u8>() = (1i32) as u8;
+                            let vec5 = e;
+                            let ptr5 = vec5.as_ptr().cast::<u8>();
+                            let len5 = vec5.len();
+                            *ptr0
+                                .add(40 + 4 * ::core::mem::size_of::<*const u8>())
+                                .cast::<usize>() = len5;
+                            *ptr0
+                                .add(40 + 3 * ::core::mem::size_of::<*const u8>())
+                                .cast::<*mut u8>() = ptr5.cast_mut();
+                        }
+                        None => {
+                            *ptr0
+                                .add(40 + 2 * ::core::mem::size_of::<*const u8>())
+                                .cast::<u8>() = (0i32) as u8;
+                        }
+                    };
+                    let vec8 = constants4;
+                    let len8 = vec8.len();
+                    let layout8 = _rt::alloc::Layout::from_size_align_unchecked(
+                        vec8.len() * (8 + 2 * ::core::mem::size_of::<*const u8>()),
+                        8,
+                    );
+                    let result8 = if layout8.size() != 0 {
+                        let ptr = _rt::alloc::alloc(layout8).cast::<u8>();
+                        if ptr.is_null() {
+                            _rt::alloc::handle_alloc_error(layout8);
+                        }
+                        ptr
+                    } else {
+                        ::core::ptr::null_mut()
+                    };
+                    for (i, e) in vec8.into_iter().enumerate() {
+                        let base = result8.add(i * (8 + 2 * ::core::mem::size_of::<*const u8>()));
+                        {
+                            let super::super::super::krate::gpu::types::ConstantEntry {
+                                name: name6,
+                                value: value6,
+                            } = e;
+                            let vec7 = name6;
+                            let ptr7 = vec7.as_ptr().cast::<u8>();
+                            let len7 = vec7.len();
+                            *base
+                                .add(::core::mem::size_of::<*const u8>())
+                                .cast::<usize>() = len7;
+                            *base.add(0).cast::<*mut u8>() = ptr7.cast_mut();
+                            *base
+                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                .cast::<f64>() = _rt::as_f64(value6);
+                        }
+                    }
+                    *ptr0
+                        .add(40 + 6 * ::core::mem::size_of::<*const u8>())
+                        .cast::<usize>() = len8;
+                    *ptr0
+                        .add(40 + 5 * ::core::mem::size_of::<*const u8>())
+                        .cast::<*mut u8>() = result8;
+                    let vec13 = buffers3;
+                    let len13 = vec13.len();
+                    let layout13 = _rt::alloc::Layout::from_size_align_unchecked(
+                        vec13.len() * (16 + 2 * ::core::mem::size_of::<*const u8>()),
+                        8,
+                    );
+                    let result13 = if layout13.size() != 0 {
+                        let ptr = _rt::alloc::alloc(layout13).cast::<u8>();
+                        if ptr.is_null() {
+                            _rt::alloc::handle_alloc_error(layout13);
+                        }
+                        ptr
+                    } else {
+                        ::core::ptr::null_mut()
+                    };
+                    for (i, e) in vec13.into_iter().enumerate() {
+                        let base = result13.add(i * (16 + 2 * ::core::mem::size_of::<*const u8>()));
+                        {
+                            let super::super::super::krate::gpu::types::VertexBufferLayout {
+                                array_stride: array_stride9,
+                                step_mode: step_mode9,
+                                attributes: attributes9,
+                            } = e;
+                            *base.add(0).cast::<i64>() = _rt::as_i64(array_stride9);
+                            *base.add(8).cast::<u8>() = (step_mode9.clone() as i32) as u8;
+                            let vec12 = attributes9;
+                            let len12 = vec12.len();
+                            let layout12 = _rt::alloc::Layout::from_size_align_unchecked(
+                                vec12.len() * (16 + 2 * ::core::mem::size_of::<*const u8>()),
+                                8,
+                            );
+                            let result12 = if layout12.size() != 0 {
+                                let ptr = _rt::alloc::alloc(layout12).cast::<u8>();
+                                if ptr.is_null() {
+                                    _rt::alloc::handle_alloc_error(layout12);
+                                }
+                                ptr
+                            } else {
+                                ::core::ptr::null_mut()
+                            };
+                            for (i, e) in vec12.into_iter().enumerate() {
+                                let base = result12
+                                    .add(i * (16 + 2 * ::core::mem::size_of::<*const u8>()));
+                                {
+                                    let super::super::super::krate::gpu::types::VertexAttribute {
+                                        format: format10,
+                                        offset: offset10,
+                                        shader_location: shader_location10,
+                                    } = e;
+                                    let vec11 = format10;
+                                    let ptr11 = vec11.as_ptr().cast::<u8>();
+                                    let len11 = vec11.len();
+                                    *base
+                                        .add(::core::mem::size_of::<*const u8>())
+                                        .cast::<usize>() = len11;
+                                    *base.add(0).cast::<*mut u8>() = ptr11.cast_mut();
+                                    *base
+                                        .add(2 * ::core::mem::size_of::<*const u8>())
+                                        .cast::<i64>() = _rt::as_i64(offset10);
+                                    *base
+                                        .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                        .cast::<i32>() = _rt::as_i32(shader_location10);
+                                }
+                            }
+                            *base
+                                .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                .cast::<usize>() = len12;
+                            *base
+                                .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                .cast::<*mut u8>() = result12;
+                            cleanup_list.extend_from_slice(&[(result12, layout12)]);
+                        }
+                    }
+                    *ptr0
+                        .add(48 + 7 * ::core::mem::size_of::<*const u8>())
+                        .cast::<usize>() = len13;
+                    *ptr0
+                        .add(48 + 6 * ::core::mem::size_of::<*const u8>())
+                        .cast::<*mut u8>() = result13;
+                    let super::super::super::krate::gpu::types::PrimitiveState {
+                        topology: topology14,
+                        strip_index_format: strip_index_format14,
+                        front_face: front_face14,
+                        cull_mode: cull_mode14,
+                        unclipped_depth: unclipped_depth14,
+                        polygon_mode: polygon_mode14,
+                        conservative: conservative14,
+                    } = primitive1;
+                    *ptr0
+                        .add(48 + 8 * ::core::mem::size_of::<*const u8>())
+                        .cast::<u8>() = (topology14.clone() as i32) as u8;
+                    match strip_index_format14 {
+                        Some(e) => {
+                            *ptr0
+                                .add(49 + 8 * ::core::mem::size_of::<*const u8>())
+                                .cast::<u8>() = (1i32) as u8;
+                            *ptr0
+                                .add(50 + 8 * ::core::mem::size_of::<*const u8>())
+                                .cast::<u8>() = (e.clone() as i32) as u8;
+                        }
+                        None => {
+                            *ptr0
+                                .add(49 + 8 * ::core::mem::size_of::<*const u8>())
+                                .cast::<u8>() = (0i32) as u8;
+                        }
+                    };
+                    *ptr0
+                        .add(51 + 8 * ::core::mem::size_of::<*const u8>())
+                        .cast::<u8>() = (front_face14.clone() as i32) as u8;
+                    *ptr0
+                        .add(52 + 8 * ::core::mem::size_of::<*const u8>())
+                        .cast::<u8>() = (cull_mode14.clone() as i32) as u8;
+                    *ptr0
+                        .add(53 + 8 * ::core::mem::size_of::<*const u8>())
+                        .cast::<u8>() = (match unclipped_depth14 {
+                        true => 1,
+                        false => 0,
+                    }) as u8;
+                    *ptr0
+                        .add(54 + 8 * ::core::mem::size_of::<*const u8>())
+                        .cast::<u8>() = (polygon_mode14.clone() as i32) as u8;
+                    *ptr0
+                        .add(55 + 8 * ::core::mem::size_of::<*const u8>())
+                        .cast::<u8>() = (match conservative14 {
+                        true => 1,
+                        false => 0,
+                    }) as u8;
+                    match depth_stencil1 {
+                        Some(e) => {
+                            *ptr0
+                                .add(56 + 8 * ::core::mem::size_of::<*const u8>())
+                                .cast::<u8>() = (1i32) as u8;
+                            let super::super::super::krate::gpu::types::DepthStencilState {
+                                format: format15,
+                                depth_write_enabled: depth_write_enabled15,
+                                depth_compare: depth_compare15,
+                                stencil_front: stencil_front15,
+                                stencil_back: stencil_back15,
+                                stencil_read_mask: stencil_read_mask15,
+                                stencil_write_mask: stencil_write_mask15,
+                                depth_bias: depth_bias15,
+                                depth_bias_slope_scale: depth_bias_slope_scale15,
+                                depth_bias_clamp: depth_bias_clamp15,
+                            } = e;
+                            let vec16 = format15;
+                            let ptr16 = vec16.as_ptr().cast::<u8>();
+                            let len16 = vec16.len();
+                            *ptr0
+                                .add(56 + 10 * ::core::mem::size_of::<*const u8>())
+                                .cast::<usize>() = len16;
+                            *ptr0
+                                .add(56 + 9 * ::core::mem::size_of::<*const u8>())
+                                .cast::<*mut u8>() = ptr16.cast_mut();
+                            *ptr0
+                                .add(56 + 11 * ::core::mem::size_of::<*const u8>())
+                                .cast::<u8>() = (match depth_write_enabled15 {
+                                true => 1,
+                                false => 0,
+                            }) as u8;
+                            *ptr0
+                                .add(57 + 11 * ::core::mem::size_of::<*const u8>())
+                                .cast::<u8>() = (depth_compare15.clone() as i32) as u8;
+                            let super::super::super::krate::gpu::types::StencilFaceState {
+                                compare: compare17,
+                                fail_op: fail_op17,
+                                depth_fail_op: depth_fail_op17,
+                                pass_op: pass_op17,
+                            } = stencil_front15;
+                            *ptr0
+                                .add(58 + 11 * ::core::mem::size_of::<*const u8>())
+                                .cast::<u8>() = (compare17.clone() as i32) as u8;
+                            *ptr0
+                                .add(59 + 11 * ::core::mem::size_of::<*const u8>())
+                                .cast::<u8>() = (fail_op17.clone() as i32) as u8;
+                            *ptr0
+                                .add(60 + 11 * ::core::mem::size_of::<*const u8>())
+                                .cast::<u8>() = (depth_fail_op17.clone() as i32) as u8;
+                            *ptr0
+                                .add(61 + 11 * ::core::mem::size_of::<*const u8>())
+                                .cast::<u8>() = (pass_op17.clone() as i32) as u8;
+                            let super::super::super::krate::gpu::types::StencilFaceState {
+                                compare: compare18,
+                                fail_op: fail_op18,
+                                depth_fail_op: depth_fail_op18,
+                                pass_op: pass_op18,
+                            } = stencil_back15;
+                            *ptr0
+                                .add(62 + 11 * ::core::mem::size_of::<*const u8>())
+                                .cast::<u8>() = (compare18.clone() as i32) as u8;
+                            *ptr0
+                                .add(63 + 11 * ::core::mem::size_of::<*const u8>())
+                                .cast::<u8>() = (fail_op18.clone() as i32) as u8;
+                            *ptr0
+                                .add(64 + 11 * ::core::mem::size_of::<*const u8>())
+                                .cast::<u8>() = (depth_fail_op18.clone() as i32) as u8;
+                            *ptr0
+                                .add(65 + 11 * ::core::mem::size_of::<*const u8>())
+                                .cast::<u8>() = (pass_op18.clone() as i32) as u8;
+                            *ptr0
+                                .add(68 + 11 * ::core::mem::size_of::<*const u8>())
+                                .cast::<i32>() = _rt::as_i32(stencil_read_mask15);
+                            *ptr0
+                                .add(72 + 11 * ::core::mem::size_of::<*const u8>())
+                                .cast::<i32>() = _rt::as_i32(stencil_write_mask15);
+                            *ptr0
+                                .add(76 + 11 * ::core::mem::size_of::<*const u8>())
+                                .cast::<i32>() = _rt::as_i32(depth_bias15);
+                            *ptr0
+                                .add(80 + 11 * ::core::mem::size_of::<*const u8>())
+                                .cast::<f32>() = _rt::as_f32(depth_bias_slope_scale15);
+                            *ptr0
+                                .add(84 + 11 * ::core::mem::size_of::<*const u8>())
+                                .cast::<f32>() = _rt::as_f32(depth_bias_clamp15);
+                        }
+                        None => {
+                            *ptr0
+                                .add(56 + 8 * ::core::mem::size_of::<*const u8>())
+                                .cast::<u8>() = (0i32) as u8;
+                        }
+                    };
+                    let super::super::super::krate::gpu::types::MultisampleState {
+                        count: count19,
+                        mask: mask19,
+                        alpha_to_coverage_enabled: alpha_to_coverage_enabled19,
+                    } = multisample1;
+                    *ptr0
+                        .add(96 + 10 * ::core::mem::size_of::<*const u8>())
+                        .cast::<i32>() = _rt::as_i32(count19);
+                    *ptr0
+                        .add(104 + 10 * ::core::mem::size_of::<*const u8>())
+                        .cast::<i64>() = _rt::as_i64(mask19);
+                    *ptr0
+                        .add(112 + 10 * ::core::mem::size_of::<*const u8>())
+                        .cast::<u8>() = (match alpha_to_coverage_enabled19 {
+                        true => 1,
+                        false => 0,
+                    }) as u8;
+                    match fragment1 {
+                        Some(e) => {
+                            *ptr0
+                                .add(120 + 10 * ::core::mem::size_of::<*const u8>())
+                                .cast::<u8>() = (1i32) as u8;
+                            let super::super::super::krate::gpu::types::FragmentState {
+                                stage: stage20,
+                                targets: targets20,
+                            } = e;
+                            let super::super::super::krate::gpu::types::ProgrammableStage {
+                                module: module21,
+                                entry_point: entry_point21,
+                                constants: constants21,
+                            } = stage20;
+                            *ptr0
+                                .add(128 + 10 * ::core::mem::size_of::<*const u8>())
+                                .cast::<i64>() = _rt::as_i64(module21);
+                            match entry_point21 {
+                                Some(e) => {
+                                    *ptr0
+                                        .add(136 + 10 * ::core::mem::size_of::<*const u8>())
+                                        .cast::<u8>() = (1i32) as u8;
+                                    let vec22 = e;
+                                    let ptr22 = vec22.as_ptr().cast::<u8>();
+                                    let len22 = vec22.len();
+                                    *ptr0
+                                        .add(136 + 12 * ::core::mem::size_of::<*const u8>())
+                                        .cast::<usize>() = len22;
+                                    *ptr0
+                                        .add(136 + 11 * ::core::mem::size_of::<*const u8>())
+                                        .cast::<*mut u8>() = ptr22.cast_mut();
+                                }
+                                None => {
+                                    *ptr0
+                                        .add(136 + 10 * ::core::mem::size_of::<*const u8>())
+                                        .cast::<u8>() = (0i32) as u8;
+                                }
+                            };
+                            let vec25 = constants21;
+                            let len25 = vec25.len();
+                            let layout25 = _rt::alloc::Layout::from_size_align_unchecked(
+                                vec25.len() * (8 + 2 * ::core::mem::size_of::<*const u8>()),
+                                8,
+                            );
+                            let result25 = if layout25.size() != 0 {
+                                let ptr = _rt::alloc::alloc(layout25).cast::<u8>();
+                                if ptr.is_null() {
+                                    _rt::alloc::handle_alloc_error(layout25);
+                                }
+                                ptr
+                            } else {
+                                ::core::ptr::null_mut()
+                            };
+                            for (i, e) in vec25.into_iter().enumerate() {
+                                let base =
+                                    result25.add(i * (8 + 2 * ::core::mem::size_of::<*const u8>()));
+                                {
+                                    let super::super::super::krate::gpu::types::ConstantEntry {
+                                        name: name23,
+                                        value: value23,
+                                    } = e;
+                                    let vec24 = name23;
+                                    let ptr24 = vec24.as_ptr().cast::<u8>();
+                                    let len24 = vec24.len();
+                                    *base
+                                        .add(::core::mem::size_of::<*const u8>())
+                                        .cast::<usize>() = len24;
+                                    *base.add(0).cast::<*mut u8>() = ptr24.cast_mut();
+                                    *base
+                                        .add(2 * ::core::mem::size_of::<*const u8>())
+                                        .cast::<f64>() = _rt::as_f64(value23);
+                                }
+                            }
+                            *ptr0
+                                .add(136 + 14 * ::core::mem::size_of::<*const u8>())
+                                .cast::<usize>() = len25;
+                            *ptr0
+                                .add(136 + 13 * ::core::mem::size_of::<*const u8>())
+                                .cast::<*mut u8>() = result25;
+                            let vec32 = targets20;
+                            let len32 = vec32.len();
+                            let layout32 = _rt::alloc::Layout::from_size_align_unchecked(
+                                vec32.len() * (8 + 3 * ::core::mem::size_of::<*const u8>()),
+                                ::core::mem::size_of::<*const u8>(),
+                            );
+                            let result32 = if layout32.size() != 0 {
+                                let ptr = _rt::alloc::alloc(layout32).cast::<u8>();
+                                if ptr.is_null() {
+                                    _rt::alloc::handle_alloc_error(layout32);
+                                }
+                                ptr
+                            } else {
+                                ::core::ptr::null_mut()
+                            };
+                            for (i, e) in vec32.into_iter().enumerate() {
+                                let base =
+                                    result32.add(i * (8 + 3 * ::core::mem::size_of::<*const u8>()));
+                                {
+                                    match e {
+                                        Some(e) => {
+                                            *base.add(0).cast::<u8>() = (1i32) as u8;
+                                            let super::super::super::krate::gpu::types::ColorTargetState{ format:format26, blend:blend26, write_mask:write_mask26, } = e;
+                                            let vec27 = format26;
+                                            let ptr27 = vec27.as_ptr().cast::<u8>();
+                                            let len27 = vec27.len();
+                                            *base
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>() = len27;
+                                            *base
+                                                .add(::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>() = ptr27.cast_mut();
+                                            match blend26 {
+                                                Some(e) => {
+                                                    *base
+                                                        .add(
+                                                            3 * ::core::mem::size_of::<*const u8>(),
+                                                        )
+                                                        .cast::<u8>() = (1i32) as u8;
+                                                    let super::super::super::krate::gpu::types::BlendState{ color:color28, alpha:alpha28, } = e;
+                                                    let super::super::super::krate::gpu::types::BlendComponent{ src_factor:src_factor29, dst_factor:dst_factor29, operation:operation29, } = color28;
+                                                    *base
+                                                        .add(
+                                                            1 + 3
+                                                                * ::core::mem::size_of::<*const u8>(
+                                                                ),
+                                                        )
+                                                        .cast::<u8>() =
+                                                        (src_factor29.clone() as i32) as u8;
+                                                    *base
+                                                        .add(
+                                                            2 + 3
+                                                                * ::core::mem::size_of::<*const u8>(
+                                                                ),
+                                                        )
+                                                        .cast::<u8>() =
+                                                        (dst_factor29.clone() as i32) as u8;
+                                                    *base
+                                                        .add(
+                                                            3 + 3
+                                                                * ::core::mem::size_of::<*const u8>(
+                                                                ),
+                                                        )
+                                                        .cast::<u8>() =
+                                                        (operation29.clone() as i32) as u8;
+                                                    let super::super::super::krate::gpu::types::BlendComponent{ src_factor:src_factor30, dst_factor:dst_factor30, operation:operation30, } = alpha28;
+                                                    *base
+                                                        .add(
+                                                            4 + 3
+                                                                * ::core::mem::size_of::<*const u8>(
+                                                                ),
+                                                        )
+                                                        .cast::<u8>() =
+                                                        (src_factor30.clone() as i32) as u8;
+                                                    *base
+                                                        .add(
+                                                            5 + 3
+                                                                * ::core::mem::size_of::<*const u8>(
+                                                                ),
+                                                        )
+                                                        .cast::<u8>() =
+                                                        (dst_factor30.clone() as i32) as u8;
+                                                    *base
+                                                        .add(
+                                                            6 + 3
+                                                                * ::core::mem::size_of::<*const u8>(
+                                                                ),
+                                                        )
+                                                        .cast::<u8>() =
+                                                        (operation30.clone() as i32) as u8;
+                                                }
+                                                None => {
+                                                    *base
+                                                        .add(
+                                                            3 * ::core::mem::size_of::<*const u8>(),
+                                                        )
+                                                        .cast::<u8>() = (0i32) as u8;
+                                                }
+                                            };
+                                            let flags31 = write_mask26;
+                                            *base
+                                                .add(7 + 3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<u8>() =
+                                                ((flags31.bits() >> 0) as i32) as u8;
+                                        }
+                                        None => {
+                                            *base.add(0).cast::<u8>() = (0i32) as u8;
+                                        }
+                                    };
+                                }
+                            }
+                            *ptr0
+                                .add(144 + 15 * ::core::mem::size_of::<*const u8>())
+                                .cast::<usize>() = len32;
+                            *ptr0
+                                .add(144 + 14 * ::core::mem::size_of::<*const u8>())
+                                .cast::<*mut u8>() = result32;
+                            cleanup_list
+                                .extend_from_slice(&[(result25, layout25), (result32, layout32)]);
+                        }
+                        None => {
+                            *ptr0
+                                .add(120 + 10 * ::core::mem::size_of::<*const u8>())
+                                .cast::<u8>() = (0i32) as u8;
+                        }
+                    };
+                    match multiview_mask1 {
+                        Some(e) => {
+                            *ptr0
+                                .add(144 + 16 * ::core::mem::size_of::<*const u8>())
+                                .cast::<u8>() = (1i32) as u8;
+                            *ptr0
+                                .add(148 + 16 * ::core::mem::size_of::<*const u8>())
+                                .cast::<i32>() = _rt::as_i32(e);
+                        }
+                        None => {
+                            *ptr0
+                                .add(144 + 16 * ::core::mem::size_of::<*const u8>())
+                                .cast::<u8>() = (0i32) as u8;
+                        }
+                    };
+                    let ptr33 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:gpu/gpu@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "create-render-pipeline"]
+                        fn wit_import34(_: *mut u8, _: *mut u8);
+                    }
+
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import34(_: *mut u8, _: *mut u8) {
+                        unreachable!()
+                    }
+                    unsafe { wit_import34(ptr0, ptr33) };
+                    let l35 = i32::from(*ptr33.add(0).cast::<u8>());
+                    let result54 = match l35 {
+                        0 => {
+                            let e = {
+                                let l36 = *ptr33.add(8).cast::<i64>();
+
+                                l36 as u64
+                            };
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l37 = i32::from(*ptr33.add(8).cast::<u8>());
+                                use super::super::super::krate::gpu::types::GpuError as V53;
+                                let v53 = match l37 {
+                                    0 => {
+                                        let e53 = {
+                                            let l38 = *ptr33
+                                                .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l39 = *ptr33
+                                                .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len40 = l39;
+                                            let bytes40 =
+                                                _rt::Vec::from_raw_parts(l38.cast(), len40, len40);
+
+                                            _rt::string_lift(bytes40)
+                                        };
+                                        V53::InvalidHandle(e53)
+                                    }
+                                    1 => {
+                                        let e53 = {
+                                            let l41 = *ptr33
+                                                .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l42 = *ptr33
+                                                .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len43 = l42;
+                                            let bytes43 =
+                                                _rt::Vec::from_raw_parts(l41.cast(), len43, len43);
+
+                                            _rt::string_lift(bytes43)
+                                        };
+                                        V53::Validation(e53)
+                                    }
+                                    2 => V53::OutOfMemory,
+                                    3 => {
+                                        let e53 = {
+                                            let l44 = *ptr33
+                                                .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l45 = *ptr33
+                                                .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len46 = l45;
+                                            let bytes46 =
+                                                _rt::Vec::from_raw_parts(l44.cast(), len46, len46);
+
+                                            _rt::string_lift(bytes46)
+                                        };
+                                        V53::Lost(e53)
+                                    }
+                                    4 => {
+                                        let e53 = {
+                                            let l47 = *ptr33
+                                                .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l48 = *ptr33
+                                                .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len49 = l48;
+                                            let bytes49 =
+                                                _rt::Vec::from_raw_parts(l47.cast(), len49, len49);
+
+                                            _rt::string_lift(bytes49)
+                                        };
+                                        V53::Unsupported(e53)
+                                    }
+                                    n => {
+                                        debug_assert_eq!(n, 5, "invalid enum discriminant");
+                                        let e53 = {
+                                            let l50 = *ptr33
+                                                .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l51 = *ptr33
+                                                .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len52 = l51;
+                                            let bytes52 =
+                                                _rt::Vec::from_raw_parts(l50.cast(), len52, len52);
+
+                                            _rt::string_lift(bytes52)
+                                        };
+                                        V53::Internal(e53)
+                                    }
+                                };
+
+                                v53
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    };
+                    if layout8.size() != 0 {
+                        _rt::alloc::dealloc(result8.cast(), layout8);
+                    }
+                    if layout13.size() != 0 {
+                        _rt::alloc::dealloc(result13.cast(), layout13);
+                    }
+                    for (ptr, layout) in cleanup_list {
+                        if layout.size() != 0 {
+                            _rt::alloc::dealloc(ptr.cast(), layout);
+                        }
+                    }
+                    result54
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Make a compute pipeline.
+            pub fn create_compute_pipeline(
+                device: Handle,
+                descriptor: &ComputePipelineDescriptor,
+            ) -> Result<Handle, GpuError> {
+                unsafe {
+                    #[repr(align(8))]
+                    struct RetArea(
+                        [::core::mem::MaybeUninit<u8>;
+                            16 + 2 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let mut ret_area = RetArea(
+                        [::core::mem::MaybeUninit::uninit();
+                            16 + 2 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let super::super::super::krate::gpu::types::ComputePipelineDescriptor {
+                        label: label0,
+                        layout: layout0,
+                        stage: stage0,
+                    } = descriptor;
+                    let (result2_0, result2_1, result2_2) = match label0 {
+                        Some(e) => {
+                            let vec1 = e;
+                            let ptr1 = vec1.as_ptr().cast::<u8>();
+                            let len1 = vec1.len();
+
+                            (1i32, ptr1.cast_mut(), len1)
+                        }
+                        None => (0i32, ::core::ptr::null_mut(), 0usize),
+                    };
+                    let (result3_0, result3_1) = match layout0 {
+                        Some(e) => (1i32, _rt::as_i64(e)),
+                        None => (0i32, 0i64),
+                    };
+                    let super::super::super::krate::gpu::types::ProgrammableStage {
+                        module: module4,
+                        entry_point: entry_point4,
+                        constants: constants4,
+                    } = stage0;
+                    let (result6_0, result6_1, result6_2) = match entry_point4 {
+                        Some(e) => {
+                            let vec5 = e;
+                            let ptr5 = vec5.as_ptr().cast::<u8>();
+                            let len5 = vec5.len();
+
+                            (1i32, ptr5.cast_mut(), len5)
+                        }
+                        None => (0i32, ::core::ptr::null_mut(), 0usize),
+                    };
+                    let vec9 = constants4;
+                    let len9 = vec9.len();
+                    let layout9 = _rt::alloc::Layout::from_size_align_unchecked(
+                        vec9.len() * (8 + 2 * ::core::mem::size_of::<*const u8>()),
+                        8,
+                    );
+                    let result9 = if layout9.size() != 0 {
+                        let ptr = _rt::alloc::alloc(layout9).cast::<u8>();
+                        if ptr.is_null() {
+                            _rt::alloc::handle_alloc_error(layout9);
+                        }
+                        ptr
+                    } else {
+                        ::core::ptr::null_mut()
+                    };
+                    for (i, e) in vec9.into_iter().enumerate() {
+                        let base = result9.add(i * (8 + 2 * ::core::mem::size_of::<*const u8>()));
+                        {
+                            let super::super::super::krate::gpu::types::ConstantEntry {
+                                name: name7,
+                                value: value7,
+                            } = e;
+                            let vec8 = name7;
+                            let ptr8 = vec8.as_ptr().cast::<u8>();
+                            let len8 = vec8.len();
+                            *base
+                                .add(::core::mem::size_of::<*const u8>())
+                                .cast::<usize>() = len8;
+                            *base.add(0).cast::<*mut u8>() = ptr8.cast_mut();
+                            *base
+                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                .cast::<f64>() = _rt::as_f64(value7);
+                        }
+                    }
+                    let ptr10 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:gpu/gpu@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "create-compute-pipeline"]
+                        fn wit_import11(
+                            _: i64,
+                            _: i32,
+                            _: *mut u8,
+                            _: usize,
+                            _: i32,
+                            _: i64,
+                            _: i64,
+                            _: i32,
+                            _: *mut u8,
+                            _: usize,
+                            _: *mut u8,
+                            _: usize,
+                            _: *mut u8,
+                        );
+                    }
+
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import11(
+                        _: i64,
+                        _: i32,
+                        _: *mut u8,
+                        _: usize,
+                        _: i32,
+                        _: i64,
+                        _: i64,
+                        _: i32,
+                        _: *mut u8,
+                        _: usize,
+                        _: *mut u8,
+                        _: usize,
+                        _: *mut u8,
+                    ) {
+                        unreachable!()
+                    }
+                    unsafe {
+                        wit_import11(
+                            _rt::as_i64(device),
+                            result2_0,
+                            result2_1,
+                            result2_2,
+                            result3_0,
+                            result3_1,
+                            _rt::as_i64(module4),
+                            result6_0,
+                            result6_1,
+                            result6_2,
+                            result9,
+                            len9,
+                            ptr10,
+                        )
+                    };
+                    let l12 = i32::from(*ptr10.add(0).cast::<u8>());
+                    let result31 = match l12 {
+                        0 => {
+                            let e = {
+                                let l13 = *ptr10.add(8).cast::<i64>();
+
+                                l13 as u64
+                            };
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l14 = i32::from(*ptr10.add(8).cast::<u8>());
+                                use super::super::super::krate::gpu::types::GpuError as V30;
+                                let v30 = match l14 {
+                                    0 => {
+                                        let e30 = {
+                                            let l15 = *ptr10
+                                                .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l16 = *ptr10
+                                                .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len17 = l16;
+                                            let bytes17 =
+                                                _rt::Vec::from_raw_parts(l15.cast(), len17, len17);
+
+                                            _rt::string_lift(bytes17)
+                                        };
+                                        V30::InvalidHandle(e30)
+                                    }
+                                    1 => {
+                                        let e30 = {
+                                            let l18 = *ptr10
+                                                .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l19 = *ptr10
+                                                .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len20 = l19;
+                                            let bytes20 =
+                                                _rt::Vec::from_raw_parts(l18.cast(), len20, len20);
+
+                                            _rt::string_lift(bytes20)
+                                        };
+                                        V30::Validation(e30)
+                                    }
+                                    2 => V30::OutOfMemory,
+                                    3 => {
+                                        let e30 = {
+                                            let l21 = *ptr10
+                                                .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l22 = *ptr10
+                                                .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len23 = l22;
+                                            let bytes23 =
+                                                _rt::Vec::from_raw_parts(l21.cast(), len23, len23);
+
+                                            _rt::string_lift(bytes23)
+                                        };
+                                        V30::Lost(e30)
+                                    }
+                                    4 => {
+                                        let e30 = {
+                                            let l24 = *ptr10
+                                                .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l25 = *ptr10
+                                                .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len26 = l25;
+                                            let bytes26 =
+                                                _rt::Vec::from_raw_parts(l24.cast(), len26, len26);
+
+                                            _rt::string_lift(bytes26)
+                                        };
+                                        V30::Unsupported(e30)
+                                    }
+                                    n => {
+                                        debug_assert_eq!(n, 5, "invalid enum discriminant");
+                                        let e30 = {
+                                            let l27 = *ptr10
+                                                .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l28 = *ptr10
+                                                .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len29 = l28;
+                                            let bytes29 =
+                                                _rt::Vec::from_raw_parts(l27.cast(), len29, len29);
+
+                                            _rt::string_lift(bytes29)
+                                        };
+                                        V30::Internal(e30)
+                                    }
+                                };
+
+                                v30
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    };
+                    if layout9.size() != 0 {
+                        _rt::alloc::dealloc(result9.cast(), layout9);
+                    }
+                    result31
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// The bind group layout a render or compute pipeline uses at an index.
+            pub fn pipeline_bind_group_layout(
+                pipeline: Handle,
+                index: u32,
+            ) -> Result<Handle, GpuError> {
+                unsafe {
+                    #[repr(align(8))]
+                    struct RetArea(
+                        [::core::mem::MaybeUninit<u8>;
+                            16 + 2 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let mut ret_area = RetArea(
+                        [::core::mem::MaybeUninit::uninit();
+                            16 + 2 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:gpu/gpu@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "pipeline-bind-group-layout"]
+                        fn wit_import1(_: i64, _: i32, _: *mut u8);
+                    }
+
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import1(_: i64, _: i32, _: *mut u8) {
+                        unreachable!()
+                    }
+                    unsafe { wit_import1(_rt::as_i64(pipeline), _rt::as_i32(&index), ptr0) };
+                    let l2 = i32::from(*ptr0.add(0).cast::<u8>());
+                    let result21 = match l2 {
+                        0 => {
+                            let e = {
+                                let l3 = *ptr0.add(8).cast::<i64>();
+
+                                l3 as u64
+                            };
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l4 = i32::from(*ptr0.add(8).cast::<u8>());
+                                use super::super::super::krate::gpu::types::GpuError as V20;
+                                let v20 = match l4 {
+                                    0 => {
+                                        let e20 = {
+                                            let l5 = *ptr0
+                                                .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l6 = *ptr0
+                                                .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len7 = l6;
+                                            let bytes7 =
+                                                _rt::Vec::from_raw_parts(l5.cast(), len7, len7);
+
+                                            _rt::string_lift(bytes7)
+                                        };
+                                        V20::InvalidHandle(e20)
+                                    }
+                                    1 => {
+                                        let e20 = {
+                                            let l8 = *ptr0
+                                                .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l9 = *ptr0
+                                                .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len10 = l9;
+                                            let bytes10 =
+                                                _rt::Vec::from_raw_parts(l8.cast(), len10, len10);
+
+                                            _rt::string_lift(bytes10)
+                                        };
+                                        V20::Validation(e20)
+                                    }
+                                    2 => V20::OutOfMemory,
+                                    3 => {
+                                        let e20 = {
+                                            let l11 = *ptr0
+                                                .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l12 = *ptr0
+                                                .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len13 = l12;
+                                            let bytes13 =
+                                                _rt::Vec::from_raw_parts(l11.cast(), len13, len13);
+
+                                            _rt::string_lift(bytes13)
+                                        };
+                                        V20::Lost(e20)
+                                    }
+                                    4 => {
+                                        let e20 = {
+                                            let l14 = *ptr0
+                                                .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l15 = *ptr0
+                                                .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len16 = l15;
+                                            let bytes16 =
+                                                _rt::Vec::from_raw_parts(l14.cast(), len16, len16);
+
+                                            _rt::string_lift(bytes16)
+                                        };
+                                        V20::Unsupported(e20)
+                                    }
+                                    n => {
+                                        debug_assert_eq!(n, 5, "invalid enum discriminant");
+                                        let e20 = {
+                                            let l17 = *ptr0
+                                                .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l18 = *ptr0
+                                                .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len19 = l18;
+                                            let bytes19 =
+                                                _rt::Vec::from_raw_parts(l17.cast(), len19, len19);
+
+                                            _rt::string_lift(bytes19)
+                                        };
+                                        V20::Internal(e20)
+                                    }
+                                };
+
+                                v20
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    };
+                    result21
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Start recording commands.
+            pub fn create_command_encoder(
+                device: Handle,
+                label: Option<&str>,
+            ) -> Result<Handle, GpuError> {
+                unsafe {
+                    #[repr(align(8))]
+                    struct RetArea(
+                        [::core::mem::MaybeUninit<u8>;
+                            16 + 2 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let mut ret_area = RetArea(
+                        [::core::mem::MaybeUninit::uninit();
+                            16 + 2 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let (result1_0, result1_1, result1_2) = match label {
+                        Some(e) => {
+                            let vec0 = e;
+                            let ptr0 = vec0.as_ptr().cast::<u8>();
+                            let len0 = vec0.len();
+
+                            (1i32, ptr0.cast_mut(), len0)
+                        }
+                        None => (0i32, ::core::ptr::null_mut(), 0usize),
+                    };
+                    let ptr2 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:gpu/gpu@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "create-command-encoder"]
+                        fn wit_import3(_: i64, _: i32, _: *mut u8, _: usize, _: *mut u8);
+                    }
+
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import3(
+                        _: i64,
+                        _: i32,
+                        _: *mut u8,
+                        _: usize,
+                        _: *mut u8,
+                    ) {
+                        unreachable!()
+                    }
+                    unsafe {
+                        wit_import3(_rt::as_i64(device), result1_0, result1_1, result1_2, ptr2)
+                    };
+                    let l4 = i32::from(*ptr2.add(0).cast::<u8>());
+                    let result23 = match l4 {
+                        0 => {
+                            let e = {
+                                let l5 = *ptr2.add(8).cast::<i64>();
+
+                                l5 as u64
+                            };
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l6 = i32::from(*ptr2.add(8).cast::<u8>());
+                                use super::super::super::krate::gpu::types::GpuError as V22;
+                                let v22 = match l6 {
+                                    0 => {
+                                        let e22 = {
+                                            let l7 = *ptr2
+                                                .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l8 = *ptr2
+                                                .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len9 = l8;
+                                            let bytes9 =
+                                                _rt::Vec::from_raw_parts(l7.cast(), len9, len9);
+
+                                            _rt::string_lift(bytes9)
+                                        };
+                                        V22::InvalidHandle(e22)
+                                    }
+                                    1 => {
+                                        let e22 = {
+                                            let l10 = *ptr2
+                                                .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l11 = *ptr2
+                                                .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len12 = l11;
+                                            let bytes12 =
+                                                _rt::Vec::from_raw_parts(l10.cast(), len12, len12);
+
+                                            _rt::string_lift(bytes12)
+                                        };
+                                        V22::Validation(e22)
+                                    }
+                                    2 => V22::OutOfMemory,
+                                    3 => {
+                                        let e22 = {
+                                            let l13 = *ptr2
+                                                .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l14 = *ptr2
+                                                .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len15 = l14;
+                                            let bytes15 =
+                                                _rt::Vec::from_raw_parts(l13.cast(), len15, len15);
+
+                                            _rt::string_lift(bytes15)
+                                        };
+                                        V22::Lost(e22)
+                                    }
+                                    4 => {
+                                        let e22 = {
+                                            let l16 = *ptr2
+                                                .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l17 = *ptr2
+                                                .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len18 = l17;
+                                            let bytes18 =
+                                                _rt::Vec::from_raw_parts(l16.cast(), len18, len18);
+
+                                            _rt::string_lift(bytes18)
+                                        };
+                                        V22::Unsupported(e22)
+                                    }
+                                    n => {
+                                        debug_assert_eq!(n, 5, "invalid enum discriminant");
+                                        let e22 = {
+                                            let l19 = *ptr2
+                                                .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l20 = *ptr2
+                                                .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len21 = l20;
+                                            let bytes21 =
+                                                _rt::Vec::from_raw_parts(l19.cast(), len21, len21);
+
+                                            _rt::string_lift(bytes21)
+                                        };
+                                        V22::Internal(e22)
+                                    }
+                                };
+
+                                v22
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    };
+                    result23
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Record a whole render pass: its attachments and every command in it.
+            pub fn encode_render_pass(
+                encoder: Handle,
+                descriptor: &RenderPassDescriptor,
+                commands: &[RenderCommand],
+            ) -> Result<(), GpuError> {
+                unsafe {
+                    #[repr(align(8))]
+                    struct RetArea(
+                        [::core::mem::MaybeUninit<u8>;
+                            120 + 6 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let mut ret_area = RetArea(
+                        [::core::mem::MaybeUninit::uninit();
+                            120 + 6 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    *ptr0.add(0).cast::<i64>() = _rt::as_i64(encoder);
+                    let super::super::super::krate::gpu::types::RenderPassDescriptor {
+                        label: label1,
+                        color_attachments: color_attachments1,
+                        depth_stencil_attachment: depth_stencil_attachment1,
+                        timestamp_writes: timestamp_writes1,
+                        occlusion_query_set: occlusion_query_set1,
+                        multiview_mask: multiview_mask1,
+                    } = descriptor;
+                    match label1 {
+                        Some(e) => {
+                            *ptr0.add(8).cast::<u8>() = (1i32) as u8;
+                            let vec2 = e;
+                            let ptr2 = vec2.as_ptr().cast::<u8>();
+                            let len2 = vec2.len();
+                            *ptr0
+                                .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                .cast::<usize>() = len2;
+                            *ptr0
+                                .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                .cast::<*mut u8>() = ptr2.cast_mut();
+                        }
+                        None => {
+                            *ptr0.add(8).cast::<u8>() = (0i32) as u8;
+                        }
+                    };
+                    let vec6 = color_attachments1;
+                    let len6 = vec6.len();
+                    let layout6 = _rt::alloc::Layout::from_size_align_unchecked(vec6.len() * 88, 8);
+                    let result6 = if layout6.size() != 0 {
+                        let ptr = _rt::alloc::alloc(layout6).cast::<u8>();
+                        if ptr.is_null() {
+                            _rt::alloc::handle_alloc_error(layout6);
+                        }
+                        ptr
+                    } else {
+                        ::core::ptr::null_mut()
+                    };
+                    for (i, e) in vec6.into_iter().enumerate() {
+                        let base = result6.add(i * 88);
+                        {
+                            match e {
+                                Some(e) => {
+                                    *base.add(0).cast::<u8>() = (1i32) as u8;
+                                    let super::super::super::krate::gpu::types::RenderPassColorAttachment{ view:view3, depth_slice:depth_slice3, resolve_target:resolve_target3, load:load3, store:store3, } = e;
+                                    *base.add(8).cast::<i64>() = _rt::as_i64(view3);
+                                    match depth_slice3 {
+                                        Some(e) => {
+                                            *base.add(16).cast::<u8>() = (1i32) as u8;
+                                            *base.add(20).cast::<i32>() = _rt::as_i32(e);
+                                        }
+                                        None => {
+                                            *base.add(16).cast::<u8>() = (0i32) as u8;
+                                        }
+                                    };
+                                    match resolve_target3 {
+                                        Some(e) => {
+                                            *base.add(24).cast::<u8>() = (1i32) as u8;
+                                            *base.add(32).cast::<i64>() = _rt::as_i64(e);
+                                        }
+                                        None => {
+                                            *base.add(24).cast::<u8>() = (0i32) as u8;
+                                        }
+                                    };
+                                    use super::super::super::krate::gpu::types::ColorLoadOp as V5;
+                                    match load3 {
+                                        V5::Clear(e) => {
+                                            *base.add(40).cast::<u8>() = (0i32) as u8;
+                                            let super::super::super::krate::gpu::types::Color {
+                                                r: r4,
+                                                g: g4,
+                                                b: b4,
+                                                a: a4,
+                                            } = e;
+                                            *base.add(48).cast::<f64>() = _rt::as_f64(r4);
+                                            *base.add(56).cast::<f64>() = _rt::as_f64(g4);
+                                            *base.add(64).cast::<f64>() = _rt::as_f64(b4);
+                                            *base.add(72).cast::<f64>() = _rt::as_f64(a4);
+                                        }
+                                        V5::Load => {
+                                            *base.add(40).cast::<u8>() = (1i32) as u8;
+                                        }
+                                    }
+                                    *base.add(80).cast::<u8>() = (store3.clone() as i32) as u8;
+                                }
+                                None => {
+                                    *base.add(0).cast::<u8>() = (0i32) as u8;
+                                }
+                            };
+                        }
+                    }
+                    *ptr0
+                        .add(8 + 4 * ::core::mem::size_of::<*const u8>())
+                        .cast::<usize>() = len6;
+                    *ptr0
+                        .add(8 + 3 * ::core::mem::size_of::<*const u8>())
+                        .cast::<*mut u8>() = result6;
+                    match depth_stencil_attachment1 {
+                        Some(e) => {
+                            *ptr0
+                                .add(16 + 4 * ::core::mem::size_of::<*const u8>())
+                                .cast::<u8>() = (1i32) as u8;
+                            let super::super::super::krate::gpu::types::RenderPassDepthStencilAttachment{ view:view7, depth_ops:depth_ops7, stencil_ops:stencil_ops7, } = e;
+                            *ptr0
+                                .add(24 + 4 * ::core::mem::size_of::<*const u8>())
+                                .cast::<i64>() = _rt::as_i64(view7);
+                            match depth_ops7 {
+                                Some(e) => {
+                                    *ptr0
+                                        .add(32 + 4 * ::core::mem::size_of::<*const u8>())
+                                        .cast::<u8>() = (1i32) as u8;
+                                    let super::super::super::krate::gpu::types::DepthOps {
+                                        load: load8,
+                                        store: store8,
+                                    } = e;
+                                    use super::super::super::krate::gpu::types::DepthLoadOp as V9;
+                                    match load8 {
+                                        V9::Clear(e) => {
+                                            *ptr0
+                                                .add(36 + 4 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<u8>() = (0i32) as u8;
+                                            *ptr0
+                                                .add(40 + 4 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<f32>() = _rt::as_f32(e);
+                                        }
+                                        V9::Load => {
+                                            *ptr0
+                                                .add(36 + 4 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<u8>() = (1i32) as u8;
+                                        }
+                                    }
+                                    *ptr0
+                                        .add(44 + 4 * ::core::mem::size_of::<*const u8>())
+                                        .cast::<u8>() = (store8.clone() as i32) as u8;
+                                }
+                                None => {
+                                    *ptr0
+                                        .add(32 + 4 * ::core::mem::size_of::<*const u8>())
+                                        .cast::<u8>() = (0i32) as u8;
+                                }
+                            };
+                            match stencil_ops7 {
+                                Some(e) => {
+                                    *ptr0
+                                        .add(48 + 4 * ::core::mem::size_of::<*const u8>())
+                                        .cast::<u8>() = (1i32) as u8;
+                                    let super::super::super::krate::gpu::types::StencilOps {
+                                        load: load10,
+                                        store: store10,
+                                    } = e;
+                                    use super::super::super::krate::gpu::types::StencilLoadOp as V11;
+                                    match load10 {
+                                        V11::Clear(e) => {
+                                            *ptr0
+                                                .add(52 + 4 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<u8>() = (0i32) as u8;
+                                            *ptr0
+                                                .add(56 + 4 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<i32>() = _rt::as_i32(e);
+                                        }
+                                        V11::Load => {
+                                            *ptr0
+                                                .add(52 + 4 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<u8>() = (1i32) as u8;
+                                        }
+                                    }
+                                    *ptr0
+                                        .add(60 + 4 * ::core::mem::size_of::<*const u8>())
+                                        .cast::<u8>() = (store10.clone() as i32) as u8;
+                                }
+                                None => {
+                                    *ptr0
+                                        .add(48 + 4 * ::core::mem::size_of::<*const u8>())
+                                        .cast::<u8>() = (0i32) as u8;
+                                }
+                            };
+                        }
+                        None => {
+                            *ptr0
+                                .add(16 + 4 * ::core::mem::size_of::<*const u8>())
+                                .cast::<u8>() = (0i32) as u8;
+                        }
+                    };
+                    match timestamp_writes1 {
+                        Some(e) => {
+                            *ptr0
+                                .add(64 + 4 * ::core::mem::size_of::<*const u8>())
+                                .cast::<u8>() = (1i32) as u8;
+                            let super::super::super::krate::gpu::types::PassTimestampWrites {
+                                query_set: query_set12,
+                                beginning_of_pass_write_index: beginning_of_pass_write_index12,
+                                end_of_pass_write_index: end_of_pass_write_index12,
+                            } = e;
+                            *ptr0
+                                .add(72 + 4 * ::core::mem::size_of::<*const u8>())
+                                .cast::<i64>() = _rt::as_i64(query_set12);
+                            match beginning_of_pass_write_index12 {
+                                Some(e) => {
+                                    *ptr0
+                                        .add(80 + 4 * ::core::mem::size_of::<*const u8>())
+                                        .cast::<u8>() = (1i32) as u8;
+                                    *ptr0
+                                        .add(84 + 4 * ::core::mem::size_of::<*const u8>())
+                                        .cast::<i32>() = _rt::as_i32(e);
+                                }
+                                None => {
+                                    *ptr0
+                                        .add(80 + 4 * ::core::mem::size_of::<*const u8>())
+                                        .cast::<u8>() = (0i32) as u8;
+                                }
+                            };
+                            match end_of_pass_write_index12 {
+                                Some(e) => {
+                                    *ptr0
+                                        .add(88 + 4 * ::core::mem::size_of::<*const u8>())
+                                        .cast::<u8>() = (1i32) as u8;
+                                    *ptr0
+                                        .add(92 + 4 * ::core::mem::size_of::<*const u8>())
+                                        .cast::<i32>() = _rt::as_i32(e);
+                                }
+                                None => {
+                                    *ptr0
+                                        .add(88 + 4 * ::core::mem::size_of::<*const u8>())
+                                        .cast::<u8>() = (0i32) as u8;
+                                }
+                            };
+                        }
+                        None => {
+                            *ptr0
+                                .add(64 + 4 * ::core::mem::size_of::<*const u8>())
+                                .cast::<u8>() = (0i32) as u8;
+                        }
+                    };
+                    match occlusion_query_set1 {
+                        Some(e) => {
+                            *ptr0
+                                .add(96 + 4 * ::core::mem::size_of::<*const u8>())
+                                .cast::<u8>() = (1i32) as u8;
+                            *ptr0
+                                .add(104 + 4 * ::core::mem::size_of::<*const u8>())
+                                .cast::<i64>() = _rt::as_i64(e);
+                        }
+                        None => {
+                            *ptr0
+                                .add(96 + 4 * ::core::mem::size_of::<*const u8>())
+                                .cast::<u8>() = (0i32) as u8;
+                        }
+                    };
+                    match multiview_mask1 {
+                        Some(e) => {
+                            *ptr0
+                                .add(112 + 4 * ::core::mem::size_of::<*const u8>())
+                                .cast::<u8>() = (1i32) as u8;
+                            *ptr0
+                                .add(116 + 4 * ::core::mem::size_of::<*const u8>())
+                                .cast::<i32>() = _rt::as_i32(e);
+                        }
+                        None => {
+                            *ptr0
+                                .add(112 + 4 * ::core::mem::size_of::<*const u8>())
+                                .cast::<u8>() = (0i32) as u8;
+                        }
+                    };
+                    let vec34 = commands;
+                    let len34 = vec34.len();
+                    let layout34 =
+                        _rt::alloc::Layout::from_size_align_unchecked(vec34.len() * 48, 8);
+                    let result34 = if layout34.size() != 0 {
+                        let ptr = _rt::alloc::alloc(layout34).cast::<u8>();
+                        if ptr.is_null() {
+                            _rt::alloc::handle_alloc_error(layout34);
+                        }
+                        ptr
+                    } else {
+                        ::core::ptr::null_mut()
+                    };
+                    for (i, e) in vec34.into_iter().enumerate() {
+                        let base = result34.add(i * 48);
+                        {
+                            use super::super::super::krate::gpu::types::RenderCommand as V33;
+                            match e {
+                                V33::SetPipeline(e) => {
+                                    *base.add(0).cast::<u8>() = (0i32) as u8;
+                                    *base.add(8).cast::<i64>() = _rt::as_i64(e);
+                                }
+                                V33::SetBindGroup(e) => {
+                                    *base.add(0).cast::<u8>() = (1i32) as u8;
+                                    let super::super::super::krate::gpu::types::SetBindGroup {
+                                        index: index13,
+                                        group: group13,
+                                        offsets: offsets13,
+                                    } = e;
+                                    *base.add(8).cast::<i32>() = _rt::as_i32(index13);
+                                    match group13 {
+                                        Some(e) => {
+                                            *base.add(16).cast::<u8>() = (1i32) as u8;
+                                            *base.add(24).cast::<i64>() = _rt::as_i64(e);
+                                        }
+                                        None => {
+                                            *base.add(16).cast::<u8>() = (0i32) as u8;
+                                        }
+                                    };
+                                    let vec14 = offsets13;
+                                    let ptr14 = vec14.as_ptr().cast::<u8>();
+                                    let len14 = vec14.len();
+                                    *base
+                                        .add(32 + 1 * ::core::mem::size_of::<*const u8>())
+                                        .cast::<usize>() = len14;
+                                    *base.add(32).cast::<*mut u8>() = ptr14.cast_mut();
+                                }
+                                V33::SetVertexBuffer(e) => {
+                                    *base.add(0).cast::<u8>() = (2i32) as u8;
+                                    let super::super::super::krate::gpu::types::SetVertexBuffer {
+                                        slot: slot15,
+                                        buffer: buffer15,
+                                        offset: offset15,
+                                        size: size15,
+                                    } = e;
+                                    *base.add(8).cast::<i32>() = _rt::as_i32(slot15);
+                                    *base.add(16).cast::<i64>() = _rt::as_i64(buffer15);
+                                    *base.add(24).cast::<i64>() = _rt::as_i64(offset15);
+                                    match size15 {
+                                        Some(e) => {
+                                            *base.add(32).cast::<u8>() = (1i32) as u8;
+                                            *base.add(40).cast::<i64>() = _rt::as_i64(e);
+                                        }
+                                        None => {
+                                            *base.add(32).cast::<u8>() = (0i32) as u8;
+                                        }
+                                    };
+                                }
+                                V33::SetIndexBuffer(e) => {
+                                    *base.add(0).cast::<u8>() = (3i32) as u8;
+                                    let super::super::super::krate::gpu::types::SetIndexBuffer {
+                                        buffer: buffer16,
+                                        format: format16,
+                                        offset: offset16,
+                                        size: size16,
+                                    } = e;
+                                    *base.add(8).cast::<i64>() = _rt::as_i64(buffer16);
+                                    *base.add(16).cast::<u8>() = (format16.clone() as i32) as u8;
+                                    *base.add(24).cast::<i64>() = _rt::as_i64(offset16);
+                                    match size16 {
+                                        Some(e) => {
+                                            *base.add(32).cast::<u8>() = (1i32) as u8;
+                                            *base.add(40).cast::<i64>() = _rt::as_i64(e);
+                                        }
+                                        None => {
+                                            *base.add(32).cast::<u8>() = (0i32) as u8;
+                                        }
+                                    };
+                                }
+                                V33::SetViewport(e) => {
+                                    *base.add(0).cast::<u8>() = (4i32) as u8;
+                                    let super::super::super::krate::gpu::types::Viewport {
+                                        x: x17,
+                                        y: y17,
+                                        width: width17,
+                                        height: height17,
+                                        min_depth: min_depth17,
+                                        max_depth: max_depth17,
+                                    } = e;
+                                    *base.add(8).cast::<f32>() = _rt::as_f32(x17);
+                                    *base.add(12).cast::<f32>() = _rt::as_f32(y17);
+                                    *base.add(16).cast::<f32>() = _rt::as_f32(width17);
+                                    *base.add(20).cast::<f32>() = _rt::as_f32(height17);
+                                    *base.add(24).cast::<f32>() = _rt::as_f32(min_depth17);
+                                    *base.add(28).cast::<f32>() = _rt::as_f32(max_depth17);
+                                }
+                                V33::SetScissorRect(e) => {
+                                    *base.add(0).cast::<u8>() = (5i32) as u8;
+                                    let super::super::super::krate::gpu::types::ScissorRect {
+                                        x: x18,
+                                        y: y18,
+                                        width: width18,
+                                        height: height18,
+                                    } = e;
+                                    *base.add(8).cast::<i32>() = _rt::as_i32(x18);
+                                    *base.add(12).cast::<i32>() = _rt::as_i32(y18);
+                                    *base.add(16).cast::<i32>() = _rt::as_i32(width18);
+                                    *base.add(20).cast::<i32>() = _rt::as_i32(height18);
+                                }
+                                V33::SetBlendConstant(e) => {
+                                    *base.add(0).cast::<u8>() = (6i32) as u8;
+                                    let super::super::super::krate::gpu::types::Color {
+                                        r: r19,
+                                        g: g19,
+                                        b: b19,
+                                        a: a19,
+                                    } = e;
+                                    *base.add(8).cast::<f64>() = _rt::as_f64(r19);
+                                    *base.add(16).cast::<f64>() = _rt::as_f64(g19);
+                                    *base.add(24).cast::<f64>() = _rt::as_f64(b19);
+                                    *base.add(32).cast::<f64>() = _rt::as_f64(a19);
+                                }
+                                V33::SetStencilReference(e) => {
+                                    *base.add(0).cast::<u8>() = (7i32) as u8;
+                                    *base.add(8).cast::<i32>() = _rt::as_i32(e);
+                                }
+                                V33::SetImmediates(e) => {
+                                    *base.add(0).cast::<u8>() = (8i32) as u8;
+                                    let super::super::super::krate::gpu::types::SetImmediates {
+                                        offset: offset20,
+                                        data: data20,
+                                    } = e;
+                                    *base.add(8).cast::<i32>() = _rt::as_i32(offset20);
+                                    let vec21 = data20;
+                                    let ptr21 = vec21.as_ptr().cast::<u8>();
+                                    let len21 = vec21.len();
+                                    *base
+                                        .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                        .cast::<usize>() = len21;
+                                    *base
+                                        .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                        .cast::<*mut u8>() = ptr21.cast_mut();
+                                }
+                                V33::Draw(e) => {
+                                    *base.add(0).cast::<u8>() = (9i32) as u8;
+                                    let super::super::super::krate::gpu::types::Draw {
+                                        vertex_count: vertex_count22,
+                                        instance_count: instance_count22,
+                                        first_vertex: first_vertex22,
+                                        first_instance: first_instance22,
+                                    } = e;
+                                    *base.add(8).cast::<i32>() = _rt::as_i32(vertex_count22);
+                                    *base.add(12).cast::<i32>() = _rt::as_i32(instance_count22);
+                                    *base.add(16).cast::<i32>() = _rt::as_i32(first_vertex22);
+                                    *base.add(20).cast::<i32>() = _rt::as_i32(first_instance22);
+                                }
+                                V33::DrawIndexed(e) => {
+                                    *base.add(0).cast::<u8>() = (10i32) as u8;
+                                    let super::super::super::krate::gpu::types::DrawIndexed {
+                                        index_count: index_count23,
+                                        instance_count: instance_count23,
+                                        first_index: first_index23,
+                                        base_vertex: base_vertex23,
+                                        first_instance: first_instance23,
+                                    } = e;
+                                    *base.add(8).cast::<i32>() = _rt::as_i32(index_count23);
+                                    *base.add(12).cast::<i32>() = _rt::as_i32(instance_count23);
+                                    *base.add(16).cast::<i32>() = _rt::as_i32(first_index23);
+                                    *base.add(20).cast::<i32>() = _rt::as_i32(base_vertex23);
+                                    *base.add(24).cast::<i32>() = _rt::as_i32(first_instance23);
+                                }
+                                V33::DrawIndirect(e) => {
+                                    *base.add(0).cast::<u8>() = (11i32) as u8;
+                                    let super::super::super::krate::gpu::types::Indirect {
+                                        buffer: buffer24,
+                                        offset: offset24,
+                                    } = e;
+                                    *base.add(8).cast::<i64>() = _rt::as_i64(buffer24);
+                                    *base.add(16).cast::<i64>() = _rt::as_i64(offset24);
+                                }
+                                V33::DrawIndexedIndirect(e) => {
+                                    *base.add(0).cast::<u8>() = (12i32) as u8;
+                                    let super::super::super::krate::gpu::types::Indirect {
+                                        buffer: buffer25,
+                                        offset: offset25,
+                                    } = e;
+                                    *base.add(8).cast::<i64>() = _rt::as_i64(buffer25);
+                                    *base.add(16).cast::<i64>() = _rt::as_i64(offset25);
+                                }
+                                V33::MultiDrawIndirect(e) => {
+                                    *base.add(0).cast::<u8>() = (13i32) as u8;
+                                    let super::super::super::krate::gpu::types::MultiIndirect {
+                                        buffer: buffer26,
+                                        offset: offset26,
+                                        count: count26,
+                                    } = e;
+                                    *base.add(8).cast::<i64>() = _rt::as_i64(buffer26);
+                                    *base.add(16).cast::<i64>() = _rt::as_i64(offset26);
+                                    *base.add(24).cast::<i32>() = _rt::as_i32(count26);
+                                }
+                                V33::MultiDrawIndexedIndirect(e) => {
+                                    *base.add(0).cast::<u8>() = (14i32) as u8;
+                                    let super::super::super::krate::gpu::types::MultiIndirect {
+                                        buffer: buffer27,
+                                        offset: offset27,
+                                        count: count27,
+                                    } = e;
+                                    *base.add(8).cast::<i64>() = _rt::as_i64(buffer27);
+                                    *base.add(16).cast::<i64>() = _rt::as_i64(offset27);
+                                    *base.add(24).cast::<i32>() = _rt::as_i32(count27);
+                                }
+                                V33::MultiDrawIndirectCount(e) => {
+                                    *base.add(0).cast::<u8>() = (15i32) as u8;
+                                    let super::super::super::krate::gpu::types::MultiIndirectCount{ buffer:buffer28, offset:offset28, count_buffer:count_buffer28, count_offset:count_offset28, max_count:max_count28, } = e;
+                                    *base.add(8).cast::<i64>() = _rt::as_i64(buffer28);
+                                    *base.add(16).cast::<i64>() = _rt::as_i64(offset28);
+                                    *base.add(24).cast::<i64>() = _rt::as_i64(count_buffer28);
+                                    *base.add(32).cast::<i64>() = _rt::as_i64(count_offset28);
+                                    *base.add(40).cast::<i32>() = _rt::as_i32(max_count28);
+                                }
+                                V33::MultiDrawIndexedIndirectCount(e) => {
+                                    *base.add(0).cast::<u8>() = (16i32) as u8;
+                                    let super::super::super::krate::gpu::types::MultiIndirectCount{ buffer:buffer29, offset:offset29, count_buffer:count_buffer29, count_offset:count_offset29, max_count:max_count29, } = e;
+                                    *base.add(8).cast::<i64>() = _rt::as_i64(buffer29);
+                                    *base.add(16).cast::<i64>() = _rt::as_i64(offset29);
+                                    *base.add(24).cast::<i64>() = _rt::as_i64(count_buffer29);
+                                    *base.add(32).cast::<i64>() = _rt::as_i64(count_offset29);
+                                    *base.add(40).cast::<i32>() = _rt::as_i32(max_count29);
+                                }
+                                V33::BeginOcclusionQuery(e) => {
+                                    *base.add(0).cast::<u8>() = (17i32) as u8;
+                                    *base.add(8).cast::<i32>() = _rt::as_i32(e);
+                                }
+                                V33::EndOcclusionQuery => {
+                                    *base.add(0).cast::<u8>() = (18i32) as u8;
+                                }
+                                V33::WriteTimestamp(e) => {
+                                    *base.add(0).cast::<u8>() = (19i32) as u8;
+                                    let super::super::super::krate::gpu::types::QueryWrite {
+                                        query_set: query_set30,
+                                        index: index30,
+                                    } = e;
+                                    *base.add(8).cast::<i64>() = _rt::as_i64(query_set30);
+                                    *base.add(16).cast::<i32>() = _rt::as_i32(index30);
+                                }
+                                V33::PushDebugGroup(e) => {
+                                    *base.add(0).cast::<u8>() = (20i32) as u8;
+                                    let vec31 = e;
+                                    let ptr31 = vec31.as_ptr().cast::<u8>();
+                                    let len31 = vec31.len();
+                                    *base
+                                        .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                        .cast::<usize>() = len31;
+                                    *base.add(8).cast::<*mut u8>() = ptr31.cast_mut();
+                                }
+                                V33::PopDebugGroup => {
+                                    *base.add(0).cast::<u8>() = (21i32) as u8;
+                                }
+                                V33::InsertDebugMarker(e) => {
+                                    *base.add(0).cast::<u8>() = (22i32) as u8;
+                                    let vec32 = e;
+                                    let ptr32 = vec32.as_ptr().cast::<u8>();
+                                    let len32 = vec32.len();
+                                    *base
+                                        .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                        .cast::<usize>() = len32;
+                                    *base.add(8).cast::<*mut u8>() = ptr32.cast_mut();
+                                }
+                            }
+                        }
+                    }
+                    *ptr0
+                        .add(120 + 5 * ::core::mem::size_of::<*const u8>())
+                        .cast::<usize>() = len34;
+                    *ptr0
+                        .add(120 + 4 * ::core::mem::size_of::<*const u8>())
+                        .cast::<*mut u8>() = result34;
+                    let ptr35 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:gpu/gpu@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "encode-render-pass"]
+                        fn wit_import36(_: *mut u8, _: *mut u8);
+                    }
+
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import36(_: *mut u8, _: *mut u8) {
+                        unreachable!()
+                    }
+                    unsafe { wit_import36(ptr0, ptr35) };
+                    let l37 = i32::from(*ptr35.add(0).cast::<u8>());
+                    let result55 = match l37 {
+                        0 => {
+                            let e = ();
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l38 = i32::from(
+                                    *ptr35.add(::core::mem::size_of::<*const u8>()).cast::<u8>(),
+                                );
+                                use super::super::super::krate::gpu::types::GpuError as V54;
+                                let v54 = match l38 {
+                                    0 => {
+                                        let e54 = {
+                                            let l39 = *ptr35
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l40 = *ptr35
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len41 = l40;
+                                            let bytes41 =
+                                                _rt::Vec::from_raw_parts(l39.cast(), len41, len41);
+
+                                            _rt::string_lift(bytes41)
+                                        };
+                                        V54::InvalidHandle(e54)
+                                    }
+                                    1 => {
+                                        let e54 = {
+                                            let l42 = *ptr35
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l43 = *ptr35
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len44 = l43;
+                                            let bytes44 =
+                                                _rt::Vec::from_raw_parts(l42.cast(), len44, len44);
+
+                                            _rt::string_lift(bytes44)
+                                        };
+                                        V54::Validation(e54)
+                                    }
+                                    2 => V54::OutOfMemory,
+                                    3 => {
+                                        let e54 = {
+                                            let l45 = *ptr35
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l46 = *ptr35
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len47 = l46;
+                                            let bytes47 =
+                                                _rt::Vec::from_raw_parts(l45.cast(), len47, len47);
+
+                                            _rt::string_lift(bytes47)
+                                        };
+                                        V54::Lost(e54)
+                                    }
+                                    4 => {
+                                        let e54 = {
+                                            let l48 = *ptr35
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l49 = *ptr35
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len50 = l49;
+                                            let bytes50 =
+                                                _rt::Vec::from_raw_parts(l48.cast(), len50, len50);
+
+                                            _rt::string_lift(bytes50)
+                                        };
+                                        V54::Unsupported(e54)
+                                    }
+                                    n => {
+                                        debug_assert_eq!(n, 5, "invalid enum discriminant");
+                                        let e54 = {
+                                            let l51 = *ptr35
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l52 = *ptr35
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len53 = l52;
+                                            let bytes53 =
+                                                _rt::Vec::from_raw_parts(l51.cast(), len53, len53);
+
+                                            _rt::string_lift(bytes53)
+                                        };
+                                        V54::Internal(e54)
+                                    }
+                                };
+
+                                v54
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    };
+                    if layout6.size() != 0 {
+                        _rt::alloc::dealloc(result6.cast(), layout6);
+                    }
+                    if layout34.size() != 0 {
+                        _rt::alloc::dealloc(result34.cast(), layout34);
+                    }
+                    result55
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Record a whole compute pass.
+            pub fn encode_compute_pass(
+                encoder: Handle,
+                descriptor: &ComputePassDescriptor,
+                commands: &[ComputeCommand],
+            ) -> Result<(), GpuError> {
+                unsafe {
+                    #[cfg_attr(target_pointer_width = "64", repr(align(8)))]
+                    #[cfg_attr(target_pointer_width = "32", repr(align(4)))]
+                    struct RetArea(
+                        [::core::mem::MaybeUninit<u8>; 4 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let mut ret_area = RetArea(
+                        [::core::mem::MaybeUninit::uninit();
+                            4 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let super::super::super::krate::gpu::types::ComputePassDescriptor {
+                        label: label0,
+                        timestamp_writes: timestamp_writes0,
+                    } = descriptor;
+                    let (result2_0, result2_1, result2_2) = match label0 {
+                        Some(e) => {
+                            let vec1 = e;
+                            let ptr1 = vec1.as_ptr().cast::<u8>();
+                            let len1 = vec1.len();
+
+                            (1i32, ptr1.cast_mut(), len1)
+                        }
+                        None => (0i32, ::core::ptr::null_mut(), 0usize),
+                    };
+                    let (result6_0, result6_1, result6_2, result6_3, result6_4, result6_5) =
+                        match timestamp_writes0 {
+                            Some(e) => {
+                                let super::super::super::krate::gpu::types::PassTimestampWrites {
+                                    query_set: query_set3,
+                                    beginning_of_pass_write_index: beginning_of_pass_write_index3,
+                                    end_of_pass_write_index: end_of_pass_write_index3,
+                                } = e;
+                                let (result4_0, result4_1) = match beginning_of_pass_write_index3 {
+                                    Some(e) => (1i32, _rt::as_i32(e)),
+                                    None => (0i32, 0i32),
+                                };
+                                let (result5_0, result5_1) = match end_of_pass_write_index3 {
+                                    Some(e) => (1i32, _rt::as_i32(e)),
+                                    None => (0i32, 0i32),
+                                };
+                                (
+                                    1i32,
+                                    _rt::as_i64(query_set3),
+                                    result4_0,
+                                    result4_1,
+                                    result5_0,
+                                    result5_1,
+                                )
+                            }
+                            None => (0i32, 0i64, 0i32, 0i32, 0i32, 0i32),
+                        };
+                    let vec17 = commands;
+                    let len17 = vec17.len();
+                    let layout17 = _rt::alloc::Layout::from_size_align_unchecked(
+                        vec17.len() * (32 + 2 * ::core::mem::size_of::<*const u8>()),
+                        8,
+                    );
+                    let result17 = if layout17.size() != 0 {
+                        let ptr = _rt::alloc::alloc(layout17).cast::<u8>();
+                        if ptr.is_null() {
+                            _rt::alloc::handle_alloc_error(layout17);
+                        }
+                        ptr
+                    } else {
+                        ::core::ptr::null_mut()
+                    };
+                    for (i, e) in vec17.into_iter().enumerate() {
+                        let base = result17.add(i * (32 + 2 * ::core::mem::size_of::<*const u8>()));
+                        {
+                            use super::super::super::krate::gpu::types::ComputeCommand as V16;
+                            match e {
+                                V16::SetPipeline(e) => {
+                                    *base.add(0).cast::<u8>() = (0i32) as u8;
+                                    *base.add(8).cast::<i64>() = _rt::as_i64(e);
+                                }
+                                V16::SetBindGroup(e) => {
+                                    *base.add(0).cast::<u8>() = (1i32) as u8;
+                                    let super::super::super::krate::gpu::types::SetBindGroup {
+                                        index: index7,
+                                        group: group7,
+                                        offsets: offsets7,
+                                    } = e;
+                                    *base.add(8).cast::<i32>() = _rt::as_i32(index7);
+                                    match group7 {
+                                        Some(e) => {
+                                            *base.add(16).cast::<u8>() = (1i32) as u8;
+                                            *base.add(24).cast::<i64>() = _rt::as_i64(e);
+                                        }
+                                        None => {
+                                            *base.add(16).cast::<u8>() = (0i32) as u8;
+                                        }
+                                    };
+                                    let vec8 = offsets7;
+                                    let ptr8 = vec8.as_ptr().cast::<u8>();
+                                    let len8 = vec8.len();
+                                    *base
+                                        .add(32 + 1 * ::core::mem::size_of::<*const u8>())
+                                        .cast::<usize>() = len8;
+                                    *base.add(32).cast::<*mut u8>() = ptr8.cast_mut();
+                                }
+                                V16::SetImmediates(e) => {
+                                    *base.add(0).cast::<u8>() = (2i32) as u8;
+                                    let super::super::super::krate::gpu::types::SetImmediates {
+                                        offset: offset9,
+                                        data: data9,
+                                    } = e;
+                                    *base.add(8).cast::<i32>() = _rt::as_i32(offset9);
+                                    let vec10 = data9;
+                                    let ptr10 = vec10.as_ptr().cast::<u8>();
+                                    let len10 = vec10.len();
+                                    *base
+                                        .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                        .cast::<usize>() = len10;
+                                    *base
+                                        .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                        .cast::<*mut u8>() = ptr10.cast_mut();
+                                }
+                                V16::Dispatch(e) => {
+                                    *base.add(0).cast::<u8>() = (3i32) as u8;
+                                    let super::super::super::krate::gpu::types::Origin3d {
+                                        x: x11,
+                                        y: y11,
+                                        z: z11,
+                                    } = e;
+                                    *base.add(8).cast::<i32>() = _rt::as_i32(x11);
+                                    *base.add(12).cast::<i32>() = _rt::as_i32(y11);
+                                    *base.add(16).cast::<i32>() = _rt::as_i32(z11);
+                                }
+                                V16::DispatchIndirect(e) => {
+                                    *base.add(0).cast::<u8>() = (4i32) as u8;
+                                    let super::super::super::krate::gpu::types::Indirect {
+                                        buffer: buffer12,
+                                        offset: offset12,
+                                    } = e;
+                                    *base.add(8).cast::<i64>() = _rt::as_i64(buffer12);
+                                    *base.add(16).cast::<i64>() = _rt::as_i64(offset12);
+                                }
+                                V16::WriteTimestamp(e) => {
+                                    *base.add(0).cast::<u8>() = (5i32) as u8;
+                                    let super::super::super::krate::gpu::types::QueryWrite {
+                                        query_set: query_set13,
+                                        index: index13,
+                                    } = e;
+                                    *base.add(8).cast::<i64>() = _rt::as_i64(query_set13);
+                                    *base.add(16).cast::<i32>() = _rt::as_i32(index13);
+                                }
+                                V16::PushDebugGroup(e) => {
+                                    *base.add(0).cast::<u8>() = (6i32) as u8;
+                                    let vec14 = e;
+                                    let ptr14 = vec14.as_ptr().cast::<u8>();
+                                    let len14 = vec14.len();
+                                    *base
+                                        .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                        .cast::<usize>() = len14;
+                                    *base.add(8).cast::<*mut u8>() = ptr14.cast_mut();
+                                }
+                                V16::PopDebugGroup => {
+                                    *base.add(0).cast::<u8>() = (7i32) as u8;
+                                }
+                                V16::InsertDebugMarker(e) => {
+                                    *base.add(0).cast::<u8>() = (8i32) as u8;
+                                    let vec15 = e;
+                                    let ptr15 = vec15.as_ptr().cast::<u8>();
+                                    let len15 = vec15.len();
+                                    *base
+                                        .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                        .cast::<usize>() = len15;
+                                    *base.add(8).cast::<*mut u8>() = ptr15.cast_mut();
+                                }
+                            }
+                        }
+                    }
+                    let ptr18 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:gpu/gpu@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "encode-compute-pass"]
+                        fn wit_import19(
+                            _: i64,
+                            _: i32,
+                            _: *mut u8,
+                            _: usize,
+                            _: i32,
+                            _: i64,
+                            _: i32,
+                            _: i32,
+                            _: i32,
+                            _: i32,
+                            _: *mut u8,
+                            _: usize,
+                            _: *mut u8,
+                        );
+                    }
+
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import19(
+                        _: i64,
+                        _: i32,
+                        _: *mut u8,
+                        _: usize,
+                        _: i32,
+                        _: i64,
+                        _: i32,
+                        _: i32,
+                        _: i32,
+                        _: i32,
+                        _: *mut u8,
+                        _: usize,
+                        _: *mut u8,
+                    ) {
+                        unreachable!()
+                    }
+                    unsafe {
+                        wit_import19(
+                            _rt::as_i64(encoder),
+                            result2_0,
+                            result2_1,
+                            result2_2,
+                            result6_0,
+                            result6_1,
+                            result6_2,
+                            result6_3,
+                            result6_4,
+                            result6_5,
+                            result17,
+                            len17,
+                            ptr18,
+                        )
+                    };
+                    let l20 = i32::from(*ptr18.add(0).cast::<u8>());
+                    let result38 = match l20 {
+                        0 => {
+                            let e = ();
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l21 = i32::from(
+                                    *ptr18.add(::core::mem::size_of::<*const u8>()).cast::<u8>(),
+                                );
+                                use super::super::super::krate::gpu::types::GpuError as V37;
+                                let v37 = match l21 {
+                                    0 => {
+                                        let e37 = {
+                                            let l22 = *ptr18
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l23 = *ptr18
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len24 = l23;
+                                            let bytes24 =
+                                                _rt::Vec::from_raw_parts(l22.cast(), len24, len24);
+
+                                            _rt::string_lift(bytes24)
+                                        };
+                                        V37::InvalidHandle(e37)
+                                    }
+                                    1 => {
+                                        let e37 = {
+                                            let l25 = *ptr18
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l26 = *ptr18
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len27 = l26;
+                                            let bytes27 =
+                                                _rt::Vec::from_raw_parts(l25.cast(), len27, len27);
+
+                                            _rt::string_lift(bytes27)
+                                        };
+                                        V37::Validation(e37)
+                                    }
+                                    2 => V37::OutOfMemory,
+                                    3 => {
+                                        let e37 = {
+                                            let l28 = *ptr18
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l29 = *ptr18
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len30 = l29;
+                                            let bytes30 =
+                                                _rt::Vec::from_raw_parts(l28.cast(), len30, len30);
+
+                                            _rt::string_lift(bytes30)
+                                        };
+                                        V37::Lost(e37)
+                                    }
+                                    4 => {
+                                        let e37 = {
+                                            let l31 = *ptr18
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l32 = *ptr18
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len33 = l32;
+                                            let bytes33 =
+                                                _rt::Vec::from_raw_parts(l31.cast(), len33, len33);
+
+                                            _rt::string_lift(bytes33)
+                                        };
+                                        V37::Unsupported(e37)
+                                    }
+                                    n => {
+                                        debug_assert_eq!(n, 5, "invalid enum discriminant");
+                                        let e37 = {
+                                            let l34 = *ptr18
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l35 = *ptr18
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len36 = l35;
+                                            let bytes36 =
+                                                _rt::Vec::from_raw_parts(l34.cast(), len36, len36);
+
+                                            _rt::string_lift(bytes36)
+                                        };
+                                        V37::Internal(e37)
+                                    }
+                                };
+
+                                v37
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    };
+                    if layout17.size() != 0 {
+                        _rt::alloc::dealloc(result17.cast(), layout17);
+                    }
+                    result38
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Copy between buffers.
+            pub fn copy_buffer_to_buffer(
+                encoder: Handle,
+                source: Handle,
+                source_offset: u64,
+                destination: Handle,
+                destination_offset: u64,
+                size: Option<u64>,
+            ) -> Result<(), GpuError> {
+                unsafe {
+                    #[cfg_attr(target_pointer_width = "64", repr(align(8)))]
+                    #[cfg_attr(target_pointer_width = "32", repr(align(4)))]
+                    struct RetArea(
+                        [::core::mem::MaybeUninit<u8>; 4 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let mut ret_area = RetArea(
+                        [::core::mem::MaybeUninit::uninit();
+                            4 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let (result0_0, result0_1) = match size {
+                        Some(e) => (1i32, _rt::as_i64(e)),
+                        None => (0i32, 0i64),
+                    };
+                    let ptr1 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:gpu/gpu@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "copy-buffer-to-buffer"]
+                        fn wit_import2(
+                            _: i64,
+                            _: i64,
+                            _: i64,
+                            _: i64,
+                            _: i64,
+                            _: i32,
+                            _: i64,
+                            _: *mut u8,
+                        );
+                    }
+
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import2(
+                        _: i64,
+                        _: i64,
+                        _: i64,
+                        _: i64,
+                        _: i64,
+                        _: i32,
+                        _: i64,
+                        _: *mut u8,
+                    ) {
+                        unreachable!()
+                    }
+                    unsafe {
+                        wit_import2(
+                            _rt::as_i64(encoder),
+                            _rt::as_i64(source),
+                            _rt::as_i64(&source_offset),
+                            _rt::as_i64(destination),
+                            _rt::as_i64(&destination_offset),
+                            result0_0,
+                            result0_1,
+                            ptr1,
+                        )
+                    };
+                    let l3 = i32::from(*ptr1.add(0).cast::<u8>());
+                    let result21 = match l3 {
+                        0 => {
+                            let e = ();
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l4 = i32::from(
+                                    *ptr1.add(::core::mem::size_of::<*const u8>()).cast::<u8>(),
+                                );
+                                use super::super::super::krate::gpu::types::GpuError as V20;
+                                let v20 = match l4 {
+                                    0 => {
+                                        let e20 = {
+                                            let l5 = *ptr1
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l6 = *ptr1
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len7 = l6;
+                                            let bytes7 =
+                                                _rt::Vec::from_raw_parts(l5.cast(), len7, len7);
+
+                                            _rt::string_lift(bytes7)
+                                        };
+                                        V20::InvalidHandle(e20)
+                                    }
+                                    1 => {
+                                        let e20 = {
+                                            let l8 = *ptr1
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l9 = *ptr1
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len10 = l9;
+                                            let bytes10 =
+                                                _rt::Vec::from_raw_parts(l8.cast(), len10, len10);
+
+                                            _rt::string_lift(bytes10)
+                                        };
+                                        V20::Validation(e20)
+                                    }
+                                    2 => V20::OutOfMemory,
+                                    3 => {
+                                        let e20 = {
+                                            let l11 = *ptr1
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l12 = *ptr1
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len13 = l12;
+                                            let bytes13 =
+                                                _rt::Vec::from_raw_parts(l11.cast(), len13, len13);
+
+                                            _rt::string_lift(bytes13)
+                                        };
+                                        V20::Lost(e20)
+                                    }
+                                    4 => {
+                                        let e20 = {
+                                            let l14 = *ptr1
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l15 = *ptr1
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len16 = l15;
+                                            let bytes16 =
+                                                _rt::Vec::from_raw_parts(l14.cast(), len16, len16);
+
+                                            _rt::string_lift(bytes16)
+                                        };
+                                        V20::Unsupported(e20)
+                                    }
+                                    n => {
+                                        debug_assert_eq!(n, 5, "invalid enum discriminant");
+                                        let e20 = {
+                                            let l17 = *ptr1
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l18 = *ptr1
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len19 = l18;
+                                            let bytes19 =
+                                                _rt::Vec::from_raw_parts(l17.cast(), len19, len19);
+
+                                            _rt::string_lift(bytes19)
+                                        };
+                                        V20::Internal(e20)
+                                    }
+                                };
+
+                                v20
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    };
+                    result21
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Copy a buffer into a texture.
+            pub fn copy_buffer_to_texture(
+                encoder: Handle,
+                source: TexelCopyBufferInfo,
+                destination: TexelCopyTextureInfo,
+                size: Extent3d,
+            ) -> Result<(), GpuError> {
+                unsafe {
+                    #[cfg_attr(target_pointer_width = "64", repr(align(8)))]
+                    #[cfg_attr(target_pointer_width = "32", repr(align(4)))]
+                    struct RetArea(
+                        [::core::mem::MaybeUninit<u8>; 4 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let mut ret_area = RetArea(
+                        [::core::mem::MaybeUninit::uninit();
+                            4 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let super::super::super::krate::gpu::types::TexelCopyBufferInfo {
+                        buffer: buffer0,
+                        layout: layout0,
+                    } = source;
+                    let super::super::super::krate::gpu::types::TexelCopyBufferLayout {
+                        offset: offset1,
+                        bytes_per_row: bytes_per_row1,
+                        rows_per_image: rows_per_image1,
+                    } = layout0;
+                    let (result2_0, result2_1) = match bytes_per_row1 {
+                        Some(e) => (1i32, _rt::as_i32(e)),
+                        None => (0i32, 0i32),
+                    };
+                    let (result3_0, result3_1) = match rows_per_image1 {
+                        Some(e) => (1i32, _rt::as_i32(e)),
+                        None => (0i32, 0i32),
+                    };
+                    let super::super::super::krate::gpu::types::TexelCopyTextureInfo {
+                        texture: texture4,
+                        mip_level: mip_level4,
+                        origin: origin4,
+                        aspect: aspect4,
+                    } = destination;
+                    let super::super::super::krate::gpu::types::Origin3d {
+                        x: x5,
+                        y: y5,
+                        z: z5,
+                    } = origin4;
+                    let super::super::super::krate::gpu::types::Extent3d {
+                        width: width6,
+                        height: height6,
+                        depth_or_array_layers: depth_or_array_layers6,
+                    } = size;
+                    let ptr7 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:gpu/gpu@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "copy-buffer-to-texture"]
+                        fn wit_import8(
+                            _: i64,
+                            _: i64,
+                            _: i64,
+                            _: i32,
+                            _: i32,
+                            _: i32,
+                            _: i32,
+                            _: i64,
+                            _: i32,
+                            _: i32,
+                            _: i32,
+                            _: i32,
+                            _: i32,
+                            _: i32,
+                            _: i32,
+                            _: i32,
+                            _: *mut u8,
+                        );
+                    }
+
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import8(
+                        _: i64,
+                        _: i64,
+                        _: i64,
+                        _: i32,
+                        _: i32,
+                        _: i32,
+                        _: i32,
+                        _: i64,
+                        _: i32,
+                        _: i32,
+                        _: i32,
+                        _: i32,
+                        _: i32,
+                        _: i32,
+                        _: i32,
+                        _: i32,
+                        _: *mut u8,
+                    ) {
+                        unreachable!()
+                    }
+                    unsafe {
+                        wit_import8(
+                            _rt::as_i64(encoder),
+                            _rt::as_i64(buffer0),
+                            _rt::as_i64(offset1),
+                            result2_0,
+                            result2_1,
+                            result3_0,
+                            result3_1,
+                            _rt::as_i64(texture4),
+                            _rt::as_i32(mip_level4),
+                            _rt::as_i32(x5),
+                            _rt::as_i32(y5),
+                            _rt::as_i32(z5),
+                            aspect4.clone() as i32,
+                            _rt::as_i32(width6),
+                            _rt::as_i32(height6),
+                            _rt::as_i32(depth_or_array_layers6),
+                            ptr7,
+                        )
+                    };
+                    let l9 = i32::from(*ptr7.add(0).cast::<u8>());
+                    let result27 = match l9 {
+                        0 => {
+                            let e = ();
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l10 = i32::from(
+                                    *ptr7.add(::core::mem::size_of::<*const u8>()).cast::<u8>(),
+                                );
+                                use super::super::super::krate::gpu::types::GpuError as V26;
+                                let v26 = match l10 {
+                                    0 => {
+                                        let e26 = {
+                                            let l11 = *ptr7
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l12 = *ptr7
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len13 = l12;
+                                            let bytes13 =
+                                                _rt::Vec::from_raw_parts(l11.cast(), len13, len13);
+
+                                            _rt::string_lift(bytes13)
+                                        };
+                                        V26::InvalidHandle(e26)
+                                    }
+                                    1 => {
+                                        let e26 = {
+                                            let l14 = *ptr7
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l15 = *ptr7
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len16 = l15;
+                                            let bytes16 =
+                                                _rt::Vec::from_raw_parts(l14.cast(), len16, len16);
+
+                                            _rt::string_lift(bytes16)
+                                        };
+                                        V26::Validation(e26)
+                                    }
+                                    2 => V26::OutOfMemory,
+                                    3 => {
+                                        let e26 = {
+                                            let l17 = *ptr7
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l18 = *ptr7
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len19 = l18;
+                                            let bytes19 =
+                                                _rt::Vec::from_raw_parts(l17.cast(), len19, len19);
+
+                                            _rt::string_lift(bytes19)
+                                        };
+                                        V26::Lost(e26)
+                                    }
+                                    4 => {
+                                        let e26 = {
+                                            let l20 = *ptr7
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l21 = *ptr7
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len22 = l21;
+                                            let bytes22 =
+                                                _rt::Vec::from_raw_parts(l20.cast(), len22, len22);
+
+                                            _rt::string_lift(bytes22)
+                                        };
+                                        V26::Unsupported(e26)
+                                    }
+                                    n => {
+                                        debug_assert_eq!(n, 5, "invalid enum discriminant");
+                                        let e26 = {
+                                            let l23 = *ptr7
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l24 = *ptr7
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len25 = l24;
+                                            let bytes25 =
+                                                _rt::Vec::from_raw_parts(l23.cast(), len25, len25);
+
+                                            _rt::string_lift(bytes25)
+                                        };
+                                        V26::Internal(e26)
+                                    }
+                                };
+
+                                v26
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    };
+                    result27
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Copy a texture into a buffer.
+            pub fn copy_texture_to_buffer(
+                encoder: Handle,
+                source: TexelCopyTextureInfo,
+                destination: TexelCopyBufferInfo,
+                size: Extent3d,
+            ) -> Result<(), GpuError> {
+                unsafe {
+                    #[cfg_attr(target_pointer_width = "64", repr(align(8)))]
+                    #[cfg_attr(target_pointer_width = "32", repr(align(4)))]
+                    struct RetArea(
+                        [::core::mem::MaybeUninit<u8>; 4 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let mut ret_area = RetArea(
+                        [::core::mem::MaybeUninit::uninit();
+                            4 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let super::super::super::krate::gpu::types::TexelCopyTextureInfo {
+                        texture: texture0,
+                        mip_level: mip_level0,
+                        origin: origin0,
+                        aspect: aspect0,
+                    } = source;
+                    let super::super::super::krate::gpu::types::Origin3d {
+                        x: x1,
+                        y: y1,
+                        z: z1,
+                    } = origin0;
+                    let super::super::super::krate::gpu::types::TexelCopyBufferInfo {
+                        buffer: buffer2,
+                        layout: layout2,
+                    } = destination;
+                    let super::super::super::krate::gpu::types::TexelCopyBufferLayout {
+                        offset: offset3,
+                        bytes_per_row: bytes_per_row3,
+                        rows_per_image: rows_per_image3,
+                    } = layout2;
+                    let (result4_0, result4_1) = match bytes_per_row3 {
+                        Some(e) => (1i32, _rt::as_i32(e)),
+                        None => (0i32, 0i32),
+                    };
+                    let (result5_0, result5_1) = match rows_per_image3 {
+                        Some(e) => (1i32, _rt::as_i32(e)),
+                        None => (0i32, 0i32),
+                    };
+                    let super::super::super::krate::gpu::types::Extent3d {
+                        width: width6,
+                        height: height6,
+                        depth_or_array_layers: depth_or_array_layers6,
+                    } = size;
+                    let ptr7 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:gpu/gpu@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "copy-texture-to-buffer"]
+                        fn wit_import8(
+                            _: i64,
+                            _: i64,
+                            _: i32,
+                            _: i32,
+                            _: i32,
+                            _: i32,
+                            _: i32,
+                            _: i64,
+                            _: i64,
+                            _: i32,
+                            _: i32,
+                            _: i32,
+                            _: i32,
+                            _: i32,
+                            _: i32,
+                            _: i32,
+                            _: *mut u8,
+                        );
+                    }
+
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import8(
+                        _: i64,
+                        _: i64,
+                        _: i32,
+                        _: i32,
+                        _: i32,
+                        _: i32,
+                        _: i32,
+                        _: i64,
+                        _: i64,
+                        _: i32,
+                        _: i32,
+                        _: i32,
+                        _: i32,
+                        _: i32,
+                        _: i32,
+                        _: i32,
+                        _: *mut u8,
+                    ) {
+                        unreachable!()
+                    }
+                    unsafe {
+                        wit_import8(
+                            _rt::as_i64(encoder),
+                            _rt::as_i64(texture0),
+                            _rt::as_i32(mip_level0),
+                            _rt::as_i32(x1),
+                            _rt::as_i32(y1),
+                            _rt::as_i32(z1),
+                            aspect0.clone() as i32,
+                            _rt::as_i64(buffer2),
+                            _rt::as_i64(offset3),
+                            result4_0,
+                            result4_1,
+                            result5_0,
+                            result5_1,
+                            _rt::as_i32(width6),
+                            _rt::as_i32(height6),
+                            _rt::as_i32(depth_or_array_layers6),
+                            ptr7,
+                        )
+                    };
+                    let l9 = i32::from(*ptr7.add(0).cast::<u8>());
+                    let result27 = match l9 {
+                        0 => {
+                            let e = ();
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l10 = i32::from(
+                                    *ptr7.add(::core::mem::size_of::<*const u8>()).cast::<u8>(),
+                                );
+                                use super::super::super::krate::gpu::types::GpuError as V26;
+                                let v26 = match l10 {
+                                    0 => {
+                                        let e26 = {
+                                            let l11 = *ptr7
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l12 = *ptr7
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len13 = l12;
+                                            let bytes13 =
+                                                _rt::Vec::from_raw_parts(l11.cast(), len13, len13);
+
+                                            _rt::string_lift(bytes13)
+                                        };
+                                        V26::InvalidHandle(e26)
+                                    }
+                                    1 => {
+                                        let e26 = {
+                                            let l14 = *ptr7
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l15 = *ptr7
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len16 = l15;
+                                            let bytes16 =
+                                                _rt::Vec::from_raw_parts(l14.cast(), len16, len16);
+
+                                            _rt::string_lift(bytes16)
+                                        };
+                                        V26::Validation(e26)
+                                    }
+                                    2 => V26::OutOfMemory,
+                                    3 => {
+                                        let e26 = {
+                                            let l17 = *ptr7
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l18 = *ptr7
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len19 = l18;
+                                            let bytes19 =
+                                                _rt::Vec::from_raw_parts(l17.cast(), len19, len19);
+
+                                            _rt::string_lift(bytes19)
+                                        };
+                                        V26::Lost(e26)
+                                    }
+                                    4 => {
+                                        let e26 = {
+                                            let l20 = *ptr7
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l21 = *ptr7
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len22 = l21;
+                                            let bytes22 =
+                                                _rt::Vec::from_raw_parts(l20.cast(), len22, len22);
+
+                                            _rt::string_lift(bytes22)
+                                        };
+                                        V26::Unsupported(e26)
+                                    }
+                                    n => {
+                                        debug_assert_eq!(n, 5, "invalid enum discriminant");
+                                        let e26 = {
+                                            let l23 = *ptr7
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l24 = *ptr7
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len25 = l24;
+                                            let bytes25 =
+                                                _rt::Vec::from_raw_parts(l23.cast(), len25, len25);
+
+                                            _rt::string_lift(bytes25)
+                                        };
+                                        V26::Internal(e26)
+                                    }
+                                };
+
+                                v26
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    };
+                    result27
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Copy between textures.
+            pub fn copy_texture_to_texture(
+                encoder: Handle,
+                source: TexelCopyTextureInfo,
+                destination: TexelCopyTextureInfo,
+                size: Extent3d,
+            ) -> Result<(), GpuError> {
+                unsafe {
+                    #[cfg_attr(target_pointer_width = "64", repr(align(8)))]
+                    #[cfg_attr(target_pointer_width = "32", repr(align(4)))]
+                    struct RetArea(
+                        [::core::mem::MaybeUninit<u8>; 4 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let mut ret_area = RetArea(
+                        [::core::mem::MaybeUninit::uninit();
+                            4 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let super::super::super::krate::gpu::types::TexelCopyTextureInfo {
+                        texture: texture0,
+                        mip_level: mip_level0,
+                        origin: origin0,
+                        aspect: aspect0,
+                    } = source;
+                    let super::super::super::krate::gpu::types::Origin3d {
+                        x: x1,
+                        y: y1,
+                        z: z1,
+                    } = origin0;
+                    let super::super::super::krate::gpu::types::TexelCopyTextureInfo {
+                        texture: texture2,
+                        mip_level: mip_level2,
+                        origin: origin2,
+                        aspect: aspect2,
+                    } = destination;
+                    let super::super::super::krate::gpu::types::Origin3d {
+                        x: x3,
+                        y: y3,
+                        z: z3,
+                    } = origin2;
+                    let super::super::super::krate::gpu::types::Extent3d {
+                        width: width4,
+                        height: height4,
+                        depth_or_array_layers: depth_or_array_layers4,
+                    } = size;
+                    let ptr5 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:gpu/gpu@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "copy-texture-to-texture"]
+                        fn wit_import6(
+                            _: i64,
+                            _: i64,
+                            _: i32,
+                            _: i32,
+                            _: i32,
+                            _: i32,
+                            _: i32,
+                            _: i64,
+                            _: i32,
+                            _: i32,
+                            _: i32,
+                            _: i32,
+                            _: i32,
+                            _: i32,
+                            _: i32,
+                            _: i32,
+                            _: *mut u8,
+                        );
+                    }
+
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import6(
+                        _: i64,
+                        _: i64,
+                        _: i32,
+                        _: i32,
+                        _: i32,
+                        _: i32,
+                        _: i32,
+                        _: i64,
+                        _: i32,
+                        _: i32,
+                        _: i32,
+                        _: i32,
+                        _: i32,
+                        _: i32,
+                        _: i32,
+                        _: i32,
+                        _: *mut u8,
+                    ) {
+                        unreachable!()
+                    }
+                    unsafe {
+                        wit_import6(
+                            _rt::as_i64(encoder),
+                            _rt::as_i64(texture0),
+                            _rt::as_i32(mip_level0),
+                            _rt::as_i32(x1),
+                            _rt::as_i32(y1),
+                            _rt::as_i32(z1),
+                            aspect0.clone() as i32,
+                            _rt::as_i64(texture2),
+                            _rt::as_i32(mip_level2),
+                            _rt::as_i32(x3),
+                            _rt::as_i32(y3),
+                            _rt::as_i32(z3),
+                            aspect2.clone() as i32,
+                            _rt::as_i32(width4),
+                            _rt::as_i32(height4),
+                            _rt::as_i32(depth_or_array_layers4),
+                            ptr5,
+                        )
+                    };
+                    let l7 = i32::from(*ptr5.add(0).cast::<u8>());
+                    let result25 = match l7 {
+                        0 => {
+                            let e = ();
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l8 = i32::from(
+                                    *ptr5.add(::core::mem::size_of::<*const u8>()).cast::<u8>(),
+                                );
+                                use super::super::super::krate::gpu::types::GpuError as V24;
+                                let v24 = match l8 {
+                                    0 => {
+                                        let e24 = {
+                                            let l9 = *ptr5
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l10 = *ptr5
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len11 = l10;
+                                            let bytes11 =
+                                                _rt::Vec::from_raw_parts(l9.cast(), len11, len11);
+
+                                            _rt::string_lift(bytes11)
+                                        };
+                                        V24::InvalidHandle(e24)
+                                    }
+                                    1 => {
+                                        let e24 = {
+                                            let l12 = *ptr5
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l13 = *ptr5
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len14 = l13;
+                                            let bytes14 =
+                                                _rt::Vec::from_raw_parts(l12.cast(), len14, len14);
+
+                                            _rt::string_lift(bytes14)
+                                        };
+                                        V24::Validation(e24)
+                                    }
+                                    2 => V24::OutOfMemory,
+                                    3 => {
+                                        let e24 = {
+                                            let l15 = *ptr5
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l16 = *ptr5
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len17 = l16;
+                                            let bytes17 =
+                                                _rt::Vec::from_raw_parts(l15.cast(), len17, len17);
+
+                                            _rt::string_lift(bytes17)
+                                        };
+                                        V24::Lost(e24)
+                                    }
+                                    4 => {
+                                        let e24 = {
+                                            let l18 = *ptr5
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l19 = *ptr5
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len20 = l19;
+                                            let bytes20 =
+                                                _rt::Vec::from_raw_parts(l18.cast(), len20, len20);
+
+                                            _rt::string_lift(bytes20)
+                                        };
+                                        V24::Unsupported(e24)
+                                    }
+                                    n => {
+                                        debug_assert_eq!(n, 5, "invalid enum discriminant");
+                                        let e24 = {
+                                            let l21 = *ptr5
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l22 = *ptr5
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len23 = l22;
+                                            let bytes23 =
+                                                _rt::Vec::from_raw_parts(l21.cast(), len23, len23);
+
+                                            _rt::string_lift(bytes23)
+                                        };
+                                        V24::Internal(e24)
+                                    }
+                                };
+
+                                v24
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    };
+                    result25
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Fill part of a buffer with zeros.
+            pub fn clear_buffer(
+                encoder: Handle,
+                buffer: Handle,
+                offset: u64,
+                size: Option<u64>,
+            ) -> Result<(), GpuError> {
+                unsafe {
+                    #[cfg_attr(target_pointer_width = "64", repr(align(8)))]
+                    #[cfg_attr(target_pointer_width = "32", repr(align(4)))]
+                    struct RetArea(
+                        [::core::mem::MaybeUninit<u8>; 4 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let mut ret_area = RetArea(
+                        [::core::mem::MaybeUninit::uninit();
+                            4 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let (result0_0, result0_1) = match size {
+                        Some(e) => (1i32, _rt::as_i64(e)),
+                        None => (0i32, 0i64),
+                    };
+                    let ptr1 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:gpu/gpu@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "clear-buffer"]
+                        fn wit_import2(_: i64, _: i64, _: i64, _: i32, _: i64, _: *mut u8);
+                    }
+
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import2(
+                        _: i64,
+                        _: i64,
+                        _: i64,
+                        _: i32,
+                        _: i64,
+                        _: *mut u8,
+                    ) {
+                        unreachable!()
+                    }
+                    unsafe {
+                        wit_import2(
+                            _rt::as_i64(encoder),
+                            _rt::as_i64(buffer),
+                            _rt::as_i64(&offset),
+                            result0_0,
+                            result0_1,
+                            ptr1,
+                        )
+                    };
+                    let l3 = i32::from(*ptr1.add(0).cast::<u8>());
+                    let result21 = match l3 {
+                        0 => {
+                            let e = ();
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l4 = i32::from(
+                                    *ptr1.add(::core::mem::size_of::<*const u8>()).cast::<u8>(),
+                                );
+                                use super::super::super::krate::gpu::types::GpuError as V20;
+                                let v20 = match l4 {
+                                    0 => {
+                                        let e20 = {
+                                            let l5 = *ptr1
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l6 = *ptr1
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len7 = l6;
+                                            let bytes7 =
+                                                _rt::Vec::from_raw_parts(l5.cast(), len7, len7);
+
+                                            _rt::string_lift(bytes7)
+                                        };
+                                        V20::InvalidHandle(e20)
+                                    }
+                                    1 => {
+                                        let e20 = {
+                                            let l8 = *ptr1
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l9 = *ptr1
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len10 = l9;
+                                            let bytes10 =
+                                                _rt::Vec::from_raw_parts(l8.cast(), len10, len10);
+
+                                            _rt::string_lift(bytes10)
+                                        };
+                                        V20::Validation(e20)
+                                    }
+                                    2 => V20::OutOfMemory,
+                                    3 => {
+                                        let e20 = {
+                                            let l11 = *ptr1
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l12 = *ptr1
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len13 = l12;
+                                            let bytes13 =
+                                                _rt::Vec::from_raw_parts(l11.cast(), len13, len13);
+
+                                            _rt::string_lift(bytes13)
+                                        };
+                                        V20::Lost(e20)
+                                    }
+                                    4 => {
+                                        let e20 = {
+                                            let l14 = *ptr1
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l15 = *ptr1
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len16 = l15;
+                                            let bytes16 =
+                                                _rt::Vec::from_raw_parts(l14.cast(), len16, len16);
+
+                                            _rt::string_lift(bytes16)
+                                        };
+                                        V20::Unsupported(e20)
+                                    }
+                                    n => {
+                                        debug_assert_eq!(n, 5, "invalid enum discriminant");
+                                        let e20 = {
+                                            let l17 = *ptr1
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l18 = *ptr1
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len19 = l18;
+                                            let bytes19 =
+                                                _rt::Vec::from_raw_parts(l17.cast(), len19, len19);
+
+                                            _rt::string_lift(bytes19)
+                                        };
+                                        V20::Internal(e20)
+                                    }
+                                };
+
+                                v20
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    };
+                    result21
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Copy query results into a buffer.
+            pub fn resolve_query_set(
+                encoder: Handle,
+                query_set: Handle,
+                first_query: u32,
+                query_count: u32,
+                destination: Handle,
+                destination_offset: u64,
+            ) -> Result<(), GpuError> {
+                unsafe {
+                    #[cfg_attr(target_pointer_width = "64", repr(align(8)))]
+                    #[cfg_attr(target_pointer_width = "32", repr(align(4)))]
+                    struct RetArea(
+                        [::core::mem::MaybeUninit<u8>; 4 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let mut ret_area = RetArea(
+                        [::core::mem::MaybeUninit::uninit();
+                            4 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:gpu/gpu@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "resolve-query-set"]
+                        fn wit_import1(_: i64, _: i64, _: i32, _: i32, _: i64, _: i64, _: *mut u8);
+                    }
+
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import1(
+                        _: i64,
+                        _: i64,
+                        _: i32,
+                        _: i32,
+                        _: i64,
+                        _: i64,
+                        _: *mut u8,
+                    ) {
+                        unreachable!()
+                    }
+                    unsafe {
+                        wit_import1(
+                            _rt::as_i64(encoder),
+                            _rt::as_i64(query_set),
+                            _rt::as_i32(&first_query),
+                            _rt::as_i32(&query_count),
+                            _rt::as_i64(destination),
+                            _rt::as_i64(&destination_offset),
+                            ptr0,
+                        )
+                    };
+                    let l2 = i32::from(*ptr0.add(0).cast::<u8>());
+                    let result20 = match l2 {
+                        0 => {
+                            let e = ();
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l3 = i32::from(
+                                    *ptr0.add(::core::mem::size_of::<*const u8>()).cast::<u8>(),
+                                );
+                                use super::super::super::krate::gpu::types::GpuError as V19;
+                                let v19 = match l3 {
+                                    0 => {
+                                        let e19 = {
+                                            let l4 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l5 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len6 = l5;
+                                            let bytes6 =
+                                                _rt::Vec::from_raw_parts(l4.cast(), len6, len6);
+
+                                            _rt::string_lift(bytes6)
+                                        };
+                                        V19::InvalidHandle(e19)
+                                    }
+                                    1 => {
+                                        let e19 = {
+                                            let l7 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l8 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len9 = l8;
+                                            let bytes9 =
+                                                _rt::Vec::from_raw_parts(l7.cast(), len9, len9);
+
+                                            _rt::string_lift(bytes9)
+                                        };
+                                        V19::Validation(e19)
+                                    }
+                                    2 => V19::OutOfMemory,
+                                    3 => {
+                                        let e19 = {
+                                            let l10 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l11 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len12 = l11;
+                                            let bytes12 =
+                                                _rt::Vec::from_raw_parts(l10.cast(), len12, len12);
+
+                                            _rt::string_lift(bytes12)
+                                        };
+                                        V19::Lost(e19)
+                                    }
+                                    4 => {
+                                        let e19 = {
+                                            let l13 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l14 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len15 = l14;
+                                            let bytes15 =
+                                                _rt::Vec::from_raw_parts(l13.cast(), len15, len15);
+
+                                            _rt::string_lift(bytes15)
+                                        };
+                                        V19::Unsupported(e19)
+                                    }
+                                    n => {
+                                        debug_assert_eq!(n, 5, "invalid enum discriminant");
+                                        let e19 = {
+                                            let l16 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l17 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len18 = l17;
+                                            let bytes18 =
+                                                _rt::Vec::from_raw_parts(l16.cast(), len18, len18);
+
+                                            _rt::string_lift(bytes18)
+                                        };
+                                        V19::Internal(e19)
+                                    }
+                                };
+
+                                v19
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    };
+                    result20
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Write a timestamp between passes.
+            pub fn write_timestamp(
+                encoder: Handle,
+                query_set: Handle,
+                index: u32,
+            ) -> Result<(), GpuError> {
+                unsafe {
+                    #[cfg_attr(target_pointer_width = "64", repr(align(8)))]
+                    #[cfg_attr(target_pointer_width = "32", repr(align(4)))]
+                    struct RetArea(
+                        [::core::mem::MaybeUninit<u8>; 4 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let mut ret_area = RetArea(
+                        [::core::mem::MaybeUninit::uninit();
+                            4 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:gpu/gpu@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "write-timestamp"]
+                        fn wit_import1(_: i64, _: i64, _: i32, _: *mut u8);
+                    }
+
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import1(_: i64, _: i64, _: i32, _: *mut u8) {
+                        unreachable!()
+                    }
+                    unsafe {
+                        wit_import1(
+                            _rt::as_i64(encoder),
+                            _rt::as_i64(query_set),
+                            _rt::as_i32(&index),
+                            ptr0,
+                        )
+                    };
+                    let l2 = i32::from(*ptr0.add(0).cast::<u8>());
+                    let result20 = match l2 {
+                        0 => {
+                            let e = ();
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l3 = i32::from(
+                                    *ptr0.add(::core::mem::size_of::<*const u8>()).cast::<u8>(),
+                                );
+                                use super::super::super::krate::gpu::types::GpuError as V19;
+                                let v19 = match l3 {
+                                    0 => {
+                                        let e19 = {
+                                            let l4 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l5 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len6 = l5;
+                                            let bytes6 =
+                                                _rt::Vec::from_raw_parts(l4.cast(), len6, len6);
+
+                                            _rt::string_lift(bytes6)
+                                        };
+                                        V19::InvalidHandle(e19)
+                                    }
+                                    1 => {
+                                        let e19 = {
+                                            let l7 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l8 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len9 = l8;
+                                            let bytes9 =
+                                                _rt::Vec::from_raw_parts(l7.cast(), len9, len9);
+
+                                            _rt::string_lift(bytes9)
+                                        };
+                                        V19::Validation(e19)
+                                    }
+                                    2 => V19::OutOfMemory,
+                                    3 => {
+                                        let e19 = {
+                                            let l10 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l11 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len12 = l11;
+                                            let bytes12 =
+                                                _rt::Vec::from_raw_parts(l10.cast(), len12, len12);
+
+                                            _rt::string_lift(bytes12)
+                                        };
+                                        V19::Lost(e19)
+                                    }
+                                    4 => {
+                                        let e19 = {
+                                            let l13 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l14 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len15 = l14;
+                                            let bytes15 =
+                                                _rt::Vec::from_raw_parts(l13.cast(), len15, len15);
+
+                                            _rt::string_lift(bytes15)
+                                        };
+                                        V19::Unsupported(e19)
+                                    }
+                                    n => {
+                                        debug_assert_eq!(n, 5, "invalid enum discriminant");
+                                        let e19 = {
+                                            let l16 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l17 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len18 = l17;
+                                            let bytes18 =
+                                                _rt::Vec::from_raw_parts(l16.cast(), len18, len18);
+
+                                            _rt::string_lift(bytes18)
+                                        };
+                                        V19::Internal(e19)
+                                    }
+                                };
+
+                                v19
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    };
+                    result20
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Finish recording; the encoder is spent and a command buffer is returned.
+            pub fn finish_encoder(
+                encoder: Handle,
+                label: Option<&str>,
+            ) -> Result<Handle, GpuError> {
+                unsafe {
+                    #[repr(align(8))]
+                    struct RetArea(
+                        [::core::mem::MaybeUninit<u8>;
+                            16 + 2 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let mut ret_area = RetArea(
+                        [::core::mem::MaybeUninit::uninit();
+                            16 + 2 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let (result1_0, result1_1, result1_2) = match label {
+                        Some(e) => {
+                            let vec0 = e;
+                            let ptr0 = vec0.as_ptr().cast::<u8>();
+                            let len0 = vec0.len();
+
+                            (1i32, ptr0.cast_mut(), len0)
+                        }
+                        None => (0i32, ::core::ptr::null_mut(), 0usize),
+                    };
+                    let ptr2 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:gpu/gpu@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "finish-encoder"]
+                        fn wit_import3(_: i64, _: i32, _: *mut u8, _: usize, _: *mut u8);
+                    }
+
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import3(
+                        _: i64,
+                        _: i32,
+                        _: *mut u8,
+                        _: usize,
+                        _: *mut u8,
+                    ) {
+                        unreachable!()
+                    }
+                    unsafe {
+                        wit_import3(_rt::as_i64(encoder), result1_0, result1_1, result1_2, ptr2)
+                    };
+                    let l4 = i32::from(*ptr2.add(0).cast::<u8>());
+                    let result23 = match l4 {
+                        0 => {
+                            let e = {
+                                let l5 = *ptr2.add(8).cast::<i64>();
+
+                                l5 as u64
+                            };
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l6 = i32::from(*ptr2.add(8).cast::<u8>());
+                                use super::super::super::krate::gpu::types::GpuError as V22;
+                                let v22 = match l6 {
+                                    0 => {
+                                        let e22 = {
+                                            let l7 = *ptr2
+                                                .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l8 = *ptr2
+                                                .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len9 = l8;
+                                            let bytes9 =
+                                                _rt::Vec::from_raw_parts(l7.cast(), len9, len9);
+
+                                            _rt::string_lift(bytes9)
+                                        };
+                                        V22::InvalidHandle(e22)
+                                    }
+                                    1 => {
+                                        let e22 = {
+                                            let l10 = *ptr2
+                                                .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l11 = *ptr2
+                                                .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len12 = l11;
+                                            let bytes12 =
+                                                _rt::Vec::from_raw_parts(l10.cast(), len12, len12);
+
+                                            _rt::string_lift(bytes12)
+                                        };
+                                        V22::Validation(e22)
+                                    }
+                                    2 => V22::OutOfMemory,
+                                    3 => {
+                                        let e22 = {
+                                            let l13 = *ptr2
+                                                .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l14 = *ptr2
+                                                .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len15 = l14;
+                                            let bytes15 =
+                                                _rt::Vec::from_raw_parts(l13.cast(), len15, len15);
+
+                                            _rt::string_lift(bytes15)
+                                        };
+                                        V22::Lost(e22)
+                                    }
+                                    4 => {
+                                        let e22 = {
+                                            let l16 = *ptr2
+                                                .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l17 = *ptr2
+                                                .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len18 = l17;
+                                            let bytes18 =
+                                                _rt::Vec::from_raw_parts(l16.cast(), len18, len18);
+
+                                            _rt::string_lift(bytes18)
+                                        };
+                                        V22::Unsupported(e22)
+                                    }
+                                    n => {
+                                        debug_assert_eq!(n, 5, "invalid enum discriminant");
+                                        let e22 = {
+                                            let l19 = *ptr2
+                                                .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l20 = *ptr2
+                                                .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len21 = l20;
+                                            let bytes21 =
+                                                _rt::Vec::from_raw_parts(l19.cast(), len21, len21);
+
+                                            _rt::string_lift(bytes21)
+                                        };
+                                        V22::Internal(e22)
+                                    }
+                                };
+
+                                v22
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    };
+                    result23
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Run command buffers, in order. They are spent. Returns the submission's index.
+            pub fn submit(device: Handle, command_buffers: &[Handle]) -> Result<u64, GpuError> {
+                unsafe {
+                    #[repr(align(8))]
+                    struct RetArea(
+                        [::core::mem::MaybeUninit<u8>;
+                            16 + 2 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let mut ret_area = RetArea(
+                        [::core::mem::MaybeUninit::uninit();
+                            16 + 2 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let vec0 = command_buffers;
+                    let ptr0 = vec0.as_ptr().cast::<u8>();
+                    let len0 = vec0.len();
+                    let ptr1 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:gpu/gpu@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "submit"]
+                        fn wit_import2(_: i64, _: *mut u8, _: usize, _: *mut u8);
+                    }
+
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import2(_: i64, _: *mut u8, _: usize, _: *mut u8) {
+                        unreachable!()
+                    }
+                    unsafe { wit_import2(_rt::as_i64(device), ptr0.cast_mut(), len0, ptr1) };
+                    let l3 = i32::from(*ptr1.add(0).cast::<u8>());
+                    let result22 = match l3 {
+                        0 => {
+                            let e = {
+                                let l4 = *ptr1.add(8).cast::<i64>();
+
+                                l4 as u64
+                            };
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l5 = i32::from(*ptr1.add(8).cast::<u8>());
+                                use super::super::super::krate::gpu::types::GpuError as V21;
+                                let v21 = match l5 {
+                                    0 => {
+                                        let e21 = {
+                                            let l6 = *ptr1
+                                                .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l7 = *ptr1
+                                                .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len8 = l7;
+                                            let bytes8 =
+                                                _rt::Vec::from_raw_parts(l6.cast(), len8, len8);
+
+                                            _rt::string_lift(bytes8)
+                                        };
+                                        V21::InvalidHandle(e21)
+                                    }
+                                    1 => {
+                                        let e21 = {
+                                            let l9 = *ptr1
+                                                .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l10 = *ptr1
+                                                .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len11 = l10;
+                                            let bytes11 =
+                                                _rt::Vec::from_raw_parts(l9.cast(), len11, len11);
+
+                                            _rt::string_lift(bytes11)
+                                        };
+                                        V21::Validation(e21)
+                                    }
+                                    2 => V21::OutOfMemory,
+                                    3 => {
+                                        let e21 = {
+                                            let l12 = *ptr1
+                                                .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l13 = *ptr1
+                                                .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len14 = l13;
+                                            let bytes14 =
+                                                _rt::Vec::from_raw_parts(l12.cast(), len14, len14);
+
+                                            _rt::string_lift(bytes14)
+                                        };
+                                        V21::Lost(e21)
+                                    }
+                                    4 => {
+                                        let e21 = {
+                                            let l15 = *ptr1
+                                                .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l16 = *ptr1
+                                                .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len17 = l16;
+                                            let bytes17 =
+                                                _rt::Vec::from_raw_parts(l15.cast(), len17, len17);
+
+                                            _rt::string_lift(bytes17)
+                                        };
+                                        V21::Unsupported(e21)
+                                    }
+                                    n => {
+                                        debug_assert_eq!(n, 5, "invalid enum discriminant");
+                                        let e21 = {
+                                            let l18 = *ptr1
+                                                .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l19 = *ptr1
+                                                .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len20 = l19;
+                                            let bytes20 =
+                                                _rt::Vec::from_raw_parts(l18.cast(), len20, len20);
+
+                                            _rt::string_lift(bytes20)
+                                        };
+                                        V21::Internal(e21)
+                                    }
+                                };
+
+                                v21
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    };
+                    result22
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Write bytes into a buffer, in queue order.
+            pub fn write_buffer(
+                device: Handle,
+                buffer: Handle,
+                offset: u64,
+                data: &[u8],
+            ) -> Result<(), GpuError> {
+                unsafe {
+                    #[cfg_attr(target_pointer_width = "64", repr(align(8)))]
+                    #[cfg_attr(target_pointer_width = "32", repr(align(4)))]
+                    struct RetArea(
+                        [::core::mem::MaybeUninit<u8>; 4 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let mut ret_area = RetArea(
+                        [::core::mem::MaybeUninit::uninit();
+                            4 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let vec0 = data;
+                    let ptr0 = vec0.as_ptr().cast::<u8>();
+                    let len0 = vec0.len();
+                    let ptr1 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:gpu/gpu@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "write-buffer"]
+                        fn wit_import2(_: i64, _: i64, _: i64, _: *mut u8, _: usize, _: *mut u8);
+                    }
+
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import2(
+                        _: i64,
+                        _: i64,
+                        _: i64,
+                        _: *mut u8,
+                        _: usize,
+                        _: *mut u8,
+                    ) {
+                        unreachable!()
+                    }
+                    unsafe {
+                        wit_import2(
+                            _rt::as_i64(device),
+                            _rt::as_i64(buffer),
+                            _rt::as_i64(&offset),
+                            ptr0.cast_mut(),
+                            len0,
+                            ptr1,
+                        )
+                    };
+                    let l3 = i32::from(*ptr1.add(0).cast::<u8>());
+                    let result21 = match l3 {
+                        0 => {
+                            let e = ();
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l4 = i32::from(
+                                    *ptr1.add(::core::mem::size_of::<*const u8>()).cast::<u8>(),
+                                );
+                                use super::super::super::krate::gpu::types::GpuError as V20;
+                                let v20 = match l4 {
+                                    0 => {
+                                        let e20 = {
+                                            let l5 = *ptr1
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l6 = *ptr1
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len7 = l6;
+                                            let bytes7 =
+                                                _rt::Vec::from_raw_parts(l5.cast(), len7, len7);
+
+                                            _rt::string_lift(bytes7)
+                                        };
+                                        V20::InvalidHandle(e20)
+                                    }
+                                    1 => {
+                                        let e20 = {
+                                            let l8 = *ptr1
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l9 = *ptr1
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len10 = l9;
+                                            let bytes10 =
+                                                _rt::Vec::from_raw_parts(l8.cast(), len10, len10);
+
+                                            _rt::string_lift(bytes10)
+                                        };
+                                        V20::Validation(e20)
+                                    }
+                                    2 => V20::OutOfMemory,
+                                    3 => {
+                                        let e20 = {
+                                            let l11 = *ptr1
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l12 = *ptr1
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len13 = l12;
+                                            let bytes13 =
+                                                _rt::Vec::from_raw_parts(l11.cast(), len13, len13);
+
+                                            _rt::string_lift(bytes13)
+                                        };
+                                        V20::Lost(e20)
+                                    }
+                                    4 => {
+                                        let e20 = {
+                                            let l14 = *ptr1
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l15 = *ptr1
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len16 = l15;
+                                            let bytes16 =
+                                                _rt::Vec::from_raw_parts(l14.cast(), len16, len16);
+
+                                            _rt::string_lift(bytes16)
+                                        };
+                                        V20::Unsupported(e20)
+                                    }
+                                    n => {
+                                        debug_assert_eq!(n, 5, "invalid enum discriminant");
+                                        let e20 = {
+                                            let l17 = *ptr1
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l18 = *ptr1
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len19 = l18;
+                                            let bytes19 =
+                                                _rt::Vec::from_raw_parts(l17.cast(), len19, len19);
+
+                                            _rt::string_lift(bytes19)
+                                        };
+                                        V20::Internal(e20)
+                                    }
+                                };
+
+                                v20
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    };
+                    result21
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Write texels into a texture, in queue order.
+            pub fn write_texture(
+                device: Handle,
+                destination: TexelCopyTextureInfo,
+                data: &[u8],
+                layout: TexelCopyBufferLayout,
+                size: Extent3d,
+            ) -> Result<(), GpuError> {
+                unsafe {
+                    #[repr(align(8))]
+                    struct RetArea(
+                        [::core::mem::MaybeUninit<u8>;
+                            80 + 2 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let mut ret_area = RetArea(
+                        [::core::mem::MaybeUninit::uninit();
+                            80 + 2 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    *ptr0.add(0).cast::<i64>() = _rt::as_i64(device);
+                    let super::super::super::krate::gpu::types::TexelCopyTextureInfo {
+                        texture: texture1,
+                        mip_level: mip_level1,
+                        origin: origin1,
+                        aspect: aspect1,
+                    } = destination;
+                    *ptr0.add(8).cast::<i64>() = _rt::as_i64(texture1);
+                    *ptr0.add(16).cast::<i32>() = _rt::as_i32(mip_level1);
+                    let super::super::super::krate::gpu::types::Origin3d {
+                        x: x2,
+                        y: y2,
+                        z: z2,
+                    } = origin1;
+                    *ptr0.add(20).cast::<i32>() = _rt::as_i32(x2);
+                    *ptr0.add(24).cast::<i32>() = _rt::as_i32(y2);
+                    *ptr0.add(28).cast::<i32>() = _rt::as_i32(z2);
+                    *ptr0.add(32).cast::<u8>() = (aspect1.clone() as i32) as u8;
+                    let vec3 = data;
+                    let ptr3 = vec3.as_ptr().cast::<u8>();
+                    let len3 = vec3.len();
+                    *ptr0
+                        .add(40 + 1 * ::core::mem::size_of::<*const u8>())
+                        .cast::<usize>() = len3;
+                    *ptr0.add(40).cast::<*mut u8>() = ptr3.cast_mut();
+                    let super::super::super::krate::gpu::types::TexelCopyBufferLayout {
+                        offset: offset4,
+                        bytes_per_row: bytes_per_row4,
+                        rows_per_image: rows_per_image4,
+                    } = layout;
+                    *ptr0
+                        .add(40 + 2 * ::core::mem::size_of::<*const u8>())
+                        .cast::<i64>() = _rt::as_i64(offset4);
+                    match bytes_per_row4 {
+                        Some(e) => {
+                            *ptr0
+                                .add(48 + 2 * ::core::mem::size_of::<*const u8>())
+                                .cast::<u8>() = (1i32) as u8;
+                            *ptr0
+                                .add(52 + 2 * ::core::mem::size_of::<*const u8>())
+                                .cast::<i32>() = _rt::as_i32(e);
+                        }
+                        None => {
+                            *ptr0
+                                .add(48 + 2 * ::core::mem::size_of::<*const u8>())
+                                .cast::<u8>() = (0i32) as u8;
+                        }
+                    };
+                    match rows_per_image4 {
+                        Some(e) => {
+                            *ptr0
+                                .add(56 + 2 * ::core::mem::size_of::<*const u8>())
+                                .cast::<u8>() = (1i32) as u8;
+                            *ptr0
+                                .add(60 + 2 * ::core::mem::size_of::<*const u8>())
+                                .cast::<i32>() = _rt::as_i32(e);
+                        }
+                        None => {
+                            *ptr0
+                                .add(56 + 2 * ::core::mem::size_of::<*const u8>())
+                                .cast::<u8>() = (0i32) as u8;
+                        }
+                    };
+                    let super::super::super::krate::gpu::types::Extent3d {
+                        width: width5,
+                        height: height5,
+                        depth_or_array_layers: depth_or_array_layers5,
+                    } = size;
+                    *ptr0
+                        .add(64 + 2 * ::core::mem::size_of::<*const u8>())
+                        .cast::<i32>() = _rt::as_i32(width5);
+                    *ptr0
+                        .add(68 + 2 * ::core::mem::size_of::<*const u8>())
+                        .cast::<i32>() = _rt::as_i32(height5);
+                    *ptr0
+                        .add(72 + 2 * ::core::mem::size_of::<*const u8>())
+                        .cast::<i32>() = _rt::as_i32(depth_or_array_layers5);
+                    let ptr6 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:gpu/gpu@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "write-texture"]
+                        fn wit_import7(_: *mut u8, _: *mut u8);
+                    }
+
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import7(_: *mut u8, _: *mut u8) {
+                        unreachable!()
+                    }
+                    unsafe { wit_import7(ptr0, ptr6) };
+                    let l8 = i32::from(*ptr6.add(0).cast::<u8>());
+                    let result26 = match l8 {
+                        0 => {
+                            let e = ();
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l9 = i32::from(
+                                    *ptr6.add(::core::mem::size_of::<*const u8>()).cast::<u8>(),
+                                );
+                                use super::super::super::krate::gpu::types::GpuError as V25;
+                                let v25 = match l9 {
+                                    0 => {
+                                        let e25 = {
+                                            let l10 = *ptr6
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l11 = *ptr6
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len12 = l11;
+                                            let bytes12 =
+                                                _rt::Vec::from_raw_parts(l10.cast(), len12, len12);
+
+                                            _rt::string_lift(bytes12)
+                                        };
+                                        V25::InvalidHandle(e25)
+                                    }
+                                    1 => {
+                                        let e25 = {
+                                            let l13 = *ptr6
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l14 = *ptr6
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len15 = l14;
+                                            let bytes15 =
+                                                _rt::Vec::from_raw_parts(l13.cast(), len15, len15);
+
+                                            _rt::string_lift(bytes15)
+                                        };
+                                        V25::Validation(e25)
+                                    }
+                                    2 => V25::OutOfMemory,
+                                    3 => {
+                                        let e25 = {
+                                            let l16 = *ptr6
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l17 = *ptr6
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len18 = l17;
+                                            let bytes18 =
+                                                _rt::Vec::from_raw_parts(l16.cast(), len18, len18);
+
+                                            _rt::string_lift(bytes18)
+                                        };
+                                        V25::Lost(e25)
+                                    }
+                                    4 => {
+                                        let e25 = {
+                                            let l19 = *ptr6
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l20 = *ptr6
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len21 = l20;
+                                            let bytes21 =
+                                                _rt::Vec::from_raw_parts(l19.cast(), len21, len21);
+
+                                            _rt::string_lift(bytes21)
+                                        };
+                                        V25::Unsupported(e25)
+                                    }
+                                    n => {
+                                        debug_assert_eq!(n, 5, "invalid enum discriminant");
+                                        let e25 = {
+                                            let l22 = *ptr6
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l23 = *ptr6
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len24 = l23;
+                                            let bytes24 =
+                                                _rt::Vec::from_raw_parts(l22.cast(), len24, len24);
+
+                                            _rt::string_lift(bytes24)
+                                        };
+                                        V25::Internal(e25)
+                                    }
+                                };
+
+                                v25
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    };
+                    result26
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Nanoseconds per timestamp tick.
+            pub fn timestamp_period(device: Handle) -> Result<f32, GpuError> {
+                unsafe {
+                    #[cfg_attr(target_pointer_width = "64", repr(align(8)))]
+                    #[cfg_attr(target_pointer_width = "32", repr(align(4)))]
+                    struct RetArea(
+                        [::core::mem::MaybeUninit<u8>; 4 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let mut ret_area = RetArea(
+                        [::core::mem::MaybeUninit::uninit();
+                            4 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:gpu/gpu@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "timestamp-period"]
+                        fn wit_import1(_: i64, _: *mut u8);
+                    }
+
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import1(_: i64, _: *mut u8) {
+                        unreachable!()
+                    }
+                    unsafe { wit_import1(_rt::as_i64(device), ptr0) };
+                    let l2 = i32::from(*ptr0.add(0).cast::<u8>());
+                    let result21 = match l2 {
+                        0 => {
+                            let e = {
+                                let l3 =
+                                    *ptr0.add(::core::mem::size_of::<*const u8>()).cast::<f32>();
+
+                                l3
+                            };
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l4 = i32::from(
+                                    *ptr0.add(::core::mem::size_of::<*const u8>()).cast::<u8>(),
+                                );
+                                use super::super::super::krate::gpu::types::GpuError as V20;
+                                let v20 = match l4 {
+                                    0 => {
+                                        let e20 = {
+                                            let l5 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l6 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len7 = l6;
+                                            let bytes7 =
+                                                _rt::Vec::from_raw_parts(l5.cast(), len7, len7);
+
+                                            _rt::string_lift(bytes7)
+                                        };
+                                        V20::InvalidHandle(e20)
+                                    }
+                                    1 => {
+                                        let e20 = {
+                                            let l8 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l9 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len10 = l9;
+                                            let bytes10 =
+                                                _rt::Vec::from_raw_parts(l8.cast(), len10, len10);
+
+                                            _rt::string_lift(bytes10)
+                                        };
+                                        V20::Validation(e20)
+                                    }
+                                    2 => V20::OutOfMemory,
+                                    3 => {
+                                        let e20 = {
+                                            let l11 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l12 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len13 = l12;
+                                            let bytes13 =
+                                                _rt::Vec::from_raw_parts(l11.cast(), len13, len13);
+
+                                            _rt::string_lift(bytes13)
+                                        };
+                                        V20::Lost(e20)
+                                    }
+                                    4 => {
+                                        let e20 = {
+                                            let l14 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l15 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len16 = l15;
+                                            let bytes16 =
+                                                _rt::Vec::from_raw_parts(l14.cast(), len16, len16);
+
+                                            _rt::string_lift(bytes16)
+                                        };
+                                        V20::Unsupported(e20)
+                                    }
+                                    n => {
+                                        debug_assert_eq!(n, 5, "invalid enum discriminant");
+                                        let e20 = {
+                                            let l17 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l18 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len19 = l18;
+                                            let bytes19 =
+                                                _rt::Vec::from_raw_parts(l17.cast(), len19, len19);
+
+                                            _rt::string_lift(bytes19)
+                                        };
+                                        V20::Internal(e20)
+                                    }
+                                };
+
+                                v20
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    };
+                    result21
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// A surface on a canvas widget of a window, to draw frames into.
+            pub fn create_surface(window: u64, widget: u64) -> Result<Handle, GpuError> {
+                unsafe {
+                    #[repr(align(8))]
+                    struct RetArea(
+                        [::core::mem::MaybeUninit<u8>;
+                            16 + 2 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let mut ret_area = RetArea(
+                        [::core::mem::MaybeUninit::uninit();
+                            16 + 2 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:gpu/gpu@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "create-surface"]
+                        fn wit_import1(_: i64, _: i64, _: *mut u8);
+                    }
+
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import1(_: i64, _: i64, _: *mut u8) {
+                        unreachable!()
+                    }
+                    unsafe { wit_import1(_rt::as_i64(&window), _rt::as_i64(&widget), ptr0) };
+                    let l2 = i32::from(*ptr0.add(0).cast::<u8>());
+                    let result21 = match l2 {
+                        0 => {
+                            let e = {
+                                let l3 = *ptr0.add(8).cast::<i64>();
+
+                                l3 as u64
+                            };
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l4 = i32::from(*ptr0.add(8).cast::<u8>());
+                                use super::super::super::krate::gpu::types::GpuError as V20;
+                                let v20 = match l4 {
+                                    0 => {
+                                        let e20 = {
+                                            let l5 = *ptr0
+                                                .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l6 = *ptr0
+                                                .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len7 = l6;
+                                            let bytes7 =
+                                                _rt::Vec::from_raw_parts(l5.cast(), len7, len7);
+
+                                            _rt::string_lift(bytes7)
+                                        };
+                                        V20::InvalidHandle(e20)
+                                    }
+                                    1 => {
+                                        let e20 = {
+                                            let l8 = *ptr0
+                                                .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l9 = *ptr0
+                                                .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len10 = l9;
+                                            let bytes10 =
+                                                _rt::Vec::from_raw_parts(l8.cast(), len10, len10);
+
+                                            _rt::string_lift(bytes10)
+                                        };
+                                        V20::Validation(e20)
+                                    }
+                                    2 => V20::OutOfMemory,
+                                    3 => {
+                                        let e20 = {
+                                            let l11 = *ptr0
+                                                .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l12 = *ptr0
+                                                .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len13 = l12;
+                                            let bytes13 =
+                                                _rt::Vec::from_raw_parts(l11.cast(), len13, len13);
+
+                                            _rt::string_lift(bytes13)
+                                        };
+                                        V20::Lost(e20)
+                                    }
+                                    4 => {
+                                        let e20 = {
+                                            let l14 = *ptr0
+                                                .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l15 = *ptr0
+                                                .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len16 = l15;
+                                            let bytes16 =
+                                                _rt::Vec::from_raw_parts(l14.cast(), len16, len16);
+
+                                            _rt::string_lift(bytes16)
+                                        };
+                                        V20::Unsupported(e20)
+                                    }
+                                    n => {
+                                        debug_assert_eq!(n, 5, "invalid enum discriminant");
+                                        let e20 = {
+                                            let l17 = *ptr0
+                                                .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l18 = *ptr0
+                                                .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len19 = l18;
+                                            let bytes19 =
+                                                _rt::Vec::from_raw_parts(l17.cast(), len19, len19);
+
+                                            _rt::string_lift(bytes19)
+                                        };
+                                        V20::Internal(e20)
+                                    }
+                                };
+
+                                v20
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    };
+                    result21
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// The size in pixels the surface's canvas is shown at now: its laid-out
+            /// size times the display's density. Configure to this for a sharp picture;
+            /// it changes when the window is resized or moves to another display.
+            pub fn surface_pixel_size(surface: Handle) -> Result<(u32, u32), GpuError> {
+                unsafe {
+                    #[cfg_attr(target_pointer_width = "64", repr(align(8)))]
+                    #[cfg_attr(target_pointer_width = "32", repr(align(4)))]
+                    struct RetArea(
+                        [::core::mem::MaybeUninit<u8>; 4 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let mut ret_area = RetArea(
+                        [::core::mem::MaybeUninit::uninit();
+                            4 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:gpu/gpu@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "surface-pixel-size"]
+                        fn wit_import1(_: i64, _: *mut u8);
+                    }
+
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import1(_: i64, _: *mut u8) {
+                        unreachable!()
+                    }
+                    unsafe { wit_import1(_rt::as_i64(surface), ptr0) };
+                    let l2 = i32::from(*ptr0.add(0).cast::<u8>());
+                    let result22 = match l2 {
+                        0 => {
+                            let e = {
+                                let l3 =
+                                    *ptr0.add(::core::mem::size_of::<*const u8>()).cast::<i32>();
+                                let l4 = *ptr0
+                                    .add(4 + 1 * ::core::mem::size_of::<*const u8>())
+                                    .cast::<i32>();
+
+                                (l3 as u32, l4 as u32)
+                            };
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l5 = i32::from(
+                                    *ptr0.add(::core::mem::size_of::<*const u8>()).cast::<u8>(),
+                                );
+                                use super::super::super::krate::gpu::types::GpuError as V21;
+                                let v21 = match l5 {
+                                    0 => {
+                                        let e21 = {
+                                            let l6 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l7 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len8 = l7;
+                                            let bytes8 =
+                                                _rt::Vec::from_raw_parts(l6.cast(), len8, len8);
+
+                                            _rt::string_lift(bytes8)
+                                        };
+                                        V21::InvalidHandle(e21)
+                                    }
+                                    1 => {
+                                        let e21 = {
+                                            let l9 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l10 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len11 = l10;
+                                            let bytes11 =
+                                                _rt::Vec::from_raw_parts(l9.cast(), len11, len11);
+
+                                            _rt::string_lift(bytes11)
+                                        };
+                                        V21::Validation(e21)
+                                    }
+                                    2 => V21::OutOfMemory,
+                                    3 => {
+                                        let e21 = {
+                                            let l12 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l13 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len14 = l13;
+                                            let bytes14 =
+                                                _rt::Vec::from_raw_parts(l12.cast(), len14, len14);
+
+                                            _rt::string_lift(bytes14)
+                                        };
+                                        V21::Lost(e21)
+                                    }
+                                    4 => {
+                                        let e21 = {
+                                            let l15 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l16 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len17 = l16;
+                                            let bytes17 =
+                                                _rt::Vec::from_raw_parts(l15.cast(), len17, len17);
+
+                                            _rt::string_lift(bytes17)
+                                        };
+                                        V21::Unsupported(e21)
+                                    }
+                                    n => {
+                                        debug_assert_eq!(n, 5, "invalid enum discriminant");
+                                        let e21 = {
+                                            let l18 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l19 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len20 = l19;
+                                            let bytes20 =
+                                                _rt::Vec::from_raw_parts(l18.cast(), len20, len20);
+
+                                            _rt::string_lift(bytes20)
+                                        };
+                                        V21::Internal(e21)
+                                    }
+                                };
+
+                                v21
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    };
+                    result22
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// What a surface can do with an adapter.
+            pub fn get_surface_capabilities(
+                surface: Handle,
+                adapter: Handle,
+            ) -> Result<SurfaceCapabilities, GpuError> {
+                unsafe {
+                    #[cfg_attr(target_pointer_width = "64", repr(align(8)))]
+                    #[cfg_attr(target_pointer_width = "32", repr(align(4)))]
+                    struct RetArea(
+                        [::core::mem::MaybeUninit<u8>; 8 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let mut ret_area = RetArea(
+                        [::core::mem::MaybeUninit::uninit();
+                            8 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:gpu/gpu@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "get-surface-capabilities"]
+                        fn wit_import1(_: i64, _: i64, _: *mut u8);
+                    }
+
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import1(_: i64, _: i64, _: *mut u8) {
+                        unreachable!()
+                    }
+                    unsafe { wit_import1(_rt::as_i64(surface), _rt::as_i64(adapter), ptr0) };
+                    let l2 = i32::from(*ptr0.add(0).cast::<u8>());
+                    let result35 = match l2 {
+                        0 => {
+                            let e = {
+                                let l3 = *ptr0
+                                    .add(::core::mem::size_of::<*const u8>())
+                                    .cast::<*mut u8>();
+                                let l4 = *ptr0
+                                    .add(2 * ::core::mem::size_of::<*const u8>())
+                                    .cast::<usize>();
+                                let base8 = l3;
+                                let len8 = l4;
+                                let mut result8 = _rt::Vec::with_capacity(len8);
+                                for i in 0..len8 {
+                                    let base =
+                                        base8.add(i * (2 * ::core::mem::size_of::<*const u8>()));
+                                    let e8 = {
+                                        let l5 = *base.add(0).cast::<*mut u8>();
+                                        let l6 = *base
+                                            .add(::core::mem::size_of::<*const u8>())
+                                            .cast::<usize>();
+                                        let len7 = l6;
+                                        let bytes7 =
+                                            _rt::Vec::from_raw_parts(l5.cast(), len7, len7);
+
+                                        _rt::string_lift(bytes7)
+                                    };
+                                    result8.push(e8);
+                                }
+                                _rt::cabi_dealloc(
+                                    base8,
+                                    len8 * (2 * ::core::mem::size_of::<*const u8>()),
+                                    ::core::mem::size_of::<*const u8>(),
+                                );
+                                let l9 = *ptr0
+                                    .add(3 * ::core::mem::size_of::<*const u8>())
+                                    .cast::<*mut u8>();
+                                let l10 = *ptr0
+                                    .add(4 * ::core::mem::size_of::<*const u8>())
+                                    .cast::<usize>();
+                                let base12 = l9;
+                                let len12 = l10;
+                                let mut result12 = _rt::Vec::with_capacity(len12);
+                                for i in 0..len12 {
+                                    let base = base12.add(i * 1);
+                                    let e12 = {
+                                        let l11 = i32::from(*base.add(0).cast::<u8>());
+
+                                        super::super::super::krate::gpu::types::PresentMode::_lift(
+                                            l11 as u8,
+                                        )
+                                    };
+                                    result12.push(e12);
+                                }
+                                _rt::cabi_dealloc(base12, len12 * 1, 1);
+                                let l13 = *ptr0
+                                    .add(5 * ::core::mem::size_of::<*const u8>())
+                                    .cast::<*mut u8>();
+                                let l14 = *ptr0
+                                    .add(6 * ::core::mem::size_of::<*const u8>())
+                                    .cast::<usize>();
+                                let base16 = l13;
+                                let len16 = l14;
+                                let mut result16 = _rt::Vec::with_capacity(len16);
+                                for i in 0..len16 {
+                                    let base = base16.add(i * 1);
+                                    let e16 = {
+                                        let l15 = i32::from(*base.add(0).cast::<u8>());
+
+                                        super::super::super::krate::gpu::types::CompositeAlphaMode::_lift(l15 as u8)
+                                    };
+                                    result16.push(e16);
+                                }
+                                _rt::cabi_dealloc(base16, len16 * 1, 1);
+                                let l17 = i32::from(
+                                    *ptr0
+                                        .add(7 * ::core::mem::size_of::<*const u8>())
+                                        .cast::<u8>(),
+                                );
+
+                                super::super::super::krate::gpu::types::SurfaceCapabilities{
+                                      formats: result8,
+                                      present_modes: result12,
+                                      alpha_modes: result16,
+                                      usages: super::super::super::krate::gpu::types::TextureUsages::empty() | super::super::super::krate::gpu::types::TextureUsages::from_bits_retain(((l17 as u8) << 0) as _),
+                                    }
+                            };
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l18 = i32::from(
+                                    *ptr0.add(::core::mem::size_of::<*const u8>()).cast::<u8>(),
+                                );
+                                use super::super::super::krate::gpu::types::GpuError as V34;
+                                let v34 = match l18 {
+                                    0 => {
+                                        let e34 = {
+                                            let l19 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l20 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len21 = l20;
+                                            let bytes21 =
+                                                _rt::Vec::from_raw_parts(l19.cast(), len21, len21);
+
+                                            _rt::string_lift(bytes21)
+                                        };
+                                        V34::InvalidHandle(e34)
+                                    }
+                                    1 => {
+                                        let e34 = {
+                                            let l22 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l23 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len24 = l23;
+                                            let bytes24 =
+                                                _rt::Vec::from_raw_parts(l22.cast(), len24, len24);
+
+                                            _rt::string_lift(bytes24)
+                                        };
+                                        V34::Validation(e34)
+                                    }
+                                    2 => V34::OutOfMemory,
+                                    3 => {
+                                        let e34 = {
+                                            let l25 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l26 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len27 = l26;
+                                            let bytes27 =
+                                                _rt::Vec::from_raw_parts(l25.cast(), len27, len27);
+
+                                            _rt::string_lift(bytes27)
+                                        };
+                                        V34::Lost(e34)
+                                    }
+                                    4 => {
+                                        let e34 = {
+                                            let l28 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l29 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len30 = l29;
+                                            let bytes30 =
+                                                _rt::Vec::from_raw_parts(l28.cast(), len30, len30);
+
+                                            _rt::string_lift(bytes30)
+                                        };
+                                        V34::Unsupported(e34)
+                                    }
+                                    n => {
+                                        debug_assert_eq!(n, 5, "invalid enum discriminant");
+                                        let e34 = {
+                                            let l31 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l32 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len33 = l32;
+                                            let bytes33 =
+                                                _rt::Vec::from_raw_parts(l31.cast(), len33, len33);
+
+                                            _rt::string_lift(bytes33)
+                                        };
+                                        V34::Internal(e34)
+                                    }
+                                };
+
+                                v34
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    };
+                    result35
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Set a surface up for a device, a size and a format.
+            pub fn configure_surface(
+                surface: Handle,
+                device: Handle,
+                configuration: &SurfaceConfiguration,
+            ) -> Result<(), GpuError> {
+                unsafe {
+                    #[cfg_attr(target_pointer_width = "64", repr(align(8)))]
+                    #[cfg_attr(target_pointer_width = "32", repr(align(4)))]
+                    struct RetArea(
+                        [::core::mem::MaybeUninit<u8>; 4 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let mut ret_area = RetArea(
+                        [::core::mem::MaybeUninit::uninit();
+                            4 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let super::super::super::krate::gpu::types::SurfaceConfiguration {
+                        usage: usage0,
+                        format: format0,
+                        width: width0,
+                        height: height0,
+                        present_mode: present_mode0,
+                        alpha_mode: alpha_mode0,
+                        view_formats: view_formats0,
+                        desired_maximum_frame_latency: desired_maximum_frame_latency0,
+                    } = configuration;
+                    let flags1 = usage0;
+                    let vec2 = format0;
+                    let ptr2 = vec2.as_ptr().cast::<u8>();
+                    let len2 = vec2.len();
+                    let vec4 = view_formats0;
+                    let len4 = vec4.len();
+                    let layout4 = _rt::alloc::Layout::from_size_align_unchecked(
+                        vec4.len() * (2 * ::core::mem::size_of::<*const u8>()),
+                        ::core::mem::size_of::<*const u8>(),
+                    );
+                    let result4 = if layout4.size() != 0 {
+                        let ptr = _rt::alloc::alloc(layout4).cast::<u8>();
+                        if ptr.is_null() {
+                            _rt::alloc::handle_alloc_error(layout4);
+                        }
+                        ptr
+                    } else {
+                        ::core::ptr::null_mut()
+                    };
+                    for (i, e) in vec4.into_iter().enumerate() {
+                        let base = result4.add(i * (2 * ::core::mem::size_of::<*const u8>()));
+                        {
+                            let vec3 = e;
+                            let ptr3 = vec3.as_ptr().cast::<u8>();
+                            let len3 = vec3.len();
+                            *base
+                                .add(::core::mem::size_of::<*const u8>())
+                                .cast::<usize>() = len3;
+                            *base.add(0).cast::<*mut u8>() = ptr3.cast_mut();
+                        }
+                    }
+                    let ptr5 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:gpu/gpu@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "configure-surface"]
+                        fn wit_import6(
+                            _: i64,
+                            _: i64,
+                            _: i32,
+                            _: *mut u8,
+                            _: usize,
+                            _: i32,
+                            _: i32,
+                            _: i32,
+                            _: i32,
+                            _: *mut u8,
+                            _: usize,
+                            _: i32,
+                            _: *mut u8,
+                        );
+                    }
+
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import6(
+                        _: i64,
+                        _: i64,
+                        _: i32,
+                        _: *mut u8,
+                        _: usize,
+                        _: i32,
+                        _: i32,
+                        _: i32,
+                        _: i32,
+                        _: *mut u8,
+                        _: usize,
+                        _: i32,
+                        _: *mut u8,
+                    ) {
+                        unreachable!()
+                    }
+                    unsafe {
+                        wit_import6(
+                            _rt::as_i64(surface),
+                            _rt::as_i64(device),
+                            (flags1.bits() >> 0) as i32,
+                            ptr2.cast_mut(),
+                            len2,
+                            _rt::as_i32(width0),
+                            _rt::as_i32(height0),
+                            present_mode0.clone() as i32,
+                            alpha_mode0.clone() as i32,
+                            result4,
+                            len4,
+                            _rt::as_i32(desired_maximum_frame_latency0),
+                            ptr5,
+                        )
+                    };
+                    let l7 = i32::from(*ptr5.add(0).cast::<u8>());
+                    let result25 = match l7 {
+                        0 => {
+                            let e = ();
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l8 = i32::from(
+                                    *ptr5.add(::core::mem::size_of::<*const u8>()).cast::<u8>(),
+                                );
+                                use super::super::super::krate::gpu::types::GpuError as V24;
+                                let v24 = match l8 {
+                                    0 => {
+                                        let e24 = {
+                                            let l9 = *ptr5
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l10 = *ptr5
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len11 = l10;
+                                            let bytes11 =
+                                                _rt::Vec::from_raw_parts(l9.cast(), len11, len11);
+
+                                            _rt::string_lift(bytes11)
+                                        };
+                                        V24::InvalidHandle(e24)
+                                    }
+                                    1 => {
+                                        let e24 = {
+                                            let l12 = *ptr5
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l13 = *ptr5
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len14 = l13;
+                                            let bytes14 =
+                                                _rt::Vec::from_raw_parts(l12.cast(), len14, len14);
+
+                                            _rt::string_lift(bytes14)
+                                        };
+                                        V24::Validation(e24)
+                                    }
+                                    2 => V24::OutOfMemory,
+                                    3 => {
+                                        let e24 = {
+                                            let l15 = *ptr5
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l16 = *ptr5
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len17 = l16;
+                                            let bytes17 =
+                                                _rt::Vec::from_raw_parts(l15.cast(), len17, len17);
+
+                                            _rt::string_lift(bytes17)
+                                        };
+                                        V24::Lost(e24)
+                                    }
+                                    4 => {
+                                        let e24 = {
+                                            let l18 = *ptr5
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l19 = *ptr5
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len20 = l19;
+                                            let bytes20 =
+                                                _rt::Vec::from_raw_parts(l18.cast(), len20, len20);
+
+                                            _rt::string_lift(bytes20)
+                                        };
+                                        V24::Unsupported(e24)
+                                    }
+                                    n => {
+                                        debug_assert_eq!(n, 5, "invalid enum discriminant");
+                                        let e24 = {
+                                            let l21 = *ptr5
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l22 = *ptr5
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len23 = l22;
+                                            let bytes23 =
+                                                _rt::Vec::from_raw_parts(l21.cast(), len23, len23);
+
+                                            _rt::string_lift(bytes23)
+                                        };
+                                        V24::Internal(e24)
+                                    }
+                                };
+
+                                v24
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    };
+                    if layout4.size() != 0 {
+                        _rt::alloc::dealloc(result4.cast(), layout4);
+                    }
+                    result25
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// The texture to draw the next frame into.
+            pub fn current_texture(surface: Handle) -> Result<SurfaceFrame, SurfaceError> {
+                unsafe {
+                    #[repr(align(8))]
+                    struct RetArea(
+                        [::core::mem::MaybeUninit<u8>;
+                            16 + 2 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let mut ret_area = RetArea(
+                        [::core::mem::MaybeUninit::uninit();
+                            16 + 2 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:gpu/gpu@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "current-texture"]
+                        fn wit_import1(_: i64, _: *mut u8);
+                    }
+
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import1(_: i64, _: *mut u8) {
+                        unreachable!()
+                    }
+                    unsafe { wit_import1(_rt::as_i64(surface), ptr0) };
+                    let l2 = i32::from(*ptr0.add(0).cast::<u8>());
+                    let result13 = match l2 {
+                        0 => {
+                            let e = {
+                                let l3 = *ptr0.add(8).cast::<i64>();
+                                let l4 = i32::from(*ptr0.add(16).cast::<u8>());
+
+                                super::super::super::krate::gpu::types::SurfaceFrame {
+                                    texture: l3 as u64,
+                                    suboptimal: _rt::bool_lift(l4 as u8),
+                                }
+                            };
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l5 = i32::from(*ptr0.add(8).cast::<u8>());
+                                use super::super::super::krate::gpu::types::SurfaceError as V12;
+                                let v12 = match l5 {
+                                    0 => V12::NotConfigured,
+                                    1 => V12::Outdated,
+                                    2 => V12::Occluded,
+                                    3 => {
+                                        let e12 = {
+                                            let l6 = *ptr0
+                                                .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l7 = *ptr0
+                                                .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len8 = l7;
+                                            let bytes8 =
+                                                _rt::Vec::from_raw_parts(l6.cast(), len8, len8);
+
+                                            _rt::string_lift(bytes8)
+                                        };
+                                        V12::Lost(e12)
+                                    }
+                                    n => {
+                                        debug_assert_eq!(n, 4, "invalid enum discriminant");
+                                        let e12 = {
+                                            let l9 = *ptr0
+                                                .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l10 = *ptr0
+                                                .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len11 = l10;
+                                            let bytes11 =
+                                                _rt::Vec::from_raw_parts(l9.cast(), len11, len11);
+
+                                            _rt::string_lift(bytes11)
+                                        };
+                                        V12::Other(e12)
+                                    }
+                                };
+
+                                v12
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    };
+                    result13
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Show the frame drawn into the current texture.
+            pub fn present(surface: Handle) -> Result<(), GpuError> {
+                unsafe {
+                    #[cfg_attr(target_pointer_width = "64", repr(align(8)))]
+                    #[cfg_attr(target_pointer_width = "32", repr(align(4)))]
+                    struct RetArea(
+                        [::core::mem::MaybeUninit<u8>; 4 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let mut ret_area = RetArea(
+                        [::core::mem::MaybeUninit::uninit();
+                            4 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:gpu/gpu@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "present"]
+                        fn wit_import1(_: i64, _: *mut u8);
+                    }
+
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import1(_: i64, _: *mut u8) {
+                        unreachable!()
+                    }
+                    unsafe { wit_import1(_rt::as_i64(surface), ptr0) };
+                    let l2 = i32::from(*ptr0.add(0).cast::<u8>());
+                    let result20 = match l2 {
+                        0 => {
+                            let e = ();
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l3 = i32::from(
+                                    *ptr0.add(::core::mem::size_of::<*const u8>()).cast::<u8>(),
+                                );
+                                use super::super::super::krate::gpu::types::GpuError as V19;
+                                let v19 = match l3 {
+                                    0 => {
+                                        let e19 = {
+                                            let l4 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l5 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len6 = l5;
+                                            let bytes6 =
+                                                _rt::Vec::from_raw_parts(l4.cast(), len6, len6);
+
+                                            _rt::string_lift(bytes6)
+                                        };
+                                        V19::InvalidHandle(e19)
+                                    }
+                                    1 => {
+                                        let e19 = {
+                                            let l7 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l8 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len9 = l8;
+                                            let bytes9 =
+                                                _rt::Vec::from_raw_parts(l7.cast(), len9, len9);
+
+                                            _rt::string_lift(bytes9)
+                                        };
+                                        V19::Validation(e19)
+                                    }
+                                    2 => V19::OutOfMemory,
+                                    3 => {
+                                        let e19 = {
+                                            let l10 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l11 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len12 = l11;
+                                            let bytes12 =
+                                                _rt::Vec::from_raw_parts(l10.cast(), len12, len12);
+
+                                            _rt::string_lift(bytes12)
+                                        };
+                                        V19::Lost(e19)
+                                    }
+                                    4 => {
+                                        let e19 = {
+                                            let l13 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l14 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len15 = l14;
+                                            let bytes15 =
+                                                _rt::Vec::from_raw_parts(l13.cast(), len15, len15);
+
+                                            _rt::string_lift(bytes15)
+                                        };
+                                        V19::Unsupported(e19)
+                                    }
+                                    n => {
+                                        debug_assert_eq!(n, 5, "invalid enum discriminant");
+                                        let e19 = {
+                                            let l16 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l17 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len18 = l17;
+                                            let bytes18 =
+                                                _rt::Vec::from_raw_parts(l16.cast(), len18, len18);
+
+                                            _rt::string_lift(bytes18)
+                                        };
+                                        V19::Internal(e19)
+                                    }
+                                };
+
+                                v19
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    };
+                    result20
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Let a handle go. The object lives on while the GPU still uses it.
+            pub fn release(object: Handle) -> () {
+                unsafe {
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:gpu/gpu@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "release"]
+                        fn wit_import0(_: i64);
+                    }
+
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import0(_: i64) {
+                        unreachable!()
+                    }
+                    unsafe { wit_import0(_rt::as_i64(object)) };
+                }
+            }
+        }
+    }
     pub mod io {
         /// Shared IO records and errors.
         #[allow(dead_code, async_fn_in_trait, unused_imports, clippy::all)]
@@ -20523,41 +34013,41 @@ pub mod krate {
                                             let l19 = i32::from(*ptr0.add(54).cast::<u8>());
 
                                             super::super::super::krate::ui::types::PointerEvent{
-                        window: l8 as u64,
-                        widget: match l9 {
-                          0 => None,
-                          1 => {
-                            let e = {
-                              let l10 = *ptr0.add(32).cast::<i64>();
+                                            window: l8 as u64,
+                                            widget: match l9 {
+                                              0 => None,
+                                              1 => {
+                                                let e = {
+                                                  let l10 = *ptr0.add(32).cast::<i64>();
 
-                              l10 as u64
-                            };
-                            Some(e)
-                          }
-                          _ => _rt::invalid_enum_discriminant(),
-                        },
-                        x: l11,
-                        y: l12,
-                        button: match l13 {
-                          0 => None,
-                          1 => {
-                            let e = {
-                              let l14 = i32::from(*ptr0.add(49).cast::<u8>());
+                                                  l10 as u64
+                                                };
+                                                Some(e)
+                                              }
+                                              _ => _rt::invalid_enum_discriminant(),
+                                            },
+                                            x: l11,
+                                            y: l12,
+                                            button: match l13 {
+                                              0 => None,
+                                              1 => {
+                                                let e = {
+                                                  let l14 = i32::from(*ptr0.add(49).cast::<u8>());
 
-                              super::super::super::krate::ui::types::PointerButton::_lift(l14 as u8)
-                            };
-                            Some(e)
-                          }
-                          _ => _rt::invalid_enum_discriminant(),
-                        },
-                        pressed: _rt::bool_lift(l15 as u8),
-                        modifiers: super::super::super::krate::ui::types::Modifiers{
-                          shift: _rt::bool_lift(l16 as u8),
-                          control: _rt::bool_lift(l17 as u8),
-                          alt: _rt::bool_lift(l18 as u8),
-                          meta: _rt::bool_lift(l19 as u8),
-                        },
-                      }
+                                                  super::super::super::krate::ui::types::PointerButton::_lift(l14 as u8)
+                                                };
+                                                Some(e)
+                                              }
+                                              _ => _rt::invalid_enum_discriminant(),
+                                            },
+                                            pressed: _rt::bool_lift(l15 as u8),
+                                            modifiers: super::super::super::krate::ui::types::Modifiers{
+                                              shift: _rt::bool_lift(l16 as u8),
+                                              control: _rt::bool_lift(l17 as u8),
+                                              alt: _rt::bool_lift(l18 as u8),
+                                              meta: _rt::bool_lift(l19 as u8),
+                                            },
+                                          }
                                         };
                                         V61::Pointer(e61)
                                     }
@@ -20614,28 +34104,28 @@ pub mod krate {
                                             );
 
                                             super::super::super::krate::ui::types::KeyEvent{
-                        window: l20 as u64,
-                        widget: match l21 {
-                          0 => None,
-                          1 => {
-                            let e = {
-                              let l22 = *ptr0.add(32).cast::<i64>();
+                                            window: l20 as u64,
+                                            widget: match l21 {
+                                              0 => None,
+                                              1 => {
+                                                let e = {
+                                                  let l22 = *ptr0.add(32).cast::<i64>();
 
-                              l22 as u64
-                            };
-                            Some(e)
-                          }
-                          _ => _rt::invalid_enum_discriminant(),
-                        },
-                        key: _rt::string_lift(bytes25),
-                        pressed: _rt::bool_lift(l26 as u8),
-                        modifiers: super::super::super::krate::ui::types::Modifiers{
-                          shift: _rt::bool_lift(l27 as u8),
-                          control: _rt::bool_lift(l28 as u8),
-                          alt: _rt::bool_lift(l29 as u8),
-                          meta: _rt::bool_lift(l30 as u8),
-                        },
-                      }
+                                                  l22 as u64
+                                                };
+                                                Some(e)
+                                              }
+                                              _ => _rt::invalid_enum_discriminant(),
+                                            },
+                                            key: _rt::string_lift(bytes25),
+                                            pressed: _rt::bool_lift(l26 as u8),
+                                            modifiers: super::super::super::krate::ui::types::Modifiers{
+                                              shift: _rt::bool_lift(l27 as u8),
+                                              control: _rt::bool_lift(l28 as u8),
+                                              alt: _rt::bool_lift(l29 as u8),
+                                              meta: _rt::bool_lift(l30 as u8),
+                                            },
+                                          }
                                         };
                                         V61::Key(e61)
                                     }
@@ -20653,30 +34143,30 @@ pub mod krate {
                                             let l41 = i32::from(*ptr0.add(59).cast::<u8>());
 
                                             super::super::super::krate::ui::types::WheelEvent{
-                        window: l31 as u64,
-                        widget: match l32 {
-                          0 => None,
-                          1 => {
-                            let e = {
-                              let l33 = *ptr0.add(32).cast::<i64>();
+                                            window: l31 as u64,
+                                            widget: match l32 {
+                                              0 => None,
+                                              1 => {
+                                                let e = {
+                                                  let l33 = *ptr0.add(32).cast::<i64>();
 
-                              l33 as u64
-                            };
-                            Some(e)
-                          }
-                          _ => _rt::invalid_enum_discriminant(),
-                        },
-                        x: l34,
-                        y: l35,
-                        dx: l36,
-                        dy: l37,
-                        modifiers: super::super::super::krate::ui::types::Modifiers{
-                          shift: _rt::bool_lift(l38 as u8),
-                          control: _rt::bool_lift(l39 as u8),
-                          alt: _rt::bool_lift(l40 as u8),
-                          meta: _rt::bool_lift(l41 as u8),
-                        },
-                      }
+                                                  l33 as u64
+                                                };
+                                                Some(e)
+                                              }
+                                              _ => _rt::invalid_enum_discriminant(),
+                                            },
+                                            x: l34,
+                                            y: l35,
+                                            dx: l36,
+                                            dy: l37,
+                                            modifiers: super::super::super::krate::ui::types::Modifiers{
+                                              shift: _rt::bool_lift(l38 as u8),
+                                              control: _rt::bool_lift(l39 as u8),
+                                              alt: _rt::bool_lift(l40 as u8),
+                                              meta: _rt::bool_lift(l41 as u8),
+                                            },
+                                          }
                                         };
                                         V61::Wheel(e61)
                                     }
@@ -20707,10 +34197,10 @@ pub mod krate {
                                                 _rt::Vec::from_raw_parts(l47.cast(), len49, len49);
 
                                             super::super::super::krate::ui::types::TextChangedEvent{
-                        window: l45 as u64,
-                        widget: l46 as u64,
-                        text: _rt::string_lift(bytes49),
-                      }
+                                            window: l45 as u64,
+                                            widget: l46 as u64,
+                                            text: _rt::string_lift(bytes49),
+                                          }
                                         };
                                         V61::TextChanged(e61)
                                     }
@@ -20871,41 +34361,41 @@ pub mod krate {
                                             let l20 = i32::from(*ptr1.add(54).cast::<u8>());
 
                                             super::super::super::krate::ui::types::PointerEvent{
-                        window: l9 as u64,
-                        widget: match l10 {
-                          0 => None,
-                          1 => {
-                            let e = {
-                              let l11 = *ptr1.add(32).cast::<i64>();
+                                            window: l9 as u64,
+                                            widget: match l10 {
+                                              0 => None,
+                                              1 => {
+                                                let e = {
+                                                  let l11 = *ptr1.add(32).cast::<i64>();
 
-                              l11 as u64
-                            };
-                            Some(e)
-                          }
-                          _ => _rt::invalid_enum_discriminant(),
-                        },
-                        x: l12,
-                        y: l13,
-                        button: match l14 {
-                          0 => None,
-                          1 => {
-                            let e = {
-                              let l15 = i32::from(*ptr1.add(49).cast::<u8>());
+                                                  l11 as u64
+                                                };
+                                                Some(e)
+                                              }
+                                              _ => _rt::invalid_enum_discriminant(),
+                                            },
+                                            x: l12,
+                                            y: l13,
+                                            button: match l14 {
+                                              0 => None,
+                                              1 => {
+                                                let e = {
+                                                  let l15 = i32::from(*ptr1.add(49).cast::<u8>());
 
-                              super::super::super::krate::ui::types::PointerButton::_lift(l15 as u8)
-                            };
-                            Some(e)
-                          }
-                          _ => _rt::invalid_enum_discriminant(),
-                        },
-                        pressed: _rt::bool_lift(l16 as u8),
-                        modifiers: super::super::super::krate::ui::types::Modifiers{
-                          shift: _rt::bool_lift(l17 as u8),
-                          control: _rt::bool_lift(l18 as u8),
-                          alt: _rt::bool_lift(l19 as u8),
-                          meta: _rt::bool_lift(l20 as u8),
-                        },
-                      }
+                                                  super::super::super::krate::ui::types::PointerButton::_lift(l15 as u8)
+                                                };
+                                                Some(e)
+                                              }
+                                              _ => _rt::invalid_enum_discriminant(),
+                                            },
+                                            pressed: _rt::bool_lift(l16 as u8),
+                                            modifiers: super::super::super::krate::ui::types::Modifiers{
+                                              shift: _rt::bool_lift(l17 as u8),
+                                              control: _rt::bool_lift(l18 as u8),
+                                              alt: _rt::bool_lift(l19 as u8),
+                                              meta: _rt::bool_lift(l20 as u8),
+                                            },
+                                          }
                                         };
                                         V62::Pointer(e62)
                                     }
@@ -20962,28 +34452,28 @@ pub mod krate {
                                             );
 
                                             super::super::super::krate::ui::types::KeyEvent{
-                        window: l21 as u64,
-                        widget: match l22 {
-                          0 => None,
-                          1 => {
-                            let e = {
-                              let l23 = *ptr1.add(32).cast::<i64>();
+                                            window: l21 as u64,
+                                            widget: match l22 {
+                                              0 => None,
+                                              1 => {
+                                                let e = {
+                                                  let l23 = *ptr1.add(32).cast::<i64>();
 
-                              l23 as u64
-                            };
-                            Some(e)
-                          }
-                          _ => _rt::invalid_enum_discriminant(),
-                        },
-                        key: _rt::string_lift(bytes26),
-                        pressed: _rt::bool_lift(l27 as u8),
-                        modifiers: super::super::super::krate::ui::types::Modifiers{
-                          shift: _rt::bool_lift(l28 as u8),
-                          control: _rt::bool_lift(l29 as u8),
-                          alt: _rt::bool_lift(l30 as u8),
-                          meta: _rt::bool_lift(l31 as u8),
-                        },
-                      }
+                                                  l23 as u64
+                                                };
+                                                Some(e)
+                                              }
+                                              _ => _rt::invalid_enum_discriminant(),
+                                            },
+                                            key: _rt::string_lift(bytes26),
+                                            pressed: _rt::bool_lift(l27 as u8),
+                                            modifiers: super::super::super::krate::ui::types::Modifiers{
+                                              shift: _rt::bool_lift(l28 as u8),
+                                              control: _rt::bool_lift(l29 as u8),
+                                              alt: _rt::bool_lift(l30 as u8),
+                                              meta: _rt::bool_lift(l31 as u8),
+                                            },
+                                          }
                                         };
                                         V62::Key(e62)
                                     }
@@ -21001,30 +34491,30 @@ pub mod krate {
                                             let l42 = i32::from(*ptr1.add(59).cast::<u8>());
 
                                             super::super::super::krate::ui::types::WheelEvent{
-                        window: l32 as u64,
-                        widget: match l33 {
-                          0 => None,
-                          1 => {
-                            let e = {
-                              let l34 = *ptr1.add(32).cast::<i64>();
+                                            window: l32 as u64,
+                                            widget: match l33 {
+                                              0 => None,
+                                              1 => {
+                                                let e = {
+                                                  let l34 = *ptr1.add(32).cast::<i64>();
 
-                              l34 as u64
-                            };
-                            Some(e)
-                          }
-                          _ => _rt::invalid_enum_discriminant(),
-                        },
-                        x: l35,
-                        y: l36,
-                        dx: l37,
-                        dy: l38,
-                        modifiers: super::super::super::krate::ui::types::Modifiers{
-                          shift: _rt::bool_lift(l39 as u8),
-                          control: _rt::bool_lift(l40 as u8),
-                          alt: _rt::bool_lift(l41 as u8),
-                          meta: _rt::bool_lift(l42 as u8),
-                        },
-                      }
+                                                  l34 as u64
+                                                };
+                                                Some(e)
+                                              }
+                                              _ => _rt::invalid_enum_discriminant(),
+                                            },
+                                            x: l35,
+                                            y: l36,
+                                            dx: l37,
+                                            dy: l38,
+                                            modifiers: super::super::super::krate::ui::types::Modifiers{
+                                              shift: _rt::bool_lift(l39 as u8),
+                                              control: _rt::bool_lift(l40 as u8),
+                                              alt: _rt::bool_lift(l41 as u8),
+                                              meta: _rt::bool_lift(l42 as u8),
+                                            },
+                                          }
                                         };
                                         V62::Wheel(e62)
                                     }
@@ -21055,10 +34545,10 @@ pub mod krate {
                                                 _rt::Vec::from_raw_parts(l48.cast(), len50, len50);
 
                                             super::super::super::krate::ui::types::TextChangedEvent{
-                        window: l46 as u64,
-                        widget: l47 as u64,
-                        text: _rt::string_lift(bytes50),
-                      }
+                                            window: l46 as u64,
+                                            widget: l47 as u64,
+                                            text: _rt::string_lift(bytes50),
+                                          }
                                         };
                                         V62::TextChanged(e62)
                                     }
@@ -23868,11 +37358,11 @@ mod _rt {
 #[doc(hidden)]
 
 macro_rules! __export_gui_impl {
-  ($ty:ident) => (self::export!($ty with_types_in self););
-  ($ty:ident with_types_in $($path_to_types_root:tt)*) => (
-  $($path_to_types_root)*::__export_world_gui_cabi!($ty with_types_in $($path_to_types_root)*);
-  )
-}
+                      ($ty:ident) => (self::export!($ty with_types_in self););
+                      ($ty:ident with_types_in $($path_to_types_root:tt)*) => (
+                      $($path_to_types_root)*::__export_world_gui_cabi!($ty with_types_in $($path_to_types_root)*);
+                      )
+                    }
 #[doc(inline)]
 pub(crate) use __export_gui_impl as export;
 
@@ -23880,72 +37370,72 @@ pub(crate) use __export_gui_impl as export;
 #[unsafe(link_section = "component-type:wit-bindgen:0.41.0:krate:app@0.2.0:gui:encoded world")]
 #[doc(hidden)]
 #[allow(clippy::octal_escapes)]
-pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 15263] = *b"\
-\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\xa5v\x01A\x02\x01A\x8d\
-\x01\x01B\x04\x01m\x05\x05trace\x05debug\x04info\x04warn\x05error\x04\0\x09log-l\
-evel\x03\0\0\x01q\x05\x06closed\0\0\x0binterrupted\0\0\x0eunexpected-eof\0\0\x0c\
-invalid-utf8\0\0\x05other\x01s\0\x04\0\x08io-error\x03\0\x02\x03\0\x14krate:io/t\
-ypes@0.1.0\x05\0\x02\x03\0\0\x08io-error\x01B\x15\x02\x03\x02\x01\x01\x04\0\x08i\
-o-error\x03\0\0\x04\0\x0cinput-stream\x03\x01\x04\0\x0doutput-stream\x03\x01\x01\
-h\x02\x01p}\x01j\x01\x05\x01\x01\x01@\x02\x04self\x04\x01ny\0\x06\x04\0\x19[meth\
-od]input-stream.read\x01\x07\x01j\x01s\x01\x01\x01@\x01\x04self\x04\0\x08\x04\0#\
-[method]input-stream.read-to-string\x01\x09\x01h\x03\x01j\x01y\x01\x01\x01@\x02\x04\
-self\x0a\x05bytes\x05\0\x0b\x04\0\x1b[method]output-stream.write\x01\x0c\x01j\0\x01\
-\x01\x01@\x02\x04self\x0a\x05bytes\x05\0\x0d\x04\0\x1f[method]output-stream.writ\
-e-all\x01\x0e\x01@\x01\x04self\x0a\0\x0d\x04\0\x1b[method]output-stream.flush\x01\
-\x0f\x03\0\x16krate:io/streams@0.1.0\x05\x02\x02\x03\0\x01\x0cinput-stream\x02\x03\
-\0\x01\x0doutput-stream\x01B\x0b\x02\x03\x02\x01\x03\x04\0\x0cinput-stream\x03\0\
-\0\x02\x03\x02\x01\x04\x04\0\x0doutput-stream\x03\0\x02\x01i\x01\x01@\0\0\x04\x04\
-\0\x05stdin\x01\x05\x01i\x03\x01@\0\0\x06\x04\0\x06stdout\x01\x07\x04\0\x06stder\
-r\x01\x07\x03\0\x14krate:io/stdio@0.1.0\x05\x05\x01B\x02\x01@\0\0s\x04\0\x03raw\x01\
-\0\x03\0\x13krate:io/args@0.1.0\x05\x06\x02\x03\0\0\x09log-level\x01B\x07\x02\x03\
-\x02\x01\x07\x04\0\x09log-level\x03\0\0\x01r\x02\x03keys\x05values\x04\0\x05fiel\
-d\x03\0\x02\x01p\x03\x01@\x03\x05level\x01\x07messages\x06fields\x04\x01\0\x04\0\
-\x04emit\x01\x05\x03\0\x12krate:io/log@0.1.0\x05\x08\x01B\x06\x01r\x03\x04sizew\x0f\
-modified-millisw\x06is-dir\x7f\x04\0\x09file-stat\x03\0\0\x01q\x04\x04read\0\0\x05\
-write\0\0\x0aread-write\0\0\x06append\0\0\x04\0\x09open-mode\x03\0\x02\x01q\x07\x09\
-not-found\0\0\x11permission-denied\0\0\x0ealready-exists\0\0\x0cinvalid-path\0\0\
-\x0fnot-a-directory\0\0\x0eis-a-directory\0\0\x02io\x01s\0\x04\0\x08fs-error\x03\
-\0\x04\x03\0\x14krate:fs/types@0.1.0\x05\x09\x02\x03\0\x05\x09file-stat\x02\x03\0\
-\x05\x09open-mode\x02\x03\0\x05\x08fs-error\x01B*\x02\x03\x02\x01\x0a\x04\0\x09f\
-ile-stat\x03\0\0\x02\x03\x02\x01\x0b\x04\0\x09open-mode\x03\0\x02\x02\x03\x02\x01\
-\x0c\x04\0\x08fs-error\x03\0\x04\x04\0\x04file\x03\x01\x01h\x06\x01p}\x01j\x01\x08\
-\x01\x05\x01@\x02\x04self\x07\x01ny\0\x09\x04\0\x11[method]file.read\x01\x0a\x01\
-j\x01y\x01\x05\x01@\x02\x04self\x07\x05bytes\x08\0\x0b\x04\0\x12[method]file.wri\
-te\x01\x0c\x01j\x01w\x01\x05\x01@\x02\x04self\x07\x03posw\0\x0d\x04\0\x15[method\
-]file.seek-set\x01\x0e\x01@\x01\x04self\x07\0\x0d\x04\0\x15[method]file.seek-end\
-\x01\x0f\x01j\x01\x01\x01\x05\x01@\x01\x04self\x07\0\x10\x04\0\x11[method]file.s\
-tat\x01\x11\x01i\x06\x01j\x01\x12\x01\x05\x01@\x02\x04paths\x04mode\x03\0\x13\x04\
-\0\x04open\x01\x14\x01@\x02\x05tokens\x04mode\x03\0\x13\x04\0\x0bopen-chosen\x01\
-\x15\x01@\x01\x04paths\0\x10\x04\0\x04stat\x01\x16\x01ps\x01j\x01\x17\x01\x05\x01\
-@\x01\x04paths\0\x18\x04\0\x04list\x01\x19\x01j\0\x01\x05\x01@\x01\x04paths\0\x1a\
-\x04\0\x0bremove-file\x01\x1b\x04\0\x0aremove-dir\x01\x1b\x04\0\x05mkdir\x01\x1b\
-\x01@\x02\x04froms\x02tos\0\x1a\x04\0\x06rename\x01\x1c\x03\0\x14krate:fs/files@\
-0.1.0\x05\x0d\x01B\x0f\x02\x03\x02\x01\x0c\x04\0\x08fs-error\x03\0\0\x01m\x03\x07\
-created\x08modified\x07removed\x04\0\x0bchange-kind\x03\0\x02\x01r\x03\x04paths\x04\
-kind\x03\x06is-dir\x7f\x04\0\x06change\x03\0\x04\x01j\x01w\x01\x01\x01@\x01\x04p\
-aths\0\x06\x04\0\x05start\x01\x07\x01p\x05\x01j\x01\x08\x01\x01\x01@\x01\x08watc\
-h-idw\0\x09\x04\0\x07changes\x01\x0a\x01@\x01\x08watch-idw\x01\0\x04\0\x04stop\x01\
-\x0b\x03\0\x14krate:fs/watch@0.1.0\x05\x0e\x01B\x0f\x01m\x07\x03get\x04post\x03p\
-ut\x06delete\x05patch\x04head\x07options\x04\0\x0bhttp-method\x03\0\0\x01r\x02\x04\
-names\x05values\x04\0\x06header\x03\0\x02\x01p\x03\x01p}\x01ky\x01r\x05\x06metho\
-d\x01\x03urls\x07headers\x04\x04body\x05\x0etimeout-millis\x06\x04\0\x07request\x03\
-\0\x07\x01r\x03\x06status{\x07headers\x04\x04body\x05\x04\0\x08response\x03\0\x09\
-\x01q\x09\x0binvalid-url\0\0\x0bdns-failure\x01s\0\x0fconnect-failure\x01s\0\x0b\
-tls-failure\x01s\0\x07timeout\0\0\x0ebody-too-large\0\0\x11permission-denied\0\0\
-\x08protocol\x01s\0\x05other\x01s\0\x04\0\x09net-error\x03\0\x0b\x01q\x04\x07pen\
-ding\0\0\x05ready\x01\x0a\0\x06failed\x01\x0c\0\x0eunknown-handle\0\0\x04\0\x0cf\
-etch-status\x03\0\x0d\x03\0\x15krate:net/types@0.1.0\x05\x0f\x02\x03\0\x08\x07re\
-quest\x02\x03\0\x08\x08response\x02\x03\0\x08\x09net-error\x02\x03\0\x08\x0cfetc\
-h-status\x01B\x16\x02\x03\x02\x01\x10\x04\0\x07request\x03\0\0\x02\x03\x02\x01\x11\
-\x04\0\x08response\x03\0\x02\x02\x03\x02\x01\x12\x04\0\x09net-error\x03\0\x04\x02\
-\x03\x02\x01\x13\x04\0\x0cfetch-status\x03\0\x06\x01p}\x01j\x01\x08\x01\x05\x01@\
-\x01\x03urls\0\x09\x04\0\x03get\x01\x0a\x01j\x01\x03\x01\x05\x01@\x01\x03req\x01\
-\0\x0b\x04\0\x05fetch\x01\x0c\x01j\x01w\x01\x05\x01@\x01\x03req\x01\0\x0d\x04\0\x05\
-begin\x01\x0e\x01@\x01\x06handlew\0\x07\x04\0\x04poll\x01\x0f\x01@\x01\x06handle\
-w\x01\0\x04\0\x06cancel\x01\x10\x03\0\x1bkrate:net/http-client@0.1.0\x05\x14\x01\
-B\x11\x02\x03\x02\x01\x12\x04\0\x09net-error\x03\0\0\x01p}\x01q\x02\x04text\x01s\
-\0\x06binary\x01\x02\0\x04\0\x0aws-message\x03\0\x03\x01q\x06\x07pending\0\0\x06\
+pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 27525] = *b"\
+\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\x8a\xd6\x01\x01A\x02\
+\x01A\xb2\x01\x01B\x04\x01m\x05\x05trace\x05debug\x04info\x04warn\x05error\x04\0\
+\x09log-level\x03\0\0\x01q\x05\x06closed\0\0\x0binterrupted\0\0\x0eunexpected-eo\
+f\0\0\x0cinvalid-utf8\0\0\x05other\x01s\0\x04\0\x08io-error\x03\0\x02\x03\0\x14k\
+rate:io/types@0.1.0\x05\0\x02\x03\0\0\x08io-error\x01B\x15\x02\x03\x02\x01\x01\x04\
+\0\x08io-error\x03\0\0\x04\0\x0cinput-stream\x03\x01\x04\0\x0doutput-stream\x03\x01\
+\x01h\x02\x01p}\x01j\x01\x05\x01\x01\x01@\x02\x04self\x04\x01ny\0\x06\x04\0\x19[\
+method]input-stream.read\x01\x07\x01j\x01s\x01\x01\x01@\x01\x04self\x04\0\x08\x04\
+\0#[method]input-stream.read-to-string\x01\x09\x01h\x03\x01j\x01y\x01\x01\x01@\x02\
+\x04self\x0a\x05bytes\x05\0\x0b\x04\0\x1b[method]output-stream.write\x01\x0c\x01\
+j\0\x01\x01\x01@\x02\x04self\x0a\x05bytes\x05\0\x0d\x04\0\x1f[method]output-stre\
+am.write-all\x01\x0e\x01@\x01\x04self\x0a\0\x0d\x04\0\x1b[method]output-stream.f\
+lush\x01\x0f\x03\0\x16krate:io/streams@0.1.0\x05\x02\x02\x03\0\x01\x0cinput-stre\
+am\x02\x03\0\x01\x0doutput-stream\x01B\x0b\x02\x03\x02\x01\x03\x04\0\x0cinput-st\
+ream\x03\0\0\x02\x03\x02\x01\x04\x04\0\x0doutput-stream\x03\0\x02\x01i\x01\x01@\0\
+\0\x04\x04\0\x05stdin\x01\x05\x01i\x03\x01@\0\0\x06\x04\0\x06stdout\x01\x07\x04\0\
+\x06stderr\x01\x07\x03\0\x14krate:io/stdio@0.1.0\x05\x05\x01B\x02\x01@\0\0s\x04\0\
+\x03raw\x01\0\x03\0\x13krate:io/args@0.1.0\x05\x06\x02\x03\0\0\x09log-level\x01B\
+\x07\x02\x03\x02\x01\x07\x04\0\x09log-level\x03\0\0\x01r\x02\x03keys\x05values\x04\
+\0\x05field\x03\0\x02\x01p\x03\x01@\x03\x05level\x01\x07messages\x06fields\x04\x01\
+\0\x04\0\x04emit\x01\x05\x03\0\x12krate:io/log@0.1.0\x05\x08\x01B\x06\x01r\x03\x04\
+sizew\x0fmodified-millisw\x06is-dir\x7f\x04\0\x09file-stat\x03\0\0\x01q\x04\x04r\
+ead\0\0\x05write\0\0\x0aread-write\0\0\x06append\0\0\x04\0\x09open-mode\x03\0\x02\
+\x01q\x07\x09not-found\0\0\x11permission-denied\0\0\x0ealready-exists\0\0\x0cinv\
+alid-path\0\0\x0fnot-a-directory\0\0\x0eis-a-directory\0\0\x02io\x01s\0\x04\0\x08\
+fs-error\x03\0\x04\x03\0\x14krate:fs/types@0.1.0\x05\x09\x02\x03\0\x05\x09file-s\
+tat\x02\x03\0\x05\x09open-mode\x02\x03\0\x05\x08fs-error\x01B*\x02\x03\x02\x01\x0a\
+\x04\0\x09file-stat\x03\0\0\x02\x03\x02\x01\x0b\x04\0\x09open-mode\x03\0\x02\x02\
+\x03\x02\x01\x0c\x04\0\x08fs-error\x03\0\x04\x04\0\x04file\x03\x01\x01h\x06\x01p\
+}\x01j\x01\x08\x01\x05\x01@\x02\x04self\x07\x01ny\0\x09\x04\0\x11[method]file.re\
+ad\x01\x0a\x01j\x01y\x01\x05\x01@\x02\x04self\x07\x05bytes\x08\0\x0b\x04\0\x12[m\
+ethod]file.write\x01\x0c\x01j\x01w\x01\x05\x01@\x02\x04self\x07\x03posw\0\x0d\x04\
+\0\x15[method]file.seek-set\x01\x0e\x01@\x01\x04self\x07\0\x0d\x04\0\x15[method]\
+file.seek-end\x01\x0f\x01j\x01\x01\x01\x05\x01@\x01\x04self\x07\0\x10\x04\0\x11[\
+method]file.stat\x01\x11\x01i\x06\x01j\x01\x12\x01\x05\x01@\x02\x04paths\x04mode\
+\x03\0\x13\x04\0\x04open\x01\x14\x01@\x02\x05tokens\x04mode\x03\0\x13\x04\0\x0bo\
+pen-chosen\x01\x15\x01@\x01\x04paths\0\x10\x04\0\x04stat\x01\x16\x01ps\x01j\x01\x17\
+\x01\x05\x01@\x01\x04paths\0\x18\x04\0\x04list\x01\x19\x01j\0\x01\x05\x01@\x01\x04\
+paths\0\x1a\x04\0\x0bremove-file\x01\x1b\x04\0\x0aremove-dir\x01\x1b\x04\0\x05mk\
+dir\x01\x1b\x01@\x02\x04froms\x02tos\0\x1a\x04\0\x06rename\x01\x1c\x03\0\x14krat\
+e:fs/files@0.1.0\x05\x0d\x01B\x0f\x02\x03\x02\x01\x0c\x04\0\x08fs-error\x03\0\0\x01\
+m\x03\x07created\x08modified\x07removed\x04\0\x0bchange-kind\x03\0\x02\x01r\x03\x04\
+paths\x04kind\x03\x06is-dir\x7f\x04\0\x06change\x03\0\x04\x01j\x01w\x01\x01\x01@\
+\x01\x04paths\0\x06\x04\0\x05start\x01\x07\x01p\x05\x01j\x01\x08\x01\x01\x01@\x01\
+\x08watch-idw\0\x09\x04\0\x07changes\x01\x0a\x01@\x01\x08watch-idw\x01\0\x04\0\x04\
+stop\x01\x0b\x03\0\x14krate:fs/watch@0.1.0\x05\x0e\x01B\x0f\x01m\x07\x03get\x04p\
+ost\x03put\x06delete\x05patch\x04head\x07options\x04\0\x0bhttp-method\x03\0\0\x01\
+r\x02\x04names\x05values\x04\0\x06header\x03\0\x02\x01p\x03\x01p}\x01ky\x01r\x05\
+\x06method\x01\x03urls\x07headers\x04\x04body\x05\x0etimeout-millis\x06\x04\0\x07\
+request\x03\0\x07\x01r\x03\x06status{\x07headers\x04\x04body\x05\x04\0\x08respon\
+se\x03\0\x09\x01q\x09\x0binvalid-url\0\0\x0bdns-failure\x01s\0\x0fconnect-failur\
+e\x01s\0\x0btls-failure\x01s\0\x07timeout\0\0\x0ebody-too-large\0\0\x11permissio\
+n-denied\0\0\x08protocol\x01s\0\x05other\x01s\0\x04\0\x09net-error\x03\0\x0b\x01\
+q\x04\x07pending\0\0\x05ready\x01\x0a\0\x06failed\x01\x0c\0\x0eunknown-handle\0\0\
+\x04\0\x0cfetch-status\x03\0\x0d\x03\0\x15krate:net/types@0.1.0\x05\x0f\x02\x03\0\
+\x08\x07request\x02\x03\0\x08\x08response\x02\x03\0\x08\x09net-error\x02\x03\0\x08\
+\x0cfetch-status\x01B\x16\x02\x03\x02\x01\x10\x04\0\x07request\x03\0\0\x02\x03\x02\
+\x01\x11\x04\0\x08response\x03\0\x02\x02\x03\x02\x01\x12\x04\0\x09net-error\x03\0\
+\x04\x02\x03\x02\x01\x13\x04\0\x0cfetch-status\x03\0\x06\x01p}\x01j\x01\x08\x01\x05\
+\x01@\x01\x03urls\0\x09\x04\0\x03get\x01\x0a\x01j\x01\x03\x01\x05\x01@\x01\x03re\
+q\x01\0\x0b\x04\0\x05fetch\x01\x0c\x01j\x01w\x01\x05\x01@\x01\x03req\x01\0\x0d\x04\
+\0\x05begin\x01\x0e\x01@\x01\x06handlew\0\x07\x04\0\x04poll\x01\x0f\x01@\x01\x06\
+handlew\x01\0\x04\0\x06cancel\x01\x10\x03\0\x1bkrate:net/http-client@0.1.0\x05\x14\
+\x01B\x11\x02\x03\x02\x01\x12\x04\0\x09net-error\x03\0\0\x01p}\x01q\x02\x04text\x01\
+s\0\x06binary\x01\x02\0\x04\0\x0aws-message\x03\0\x03\x01q\x06\x07pending\0\0\x06\
 opened\0\0\x07message\x01\x04\0\x06closed\0\0\x06failed\x01s\0\x0eunknown-handle\
 \0\0\x04\0\x08ws-event\x03\0\x05\x01j\x01w\x01\x01\x01@\x01\x03urls\0\x07\x04\0\x04\
 open\x01\x08\x01j\0\x01\x01\x01@\x02\x06handlew\x07message\x04\0\x09\x04\0\x04se\
@@ -24167,70 +37657,318 @@ g\x06\0\x09\x04\0\x0cset-lighting\x01\x13\x01@\x08\x05scenew\x08vertices\x04\x07
 normals\x04\x08tangents\x04\x03uvs\x04\x07texturew\x0enormal-texturew\x04tint\x01\
 \0\x09\x04\0\x0dnormal-mapped\x01\x14\x04\0\x05unlit\x01\x11\x01@\x02\x05scenew\x07\
 enabled\x7f\0\x09\x04\0\x0fcull-back-faces\x01\x15\x01@\x01\x05scenew\0\x09\x04\0\
-\x07present\x01\x16\x03\0\x17krate:gfx/scene3d@0.1.0\x05H\x01B\x11\x02\x03\x02\x01\
-?\x04\0\x04rect\x03\0\0\x02\x03\x02\x01D\x04\0\x0ccorner-radii\x03\0\x02\x02\x03\
-\x02\x01B\x04\0\x09gfx-error\x03\0\x04\x01p}\x01j\x01w\x01\x05\x01@\x04\x06canva\
-sw\x05widthy\x06heighty\x04rgba\x06\0\x07\x04\0\x04keep\x01\x08\x01j\0\x01\x05\x01\
-@\x03\x06canvasw\x05imagew\x04area\x01\0\x09\x04\0\x04draw\x01\x0a\x01@\x04\x06c\
-anvasw\x05imagew\x04area\x01\x05radii\x03\0\x09\x04\0\x0adraw-round\x01\x0b\x01@\
-\x02\x06canvasw\x05imagew\x01\0\x04\0\x06forget\x01\x0c\x03\0\x1dkrate:gfx/canva\
-s-images@0.1.0\x05I\x01B\x06\x01m\x02\x07pcm-s16\x07float32\x04\0\x0dsample-form\
-at\x03\0\0\x01r\x04\x0bsample-ratey\x08channels{\x06format\x01\x0dbuffer-framesy\
-\x04\0\x0dstream-config\x03\0\x02\x01q\x05\x11permission-denied\0\0\x0einvalid-s\
-tream\0\0\x12device-unavailable\0\0\x0bunsupported\x01s\0\x08platform\x01s\0\x04\
-\0\x0baudio-error\x03\0\x04\x03\0\x17krate:audio/types@0.1.0\x05J\x02\x03\0*\x0b\
-audio-error\x02\x03\0*\x0dstream-config\x01B\x15\x02\x03\x02\x01K\x04\0\x0baudio\
--error\x03\0\0\x02\x03\x02\x01L\x04\0\x0dstream-config\x03\0\x02\x01j\x01w\x01\x01\
-\x01@\x01\x06config\x03\0\x04\x04\0\x04open\x01\x05\x01j\0\x01\x01\x01@\x01\x09s\
-tream-idw\0\x06\x04\0\x05start\x01\x07\x04\0\x04stop\x01\x07\x01p}\x01j\x01y\x01\
-\x01\x01@\x02\x09stream-idw\x05bytes\x08\0\x09\x04\0\x05write\x01\x0a\x01@\x02\x09\
-stream-idw\x05bytes\x08\0\x04\x04\0\x0aload-sound\x01\x0b\x01@\x03\x09stream-idw\
-\x05soundw\x04gainv\0\x06\x04\0\x0aplay-sound\x01\x0c\x01@\x02\x09stream-idw\x05\
-soundw\0\x06\x04\0\x0astop-sound\x01\x0d\x03\0\x1akrate:audio/playback@0.1.0\x05\
-M\x01B\x05\x02\x03\x02\x01K\x04\0\x0baudio-error\x03\0\0\x01j\x01y\x01\x01\x01@\x01\
-\x09stream-idw\0\x02\x04\0\x06queued\x01\x03\x03\0\x20krate:audio/playback-queue\
-@0.1.0\x05N\x01B\x0f\x02\x03\x02\x01K\x04\0\x0baudio-error\x03\0\0\x02\x03\x02\x01\
-L\x04\0\x0dstream-config\x03\0\x02\x01j\x01w\x01\x01\x01@\x01\x06config\x03\0\x04\
-\x04\0\x04open\x01\x05\x01j\0\x01\x01\x01@\x01\x09stream-idw\0\x06\x04\0\x05star\
-t\x01\x07\x04\0\x04stop\x01\x07\x01p}\x01j\x01\x08\x01\x01\x01@\x02\x09stream-id\
-w\x09max-bytesy\0\x09\x04\0\x04read\x01\x0a\x03\0\x19krate:audio/capture@0.1.0\x05\
-O\x01B\x0d\x01m\x01\x05rgba8\x04\0\x0cframe-format\x03\0\0\x01r\x04\x05widthy\x06\
-heighty\x03fpsy\x06format\x01\x04\0\x0dstream-config\x03\0\x02\x01r\x04\x05width\
-y\x06heighty\x03fpsy\x06format\x01\x04\0\x0aframe-info\x03\0\x04\x01r\x02\x02ids\
-\x05labels\x04\0\x0bdevice-info\x03\0\x06\x01p}\x01r\x04\x05bytes\x08\x05widthy\x06\
-heighty\x0eelapsed-millisw\x04\0\x05frame\x03\0\x09\x01q\x06\x11permission-denie\
-d\0\0\x0einvalid-stream\0\0\x12device-unavailable\0\0\x0dsystem-denied\0\0\x0bun\
-supported\x01s\0\x08platform\x01s\0\x04\0\x0ccamera-error\x03\0\x0b\x03\0\x18kra\
-te:camera/types@0.1.0\x05P\x02\x03\0.\x0ccamera-error\x02\x03\0.\x0bdevice-info\x02\
-\x03\0.\x05frame\x02\x03\0.\x0aframe-info\x02\x03\0.\x0dstream-config\x01B\x1d\x02\
-\x03\x02\x01Q\x04\0\x0ccamera-error\x03\0\0\x02\x03\x02\x01R\x04\0\x0bdevice-inf\
-o\x03\0\x02\x02\x03\x02\x01S\x04\0\x05frame\x03\0\x04\x02\x03\x02\x01T\x04\0\x0a\
-frame-info\x03\0\x06\x02\x03\x02\x01U\x04\0\x0dstream-config\x03\0\x08\x01p\x03\x01\
-j\x01\x0a\x01\x01\x01@\0\0\x0b\x04\0\x07devices\x01\x0c\x01j\x01w\x01\x01\x01@\x02\
-\x06devices\x06config\x09\0\x0d\x04\0\x04open\x01\x0e\x01j\x01\x07\x01\x01\x01@\x01\
-\x09stream-idw\0\x0f\x04\0\x04info\x01\x10\x01j\0\x01\x01\x01@\x01\x09stream-idw\
-\0\x11\x04\0\x05start\x01\x12\x04\0\x04stop\x01\x12\x01k\x05\x01j\x01\x13\x01\x01\
-\x01@\x01\x09stream-idw\0\x14\x04\0\x04read\x01\x15\x04\0\x05close\x01\x12\x03\0\
-\x1akrate:camera/capture@0.1.0\x05V\x01B\x12\x01r\x01\x04texts\x04\0\x0atranscri\
-pt\x03\0\0\x01q\x05\x0finvalid-request\x01s\0\x0fmodel-not-found\0\0\x0dmodel-in\
-valid\x01s\0\x0bunsupported\x01s\0\x09inference\x01s\0\x04\0\x0cspeech-error\x03\
-\0\x02\x01m\x05\x0finvalid-request\x0fmodel-not-found\x0dmodel-invalid\x0bunsupp\
-orted\x09inference\x04\0\x0bmatch-error\x03\0\x04\x01p}\x01ks\x01j\x01\x01\x01\x03\
-\x01@\x04\x0bmodel-assets\x0apcm-s16-le\x06\x0bsample-ratey\x08language\x07\0\x08\
-\x04\0\x0atranscribe\x01\x09\x01j\x01}\x01\x05\x01@\x05\x0bmodel-assets\x0apcm-s\
-16-le\x06\x0bsample-ratey\x08language\x07\x08expecteds\0\x0a\x04\0\x0amatch-line\
-\x01\x0b\x01k}\x01j\x01\x0c\x01\x05\x01@\x06\x0bmodel-assets\x0apcm-s16-le\x06\x0b\
-sample-ratey\x08language\x07\x08expecteds\x06finish\x7f\0\x0d\x04\0\x11match-lin\
-e-stream\x01\x0e\x03\0\x20krate:speech/transcription@0.1.0\x05W\x01B\x12\x01r\x03\
-\x02ids\x04names\x08languages\x04\0\x05voice\x03\0\0\x01q\x04\x11permission-deni\
-ed\0\0\x0finvalid-request\x01s\0\x0bunsupported\x01s\0\x08platform\x01s\0\x04\0\x09\
-say-error\x03\0\x02\x01p\x01\x01j\x01\x04\x01\x03\x01@\0\0\x05\x04\0\x06voices\x01\
-\x06\x01ks\x01kv\x01j\0\x01\x03\x01@\x03\x04texts\x05voice\x07\x04rate\x08\0\x09\
-\x04\0\x03say\x01\x0a\x01@\0\0\x09\x04\0\x04stop\x01\x0b\x01j\x01\x7f\x01\x03\x01\
-@\0\0\x0c\x04\0\x08speaking\x01\x0d\x03\0\x1ckrate:speech/synthesis@0.1.0\x05X\x01\
-@\0\0z\x04\0\x03run\x01Y\x04\0\x13krate:app/gui@0.2.0\x04\0\x0b\x09\x01\0\x03gui\
-\x03\0\0\0G\x09producers\x01\x0cprocessed-by\x02\x0dwit-component\x070.227.1\x10\
-wit-bindgen-rust\x060.41.0";
+\x07present\x01\x16\x03\0\x17krate:gfx/scene3d@0.1.0\x05H\x01B\xf6\x01\x01w\x04\0\
+\x06handle\x03\0\0\x01q\x06\x0einvalid-handle\x01s\0\x0avalidation\x01s\0\x0dout\
+-of-memory\0\0\x04lost\x01s\0\x0bunsupported\x01s\0\x08internal\x01s\0\x04\0\x09\
+gpu-error\x03\0\x02\x01r\x05\x07messages\x04liney\x06columny\x06offsety\x06lengt\
+hy\x04\0\x0cshader-error\x03\0\x04\x01r\x06\x07messages\x04kinds\x04liney\x06col\
+umny\x06offsety\x06lengthy\x04\0\x13compilation-message\x03\0\x06\x01r\x02\x04na\
+mes\x05valuew\x04\0\x05limit\x03\0\x08\x01m\x03\x04none\x09low-power\x10high-per\
+formance\x04\0\x10power-preference\x03\0\x0a\x01k\x01\x01r\x03\x10power-preferen\
+ce\x0b\x16force-fallback-adapter\x7f\x12compatible-surface\x0c\x04\0\x0fadapter-\
+options\x03\0\x0d\x01m\x05\x05other\x0eintegrated-gpu\x0cdiscrete-gpu\x0bvirtual\
+-gpu\x03cpu\x04\0\x0bdevice-type\x03\0\x0f\x01r\x07\x04names\x06vendory\x06devic\
+ey\x0bdevice-type\x10\x07backends\x06drivers\x0bdriver-infos\x04\0\x0cadapter-in\
+fo\x03\0\x11\x01ks\x01ps\x01p\x09\x01r\x03\x05label\x13\x11required-features\x14\
+\x0frequired-limits\x15\x04\0\x11device-descriptor\x03\0\x16\x01n\x0a\x08map-rea\
+d\x09map-write\x08copy-src\x08copy-dst\x05index\x06vertex\x07uniform\x07storage\x08\
+indirect\x0dquery-resolve\x04\0\x0dbuffer-usages\x03\0\x18\x01r\x04\x05label\x13\
+\x04sizew\x05usage\x19\x12mapped-at-creation\x7f\x04\0\x11buffer-descriptor\x03\0\
+\x1a\x01n\x05\x08copy-src\x08copy-dst\x0ftexture-binding\x0fstorage-binding\x11r\
+ender-attachment\x04\0\x0etexture-usages\x03\0\x1c\x01r\x03\x05widthy\x06heighty\
+\x15depth-or-array-layersy\x04\0\x08extent3d\x03\0\x1e\x01r\x03\x01xy\x01yy\x01z\
+y\x04\0\x08origin3d\x03\0\x20\x01m\x03\x02d1\x02d2\x02d3\x04\0\x11texture-dimens\
+ion\x03\0\"\x01r\x08\x05label\x13\x04size\x1f\x0fmip-level-county\x0csample-coun\
+ty\x09dimension#\x06formats\x05usage\x1d\x0cview-formats\x14\x04\0\x12texture-de\
+scriptor\x03\0$\x01m\x06\x02d1\x02d2\x08d2-array\x04cube\x0acube-array\x02d3\x04\
+\0\x16texture-view-dimension\x03\0&\x01m\x03\x03all\x0cstencil-only\x0adepth-onl\
+y\x04\0\x0etexture-aspect\x03\0(\x01k'\x01k\x1d\x01ky\x01r\x09\x05label\x13\x06f\
+ormat\x13\x09dimension*\x05usage+\x06aspect)\x0ebase-mip-levely\x0fmip-level-cou\
+nt,\x10base-array-layery\x11array-layer-count,\x04\0\x17texture-view-descriptor\x03\
+\0-\x01m\x04\x0dclamp-to-edge\x06repeat\x0dmirror-repeat\x0fclamp-to-border\x04\0\
+\x0caddress-mode\x03\0/\x01m\x02\x07nearest\x06linear\x04\0\x0bfilter-mode\x03\0\
+1\x01m\x08\x05never\x04less\x05equal\x0aless-equal\x07greater\x09not-equal\x0dgr\
+eater-equal\x06always\x04\0\x10compare-function\x03\03\x01m\x04\x11transparent-b\
+lack\x0copaque-black\x0copaque-white\x04zero\x04\0\x0cborder-color\x03\05\x01k4\x01\
+k6\x01r\x0c\x05label\x13\x0eaddress-mode-u0\x0eaddress-mode-v0\x0eaddress-mode-w\
+0\x0amag-filter2\x0amin-filter2\x0dmipmap-filter2\x0dlod-min-clampv\x0dlod-max-c\
+lampv\x07compare7\x10anisotropy-clamp{\x0cborder-color8\x04\0\x12sampler-descrip\
+tor\x03\09\x01n\x03\x06vertex\x08fragment\x07compute\x04\0\x0dshader-stages\x03\0\
+;\x01q\x02\x07uniform\0\0\x07storage\x01\x7f\0\x04\0\x13buffer-binding-type\x03\0\
+=\x01r\x03\x04kind>\x12has-dynamic-offset\x7f\x10min-binding-sizew\x04\0\x15buff\
+er-binding-layout\x03\0?\x01m\x03\x09filtering\x0dnon-filtering\x0acomparison\x04\
+\0\x14sampler-binding-type\x03\0A\x01q\x04\x05float\x01\x7f\0\x05depth\0\0\x04si\
+nt\0\0\x04uint\0\0\x04\0\x13texture-sample-type\x03\0C\x01r\x03\x0bsample-type\xc4\
+\0\x0eview-dimension'\x0cmultisampled\x7f\x04\0\x16texture-binding-layout\x03\0E\
+\x01m\x03\x0awrite-only\x09read-only\x0aread-write\x04\0\x16storage-texture-acce\
+ss\x03\0G\x01r\x03\x06access\xc8\0\x06formats\x0eview-dimension'\x04\0\x1estorag\
+e-texture-binding-layout\x03\0I\x01q\x04\x06buffer\x01\xc0\0\0\x07sampler\x01\xc2\
+\0\0\x07texture\x01\xc6\0\0\x0fstorage-texture\x01\xca\0\0\x04\0\x0cbinding-type\
+\x03\0K\x01r\x04\x07bindingy\x0avisibility<\x04kind\xcc\0\x05count,\x04\0\x17bin\
+d-group-layout-entry\x03\0M\x01p\xce\0\x01r\x02\x05label\x13\x07entries\xcf\0\x04\
+\0\x1cbind-group-layout-descriptor\x03\0P\x01kw\x01r\x03\x06buffer\x01\x06offset\
+w\x04size\xd2\0\x04\0\x0ebuffer-binding\x03\0S\x01p\xd4\0\x01p\x01\x01q\x06\x06b\
+uffer\x01\xd4\0\0\x0cbuffer-array\x01\xd5\0\0\x07sampler\x01\x01\0\x0dsampler-ar\
+ray\x01\xd6\0\0\x0ctexture-view\x01\x01\0\x12texture-view-array\x01\xd6\0\0\x04\0\
+\x10binding-resource\x03\0W\x01r\x02\x07bindingy\x08resource\xd8\0\x04\0\x10bind\
+-group-entry\x03\0Y\x01p\xda\0\x01r\x03\x05label\x13\x06layout\x01\x07entries\xdb\
+\0\x04\0\x15bind-group-descriptor\x03\0\\\x01p\x0c\x01r\x03\x05label\x13\x12bind\
+-group-layouts\xde\0\x0eimmediate-sizey\x04\0\x1apipeline-layout-descriptor\x03\0\
+_\x01r\x02\x05label\x13\x04codes\x04\0\x18shader-module-descriptor\x03\0a\x01r\x02\
+\x04names\x05valueu\x04\0\x0econstant-entry\x03\0c\x01p\xe4\0\x01r\x03\x06module\
+\x01\x0bentry-point\x13\x09constants\xe5\0\x04\0\x12programmable-stage\x03\0f\x01\
+m\x02\x06vertex\x08instance\x04\0\x10vertex-step-mode\x03\0h\x01r\x03\x06formats\
+\x06offsetw\x0fshader-locationy\x04\0\x10vertex-attribute\x03\0j\x01p\xeb\0\x01r\
+\x03\x0carray-stridew\x09step-mode\xe9\0\x0aattributes\xec\0\x04\0\x14vertex-buf\
+fer-layout\x03\0m\x01p\xee\0\x01r\x02\x05stage\xe7\0\x07buffers\xef\0\x04\0\x0cv\
+ertex-state\x03\0p\x01m\x05\x0apoint-list\x09line-list\x0aline-strip\x0dtriangle\
+-list\x0etriangle-strip\x04\0\x12primitive-topology\x03\0r\x01m\x02\x06uint16\x06\
+uint32\x04\0\x0cindex-format\x03\0t\x01m\x02\x03ccw\x02cw\x04\0\x0afront-face\x03\
+\0v\x01m\x03\x04none\x05front\x04back\x04\0\x09cull-mode\x03\0x\x01m\x03\x04fill\
+\x04line\x05point\x04\0\x0cpolygon-mode\x03\0z\x01k\xf5\0\x01r\x07\x08topology\xf3\
+\0\x12strip-index-format\xfc\0\x0afront-face\xf7\0\x09cull-mode\xf9\0\x0funclipp\
+ed-depth\x7f\x0cpolygon-mode\xfb\0\x0cconservative\x7f\x04\0\x0fprimitive-state\x03\
+\0}\x01m\x08\x04keep\x04zero\x07replace\x06invert\x0fincrement-clamp\x0fdecremen\
+t-clamp\x0eincrement-wrap\x0edecrement-wrap\x04\0\x11stencil-operation\x03\0\x7f\
+\x01r\x04\x07compare4\x07fail-op\x80\x01\x0ddepth-fail-op\x80\x01\x07pass-op\x80\
+\x01\x04\0\x12stencil-face-state\x03\0\x81\x01\x01r\x0a\x06formats\x13depth-writ\
+e-enabled\x7f\x0ddepth-compare4\x0dstencil-front\x82\x01\x0cstencil-back\x82\x01\
+\x11stencil-read-masky\x12stencil-write-masky\x0adepth-biasz\x16depth-bias-slope\
+-scalev\x10depth-bias-clampv\x04\0\x13depth-stencil-state\x03\0\x83\x01\x01r\x03\
+\x05county\x04maskw\x19alpha-to-coverage-enabled\x7f\x04\0\x11multisample-state\x03\
+\0\x85\x01\x01m\x11\x04zero\x03one\x03src\x0done-minus-src\x09src-alpha\x13one-m\
+inus-src-alpha\x03dst\x0done-minus-dst\x09dst-alpha\x13one-minus-dst-alpha\x13sr\
+c-alpha-saturated\x08constant\x12one-minus-constant\x04src1\x0eone-minus-src1\x0a\
+src1-alpha\x14one-minus-src1-alpha\x04\0\x0cblend-factor\x03\0\x87\x01\x01m\x05\x03\
+add\x08subtract\x10reverse-subtract\x03min\x03max\x04\0\x0fblend-operation\x03\0\
+\x89\x01\x01r\x03\x0asrc-factor\x88\x01\x0adst-factor\x88\x01\x09operation\x8a\x01\
+\x04\0\x0fblend-component\x03\0\x8b\x01\x01r\x02\x05color\x8c\x01\x05alpha\x8c\x01\
+\x04\0\x0bblend-state\x03\0\x8d\x01\x01n\x04\x03red\x05green\x04blue\x05alpha\x04\
+\0\x0ccolor-writes\x03\0\x8f\x01\x01k\x8e\x01\x01r\x03\x06formats\x05blend\x91\x01\
+\x0awrite-mask\x90\x01\x04\0\x12color-target-state\x03\0\x92\x01\x01k\x93\x01\x01\
+p\x94\x01\x01r\x02\x05stage\xe7\0\x07targets\x95\x01\x04\0\x0efragment-state\x03\
+\0\x96\x01\x01k\x84\x01\x01k\x97\x01\x01r\x08\x05label\x13\x06layout\x0c\x06vert\
+ex\xf1\0\x09primitive\xfe\0\x0ddepth-stencil\x98\x01\x0bmultisample\x86\x01\x08f\
+ragment\x99\x01\x0emultiview-mask,\x04\0\x1arender-pipeline-descriptor\x03\0\x9a\
+\x01\x01r\x03\x05label\x13\x06layout\x0c\x05stage\xe7\0\x04\0\x1bcompute-pipelin\
+e-descriptor\x03\0\x9c\x01\x01m\x02\x09occlusion\x09timestamp\x04\0\x0aquery-typ\
+e\x03\0\x9e\x01\x01r\x03\x05label\x13\x04kind\x9f\x01\x05county\x04\0\x14query-s\
+et-descriptor\x03\0\xa0\x01\x01r\x04\x07texture\x01\x09mip-levely\x06origin!\x06\
+aspect)\x04\0\x17texel-copy-texture-info\x03\0\xa2\x01\x01r\x03\x06offsetw\x0dby\
+tes-per-row,\x0erows-per-image,\x04\0\x18texel-copy-buffer-layout\x03\0\xa4\x01\x01\
+r\x02\x06buffer\x01\x06layout\xa5\x01\x04\0\x16texel-copy-buffer-info\x03\0\xa6\x01\
+\x01r\x04\x01ru\x01gu\x01bu\x01au\x04\0\x05color\x03\0\xa8\x01\x01q\x02\x05clear\
+\x01\xa9\x01\0\x04load\0\0\x04\0\x0dcolor-load-op\x03\0\xaa\x01\x01m\x02\x05stor\
+e\x07discard\x04\0\x08store-op\x03\0\xac\x01\x01r\x05\x04view\x01\x0bdepth-slice\
+,\x0eresolve-target\x0c\x04load\xab\x01\x05store\xad\x01\x04\0\x1crender-pass-co\
+lor-attachment\x03\0\xae\x01\x01q\x02\x05clear\x01v\0\x04load\0\0\x04\0\x0ddepth\
+-load-op\x03\0\xb0\x01\x01q\x02\x05clear\x01y\0\x04load\0\0\x04\0\x0fstencil-loa\
+d-op\x03\0\xb2\x01\x01r\x02\x04load\xb1\x01\x05store\xad\x01\x04\0\x09depth-ops\x03\
+\0\xb4\x01\x01r\x02\x04load\xb3\x01\x05store\xad\x01\x04\0\x0bstencil-ops\x03\0\xb6\
+\x01\x01k\xb5\x01\x01k\xb7\x01\x01r\x03\x04view\x01\x09depth-ops\xb8\x01\x0bsten\
+cil-ops\xb9\x01\x04\0$render-pass-depth-stencil-attachment\x03\0\xba\x01\x01r\x03\
+\x09query-set\x01\x1dbeginning-of-pass-write-index,\x17end-of-pass-write-index,\x04\
+\0\x15pass-timestamp-writes\x03\0\xbc\x01\x01k\xaf\x01\x01p\xbe\x01\x01k\xbb\x01\
+\x01k\xbd\x01\x01r\x06\x05label\x13\x11color-attachments\xbf\x01\x18depth-stenci\
+l-attachment\xc0\x01\x10timestamp-writes\xc1\x01\x13occlusion-query-set\x0c\x0em\
+ultiview-mask,\x04\0\x16render-pass-descriptor\x03\0\xc2\x01\x01r\x02\x05label\x13\
+\x10timestamp-writes\xc1\x01\x04\0\x17compute-pass-descriptor\x03\0\xc4\x01\x01p\
+y\x01r\x03\x05indexy\x05group\x0c\x07offsets\xc6\x01\x04\0\x0eset-bind-group\x03\
+\0\xc7\x01\x01r\x04\x04sloty\x06buffer\x01\x06offsetw\x04size\xd2\0\x04\0\x11set\
+-vertex-buffer\x03\0\xc9\x01\x01r\x04\x06buffer\x01\x06format\xf5\0\x06offsetw\x04\
+size\xd2\0\x04\0\x10set-index-buffer\x03\0\xcb\x01\x01r\x06\x01xv\x01yv\x05width\
+v\x06heightv\x09min-depthv\x09max-depthv\x04\0\x08viewport\x03\0\xcd\x01\x01r\x04\
+\x01xy\x01yy\x05widthy\x06heighty\x04\0\x0cscissor-rect\x03\0\xcf\x01\x01p}\x01r\
+\x02\x06offsety\x04data\xd1\x01\x04\0\x0eset-immediates\x03\0\xd2\x01\x01r\x04\x0c\
+vertex-county\x0einstance-county\x0cfirst-vertexy\x0efirst-instancey\x04\0\x04dr\
+aw\x03\0\xd4\x01\x01r\x05\x0bindex-county\x0einstance-county\x0bfirst-indexy\x0b\
+base-vertexz\x0efirst-instancey\x04\0\x0cdraw-indexed\x03\0\xd6\x01\x01r\x02\x06\
+buffer\x01\x06offsetw\x04\0\x08indirect\x03\0\xd8\x01\x01r\x03\x06buffer\x01\x06\
+offsetw\x05county\x04\0\x0emulti-indirect\x03\0\xda\x01\x01r\x05\x06buffer\x01\x06\
+offsetw\x0ccount-buffer\x01\x0ccount-offsetw\x09max-county\x04\0\x14multi-indire\
+ct-count\x03\0\xdc\x01\x01r\x02\x09query-set\x01\x05indexy\x04\0\x0bquery-write\x03\
+\0\xde\x01\x01q\x17\x0cset-pipeline\x01\x01\0\x0eset-bind-group\x01\xc8\x01\0\x11\
+set-vertex-buffer\x01\xca\x01\0\x10set-index-buffer\x01\xcc\x01\0\x0cset-viewpor\
+t\x01\xce\x01\0\x10set-scissor-rect\x01\xd0\x01\0\x12set-blend-constant\x01\xa9\x01\
+\0\x15set-stencil-reference\x01y\0\x0eset-immediates\x01\xd3\x01\0\x04draw\x01\xd5\
+\x01\0\x0cdraw-indexed\x01\xd7\x01\0\x0ddraw-indirect\x01\xd9\x01\0\x15draw-inde\
+xed-indirect\x01\xd9\x01\0\x13multi-draw-indirect\x01\xdb\x01\0\x1bmulti-draw-in\
+dexed-indirect\x01\xdb\x01\0\x19multi-draw-indirect-count\x01\xdd\x01\0!multi-dr\
+aw-indexed-indirect-count\x01\xdd\x01\0\x15begin-occlusion-query\x01y\0\x13end-o\
+cclusion-query\0\0\x0fwrite-timestamp\x01\xdf\x01\0\x10push-debug-group\x01s\0\x0f\
+pop-debug-group\0\0\x13insert-debug-marker\x01s\0\x04\0\x0erender-command\x03\0\xe0\
+\x01\x01q\x09\x0cset-pipeline\x01\x01\0\x0eset-bind-group\x01\xc8\x01\0\x0eset-i\
+mmediates\x01\xd3\x01\0\x08dispatch\x01!\0\x11dispatch-indirect\x01\xd9\x01\0\x0f\
+write-timestamp\x01\xdf\x01\0\x10push-debug-group\x01s\0\x0fpop-debug-group\0\0\x13\
+insert-debug-marker\x01s\0\x04\0\x0fcompute-command\x03\0\xe2\x01\x01m\x02\x04re\
+ad\x05write\x04\0\x08map-mode\x03\0\xe4\x01\x01m\x04\x04fifo\x0cfifo-relaxed\x09\
+immediate\x07mailbox\x04\0\x0cpresent-mode\x03\0\xe6\x01\x01m\x04\x06opaque\x0ep\
+re-multiplied\x0fpost-multiplied\x07inherit\x04\0\x14composite-alpha-mode\x03\0\xe8\
+\x01\x01p\xe7\x01\x01p\xe9\x01\x01r\x04\x07formats\x14\x0dpresent-modes\xea\x01\x0b\
+alpha-modes\xeb\x01\x06usages\x1d\x04\0\x14surface-capabilities\x03\0\xec\x01\x01\
+r\x08\x05usage\x1d\x06formats\x05widthy\x06heighty\x0cpresent-mode\xe7\x01\x0aal\
+pha-mode\xe9\x01\x0cview-formats\x14\x1ddesired-maximum-frame-latencyy\x04\0\x15\
+surface-configuration\x03\0\xee\x01\x01r\x02\x07texture\x01\x0asuboptimal\x7f\x04\
+\0\x0dsurface-frame\x03\0\xf0\x01\x01q\x05\x0enot-configured\0\0\x08outdated\0\0\
+\x08occluded\0\0\x04lost\x01s\0\x05other\x01s\0\x04\0\x0dsurface-error\x03\0\xf2\
+\x01\x01r\x05\x0eallowed-usages\x1d\x0dsample-counts\xc6\x01\x0afilterable\x7f\x09\
+blendable\x7f\x12storage-read-write\x7f\x04\0\x0fformat-features\x03\0\xf4\x01\x03\
+\0\x15krate:gpu/types@0.1.0\x05I\x02\x03\0)\x06handle\x02\x03\0)\x09gpu-error\x02\
+\x03\0)\x0cshader-error\x02\x03\0)\x13compilation-message\x02\x03\0)\x05limit\x02\
+\x03\0)\x0fadapter-options\x02\x03\0)\x0cadapter-info\x02\x03\0)\x11device-descr\
+iptor\x02\x03\0)\x11buffer-descriptor\x02\x03\0)\x12texture-descriptor\x02\x03\0\
+)\x17texture-view-descriptor\x02\x03\0)\x12sampler-descriptor\x02\x03\0)\x1cbind\
+-group-layout-descriptor\x02\x03\0)\x15bind-group-descriptor\x02\x03\0)\x1apipel\
+ine-layout-descriptor\x02\x03\0)\x18shader-module-descriptor\x02\x03\0)\x1arende\
+r-pipeline-descriptor\x02\x03\0)\x1bcompute-pipeline-descriptor\x02\x03\0)\x14qu\
+ery-set-descriptor\x02\x03\0)\x17texel-copy-texture-info\x02\x03\0)\x18texel-cop\
+y-buffer-layout\x02\x03\0)\x16texel-copy-buffer-info\x02\x03\0)\x08extent3d\x02\x03\
+\0)\x16render-pass-descriptor\x02\x03\0)\x0erender-command\x02\x03\0)\x17compute\
+-pass-descriptor\x02\x03\0)\x0fcompute-command\x02\x03\0)\x08map-mode\x02\x03\0)\
+\x14surface-capabilities\x02\x03\0)\x15surface-configuration\x02\x03\0)\x0dsurfa\
+ce-frame\x02\x03\0)\x0dsurface-error\x02\x03\0)\x0fformat-features\x01B\xc2\x01\x02\
+\x03\x02\x01J\x04\0\x06handle\x03\0\0\x02\x03\x02\x01K\x04\0\x09gpu-error\x03\0\x02\
+\x02\x03\x02\x01L\x04\0\x0cshader-error\x03\0\x04\x02\x03\x02\x01M\x04\0\x13comp\
+ilation-message\x03\0\x06\x02\x03\x02\x01N\x04\0\x05limit\x03\0\x08\x02\x03\x02\x01\
+O\x04\0\x0fadapter-options\x03\0\x0a\x02\x03\x02\x01P\x04\0\x0cadapter-info\x03\0\
+\x0c\x02\x03\x02\x01Q\x04\0\x11device-descriptor\x03\0\x0e\x02\x03\x02\x01R\x04\0\
+\x11buffer-descriptor\x03\0\x10\x02\x03\x02\x01S\x04\0\x12texture-descriptor\x03\
+\0\x12\x02\x03\x02\x01T\x04\0\x17texture-view-descriptor\x03\0\x14\x02\x03\x02\x01\
+U\x04\0\x12sampler-descriptor\x03\0\x16\x02\x03\x02\x01V\x04\0\x1cbind-group-lay\
+out-descriptor\x03\0\x18\x02\x03\x02\x01W\x04\0\x15bind-group-descriptor\x03\0\x1a\
+\x02\x03\x02\x01X\x04\0\x1apipeline-layout-descriptor\x03\0\x1c\x02\x03\x02\x01Y\
+\x04\0\x18shader-module-descriptor\x03\0\x1e\x02\x03\x02\x01Z\x04\0\x1arender-pi\
+peline-descriptor\x03\0\x20\x02\x03\x02\x01[\x04\0\x1bcompute-pipeline-descripto\
+r\x03\0\"\x02\x03\x02\x01\\\x04\0\x14query-set-descriptor\x03\0$\x02\x03\x02\x01\
+]\x04\0\x17texel-copy-texture-info\x03\0&\x02\x03\x02\x01^\x04\0\x18texel-copy-b\
+uffer-layout\x03\0(\x02\x03\x02\x01_\x04\0\x16texel-copy-buffer-info\x03\0*\x02\x03\
+\x02\x01`\x04\0\x08extent3d\x03\0,\x02\x03\x02\x01a\x04\0\x16render-pass-descrip\
+tor\x03\0.\x02\x03\x02\x01b\x04\0\x0erender-command\x03\00\x02\x03\x02\x01c\x04\0\
+\x17compute-pass-descriptor\x03\02\x02\x03\x02\x01d\x04\0\x0fcompute-command\x03\
+\04\x02\x03\x02\x01e\x04\0\x08map-mode\x03\06\x02\x03\x02\x01f\x04\0\x14surface-\
+capabilities\x03\08\x02\x03\x02\x01g\x04\0\x15surface-configuration\x03\0:\x02\x03\
+\x02\x01h\x04\0\x0dsurface-frame\x03\0<\x02\x03\x02\x01i\x04\0\x0dsurface-error\x03\
+\0>\x02\x03\x02\x01j\x04\0\x0fformat-features\x03\0@\x01j\x01\x01\x01\x03\x01@\x01\
+\x07options\x0b\0\xc2\0\x04\0\x0frequest-adapter\x01C\x01j\x01\x0d\x01\x03\x01@\x01\
+\x07adapter\x01\0\xc4\0\x04\0\x10describe-adapter\x01E\x01ps\x01j\x01\xc6\0\x01\x03\
+\x01@\x01\x07adapter\x01\0\xc7\0\x04\0\x10adapter-features\x01H\x01p\x09\x01j\x01\
+\xc9\0\x01\x03\x01@\x01\x07adapter\x01\0\xca\0\x04\0\x0eadapter-limits\x01K\x01j\
+\x01\xc1\0\x01\x03\x01@\x02\x07adapter\x01\x06formats\0\xcc\0\x04\0\x17adapter-f\
+ormat-features\x01M\x01@\x02\x07adapter\x01\x0adescriptor\x0f\0\xc2\0\x04\0\x0er\
+equest-device\x01N\x01@\x01\x06device\x01\0\xc7\0\x04\0\x0fdevice-features\x01O\x01\
+@\x01\x06device\x01\0\xca\0\x04\0\x0ddevice-limits\x01P\x01j\0\x01\x03\x01@\x01\x06\
+device\x01\0\xd1\0\x04\0\x0edestroy-device\x01R\x01ks\x01@\x01\x06device\x01\0\xd3\
+\0\x04\0\x12device-lost-reason\x01T\x01j\x01\x7f\x01\x03\x01@\x02\x06device\x01\x04\
+wait\x7f\0\xd5\0\x04\0\x04poll\x01V\x01@\x02\x06device\x01\x0adescriptor\x11\0\xc2\
+\0\x04\0\x0dcreate-buffer\x01W\x01@\x04\x06buffer\x01\x04mode7\x06offsetw\x04siz\
+ew\0\xd1\0\x04\0\x0amap-buffer\x01X\x01p}\x01j\x01\xd9\0\x01\x03\x01@\x03\x06buf\
+fer\x01\x06offsetw\x04sizew\0\xda\0\x04\0\x0bread-mapped\x01[\x01@\x03\x06buffer\
+\x01\x06offsetw\x04data\xd9\0\0\xd1\0\x04\0\x0cwrite-mapped\x01\\\x01@\x01\x06bu\
+ffer\x01\0\xd1\0\x04\0\x0cunmap-buffer\x01]\x04\0\x0edestroy-buffer\x01]\x01@\x02\
+\x06device\x01\x0adescriptor\x13\0\xc2\0\x04\0\x0ecreate-texture\x01^\x01@\x01\x07\
+texture\x01\0\xd1\0\x04\0\x0fdestroy-texture\x01_\x01@\x02\x07texture\x01\x0ades\
+criptor\x15\0\xc2\0\x04\0\x13create-texture-view\x01`\x01@\x02\x06device\x01\x0a\
+descriptor\x17\0\xc2\0\x04\0\x0ecreate-sampler\x01a\x01@\x02\x06device\x01\x0ade\
+scriptor%\0\xc2\0\x04\0\x10create-query-set\x01b\x01@\x02\x06device\x01\x0adescr\
+iptor\x19\0\xc2\0\x04\0\x18create-bind-group-layout\x01c\x01@\x02\x06device\x01\x0a\
+descriptor\x1b\0\xc2\0\x04\0\x11create-bind-group\x01d\x01@\x02\x06device\x01\x0a\
+descriptor\x1d\0\xc2\0\x04\0\x16create-pipeline-layout\x01e\x01j\x01\x01\x01\x05\
+\x01@\x02\x06device\x01\x0adescriptor\x1f\0\xe6\0\x04\0\x14create-shader-module\x01\
+g\x01p\x07\x01j\x01\xe8\0\x01\x03\x01@\x01\x06module\x01\0\xe9\0\x04\0\x17shader\
+-compilation-info\x01j\x01@\x02\x06device\x01\x0adescriptor!\0\xc2\0\x04\0\x16cr\
+eate-render-pipeline\x01k\x01@\x02\x06device\x01\x0adescriptor#\0\xc2\0\x04\0\x17\
+create-compute-pipeline\x01l\x01@\x02\x08pipeline\x01\x05indexy\0\xc2\0\x04\0\x1a\
+pipeline-bind-group-layout\x01m\x01@\x02\x06device\x01\x05label\xd3\0\0\xc2\0\x04\
+\0\x16create-command-encoder\x01n\x01p1\x01@\x03\x07encoder\x01\x0adescriptor/\x08\
+commands\xef\0\0\xd1\0\x04\0\x12encode-render-pass\x01p\x01p5\x01@\x03\x07encode\
+r\x01\x0adescriptor3\x08commands\xf1\0\0\xd1\0\x04\0\x13encode-compute-pass\x01r\
+\x01kw\x01@\x06\x07encoder\x01\x06source\x01\x0dsource-offsetw\x0bdestination\x01\
+\x12destination-offsetw\x04size\xf3\0\0\xd1\0\x04\0\x15copy-buffer-to-buffer\x01\
+t\x01@\x04\x07encoder\x01\x06source+\x0bdestination'\x04size-\0\xd1\0\x04\0\x16c\
+opy-buffer-to-texture\x01u\x01@\x04\x07encoder\x01\x06source'\x0bdestination+\x04\
+size-\0\xd1\0\x04\0\x16copy-texture-to-buffer\x01v\x01@\x04\x07encoder\x01\x06so\
+urce'\x0bdestination'\x04size-\0\xd1\0\x04\0\x17copy-texture-to-texture\x01w\x01\
+@\x04\x07encoder\x01\x06buffer\x01\x06offsetw\x04size\xf3\0\0\xd1\0\x04\0\x0ccle\
+ar-buffer\x01x\x01@\x06\x07encoder\x01\x09query-set\x01\x0bfirst-queryy\x0bquery\
+-county\x0bdestination\x01\x12destination-offsetw\0\xd1\0\x04\0\x11resolve-query\
+-set\x01y\x01@\x03\x07encoder\x01\x09query-set\x01\x05indexy\0\xd1\0\x04\0\x0fwr\
+ite-timestamp\x01z\x01@\x02\x07encoder\x01\x05label\xd3\0\0\xc2\0\x04\0\x0efinis\
+h-encoder\x01{\x01p\x01\x01j\x01w\x01\x03\x01@\x02\x06device\x01\x0fcommand-buff\
+ers\xfc\0\0\xfd\0\x04\0\x06submit\x01~\x01@\x04\x06device\x01\x06buffer\x01\x06o\
+ffsetw\x04data\xd9\0\0\xd1\0\x04\0\x0cwrite-buffer\x01\x7f\x01@\x05\x06device\x01\
+\x0bdestination'\x04data\xd9\0\x06layout)\x04size-\0\xd1\0\x04\0\x0dwrite-textur\
+e\x01\x80\x01\x01j\x01v\x01\x03\x01@\x01\x06device\x01\0\x81\x01\x04\0\x10timest\
+amp-period\x01\x82\x01\x01@\x02\x06windoww\x06widgetw\0\xc2\0\x04\0\x0ecreate-su\
+rface\x01\x83\x01\x01o\x02yy\x01j\x01\x84\x01\x01\x03\x01@\x01\x07surface\x01\0\x85\
+\x01\x04\0\x12surface-pixel-size\x01\x86\x01\x01j\x019\x01\x03\x01@\x02\x07surfa\
+ce\x01\x07adapter\x01\0\x87\x01\x04\0\x18get-surface-capabilities\x01\x88\x01\x01\
+@\x03\x07surface\x01\x06device\x01\x0dconfiguration;\0\xd1\0\x04\0\x11configure-\
+surface\x01\x89\x01\x01j\x01=\x01?\x01@\x01\x07surface\x01\0\x8a\x01\x04\0\x0fcu\
+rrent-texture\x01\x8b\x01\x01@\x01\x07surface\x01\0\xd1\0\x04\0\x07present\x01\x8c\
+\x01\x01@\x01\x06object\x01\x01\0\x04\0\x07release\x01\x8d\x01\x03\0\x13krate:gp\
+u/gpu@0.1.0\x05k\x01B\x11\x02\x03\x02\x01?\x04\0\x04rect\x03\0\0\x02\x03\x02\x01\
+D\x04\0\x0ccorner-radii\x03\0\x02\x02\x03\x02\x01B\x04\0\x09gfx-error\x03\0\x04\x01\
+p}\x01j\x01w\x01\x05\x01@\x04\x06canvasw\x05widthy\x06heighty\x04rgba\x06\0\x07\x04\
+\0\x04keep\x01\x08\x01j\0\x01\x05\x01@\x03\x06canvasw\x05imagew\x04area\x01\0\x09\
+\x04\0\x04draw\x01\x0a\x01@\x04\x06canvasw\x05imagew\x04area\x01\x05radii\x03\0\x09\
+\x04\0\x0adraw-round\x01\x0b\x01@\x02\x06canvasw\x05imagew\x01\0\x04\0\x06forget\
+\x01\x0c\x03\0\x1dkrate:gfx/canvas-images@0.1.0\x05l\x01B\x06\x01m\x02\x07pcm-s1\
+6\x07float32\x04\0\x0dsample-format\x03\0\0\x01r\x04\x0bsample-ratey\x08channels\
+{\x06format\x01\x0dbuffer-framesy\x04\0\x0dstream-config\x03\0\x02\x01q\x05\x11p\
+ermission-denied\0\0\x0einvalid-stream\0\0\x12device-unavailable\0\0\x0bunsuppor\
+ted\x01s\0\x08platform\x01s\0\x04\0\x0baudio-error\x03\0\x04\x03\0\x17krate:audi\
+o/types@0.1.0\x05m\x02\x03\0,\x0baudio-error\x02\x03\0,\x0dstream-config\x01B\x15\
+\x02\x03\x02\x01n\x04\0\x0baudio-error\x03\0\0\x02\x03\x02\x01o\x04\0\x0dstream-\
+config\x03\0\x02\x01j\x01w\x01\x01\x01@\x01\x06config\x03\0\x04\x04\0\x04open\x01\
+\x05\x01j\0\x01\x01\x01@\x01\x09stream-idw\0\x06\x04\0\x05start\x01\x07\x04\0\x04\
+stop\x01\x07\x01p}\x01j\x01y\x01\x01\x01@\x02\x09stream-idw\x05bytes\x08\0\x09\x04\
+\0\x05write\x01\x0a\x01@\x02\x09stream-idw\x05bytes\x08\0\x04\x04\0\x0aload-soun\
+d\x01\x0b\x01@\x03\x09stream-idw\x05soundw\x04gainv\0\x06\x04\0\x0aplay-sound\x01\
+\x0c\x01@\x02\x09stream-idw\x05soundw\0\x06\x04\0\x0astop-sound\x01\x0d\x03\0\x1a\
+krate:audio/playback@0.1.0\x05p\x01B\x05\x02\x03\x02\x01n\x04\0\x0baudio-error\x03\
+\0\0\x01j\x01y\x01\x01\x01@\x01\x09stream-idw\0\x02\x04\0\x06queued\x01\x03\x03\0\
+\x20krate:audio/playback-queue@0.1.0\x05q\x01B\x0f\x02\x03\x02\x01n\x04\0\x0baud\
+io-error\x03\0\0\x02\x03\x02\x01o\x04\0\x0dstream-config\x03\0\x02\x01j\x01w\x01\
+\x01\x01@\x01\x06config\x03\0\x04\x04\0\x04open\x01\x05\x01j\0\x01\x01\x01@\x01\x09\
+stream-idw\0\x06\x04\0\x05start\x01\x07\x04\0\x04stop\x01\x07\x01p}\x01j\x01\x08\
+\x01\x01\x01@\x02\x09stream-idw\x09max-bytesy\0\x09\x04\0\x04read\x01\x0a\x03\0\x19\
+krate:audio/capture@0.1.0\x05r\x01B\x0d\x01m\x01\x05rgba8\x04\0\x0cframe-format\x03\
+\0\0\x01r\x04\x05widthy\x06heighty\x03fpsy\x06format\x01\x04\0\x0dstream-config\x03\
+\0\x02\x01r\x04\x05widthy\x06heighty\x03fpsy\x06format\x01\x04\0\x0aframe-info\x03\
+\0\x04\x01r\x02\x02ids\x05labels\x04\0\x0bdevice-info\x03\0\x06\x01p}\x01r\x04\x05\
+bytes\x08\x05widthy\x06heighty\x0eelapsed-millisw\x04\0\x05frame\x03\0\x09\x01q\x06\
+\x11permission-denied\0\0\x0einvalid-stream\0\0\x12device-unavailable\0\0\x0dsys\
+tem-denied\0\0\x0bunsupported\x01s\0\x08platform\x01s\0\x04\0\x0ccamera-error\x03\
+\0\x0b\x03\0\x18krate:camera/types@0.1.0\x05s\x02\x03\00\x0ccamera-error\x02\x03\
+\00\x0bdevice-info\x02\x03\00\x05frame\x02\x03\00\x0aframe-info\x02\x03\00\x0dst\
+ream-config\x01B\x1d\x02\x03\x02\x01t\x04\0\x0ccamera-error\x03\0\0\x02\x03\x02\x01\
+u\x04\0\x0bdevice-info\x03\0\x02\x02\x03\x02\x01v\x04\0\x05frame\x03\0\x04\x02\x03\
+\x02\x01w\x04\0\x0aframe-info\x03\0\x06\x02\x03\x02\x01x\x04\0\x0dstream-config\x03\
+\0\x08\x01p\x03\x01j\x01\x0a\x01\x01\x01@\0\0\x0b\x04\0\x07devices\x01\x0c\x01j\x01\
+w\x01\x01\x01@\x02\x06devices\x06config\x09\0\x0d\x04\0\x04open\x01\x0e\x01j\x01\
+\x07\x01\x01\x01@\x01\x09stream-idw\0\x0f\x04\0\x04info\x01\x10\x01j\0\x01\x01\x01\
+@\x01\x09stream-idw\0\x11\x04\0\x05start\x01\x12\x04\0\x04stop\x01\x12\x01k\x05\x01\
+j\x01\x13\x01\x01\x01@\x01\x09stream-idw\0\x14\x04\0\x04read\x01\x15\x04\0\x05cl\
+ose\x01\x12\x03\0\x1akrate:camera/capture@0.1.0\x05y\x01B\x12\x01r\x01\x04texts\x04\
+\0\x0atranscript\x03\0\0\x01q\x05\x0finvalid-request\x01s\0\x0fmodel-not-found\0\
+\0\x0dmodel-invalid\x01s\0\x0bunsupported\x01s\0\x09inference\x01s\0\x04\0\x0csp\
+eech-error\x03\0\x02\x01m\x05\x0finvalid-request\x0fmodel-not-found\x0dmodel-inv\
+alid\x0bunsupported\x09inference\x04\0\x0bmatch-error\x03\0\x04\x01p}\x01ks\x01j\
+\x01\x01\x01\x03\x01@\x04\x0bmodel-assets\x0apcm-s16-le\x06\x0bsample-ratey\x08l\
+anguage\x07\0\x08\x04\0\x0atranscribe\x01\x09\x01j\x01}\x01\x05\x01@\x05\x0bmode\
+l-assets\x0apcm-s16-le\x06\x0bsample-ratey\x08language\x07\x08expecteds\0\x0a\x04\
+\0\x0amatch-line\x01\x0b\x01k}\x01j\x01\x0c\x01\x05\x01@\x06\x0bmodel-assets\x0a\
+pcm-s16-le\x06\x0bsample-ratey\x08language\x07\x08expecteds\x06finish\x7f\0\x0d\x04\
+\0\x11match-line-stream\x01\x0e\x03\0\x20krate:speech/transcription@0.1.0\x05z\x01\
+B\x12\x01r\x03\x02ids\x04names\x08languages\x04\0\x05voice\x03\0\0\x01q\x04\x11p\
+ermission-denied\0\0\x0finvalid-request\x01s\0\x0bunsupported\x01s\0\x08platform\
+\x01s\0\x04\0\x09say-error\x03\0\x02\x01p\x01\x01j\x01\x04\x01\x03\x01@\0\0\x05\x04\
+\0\x06voices\x01\x06\x01ks\x01kv\x01j\0\x01\x03\x01@\x03\x04texts\x05voice\x07\x04\
+rate\x08\0\x09\x04\0\x03say\x01\x0a\x01@\0\0\x09\x04\0\x04stop\x01\x0b\x01j\x01\x7f\
+\x01\x03\x01@\0\0\x0c\x04\0\x08speaking\x01\x0d\x03\0\x1ckrate:speech/synthesis@\
+0.1.0\x05{\x01@\0\0z\x04\0\x03run\x01|\x04\0\x13krate:app/gui@0.2.0\x04\0\x0b\x09\
+\x01\0\x03gui\x03\0\0\0G\x09producers\x01\x0cprocessed-by\x02\x0dwit-component\x07\
+0.227.1\x10wit-bindgen-rust\x060.41.0";
 
 #[inline(never)]
 #[doc(hidden)]

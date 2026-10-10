@@ -191,6 +191,7 @@ world = "gui"
 "krate:random" = { path = "PREFIX/wit/krate/phase4/deps/random" }
 "krate:ui" = { path = "PREFIX/wit/krate/phase4/deps/ui" }
 "krate:gfx" = { path = "PREFIX/wit/krate/phase4/deps/gfx" }
+"krate:gpu" = { path = "PREFIX/wit/krate/phase4/deps/gpu" }
 "krate:audio" = { path = "PREFIX/wit/krate/phase4/deps/audio" }
 "krate:speech" = { path = "PREFIX/wit/krate/phase4/deps/speech" }
 
