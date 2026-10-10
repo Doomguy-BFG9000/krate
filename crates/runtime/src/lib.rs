@@ -64,6 +64,7 @@ pub mod phase4_gui_host;
 mod print_host;
 pub mod random_host;
 pub mod scene3d;
+pub mod screen_fit;
 pub mod secret_host;
 pub mod shared_host;
 mod speech_synthesis;

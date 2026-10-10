@@ -6271,6 +6271,106 @@ fn a_cpp_program_runs_and_its_constructors_run_once() {
     }
 }
 
+/// The binary a person runs measures a frame on a phone's screen (IC-911).
+///
+/// `weather-card.wasm` is apps/krate-weather built: it lays out from its
+/// real size. `weather-desktop-only.wasm` is the same app sabotaged to lay
+/// out for 1280 points whatever the screen. Given a phone's screen
+/// (`KRATE_SCREEN`), the first fits and the second cuts its day cards at
+/// the side -- and on a desktop both fit, so the phone is what tells them
+/// apart. Without the screen override every run would be judged on the
+/// size the app asked for, and a phone would never be seen.
+#[test]
+fn a_frame_is_measured_on_a_phone_screen_and_a_desktop_only_layout_is_cut() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let manifest = dir.path().join("manifest.toml");
+    std::fs::write(
+        &manifest,
+        "[app]\nid = \"com.acme.weather-card\"\nname = \"weather-card\"\nversion = \"1.0.0\"\n\
+         entry = \"code.wasm\"\nworld = \"krate:app/gui@0.2.0\"\n\n\
+         [[capabilities]]\ncap = \"ui.window:create\"\nrationale = \"window\"\nrequired = true\n\n\
+         [[capabilities]]\ncap = \"io.stdout\"\nrationale = \"print\"\nrequired = true\n\n\
+         [[capabilities]]\ncap = \"io.args\"\nrationale = \"args\"\nrequired = true\n",
+    )
+    .expect("manifest");
+    let measure = |bytes: &[u8], name: &str, screen: &str| -> serde_json::Value {
+        let wasm = dir.path().join(format!("{name}.wasm"));
+        std::fs::write(&wasm, bytes).expect("component");
+        std::fs::copy(&wasm, dir.path().join("code.wasm")).expect("entry");
+        let report = dir.path().join(format!("{name}-{screen}.json"));
+        let frame = dir.path().join(format!("{name}-{screen}.png"));
+        let out = krate()
+            .arg("run")
+            .arg(dir.path().join("code.wasm"))
+            .arg("--manifest")
+            .arg(&manifest)
+            .args(["--auto-grant", "--shoot"])
+            .arg(&frame)
+            .arg("--check-layout")
+            .env("KRATE_SCREEN", screen)
+            .env("KRATE_FIT_REPORT", &report)
+            .output()
+            .expect("run");
+        assert!(
+            out.status.success(),
+            "{name} on {screen}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let text = std::fs::read_to_string(&report)
+            .unwrap_or_else(|_| panic!("{name} on {screen} wrote no screen report"));
+        serde_json::from_str(&text).expect("report is JSON")
+    };
+    let fits = include_bytes!("fixtures/weather-card.wasm");
+    let desktop_only = include_bytes!("fixtures/weather-desktop-only.wasm");
+    assert_ne!(
+        &fits[..],
+        &desktop_only[..],
+        "the sabotage must be a different app"
+    );
+
+    let phone = measure(fits, "fits", "390x844");
+    assert_eq!(
+        phone["facts"]["screen"],
+        serde_json::json!([390.0, 844.0]),
+        "{phone}"
+    );
+    assert_eq!(
+        phone["fixed"],
+        serde_json::json!(false),
+        "it lays out from its real size: {phone}"
+    );
+    assert!(phone["facts"]["texts"].as_u64().unwrap_or(0) > 0, "{phone}");
+    assert_eq!(phone["facts"]["off_edge"], serde_json::json!([]), "{phone}");
+    assert!(
+        phone["facts"]["smallest_text"][0].as_f64().unwrap_or(0.0) >= 13.0,
+        "{phone}"
+    );
+
+    let cut = measure(desktop_only, "desktop-only", "390x844");
+    let off = cut["facts"]["off_edge"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    assert!(
+        !off.is_empty(),
+        "a 1280-point layout on a phone is cut at the side: {cut}"
+    );
+    assert!(
+        off.iter().any(|entry| entry[0]
+            .as_str()
+            .unwrap_or("")
+            .starts_with("the box holding ")),
+        "the cut is named by what it holds: {cut}"
+    );
+
+    let desk = measure(desktop_only, "desktop-only", "1280x800");
+    assert_eq!(
+        desk["facts"]["off_edge"],
+        serde_json::json!([]),
+        "on a desktop it fits: {desk}"
+    );
+}
+
 /// A game asks about the mouse through the binary a person runs
 /// (krate:ui/pointer, IC-909).
 ///

@@ -2720,6 +2720,30 @@ impl Phase3GuiHost {
                 ));
             }
         }
+        // How this frame lands on the screen it was shown on (IC-911):
+        // the smallest text as it reaches the glass, and text cut off at the
+        // side. check-app runs the app once per screen and reads this back.
+        if let Some(path) = std::env::var_os("KRATE_FIT_REPORT") {
+            let screen = canvases.values().next().map(|(_, _, surface)| {
+                let (w, h) = surface.dimensions();
+                (w as f32, h as f32)
+            });
+            if let (Some(screen), Some(canvas)) = (screen, self.inspected_canvas_size.get()) {
+                let facts = match canvases.values().next() {
+                    Some((_, _, surface)) => {
+                        let measure =
+                            |text: &str, size: f32| surface.measure_text(text, size).width;
+                        crate::screen_fit::measure(&ops, canvas, screen, Some(&measure))
+                    }
+                    None => crate::screen_fit::measure(&ops, canvas, screen, None),
+                };
+                let asked = self.requested_sizes.borrow().values().next().copied();
+                // Fixed: the app draws in a size of its own, not the screen's.
+                let fixed = (canvas.0 - screen.0).abs() > 1.0 || (canvas.1 - screen.1).abs() > 1.0;
+                let report = serde_json::json!({ "facts": facts, "asked": asked, "fixed": fixed });
+                let _ = std::fs::write(path, report.to_string());
+            }
+        }
         for line in &lines {
             eprintln!("{line}");
         }

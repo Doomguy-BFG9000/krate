@@ -18542,6 +18542,9 @@ enum CheckStage {
     /// Driving the app the way a person would: does it stay open, does it
     /// follow a resize, does pressing it do anything.
     Usability,
+    /// Running the app on a phone, a tablet and a desktop window and reading
+    /// how each frame lands there (IC-911).
+    Screens,
 }
 
 impl CheckStage {
@@ -18556,6 +18559,7 @@ impl CheckStage {
             CheckStage::Run => 14,
             CheckStage::Shoot => 15,
             CheckStage::Usability => 16,
+            CheckStage::Screens => 17,
         }
     }
 
@@ -18568,6 +18572,7 @@ impl CheckStage {
             CheckStage::Run => "run",
             CheckStage::Shoot => "shoot",
             CheckStage::Usability => "usability",
+            CheckStage::Screens => "screens",
         }
     }
 }
@@ -19489,6 +19494,13 @@ fn run_check_app(
         // Extend, never assign: the shoot stage above may already have added
         // layout findings, and this stage runs after it.
         usability_notes.extend(notes);
+
+        // Stage: screens. An app is made once and opened on a phone, a
+        // tablet and a desktop; run it on each and read how the frame lands
+        // there (IC-911). After usability, so an app that does not stay open
+        // or answer a press is told that first.
+        run_screens_stage(dir, &wasm_str, &manifest_str, shoot)?;
+        passed.push("screens");
     }
 
     Ok(CheckSummary {
@@ -19497,6 +19509,127 @@ fn run_check_app(
         shoot: shot,
         usability_notes,
         source_changes,
+    })
+}
+
+/// Run the app once per screen with the layout check on, and fail when
+/// what it drew does not fit one of them (IC-911).
+///
+/// The desktop goes first: its report says what the app asked for and
+/// whether it draws in a fixed size of its own, and that decides how the
+/// phone is held (`screen_fit::screens`). Pictures of each screen land
+/// beside `--shoot`'s, so a person sees what was judged.
+fn run_screens_stage(
+    dir: &Path,
+    wasm_str: &str,
+    manifest_str: &str,
+    shoot: Option<&Path>,
+) -> std::result::Result<(), CheckFailure> {
+    use krate_runtime::screen_fit;
+    let scratch = tempfile::tempdir().map_err(|error| CheckFailure {
+        stage: CheckStage::Screens,
+        detail: format!("could not create a scratch dir for the screens run: {error}"),
+        fix: String::new(),
+    })?;
+    let picture = |slug: &str| -> PathBuf {
+        match shoot {
+            Some(png) => {
+                let png = absolute_from_cwd(png);
+                let stem = png
+                    .file_stem()
+                    .map(|s| s.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "app".to_string());
+                png.with_file_name(format!("{stem}-{slug}.png"))
+            }
+            None => scratch.path().join(format!("{slug}.png")),
+        }
+    };
+    let run_on = |w: f32, h: f32, slug: &str| -> Option<serde_json::Value> {
+        let report = scratch.path().join(format!("{slug}.json"));
+        let png = picture(slug).to_string_lossy().into_owned();
+        let args: Vec<String> = vec![
+            "run".into(),
+            "--profile".into(),
+            "analysis".into(),
+            wasm_str.to_string(),
+            "--manifest".into(),
+            manifest_str.to_string(),
+            "--auto-grant".into(),
+            "--shoot".into(),
+            png,
+            "--check-layout".into(),
+            "--".into(),
+            "quick".into(),
+        ];
+        // SAFETY: single-threaded at this point in check-app.
+        unsafe {
+            std::env::set_var("KRATE_SCREEN", format!("{w:.0}x{h:.0}"));
+            std::env::set_var("KRATE_FIT_REPORT", &report);
+        }
+        let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+        let _ = run_self(dir, &refs);
+        unsafe {
+            std::env::remove_var("KRATE_SCREEN");
+            std::env::remove_var("KRATE_FIT_REPORT");
+        }
+        fs::read_to_string(&report)
+            .ok()
+            .and_then(|text| serde_json::from_str(&text).ok())
+    };
+    let slug = |name: &str| match name {
+        "a phone" => "phone",
+        "a phone turned sideways" => "phone-turned",
+        "a tablet" => "tablet",
+        _ => "desktop",
+    };
+    // Nothing measured is not a failure: an app that draws no text on its
+    // first frame, or a run that could not paint, has nothing to judge.
+    let Some(desktop) = run_on(1280.0, 800.0, "desktop") else {
+        return Ok(());
+    };
+    let asked = desktop["asked"]
+        .as_array()
+        .and_then(|a| Some((a.first()?.as_f64()? as f32, a.get(1)?.as_f64()? as f32)))
+        .unwrap_or((1280.0, 800.0));
+    let fixed = desktop["fixed"].as_bool().unwrap_or(false);
+    let mut faults = Vec::new();
+    for (name, w, h) in screen_fit::screens(asked, fixed) {
+        let report = if name == "a desktop window" {
+            Some(desktop.clone())
+        } else {
+            run_on(w, h, slug(name))
+        };
+        let Some(facts) = report.and_then(|r| {
+            serde_json::from_value::<screen_fit::ScreenFacts>(r["facts"].clone()).ok()
+        }) else {
+            continue;
+        };
+        if let Some(fault) = screen_fit::fault(name, &facts) {
+            faults.push(fault);
+        }
+    }
+    if faults.is_empty() {
+        return Ok(());
+    }
+    Err(CheckFailure {
+        stage: CheckStage::Screens,
+        detail: format!(
+            "the app does not fit every screen it will open on: {}",
+            faults.join(" | ")
+        ),
+        fix: if fixed {
+            "The app draws in a fixed size and is shrunk to fit, so its text becomes too small \
+             to read. Drop `set_design_size` and lay out from `canvas2d::canvas_size` every \
+             frame, so a phone gets text at its real size."
+                .to_string()
+        } else {
+            "Lay the screen out from `canvas2d::canvas_size` every frame for the width it has, \
+             not for a desktop. Below 600 points wide (a phone), put panes in one column: a \
+             sidebar becomes a row of tabs or a menu button, side-by-side panels stack, and a \
+             row of cards wraps or becomes a list. Shorten or wrap text so none is cut at the \
+             side, and keep body text at 13 points or more."
+                .to_string()
+        },
     })
 }
 
