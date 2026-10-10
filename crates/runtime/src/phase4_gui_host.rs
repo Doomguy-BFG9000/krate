@@ -403,6 +403,34 @@ impl ui4::haptics::Host for Phase3GuiHost {
     }
 }
 
+/// Where the phone is (IC-917). Phase 4 only, behind `location.read`.
+impl ui4::location::Host for Phase3GuiHost {
+    fn available(&mut self) -> wasmtime::Result<bool> {
+        Ok(self.location().0)
+    }
+
+    fn current(
+        &mut self,
+    ) -> wasmtime::Result<Result<ui4::location::Position, ui4::location::LocationError>> {
+        use krate_adapter_common::ui::LocationAnswer;
+        use ui4::location::{LocationError, Position};
+        Ok(match self.location().1 {
+            LocationAnswer::Here(p) => Ok(Position {
+                latitude: p.latitude,
+                longitude: p.longitude,
+                accuracy: p.accuracy,
+                altitude: p.altitude,
+                speed: p.speed,
+                course: p.course,
+                age_ms: p.age_ms,
+            }),
+            LocationAnswer::NotAllowed => Err(LocationError::NotAllowed),
+            LocationAnswer::Unavailable => Err(LocationError::Unavailable),
+            LocationAnswer::Finding => Err(LocationError::Finding),
+        })
+    }
+}
+
 /// How the phone is held and moves (IC-917). Phase 4 only. No capability,
 /// as with the screen's own facts: which way a phone is tilted while an app
 /// is on it tells the app nothing about the person beyond that.

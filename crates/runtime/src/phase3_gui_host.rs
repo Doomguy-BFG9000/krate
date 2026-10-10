@@ -723,6 +723,44 @@ impl Phase3GuiHost {
         self.runtime.dispatcher()
     }
 
+    /// Where the device is (IC-917), behind `location.read`: an app that
+    /// was not granted it hears `not-allowed` and the phone is never asked.
+    /// Headless, `KRATE_LOCATION=lat,lon,accuracy` stands in for a fix.
+    pub(crate) fn location(&self) -> (bool, krate_adapter_common::ui::LocationAnswer) {
+        use krate_adapter_common::ui::{LocationAnswer, Position};
+        let granted = self
+            .runtime
+            .guard()
+            .check(&UapiCall::Location(crate::uapi::LocationCall::Read))
+            .is_ok();
+        if self.headless {
+            let fix = std::env::var("KRATE_LOCATION").ok().and_then(|spec| {
+                let v: Vec<f64> = spec
+                    .split(',')
+                    .filter_map(|n| n.trim().parse().ok())
+                    .collect();
+                (v.len() == 3).then(|| Position {
+                    latitude: v[0],
+                    longitude: v[1],
+                    accuracy: v[2] as f32,
+                    ..Default::default()
+                })
+            });
+            let answer = match fix {
+                _ if !granted => LocationAnswer::NotAllowed,
+                Some(fix) => LocationAnswer::Here(fix),
+                None => LocationAnswer::Unavailable,
+            };
+            return (fix.is_some(), answer);
+        }
+        let dispatcher = self.dispatcher();
+        let available = dispatcher.location_available();
+        if !granted {
+            return (available, LocationAnswer::NotAllowed);
+        }
+        (available, dispatcher.location())
+    }
+
     /// How the device is held (IC-917). Headless, `KRATE_MOTION=gx,gy,gz`
     /// stands in for a phone held so, to check an app's tilt handling.
     pub(crate) fn motion(&self) -> (bool, Option<krate_adapter_common::ui::MotionReading>) {

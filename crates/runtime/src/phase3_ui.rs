@@ -611,6 +611,16 @@ impl<'a> Phase3UiDispatcher<'a> {
         self.adapter.haptic(feel, strength)
     }
 
+    /// Whether the device can tell where it is (IC-917).
+    pub fn location_available(&self) -> bool {
+        self.adapter.location_available()
+    }
+
+    /// Where the device is (IC-917).
+    pub fn location(&self) -> krate_adapter_common::ui::LocationAnswer {
+        self.adapter.location()
+    }
+
     /// Whether the device can tell how it is held (IC-917).
     pub fn motion_available(&self) -> bool {
         self.adapter.motion_available()

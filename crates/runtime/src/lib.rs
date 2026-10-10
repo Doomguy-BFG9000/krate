@@ -1442,6 +1442,8 @@ impl Runtime {
         link_gui!(ui4::haptics);
         // Phase 4 only: how the phone is held and moves (IC-917).
         link_gui!(ui4::motion);
+        // Phase 4 only: where the phone is, behind location.read (IC-917).
+        link_gui!(ui4::location);
         // Phase 4 only: pictures a canvas keeps and draws by handle.
         link_gui!(phase4_gui_bindings::krate::gfx::canvas_images);
 

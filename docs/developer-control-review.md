@@ -15,8 +15,8 @@ Developer ownership and control is the default (IC-175, IC-176). Krate enforces 
 
 ## Summary
 
-- 62 boundaries reviewed, 53 of them WIT interfaces (53 declared under wit/krate).
-- 35 compulsory, each with a justification or a recorded gap; 27 optional.
+- 63 boundaries reviewed, 54 of them WIT interfaces (54 declared under wit/krate).
+- 35 compulsory, each with a justification or a recorded gap; 28 optional.
 - 7 recorded gaps where the escape hatch does not yet exist or the boundary is narrower than a developer would want.
 
 ## Every boundary
@@ -65,6 +65,7 @@ Developer ownership and control is the default (IC-175, IC-176). Krate enforces 
 | `krate:ui@0.1.0/haptics` | wit | the seven feels a phone taps back with and an impact's strength from 0 to 1, each played as the platform's own | when to tap and which feel; whether to tap at all | none needed: no capability, and a device with nothing to tap answers available() false | no | -- |
 | `krate:ui@0.1.0/image` | wit | the pixel handoff: an image widget shows what the app hands it | any renderer, any format decoded by the app | this is the escape hatch for drawing | no | -- |
 | `krate:ui@0.1.0/launcher` | wit | that opening a link goes through the person's browser and is a grant, not a process capability | which links | show the URL and let the person copy it | yes | recipient-permission |
+| `krate:ui@0.1.0/location` | wit | one fix of where the phone is -- latitude, longitude, how far off it may be, altitude, speed and course when known -- and the three reasons there is none | when to ask, how often, and what to do with the position | none: location.read is opt-in, asked on Krate's sheet and by the phone itself | no | -- |
 | `krate:ui@0.1.0/menu` | wit | nothing yet: menu calls are declared and answer unsupported | any command scheme drawn in the app | the app's own drawn menus and key handling | no | -- |
 | `krate:ui@0.1.0/motion` | wit | one reading of the phone's sensors -- gravity, the push given it, its turning and the compass heading -- in the screen's own frame however the phone is turned | whether to read, how often, and what tilt or shake means to the app | none needed: no capability, and a device without sensors answers available() false | no | -- |
 | `krate:ui@0.1.0/notify` | wit | that a notification is attributed to the app the person consented to, never to a title the app chose, and is a grant | when and what | draw the message in the app's own window | yes | recipient-permission |

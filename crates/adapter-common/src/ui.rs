@@ -1663,6 +1663,32 @@ impl PointerTracker {
 /// renderer consumes it, and this crate only carries it between them.
 pub type CanvasListHandle = std::sync::Arc<dyn std::any::Any + Send + Sync>;
 
+/// One fix of where the phone is (IC-917).
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
+pub struct Position {
+    pub latitude: f64,
+    pub longitude: f64,
+    /// Metres the fix may be off by.
+    pub accuracy: f32,
+    pub altitude: Option<f32>,
+    pub speed: Option<f32>,
+    pub course: Option<f32>,
+    /// How old the fix is.
+    pub age_ms: u64,
+}
+
+/// What asking where the phone is answers.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum LocationAnswer {
+    Here(Position),
+    /// The phone's own prompt was refused, or location is restricted.
+    NotAllowed,
+    /// No location on this device, or it is switched off.
+    Unavailable,
+    /// Still looking.
+    Finding,
+}
+
 /// One reading of a phone's motion sensors (IC-917), in the screen's frame:
 /// x right, y down, z toward the person.
 #[derive(Clone, Copy, Debug, PartialEq, Default)]
@@ -1951,6 +1977,17 @@ pub trait UiAdapter: WindowAdapter {
     /// `feel` is None. False when there is nothing to tap with.
     fn haptic(&self, _feel: Option<HapticFeel>, _strength: f32) -> bool {
         false
+    }
+
+    /// Whether this device can tell where it is (IC-917).
+    fn location_available(&self) -> bool {
+        false
+    }
+
+    /// Where the device is, starting the search (and the platform's own
+    /// prompt) on the first ask. Desktops have none.
+    fn location(&self) -> LocationAnswer {
+        LocationAnswer::Unavailable
     }
 
     /// Whether this device can tell how it is held (IC-917).

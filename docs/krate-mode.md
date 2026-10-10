@@ -558,6 +558,7 @@ to exactly what the app needs, e.g. `fs.read:notes/**`.
 | `audio.playback` | yes | play sound |
 | `audio.capture` | no | record from the microphone |
 | `camera.capture` | no | see through the camera |
+| `location.read` | no | where the phone is; the person is asked on Krate's sheet and by the phone itself |
 
 Mark `required = true` on a capability the app cannot begin without -- the verification run withholds it and the app must refuse to start (exit 5). A saving app marks `fs.write` required. `ui.window:create` is declared `required = true` by convention, but withholding a window just closes the app, so it is not the withheld gate; a GUI app whose only non-default capability is its window has nothing to withhold, which is fine. Do not mark required a capability the `quick` verification path never reaches, or the app fails its own wall test after building cleanly.
 
@@ -678,6 +679,8 @@ takes this path, so any of them is a model for the wiring.
 - `haptics::impact: func(strength: f32)`
 - `motion::available: func() -> bool`
 - `motion::read: func() -> option<reading>`
+- `location::available: func() -> bool`
+- `location::current: func() -> result<position, location-error>`
 - `text-entry::start: func(window: u64) -> bool`
 - `text-entry::stop: func(window: u64)`
 - `touch::touches: func(window: u64) -> list<touch-point>`

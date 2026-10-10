@@ -211,6 +211,10 @@ const KRATE_CAPABILITY_SPECS: &[CapabilitySpec] = &[
     // by default -- and the host asks the operating system too, so the
     // machine's own indicator light is the second, unfakeable signal.
     CapabilitySpec::resource_free(CapabilityPhase::Phase3, "camera", "capture", false),
+    // Where the person is (IC-917): opt-in and never granted by default, as
+    // the camera, and the phone asks too -- its own prompt is the second,
+    // unfakeable signal, and its location arrow shows while it is read.
+    CapabilitySpec::resource_free(CapabilityPhase::Phase3, "location", "read", false),
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]

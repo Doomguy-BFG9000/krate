@@ -536,6 +536,14 @@ impl UiAdapter for IosUikitPrototypeUiAdapter {
         uikit_native::choose_path(folder, filter)
     }
 
+    fn location_available(&self) -> bool {
+        uikit_native::location_available()
+    }
+
+    fn location(&self) -> krate_adapter_common::ui::LocationAnswer {
+        uikit_native::location_read()
+    }
+
     fn motion_available(&self) -> bool {
         uikit_native::motion_available()
     }

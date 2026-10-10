@@ -6378,6 +6378,87 @@ fn an_app_taps_back_on_a_phone_and_a_computer_says_it_cannot() {
     );
 }
 
+/// An app learns where the phone is only when the person allowed it
+/// (krate:ui/location behind location.read, IC-917).
+///
+/// `location-probe.wasm` is apps/krate-location-probe built ("Where Am I").
+/// Granted, with KRATE_LOCATION standing in for a fix, it reads that fix
+/// back. Not granted -- here, not even declared -- it hears not-allowed
+/// even though a fix is there: the guard, not the device, decides. And a
+/// computer without a fix says unavailable.
+#[test]
+fn an_app_learns_where_the_phone_is_only_when_allowed() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let wasm = dir.path().join("code.wasm");
+    std::fs::write(&wasm, include_bytes!("fixtures/location-probe.wasm")).expect("probe");
+    let manifest = |with_location: bool| {
+        let path = dir.path().join(if with_location {
+            "with.toml"
+        } else {
+            "without.toml"
+        });
+        let location = if with_location {
+            "[[capabilities]]\ncap = \"location.read\"\nrationale = \"position\"\nrequired = true\n\n"
+        } else {
+            ""
+        };
+        std::fs::write(
+            &path,
+            format!(
+                "[app]\nid = \"dev.krate.location-probe\"\nname = \"Where Am I\"\nversion = \"1.0.0\"\n\
+                 entry = \"code.wasm\"\nworld = \"krate:app/gui@0.2.0\"\n\n\
+                 [[capabilities]]\ncap = \"ui.window:create\"\nrationale = \"window\"\nrequired = true\n\n\
+                 {location}\
+                 [[capabilities]]\ncap = \"io.stdout\"\nrationale = \"print\"\nrequired = true\n\n\
+                 [[capabilities]]\ncap = \"io.args\"\nrationale = \"args\"\nrequired = true\n"
+            ),
+        )
+        .expect("manifest");
+        path
+    };
+    let run = |manifest: &std::path::Path, fix: Option<&str>| -> String {
+        let mut cmd = krate();
+        cmd.arg("run")
+            .arg("--headless")
+            .arg(&wasm)
+            .arg("--manifest")
+            .arg(manifest)
+            .arg("--auto-grant")
+            .arg("--")
+            .arg("quick")
+            .env_remove("KRATE_LOCATION");
+        if let Some(fix) = fix {
+            cmd.env("KRATE_LOCATION", fix);
+        }
+        let out = cmd.output().expect("run");
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+    let with = manifest(true);
+    let without = manifest(false);
+    let granted = run(&with, Some("1.29027,103.85196,12"));
+    assert!(
+        granted
+            .lines()
+            .any(|l| l == "location:1.29027,103.85196 within 12 m"),
+        "a granted app reads the fix: {granted}"
+    );
+    let refused = run(&without, Some("1.29027,103.85196,12"));
+    assert!(
+        refused.lines().any(|l| l == "location:not-allowed"),
+        "an app never granted location.read hears not-allowed, fix or no fix: {refused}"
+    );
+    let computer = run(&with, None);
+    assert!(
+        computer.lines().any(|l| l == "location:unavailable"),
+        "a computer with no fix says so: {computer}"
+    );
+}
+
 /// An app reads how the phone is held, and a computer says it cannot
 /// (krate:ui/motion, IC-917).
 ///

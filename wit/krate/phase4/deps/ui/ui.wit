@@ -829,6 +829,51 @@ interface motion {
   read: func() -> option<reading>;
 }
 
+/// Where the phone is: a map's dot, a run's distance, a "near me" (IC-917).
+///
+/// Behind `location.read`, which the person is asked about on Krate's sheet
+/// and then by the phone itself. Ask with `current` each time a fix is
+/// wanted: the first ask starts the phone looking and answers `finding`;
+/// a moment later it answers the position. Reading stops when the app
+/// closes.
+interface location {
+  /// One fix.
+  record position {
+    /// Degrees north of the equator; south is negative.
+    latitude: f64,
+    /// Degrees east of Greenwich; west is negative.
+    longitude: f64,
+    /// How far off the fix may be, in metres: the radius of the circle the
+    /// phone is somewhere in.
+    accuracy: f32,
+    /// Metres above sea level, when the phone knows.
+    altitude: option<f32>,
+    /// Metres a second, when moving and the phone knows.
+    speed: option<f32>,
+    /// Degrees clockwise from true north it is heading, when moving.
+    course: option<f32>,
+    /// How old the fix is, in milliseconds.
+    age-ms: u64,
+  }
+
+  /// Why there is no position.
+  variant location-error {
+    /// The person said no, on Krate's sheet or the phone's own prompt, or
+    /// the app did not declare `location.read`.
+    not-allowed,
+    /// This device cannot tell where it is, or location is switched off.
+    unavailable,
+    /// Still looking: ask again in a moment.
+    finding,
+  }
+
+  /// Whether this device can tell where it is at all.
+  available: func() -> bool;
+
+  /// The latest fix.
+  current: func() -> result<position, location-error>;
+}
+
 /// The system's own text entry, for an app that draws its own text fields:
 /// a game's name box, an emulator, a canvas editor.
 ///

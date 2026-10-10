@@ -7,7 +7,7 @@
 
 #![allow(clippy::too_many_arguments)]
 
-/// `krate:ui`: clipboard, dialog, events, haptics, image, launcher, menu, motion, notify, pointer, print, screen, text_entry, touch, tree, window.
+/// `krate:ui`: clipboard, dialog, events, haptics, image, launcher, location, menu, motion, notify, pointer, print, screen, text_entry, touch, tree, window.
 pub mod ui {
     /// `krate:ui/clipboard`.
     pub mod clipboard {
@@ -221,6 +221,20 @@ pub mod ui {
         /// keeps this from becoming a channel back into the app.
         pub fn open_url(url: &str) -> Result<(), LaunchError> {
             crate::bindings::krate::ui::launcher::open_url(url)
+        }
+    }
+    /// `krate:ui/location`.
+    pub mod location {
+        pub use crate::bindings::krate::ui::location::{LocationError, Position};
+
+        /// Whether this device can tell where it is at all.
+        pub fn available() -> bool {
+            crate::bindings::krate::ui::location::available()
+        }
+
+        /// The latest fix.
+        pub fn current() -> Result<Position, LocationError> {
+            crate::bindings::krate::ui::location::current()
         }
     }
     /// `krate:ui/menu`.

@@ -495,6 +495,7 @@ mod real {
     pub fn set_app_chrome(visible: bool) {
         if !visible {
             stop_motion();
+            stop_location();
         }
         if visible {
             // A close tapped before this app began (on the screen before
@@ -826,6 +827,133 @@ mod real {
         if let Some(manager) = MOTION.lock().expect("motion lock").take() {
             // SAFETY: stopping updates on the manager that started them.
             let _: () = unsafe { msg_send![&*manager.0, stopDeviceMotionUpdates] };
+        }
+    }
+
+    // CoreLocation, through the Objective-C runtime, read by polling: no
+    // delegate, the manager's latest fix is asked for each time.
+    #[link(name = "CoreLocation", kind = "framework")]
+    unsafe extern "C" {}
+
+    /// CLLocationCoordinate2D.
+    #[repr(C)]
+    #[derive(Clone, Copy, Default)]
+    struct CoordinateC {
+        latitude: f64,
+        longitude: f64,
+    }
+
+    // SAFETY: the C layout of CLLocationCoordinate2D, two doubles.
+    unsafe impl objc2::Encode for CoordinateC {
+        const ENCODING: objc2::Encoding = objc2::Encoding::Struct(
+            "CLLocationCoordinate2D",
+            &[objc2::Encoding::Double, objc2::Encoding::Double],
+        );
+    }
+
+    struct LocationManager(Retained<objc2::runtime::AnyObject>);
+    // SAFETY: made and stopped on the main thread; its properties are read
+    // from the guest thread under the lock, which CLLocationManager allows.
+    unsafe impl Send for LocationManager {}
+
+    static LOCATION: Mutex<Option<LocationManager>> = Mutex::new(None);
+    static LOCATION_ASKED: std::sync::atomic::AtomicBool =
+        std::sync::atomic::AtomicBool::new(false);
+
+    fn location_class() -> Option<&'static objc2::runtime::AnyClass> {
+        objc2::runtime::AnyClass::get(c"CLLocationManager")
+    }
+
+    pub fn location_available() -> bool {
+        // SAFETY: a class method answering a BOOL.
+        location_class().is_some_and(|class| unsafe { msg_send![class, locationServicesEnabled] })
+    }
+
+    /// The latest fix (IC-917). The first ask makes the manager on the main
+    /// thread -- where the phone's prompt can show -- asks to use location
+    /// while the app is open, and starts it; until a fix comes it answers
+    /// Finding.
+    pub fn location_read() -> krate_adapter_common::ui::LocationAnswer {
+        use krate_adapter_common::ui::{LocationAnswer, Position};
+        let Some(class) = location_class() else {
+            return LocationAnswer::Unavailable;
+        };
+        if !location_available() {
+            return LocationAnswer::Unavailable;
+        }
+        if !LOCATION_ASKED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+            DispatchQueue::main().exec_async(move || {
+                // SAFETY: CLLocationManager's documented setup on the main
+                // thread: make it, ask for "while using", start.
+                unsafe {
+                    let manager: Option<Retained<objc2::runtime::AnyObject>> =
+                        msg_send![class, new];
+                    let Some(manager) = manager else {
+                        return;
+                    };
+                    let best: f64 = -1.0; // kCLLocationAccuracyBest
+                    let _: () = msg_send![&*manager, setDesiredAccuracy: best];
+                    let _: () = msg_send![&*manager, requestWhenInUseAuthorization];
+                    let _: () = msg_send![&*manager, startUpdatingLocation];
+                    *LOCATION.lock().expect("location lock") = Some(LocationManager(manager));
+                }
+            });
+            return LocationAnswer::Finding;
+        }
+        let slot = LOCATION.lock().expect("location lock");
+        let Some(manager) = slot.as_ref() else {
+            return LocationAnswer::Finding;
+        };
+        // SAFETY: properties of a live manager and of the CLLocation it
+        // holds; nil until the first fix.
+        unsafe {
+            let status: i32 = msg_send![&*manager.0, authorizationStatus];
+            match status {
+                // Restricted or denied.
+                1 | 2 => return LocationAnswer::NotAllowed,
+                // Not asked yet: the prompt is up.
+                0 => return LocationAnswer::Finding,
+                _ => {}
+            }
+            let fix: Option<Retained<objc2::runtime::AnyObject>> = msg_send![&*manager.0, location];
+            let Some(fix) = fix else {
+                return LocationAnswer::Finding;
+            };
+            let accuracy: f64 = msg_send![&*fix, horizontalAccuracy];
+            if accuracy < 0.0 {
+                return LocationAnswer::Finding;
+            }
+            let at: CoordinateC = msg_send![&*fix, coordinate];
+            let altitude: f64 = msg_send![&*fix, altitude];
+            let vertical: f64 = msg_send![&*fix, verticalAccuracy];
+            let speed: f64 = msg_send![&*fix, speed];
+            let course: f64 = msg_send![&*fix, course];
+            let stamp: Option<Retained<objc2::runtime::AnyObject>> = msg_send![&*fix, timestamp];
+            let age = stamp.map_or(0.0, |date| {
+                let since: f64 = msg_send![&*date, timeIntervalSinceNow];
+                -since
+            });
+            LocationAnswer::Here(Position {
+                latitude: at.latitude,
+                longitude: at.longitude,
+                accuracy: accuracy as f32,
+                altitude: (vertical > 0.0).then_some(altitude as f32),
+                speed: (speed >= 0.0).then_some(speed as f32),
+                course: (course >= 0.0).then_some(course as f32),
+                age_ms: (age.max(0.0) * 1000.0) as u64,
+            })
+        }
+    }
+
+    /// The app closed: stop looking, so the location arrow goes away.
+    fn stop_location() {
+        LOCATION_ASKED.store(false, std::sync::atomic::Ordering::Relaxed);
+        if let Some(manager) = LOCATION.lock().expect("location lock").take() {
+            DispatchQueue::main().exec_async(move || {
+                // SAFETY: stopping the manager that started, on its thread.
+                let _: () = unsafe { msg_send![&*manager.0, stopUpdatingLocation] };
+                drop(manager);
+            });
         }
     }
 
@@ -2292,6 +2420,14 @@ mod stub {
 
     pub fn motion_read() -> Option<krate_adapter_common::ui::MotionReading> {
         None
+    }
+
+    pub fn location_available() -> bool {
+        false
+    }
+
+    pub fn location_read() -> krate_adapter_common::ui::LocationAnswer {
+        krate_adapter_common::ui::LocationAnswer::Unavailable
     }
 
     pub fn show_loading(_title: &str, _status: &str) {}

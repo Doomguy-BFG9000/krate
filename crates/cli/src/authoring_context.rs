@@ -438,7 +438,15 @@ Tilt, shake and compass: `krate::ui::motion::read()` gives `gravity`, \
 SCREEN's frame however the phone is turned -- x right, y down, z toward \
 the person -- so steer with `gravity.x` in portrait and landscape alike; \
 a phone lying flat reads gravity (0, 0, -1). It is none on a computer \
-(`available()` false): keep keys or the pad as the way to play there. A picture that does not change \
+(`available()` false): keep keys or the pad as the way to play there. \
+Where the phone is: declare `location.read` (required if the app IS \
+about place), then call `krate::ui::location::current()` each time a fix \
+is wanted -- the first call answers `Err(Finding)` while the phone looks \
+and asks the person; keep calling (twice a second is plenty) and draw \
+\"Finding where you are\" meanwhile. `Err(NotAllowed)` means they said no: \
+say so plainly and keep the rest of the app working; `Err(Unavailable)` \
+is a computer or location switched off. A position carries `accuracy` in \
+metres -- show it, never pretend a fix is exact. A picture that does not change \
 between frames (a screenshot, an avatar, a sprite sheet) is kept once \
 with `krate::gfx::canvas_images::keep(canvas, w, h, &rgba)` and drawn \
 by handle with `draw`/`draw_round` each frame: `draw_pixels` sends \
@@ -797,6 +805,7 @@ fn capability_note(pattern: &str) -> &'static str {
         "memory.budget" => "more memory than the default, in MiB (up to 3584); the person sees it at consent",
         "store.group" => "share a key-value store with the same publisher's other apps, in a named group its signed list admits",
         "camera.capture" => "see through the camera",
+        "location.read" => "where the phone is; the person is asked on Krate's sheet and by the phone itself",
         _ => "",
     }
 }

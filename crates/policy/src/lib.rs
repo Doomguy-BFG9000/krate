@@ -544,6 +544,7 @@ pub fn reaches_outside_the_run(cap: &Capability) -> bool {
         // The person's hardware.
         "audio.capture",
         "camera.capture",
+        "location.read",
         // The person's attention, data, and machine outside the sandbox.
         "ui.notify",
         "ui.open-url",
@@ -1530,6 +1531,7 @@ mod tests {
             "store.shared",
             "audio.capture",
             "camera.capture",
+            "location.read",
             "ui.notify",
             "ui.open-url",
             "ui.clipboard:read",
@@ -1577,6 +1579,7 @@ mod tests {
             "store.shared",
             "audio.capture",
             "camera.capture",
+            "location.read",
             "ui.notify",
             "ui.open-url",
             "ui.clipboard",

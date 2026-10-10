@@ -1571,6 +1571,27 @@ fn inspect_content(path: &str, text: &str, analysis: &mut Analysis) {
     );
     detect_pattern(
         analysis,
+        "location",
+        &[
+            "navigator.geolocation",
+            "getcurrentposition",
+            "watchposition",
+            "cllocationmanager",
+            "corelocation",
+            "fusedlocationprovider",
+            "locationmanager",
+            "geolocator",
+            "gpsd",
+        ],
+        path,
+        text,
+        Severity::Change,
+        "Location",
+        "Read the position through Krate location.read: declare it (required if the app is about place) and call krate::ui::location::current() each time a fix is wanted. The first calls answer Finding while the phone looks and asks the person; keep asking and show that it is looking. NotAllowed means they said no -- say so and keep the rest working. A desktop answers Unavailable.",
+        Some("location.read"),
+    );
+    detect_pattern(
+        analysis,
         "hardware",
         &[
             "serialport",

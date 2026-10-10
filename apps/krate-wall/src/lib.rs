@@ -297,6 +297,7 @@ fn describe(cap: &str) -> (String, gfx::Color) {
         "audio.capture" => ("Microphone".to_string(), red),
         "speech" | "speech.say" | "speech.listen" => ("Speech".to_string(), pink),
         "camera.capture" | "camera" => ("Camera".to_string(), gray),
+        "location.read" => ("Where you are".to_string(), blue),
         "store.kv" | "store.sql" => ("Keep its data".to_string(), green),
         "store.shared" => ("Share data with people you invite".to_string(), green),
         "store.secret" => ("Keep secrets safe".to_string(), green),
@@ -364,6 +365,15 @@ fn ask_icon(canvas: u64, cap: &str, x: f32, y: f32) -> Result<(), gfx::GfxError>
             canvas2d::fill_round_rect(canvas, rect(x - 3.5, y - 8.0, 7.0, 3.5), radii(1.2), ink)?;
             canvas2d::fill_circle(canvas, p(x, y + 1.0), 4.2, color(0.56, 0.56, 0.58, 1.0))?;
             canvas2d::fill_circle(canvas, p(x, y + 1.0), 2.6, ink)?;
+        }
+        "location.read" => {
+            // A map pin: a round head over a point.
+            canvas2d::fill_circle(canvas, p(x, y - 2.5), 6.5, ink)?;
+            for i in 0..6 {
+                let t = i as f32;
+                canvas2d::fill_circle(canvas, p(x, y + 2.0 + t * 1.2), 3.8 - t * 0.6, ink)?;
+            }
+            canvas2d::fill_circle(canvas, p(x, y - 2.5), 2.4, color(0.0, 0.48, 1.0, 1.0))?;
         }
         "ui.notify" => {
             // A bell.

@@ -20,6 +20,8 @@ pub enum UapiCall {
     Ui(UiCall),
     Audio(AudioCall),
     Camera(CameraCall),
+    /// Where the phone is (IC-917).
+    Location(LocationCall),
     Store(StoreCall),
     Random(RandomCall),
     /// Asking for more than the default memory (K-416). Not a call a guest
@@ -56,6 +58,7 @@ impl UapiCall {
             Self::Ui(call) => call.to_capability_string(),
             Self::Audio(call) => format!("audio.{call}"),
             Self::Camera(call) => format!("camera.{call}"),
+            Self::Location(call) => format!("location.{call}"),
             Self::Store(call) => format!("store.{call}"),
             Self::Random(call) => format!("random.{call}"),
             Self::Memory(call) => format!("memory.{call}"),
@@ -134,6 +137,20 @@ impl fmt::Display for CameraCall {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
             Self::Capture => "capture",
+        })
+    }
+}
+
+/// Where the person is. One call kind: reading the position.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LocationCall {
+    Read,
+}
+
+impl fmt::Display for LocationCall {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Read => "read",
         })
     }
 }
