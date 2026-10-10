@@ -62,6 +62,19 @@ const HEADLESS_IDLE_WAIT_LIMIT: u32 = 8;
 /// enough that a person who runs an app by mistake gets their prompt back.
 const HEADLESS_RUN_BUDGET: std::time::Duration = std::time::Duration::from_secs(5);
 
+/// The headless budget for this run: [`HEADLESS_RUN_BUDGET`], or
+/// `KRATE_HEADLESS_SECS` when set. The knob is for measuring an app whose
+/// start-up alone outlasts five seconds (a GPU engine loading a large scene)
+/// without a window; like `KRATE_GPU_UNPACED`, nothing a person runs sets it.
+fn headless_run_budget() -> std::time::Duration {
+    std::env::var("KRATE_HEADLESS_SECS")
+        .ok()
+        .and_then(|v| v.trim().parse::<f64>().ok())
+        .filter(|secs| secs.is_finite() && *secs > 0.0)
+        .map(std::time::Duration::from_secs_f64)
+        .unwrap_or(HEADLESS_RUN_BUDGET)
+}
+
 /// How long a headless app has to leave after being told the window closed,
 /// before the runtime ends the process for it.
 ///
@@ -1711,7 +1724,7 @@ impl Phase3GuiHost {
         let budget = if self.usability.is_some() {
             crate::usability::STAY_OPEN_WATCH + std::time::Duration::from_secs(5)
         } else {
-            HEADLESS_RUN_BUDGET
+            headless_run_budget()
         };
         if now.duration_since(started) < budget {
             return None;

@@ -109,6 +109,16 @@ struct BufferEntry {
     usage: wgpu::BufferUsages,
     /// The mapped range and whether it is writable, once mapping succeeded.
     mapped: Option<(std::ops::Range<u64>, bool)>,
+    /// A map `begin-map-buffer` started that has not finished yet.
+    pending_map: Option<PendingMap>,
+}
+
+/// A map in flight: its range, whether it is for writing, and the slot
+/// wgpu's callback fills when the GPU is done with the buffer.
+struct PendingMap {
+    range: std::ops::Range<u64>,
+    write: bool,
+    done: Arc<Mutex<Option<Result<(), wgpu::BufferAsyncError>>>>,
 }
 
 struct TextureEntry {
@@ -125,8 +135,28 @@ struct SurfaceEntry {
     texture: Option<wgpu::Texture>,
     /// The handle given out for the current frame, if one is out.
     frame: Option<u64>,
-    /// Where a frame is copied to on its way to the canvas.
-    readback: Option<(wgpu::Buffer, u64)>,
+    /// Where frames are copied to on their way to the canvas.
+    readback: Option<Readback>,
+}
+
+/// Two buffers frames are copied into, used in turn. A present copies the
+/// new frame into one and hands the canvas the frame copied into the other
+/// one present earlier, which the GPU has normally finished by then: the app
+/// draws its next frame while the GPU finishes this one, instead of the two
+/// taking turns (K-405). The cost is one frame of latency.
+struct Readback {
+    size: u64,
+    buffers: [wgpu::Buffer; 2],
+    /// The buffer the next frame is copied into.
+    next: usize,
+    /// The frame copied at the previous present, not yet handed over.
+    pending: Option<PendingFrame>,
+}
+
+struct PendingFrame {
+    slot: usize,
+    submission: wgpu::SubmissionIndex,
+    mapped: Arc<Mutex<Option<Result<(), wgpu::BufferAsyncError>>>>,
 }
 
 #[derive(Clone)]
@@ -1030,12 +1060,30 @@ impl g::Host for Phase3GuiHost {
                     size: descriptor.size,
                     usage,
                     mapped,
+                    pending_map: None,
                 }),
             )
         }))
     }
 
     fn map_buffer(
+        &mut self,
+        buffer: u64,
+        mode: t::MapMode,
+        offset: u64,
+        size: u64,
+    ) -> wasmtime::Result<GpuResult<()>> {
+        if let Err(e) = self.begin_map_buffer(buffer, mode, offset, size)? {
+            return Ok(Err(e));
+        }
+        Ok(match self.map_buffer_ready(buffer, true)? {
+            Ok(true) => Ok(()),
+            Ok(false) => Err(validation("the buffer did not finish mapping")),
+            Err(e) => Err(e),
+        })
+    }
+
+    fn begin_map_buffer(
         &mut self,
         buffer: u64,
         mode: t::MapMode,
@@ -1051,7 +1099,7 @@ impl g::Host for Phase3GuiHost {
             Ok(b) => b,
             Err(e) => return Ok(Err(e)),
         };
-        if b.mapped.is_some() {
+        if b.mapped.is_some() || b.pending_map.is_some() {
             return Ok(Err(validation("the buffer is already mapped")));
         }
         let (wanted, write) = match mode {
@@ -1074,9 +1122,9 @@ impl g::Host for Phase3GuiHost {
             Ok(s) => s,
             Err(e) => return Ok(Err(e)),
         };
-        let result = Arc::new(Mutex::new(None));
+        let done = Arc::new(Mutex::new(None));
         {
-            let result = Arc::clone(&result);
+            let done = Arc::clone(&done);
             let (_, error) = scoped(&d, || {
                 slice.map_async(
                     if write {
@@ -1085,7 +1133,7 @@ impl g::Host for Phase3GuiHost {
                         wgpu::MapMode::Read
                     },
                     move |r| {
-                        if let Ok(mut slot) = result.lock() {
+                        if let Ok(mut slot) = done.lock() {
                             *slot = Some(r);
                         }
                     },
@@ -1099,11 +1147,51 @@ impl g::Host for Phase3GuiHost {
                 return Ok(Err(error));
             }
         }
-        let _ = d.poll(wgpu::PollType::Wait {
-            submission_index: None,
-            timeout: Some(std::time::Duration::from_secs(10)),
-        });
-        let outcome = result.lock().ok().and_then(|mut r| r.take());
+        if let Some(Entry {
+            obj: Obj::Buffer(b),
+            ..
+        }) = gpu.objects.get_mut(&buffer)
+        {
+            b.pending_map = Some(PendingMap {
+                range: offset..offset + size,
+                write,
+                done,
+            });
+        }
+        Ok(Ok(()))
+    }
+
+    fn map_buffer_ready(&mut self, buffer: u64, wait: bool) -> wasmtime::Result<GpuResult<bool>> {
+        let gpu = self.gpu.get_mut();
+        let d = match gpu.owner(buffer) {
+            Ok(d) => d.device.clone(),
+            Err(e) => return Ok(Err(e)),
+        };
+        let done = match gpu.buffer(buffer) {
+            Ok(BufferEntry {
+                mapped: Some(_), ..
+            }) => return Ok(Ok(true)),
+            Ok(BufferEntry {
+                pending_map: Some(p),
+                ..
+            }) => Arc::clone(&p.done),
+            Ok(_) => return Ok(Err(validation("the buffer is not being mapped"))),
+            Err(e) => return Ok(Err(e)),
+        };
+        let finished = || done.lock().ok().is_some_and(|slot| slot.is_some());
+        if !finished() {
+            // The callback runs inside a poll; a non-blocking one is enough
+            // when the GPU has already finished.
+            let _ = d.poll(if wait {
+                wgpu::PollType::Wait {
+                    submission_index: None,
+                    timeout: Some(std::time::Duration::from_secs(10)),
+                }
+            } else {
+                wgpu::PollType::Poll
+            });
+        }
+        let outcome = done.lock().ok().and_then(|mut slot| slot.take());
         let Some(Entry {
             obj: Obj::Buffer(b),
             ..
@@ -1112,11 +1200,15 @@ impl g::Host for Phase3GuiHost {
             return Ok(Err(invalid(buffer, "buffer")));
         };
         Ok(match outcome {
+            None if !wait => Ok(false),
             Some(Ok(())) => {
-                b.mapped = Some((offset..offset + size, write));
-                Ok(())
+                if let Some(p) = b.pending_map.take() {
+                    b.mapped = Some((p.range, p.write));
+                }
+                Ok(true)
             }
             other => {
+                b.pending_map = None;
                 // The wrapper marked the range mapped when map_async was
                 // called; clear it, or the next map asserts.
                 let buf = b.buffer.clone();
@@ -1209,7 +1301,8 @@ impl g::Host for Phase3GuiHost {
         else {
             return Ok(Err(invalid(buffer, "buffer")));
         };
-        if b.mapped.take().is_none() {
+        let pending = b.pending_map.take().is_some();
+        if b.mapped.take().is_none() && !pending {
             return Ok(Ok(()));
         }
         let buf = b.buffer.clone();
@@ -1226,6 +1319,7 @@ impl g::Host for Phase3GuiHost {
             return Ok(Err(invalid(buffer, "buffer")));
         };
         b.mapped = None;
+        b.pending_map = None;
         b.buffer.destroy();
         Ok(Ok(()))
     }
@@ -2370,13 +2464,19 @@ impl g::Host for Phase3GuiHost {
                 Err(e) => return Ok(Err(e)),
             }
         };
+        // A GPU engine's first presents come before its pipelines and assets
+        // exist, so they are one flat colour (black, or the clear colour). A
+        // picture of one says nothing about the app; `--shoot` waits for the
+        // first frame that has something in it (K-1033). If none ever does,
+        // the shot on close still takes the last one.
+        let worth_shooting = !self.shot_pending() || !is_uniform(&image);
         self.images
             .borrow_mut()
             .insert((window, widget), Arc::new(image));
         let result = self
             .sync_native_widgets(window)
             .map_err(|error| t::GpuError::Internal(error.to_string()));
-        if result.is_ok() {
+        if result.is_ok() && worth_shooting {
             self.maybe_take_screenshot();
         }
         self.frame_ended.set(true);
@@ -2388,6 +2488,22 @@ impl g::Host for Phase3GuiHost {
         let gpu = self.gpu.get_mut();
         gpu.objects.remove(&object);
         Ok(())
+    }
+}
+
+impl Phase3GuiHost {
+    /// Whether `--shoot` asked for a picture that has not been taken yet.
+    fn shot_pending(&self) -> bool {
+        self.screenshot.is_some() && !self.screenshot_taken.get()
+    }
+}
+
+/// Whether every pixel of a frame is the same colour.
+fn is_uniform(image: &ImagePixels) -> bool {
+    let mut pixels = image.rgba.chunks_exact(4);
+    match pixels.next() {
+        Some(first) => pixels.all(|p| p == first),
+        None => true,
     }
 }
 
@@ -2735,7 +2851,7 @@ impl GpuState {
         let (width, height) = (config.width, config.height);
         let padded = (width * 4).next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
         let size = padded as u64 * height as u64;
-        let readback = {
+        let ring = {
             let Some(Entry {
                 obj: Obj::Surface(s),
                 ..
@@ -2743,21 +2859,30 @@ impl GpuState {
             else {
                 return Err(invalid(surface, "surface"));
             };
-            match &s.readback {
-                Some((buffer, have)) if *have == size => buffer.clone(),
-                _ => {
-                    let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            if s.readback.as_ref().map(|r| r.size) != Some(size) {
+                let buffer = || {
+                    device.create_buffer(&wgpu::BufferDescriptor {
                         label: Some("krate surface readback"),
                         size,
                         usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
                         mapped_at_creation: false,
-                    });
-                    s.readback = Some((buffer.clone(), size));
-                    buffer
-                }
+                    })
+                };
+                s.readback = Some(Readback {
+                    size,
+                    buffers: [buffer(), buffer()],
+                    next: 0,
+                    pending: None,
+                });
             }
+            let Some(ring) = s.readback.as_mut() else {
+                return Err(invalid(surface, "surface"));
+            };
+            ring
         };
-        let (_, error) = scoped(&device, || {
+        let slot = ring.next;
+        let target = ring.buffers[slot].clone();
+        let (submission, error) = scoped(&device, || {
             let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("krate surface present"),
             });
@@ -2769,7 +2894,7 @@ impl GpuState {
                     aspect: wgpu::TextureAspect::All,
                 },
                 wgpu::TexelCopyBufferInfo {
-                    buffer: &readback,
+                    buffer: &target,
                     layout: wgpu::TexelCopyBufferLayout {
                         offset: 0,
                         bytes_per_row: Some(padded),
@@ -2782,7 +2907,7 @@ impl GpuState {
                     depth_or_array_layers: 1,
                 },
             );
-            queue.submit([encoder.finish()]);
+            queue.submit([encoder.finish()])
         });
         if let Some(error) = error {
             return Err(error);
@@ -2790,17 +2915,36 @@ impl GpuState {
         let mapped = Arc::new(Mutex::new(None));
         {
             let mapped = Arc::clone(&mapped);
-            readback.slice(..).map_async(wgpu::MapMode::Read, move |r| {
+            target.slice(..).map_async(wgpu::MapMode::Read, move |r| {
                 if let Ok(mut slot) = mapped.lock() {
                     *slot = Some(r);
                 }
             });
         }
+        let copied = PendingFrame {
+            slot,
+            submission,
+            mapped,
+        };
+        ring.next = 1 - slot;
+        // Hand over the frame copied one present ago; on the first present
+        // there is none, so this one is waited for.
+        let shown = match ring.pending.replace(copied) {
+            Some(previous) => previous,
+            None => match ring.pending.take() {
+                Some(this) => this,
+                None => return Err(t::GpuError::Internal("no frame to present".to_string())),
+            },
+        };
+        let readback = ring.buffers[shown.slot].clone();
         let _ = device.poll(wgpu::PollType::Wait {
-            submission_index: None,
+            submission_index: Some(shown.submission),
             timeout: Some(std::time::Duration::from_secs(10)),
         });
-        let ok = matches!(mapped.lock().ok().and_then(|mut m| m.take()), Some(Ok(())));
+        let ok = matches!(
+            shown.mapped.lock().ok().and_then(|mut m| m.take()),
+            Some(Ok(()))
+        );
         if !ok {
             readback.unmap();
             return Err(t::GpuError::Internal(
@@ -2821,20 +2965,36 @@ impl GpuState {
             }
         }
         readback.unmap();
+        // The canvas is opaque; a frame drawn with alpha below one must not
+        // show the window through it. One pass for both fixes.
         if swap {
             for px in rgba.chunks_exact_mut(4) {
                 px.swap(0, 2);
+                px[3] = 255;
             }
-        }
-        // The canvas is opaque; a frame drawn with alpha below one must not
-        // show the window through it.
-        for px in rgba.chunks_exact_mut(4) {
-            px[3] = 255;
+        } else {
+            for px in rgba.chunks_exact_mut(4) {
+                px[3] = 255;
+            }
         }
         let _ = &config.view_formats;
         let _ = config.usage;
         let image = ImagePixels::new(width, height, rgba)
             .map_err(|error| t::GpuError::Internal(error.to_string()))?;
         Ok((window, widget, image))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_flat_frame_is_uniform_and_a_drawn_one_is_not() {
+        let flat = ImagePixels::new(2, 2, [0, 0, 0, 255].repeat(4)).unwrap();
+        assert!(is_uniform(&flat));
+        let mut drawn = [0, 0, 0, 255].repeat(4);
+        drawn[13] = 40;
+        assert!(!is_uniform(&ImagePixels::new(2, 2, drawn).unwrap()));
     }
 }

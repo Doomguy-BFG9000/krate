@@ -1042,6 +1042,7 @@ pub mod gfx {
 /// `krate:gpu`: gpu.
 pub mod gpu {
     /// `krate:gpu/gpu`.
+    #[allow(clippy::module_inception)]
     pub mod gpu {
         pub use crate::bindings::krate::gpu::gpu::{
             AdapterInfo, AdapterOptions, BindGroupDescriptor, BindGroupLayoutDescriptor,
@@ -1136,6 +1137,27 @@ pub mod gpu {
             size: u64,
         ) -> Result<(), GpuError> {
             crate::bindings::krate::gpu::gpu::map_buffer(buffer, mode, offset, size)
+        }
+
+        /// Start mapping part of a buffer without waiting for the GPU, as
+        /// WebGPU's mapAsync does. The map finishes once the GPU is done with every
+        /// submitted use of the buffer; ask with `map-buffer-ready`. Until then the
+        /// buffer cannot be read, written or mapped again.
+        pub fn begin_map_buffer(
+            buffer: Handle,
+            mode: MapMode,
+            offset: u64,
+            size: u64,
+        ) -> Result<(), GpuError> {
+            crate::bindings::krate::gpu::gpu::begin_map_buffer(buffer, mode, offset, size)
+        }
+
+        /// Whether a map `begin-map-buffer` started has finished: true once the
+        /// buffer is mapped, false while the GPU still uses it. With `wait`, blocks
+        /// until it finishes. A map that failed is an error, and the buffer is left
+        /// unmapped.
+        pub fn map_buffer_ready(buffer: Handle, wait: bool) -> Result<bool, GpuError> {
+            crate::bindings::krate::gpu::gpu::map_buffer_ready(buffer, wait)
         }
 
         /// Read bytes from a mapped buffer.

@@ -15206,6 +15206,304 @@ pub mod krate {
                 }
             }
             #[allow(unused_unsafe, clippy::all)]
+            /// Start mapping part of a buffer without waiting for the GPU, as
+            /// WebGPU's mapAsync does. The map finishes once the GPU is done with every
+            /// submitted use of the buffer; ask with `map-buffer-ready`. Until then the
+            /// buffer cannot be read, written or mapped again.
+            pub fn begin_map_buffer(
+                buffer: Handle,
+                mode: MapMode,
+                offset: u64,
+                size: u64,
+            ) -> Result<(), GpuError> {
+                unsafe {
+                    #[cfg_attr(target_pointer_width = "64", repr(align(8)))]
+                    #[cfg_attr(target_pointer_width = "32", repr(align(4)))]
+                    struct RetArea(
+                        [::core::mem::MaybeUninit<u8>; 4 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let mut ret_area = RetArea(
+                        [::core::mem::MaybeUninit::uninit();
+                            4 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:gpu/gpu@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "begin-map-buffer"]
+                        fn wit_import1(_: i64, _: i32, _: i64, _: i64, _: *mut u8);
+                    }
+
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import1(_: i64, _: i32, _: i64, _: i64, _: *mut u8) {
+                        unreachable!()
+                    }
+                    unsafe {
+                        wit_import1(
+                            _rt::as_i64(buffer),
+                            mode.clone() as i32,
+                            _rt::as_i64(&offset),
+                            _rt::as_i64(&size),
+                            ptr0,
+                        )
+                    };
+                    let l2 = i32::from(*ptr0.add(0).cast::<u8>());
+                    let result20 = match l2 {
+                        0 => {
+                            let e = ();
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l3 = i32::from(
+                                    *ptr0.add(::core::mem::size_of::<*const u8>()).cast::<u8>(),
+                                );
+                                use super::super::super::krate::gpu::types::GpuError as V19;
+                                let v19 = match l3 {
+                                    0 => {
+                                        let e19 = {
+                                            let l4 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l5 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len6 = l5;
+                                            let bytes6 =
+                                                _rt::Vec::from_raw_parts(l4.cast(), len6, len6);
+
+                                            _rt::string_lift(bytes6)
+                                        };
+                                        V19::InvalidHandle(e19)
+                                    }
+                                    1 => {
+                                        let e19 = {
+                                            let l7 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l8 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len9 = l8;
+                                            let bytes9 =
+                                                _rt::Vec::from_raw_parts(l7.cast(), len9, len9);
+
+                                            _rt::string_lift(bytes9)
+                                        };
+                                        V19::Validation(e19)
+                                    }
+                                    2 => V19::OutOfMemory,
+                                    3 => {
+                                        let e19 = {
+                                            let l10 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l11 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len12 = l11;
+                                            let bytes12 =
+                                                _rt::Vec::from_raw_parts(l10.cast(), len12, len12);
+
+                                            _rt::string_lift(bytes12)
+                                        };
+                                        V19::Lost(e19)
+                                    }
+                                    4 => {
+                                        let e19 = {
+                                            let l13 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l14 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len15 = l14;
+                                            let bytes15 =
+                                                _rt::Vec::from_raw_parts(l13.cast(), len15, len15);
+
+                                            _rt::string_lift(bytes15)
+                                        };
+                                        V19::Unsupported(e19)
+                                    }
+                                    n => {
+                                        debug_assert_eq!(n, 5, "invalid enum discriminant");
+                                        let e19 = {
+                                            let l16 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l17 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len18 = l17;
+                                            let bytes18 =
+                                                _rt::Vec::from_raw_parts(l16.cast(), len18, len18);
+
+                                            _rt::string_lift(bytes18)
+                                        };
+                                        V19::Internal(e19)
+                                    }
+                                };
+
+                                v19
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    };
+                    result20
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Whether a map `begin-map-buffer` started has finished: true once the
+            /// buffer is mapped, false while the GPU still uses it. With `wait`, blocks
+            /// until it finishes. A map that failed is an error, and the buffer is left
+            /// unmapped.
+            pub fn map_buffer_ready(buffer: Handle, wait: bool) -> Result<bool, GpuError> {
+                unsafe {
+                    #[cfg_attr(target_pointer_width = "64", repr(align(8)))]
+                    #[cfg_attr(target_pointer_width = "32", repr(align(4)))]
+                    struct RetArea(
+                        [::core::mem::MaybeUninit<u8>; 4 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let mut ret_area = RetArea(
+                        [::core::mem::MaybeUninit::uninit();
+                            4 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:gpu/gpu@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "map-buffer-ready"]
+                        fn wit_import1(_: i64, _: i32, _: *mut u8);
+                    }
+
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import1(_: i64, _: i32, _: *mut u8) {
+                        unreachable!()
+                    }
+                    unsafe {
+                        wit_import1(
+                            _rt::as_i64(buffer),
+                            match &wait {
+                                true => 1,
+                                false => 0,
+                            },
+                            ptr0,
+                        )
+                    };
+                    let l2 = i32::from(*ptr0.add(0).cast::<u8>());
+                    let result21 = match l2 {
+                        0 => {
+                            let e = {
+                                let l3 = i32::from(
+                                    *ptr0.add(::core::mem::size_of::<*const u8>()).cast::<u8>(),
+                                );
+
+                                _rt::bool_lift(l3 as u8)
+                            };
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l4 = i32::from(
+                                    *ptr0.add(::core::mem::size_of::<*const u8>()).cast::<u8>(),
+                                );
+                                use super::super::super::krate::gpu::types::GpuError as V20;
+                                let v20 = match l4 {
+                                    0 => {
+                                        let e20 = {
+                                            let l5 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l6 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len7 = l6;
+                                            let bytes7 =
+                                                _rt::Vec::from_raw_parts(l5.cast(), len7, len7);
+
+                                            _rt::string_lift(bytes7)
+                                        };
+                                        V20::InvalidHandle(e20)
+                                    }
+                                    1 => {
+                                        let e20 = {
+                                            let l8 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l9 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len10 = l9;
+                                            let bytes10 =
+                                                _rt::Vec::from_raw_parts(l8.cast(), len10, len10);
+
+                                            _rt::string_lift(bytes10)
+                                        };
+                                        V20::Validation(e20)
+                                    }
+                                    2 => V20::OutOfMemory,
+                                    3 => {
+                                        let e20 = {
+                                            let l11 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l12 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len13 = l12;
+                                            let bytes13 =
+                                                _rt::Vec::from_raw_parts(l11.cast(), len13, len13);
+
+                                            _rt::string_lift(bytes13)
+                                        };
+                                        V20::Lost(e20)
+                                    }
+                                    4 => {
+                                        let e20 = {
+                                            let l14 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l15 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len16 = l15;
+                                            let bytes16 =
+                                                _rt::Vec::from_raw_parts(l14.cast(), len16, len16);
+
+                                            _rt::string_lift(bytes16)
+                                        };
+                                        V20::Unsupported(e20)
+                                    }
+                                    n => {
+                                        debug_assert_eq!(n, 5, "invalid enum discriminant");
+                                        let e20 = {
+                                            let l17 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l18 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len19 = l18;
+                                            let bytes19 =
+                                                _rt::Vec::from_raw_parts(l17.cast(), len19, len19);
+
+                                            _rt::string_lift(bytes19)
+                                        };
+                                        V20::Internal(e20)
+                                    }
+                                };
+
+                                v20
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    };
+                    result21
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
             /// Read bytes from a mapped buffer.
             pub fn read_mapped(
                 buffer: Handle,
@@ -37370,8 +37668,8 @@ pub(crate) use __export_gui_impl as export;
 #[unsafe(link_section = "component-type:wit-bindgen:0.41.0:krate:app@0.2.0:gui:encoded world")]
 #[doc(hidden)]
 #[allow(clippy::octal_escapes)]
-pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 27525] = *b"\
-\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\x8a\xd6\x01\x01A\x02\
+pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 27588] = *b"\
+\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\xc9\xd6\x01\x01A\x02\
 \x01A\xb2\x01\x01B\x04\x01m\x05\x05trace\x05debug\x04info\x04warn\x05error\x04\0\
 \x09log-level\x03\0\0\x01q\x05\x06closed\0\0\x0binterrupted\0\0\x0eunexpected-eo\
 f\0\0\x0cinvalid-utf8\0\0\x05other\x01s\0\x04\0\x08io-error\x03\0\x02\x03\0\x14k\
@@ -37826,7 +38124,7 @@ y-buffer-layout\x02\x03\0)\x16texel-copy-buffer-info\x02\x03\0)\x08extent3d\x02\
 \0)\x16render-pass-descriptor\x02\x03\0)\x0erender-command\x02\x03\0)\x17compute\
 -pass-descriptor\x02\x03\0)\x0fcompute-command\x02\x03\0)\x08map-mode\x02\x03\0)\
 \x14surface-capabilities\x02\x03\0)\x15surface-configuration\x02\x03\0)\x0dsurfa\
-ce-frame\x02\x03\0)\x0dsurface-error\x02\x03\0)\x0fformat-features\x01B\xc2\x01\x02\
+ce-frame\x02\x03\0)\x0dsurface-error\x02\x03\0)\x0fformat-features\x01B\xc5\x01\x02\
 \x03\x02\x01J\x04\0\x06handle\x03\0\0\x02\x03\x02\x01K\x04\0\x09gpu-error\x03\0\x02\
 \x02\x03\x02\x01L\x04\0\x0cshader-error\x03\0\x04\x02\x03\x02\x01M\x04\0\x13comp\
 ilation-message\x03\0\x06\x02\x03\x02\x01N\x04\0\x05limit\x03\0\x08\x02\x03\x02\x01\
@@ -37861,114 +38159,115 @@ device\x01\0\xd1\0\x04\0\x0edestroy-device\x01R\x01ks\x01@\x01\x06device\x01\0\x
 \0\x04\0\x12device-lost-reason\x01T\x01j\x01\x7f\x01\x03\x01@\x02\x06device\x01\x04\
 wait\x7f\0\xd5\0\x04\0\x04poll\x01V\x01@\x02\x06device\x01\x0adescriptor\x11\0\xc2\
 \0\x04\0\x0dcreate-buffer\x01W\x01@\x04\x06buffer\x01\x04mode7\x06offsetw\x04siz\
-ew\0\xd1\0\x04\0\x0amap-buffer\x01X\x01p}\x01j\x01\xd9\0\x01\x03\x01@\x03\x06buf\
-fer\x01\x06offsetw\x04sizew\0\xda\0\x04\0\x0bread-mapped\x01[\x01@\x03\x06buffer\
-\x01\x06offsetw\x04data\xd9\0\0\xd1\0\x04\0\x0cwrite-mapped\x01\\\x01@\x01\x06bu\
-ffer\x01\0\xd1\0\x04\0\x0cunmap-buffer\x01]\x04\0\x0edestroy-buffer\x01]\x01@\x02\
-\x06device\x01\x0adescriptor\x13\0\xc2\0\x04\0\x0ecreate-texture\x01^\x01@\x01\x07\
-texture\x01\0\xd1\0\x04\0\x0fdestroy-texture\x01_\x01@\x02\x07texture\x01\x0ades\
-criptor\x15\0\xc2\0\x04\0\x13create-texture-view\x01`\x01@\x02\x06device\x01\x0a\
-descriptor\x17\0\xc2\0\x04\0\x0ecreate-sampler\x01a\x01@\x02\x06device\x01\x0ade\
-scriptor%\0\xc2\0\x04\0\x10create-query-set\x01b\x01@\x02\x06device\x01\x0adescr\
-iptor\x19\0\xc2\0\x04\0\x18create-bind-group-layout\x01c\x01@\x02\x06device\x01\x0a\
-descriptor\x1b\0\xc2\0\x04\0\x11create-bind-group\x01d\x01@\x02\x06device\x01\x0a\
-descriptor\x1d\0\xc2\0\x04\0\x16create-pipeline-layout\x01e\x01j\x01\x01\x01\x05\
-\x01@\x02\x06device\x01\x0adescriptor\x1f\0\xe6\0\x04\0\x14create-shader-module\x01\
-g\x01p\x07\x01j\x01\xe8\0\x01\x03\x01@\x01\x06module\x01\0\xe9\0\x04\0\x17shader\
--compilation-info\x01j\x01@\x02\x06device\x01\x0adescriptor!\0\xc2\0\x04\0\x16cr\
-eate-render-pipeline\x01k\x01@\x02\x06device\x01\x0adescriptor#\0\xc2\0\x04\0\x17\
-create-compute-pipeline\x01l\x01@\x02\x08pipeline\x01\x05indexy\0\xc2\0\x04\0\x1a\
-pipeline-bind-group-layout\x01m\x01@\x02\x06device\x01\x05label\xd3\0\0\xc2\0\x04\
-\0\x16create-command-encoder\x01n\x01p1\x01@\x03\x07encoder\x01\x0adescriptor/\x08\
-commands\xef\0\0\xd1\0\x04\0\x12encode-render-pass\x01p\x01p5\x01@\x03\x07encode\
-r\x01\x0adescriptor3\x08commands\xf1\0\0\xd1\0\x04\0\x13encode-compute-pass\x01r\
-\x01kw\x01@\x06\x07encoder\x01\x06source\x01\x0dsource-offsetw\x0bdestination\x01\
-\x12destination-offsetw\x04size\xf3\0\0\xd1\0\x04\0\x15copy-buffer-to-buffer\x01\
-t\x01@\x04\x07encoder\x01\x06source+\x0bdestination'\x04size-\0\xd1\0\x04\0\x16c\
-opy-buffer-to-texture\x01u\x01@\x04\x07encoder\x01\x06source'\x0bdestination+\x04\
-size-\0\xd1\0\x04\0\x16copy-texture-to-buffer\x01v\x01@\x04\x07encoder\x01\x06so\
-urce'\x0bdestination'\x04size-\0\xd1\0\x04\0\x17copy-texture-to-texture\x01w\x01\
-@\x04\x07encoder\x01\x06buffer\x01\x06offsetw\x04size\xf3\0\0\xd1\0\x04\0\x0ccle\
-ar-buffer\x01x\x01@\x06\x07encoder\x01\x09query-set\x01\x0bfirst-queryy\x0bquery\
--county\x0bdestination\x01\x12destination-offsetw\0\xd1\0\x04\0\x11resolve-query\
--set\x01y\x01@\x03\x07encoder\x01\x09query-set\x01\x05indexy\0\xd1\0\x04\0\x0fwr\
-ite-timestamp\x01z\x01@\x02\x07encoder\x01\x05label\xd3\0\0\xc2\0\x04\0\x0efinis\
-h-encoder\x01{\x01p\x01\x01j\x01w\x01\x03\x01@\x02\x06device\x01\x0fcommand-buff\
-ers\xfc\0\0\xfd\0\x04\0\x06submit\x01~\x01@\x04\x06device\x01\x06buffer\x01\x06o\
-ffsetw\x04data\xd9\0\0\xd1\0\x04\0\x0cwrite-buffer\x01\x7f\x01@\x05\x06device\x01\
-\x0bdestination'\x04data\xd9\0\x06layout)\x04size-\0\xd1\0\x04\0\x0dwrite-textur\
-e\x01\x80\x01\x01j\x01v\x01\x03\x01@\x01\x06device\x01\0\x81\x01\x04\0\x10timest\
-amp-period\x01\x82\x01\x01@\x02\x06windoww\x06widgetw\0\xc2\0\x04\0\x0ecreate-su\
-rface\x01\x83\x01\x01o\x02yy\x01j\x01\x84\x01\x01\x03\x01@\x01\x07surface\x01\0\x85\
-\x01\x04\0\x12surface-pixel-size\x01\x86\x01\x01j\x019\x01\x03\x01@\x02\x07surfa\
-ce\x01\x07adapter\x01\0\x87\x01\x04\0\x18get-surface-capabilities\x01\x88\x01\x01\
-@\x03\x07surface\x01\x06device\x01\x0dconfiguration;\0\xd1\0\x04\0\x11configure-\
-surface\x01\x89\x01\x01j\x01=\x01?\x01@\x01\x07surface\x01\0\x8a\x01\x04\0\x0fcu\
-rrent-texture\x01\x8b\x01\x01@\x01\x07surface\x01\0\xd1\0\x04\0\x07present\x01\x8c\
-\x01\x01@\x01\x06object\x01\x01\0\x04\0\x07release\x01\x8d\x01\x03\0\x13krate:gp\
-u/gpu@0.1.0\x05k\x01B\x11\x02\x03\x02\x01?\x04\0\x04rect\x03\0\0\x02\x03\x02\x01\
-D\x04\0\x0ccorner-radii\x03\0\x02\x02\x03\x02\x01B\x04\0\x09gfx-error\x03\0\x04\x01\
-p}\x01j\x01w\x01\x05\x01@\x04\x06canvasw\x05widthy\x06heighty\x04rgba\x06\0\x07\x04\
-\0\x04keep\x01\x08\x01j\0\x01\x05\x01@\x03\x06canvasw\x05imagew\x04area\x01\0\x09\
-\x04\0\x04draw\x01\x0a\x01@\x04\x06canvasw\x05imagew\x04area\x01\x05radii\x03\0\x09\
-\x04\0\x0adraw-round\x01\x0b\x01@\x02\x06canvasw\x05imagew\x01\0\x04\0\x06forget\
-\x01\x0c\x03\0\x1dkrate:gfx/canvas-images@0.1.0\x05l\x01B\x06\x01m\x02\x07pcm-s1\
-6\x07float32\x04\0\x0dsample-format\x03\0\0\x01r\x04\x0bsample-ratey\x08channels\
-{\x06format\x01\x0dbuffer-framesy\x04\0\x0dstream-config\x03\0\x02\x01q\x05\x11p\
-ermission-denied\0\0\x0einvalid-stream\0\0\x12device-unavailable\0\0\x0bunsuppor\
-ted\x01s\0\x08platform\x01s\0\x04\0\x0baudio-error\x03\0\x04\x03\0\x17krate:audi\
-o/types@0.1.0\x05m\x02\x03\0,\x0baudio-error\x02\x03\0,\x0dstream-config\x01B\x15\
-\x02\x03\x02\x01n\x04\0\x0baudio-error\x03\0\0\x02\x03\x02\x01o\x04\0\x0dstream-\
-config\x03\0\x02\x01j\x01w\x01\x01\x01@\x01\x06config\x03\0\x04\x04\0\x04open\x01\
-\x05\x01j\0\x01\x01\x01@\x01\x09stream-idw\0\x06\x04\0\x05start\x01\x07\x04\0\x04\
-stop\x01\x07\x01p}\x01j\x01y\x01\x01\x01@\x02\x09stream-idw\x05bytes\x08\0\x09\x04\
-\0\x05write\x01\x0a\x01@\x02\x09stream-idw\x05bytes\x08\0\x04\x04\0\x0aload-soun\
-d\x01\x0b\x01@\x03\x09stream-idw\x05soundw\x04gainv\0\x06\x04\0\x0aplay-sound\x01\
-\x0c\x01@\x02\x09stream-idw\x05soundw\0\x06\x04\0\x0astop-sound\x01\x0d\x03\0\x1a\
-krate:audio/playback@0.1.0\x05p\x01B\x05\x02\x03\x02\x01n\x04\0\x0baudio-error\x03\
-\0\0\x01j\x01y\x01\x01\x01@\x01\x09stream-idw\0\x02\x04\0\x06queued\x01\x03\x03\0\
-\x20krate:audio/playback-queue@0.1.0\x05q\x01B\x0f\x02\x03\x02\x01n\x04\0\x0baud\
-io-error\x03\0\0\x02\x03\x02\x01o\x04\0\x0dstream-config\x03\0\x02\x01j\x01w\x01\
-\x01\x01@\x01\x06config\x03\0\x04\x04\0\x04open\x01\x05\x01j\0\x01\x01\x01@\x01\x09\
-stream-idw\0\x06\x04\0\x05start\x01\x07\x04\0\x04stop\x01\x07\x01p}\x01j\x01\x08\
-\x01\x01\x01@\x02\x09stream-idw\x09max-bytesy\0\x09\x04\0\x04read\x01\x0a\x03\0\x19\
-krate:audio/capture@0.1.0\x05r\x01B\x0d\x01m\x01\x05rgba8\x04\0\x0cframe-format\x03\
-\0\0\x01r\x04\x05widthy\x06heighty\x03fpsy\x06format\x01\x04\0\x0dstream-config\x03\
-\0\x02\x01r\x04\x05widthy\x06heighty\x03fpsy\x06format\x01\x04\0\x0aframe-info\x03\
-\0\x04\x01r\x02\x02ids\x05labels\x04\0\x0bdevice-info\x03\0\x06\x01p}\x01r\x04\x05\
-bytes\x08\x05widthy\x06heighty\x0eelapsed-millisw\x04\0\x05frame\x03\0\x09\x01q\x06\
-\x11permission-denied\0\0\x0einvalid-stream\0\0\x12device-unavailable\0\0\x0dsys\
-tem-denied\0\0\x0bunsupported\x01s\0\x08platform\x01s\0\x04\0\x0ccamera-error\x03\
-\0\x0b\x03\0\x18krate:camera/types@0.1.0\x05s\x02\x03\00\x0ccamera-error\x02\x03\
-\00\x0bdevice-info\x02\x03\00\x05frame\x02\x03\00\x0aframe-info\x02\x03\00\x0dst\
-ream-config\x01B\x1d\x02\x03\x02\x01t\x04\0\x0ccamera-error\x03\0\0\x02\x03\x02\x01\
-u\x04\0\x0bdevice-info\x03\0\x02\x02\x03\x02\x01v\x04\0\x05frame\x03\0\x04\x02\x03\
-\x02\x01w\x04\0\x0aframe-info\x03\0\x06\x02\x03\x02\x01x\x04\0\x0dstream-config\x03\
-\0\x08\x01p\x03\x01j\x01\x0a\x01\x01\x01@\0\0\x0b\x04\0\x07devices\x01\x0c\x01j\x01\
-w\x01\x01\x01@\x02\x06devices\x06config\x09\0\x0d\x04\0\x04open\x01\x0e\x01j\x01\
-\x07\x01\x01\x01@\x01\x09stream-idw\0\x0f\x04\0\x04info\x01\x10\x01j\0\x01\x01\x01\
-@\x01\x09stream-idw\0\x11\x04\0\x05start\x01\x12\x04\0\x04stop\x01\x12\x01k\x05\x01\
-j\x01\x13\x01\x01\x01@\x01\x09stream-idw\0\x14\x04\0\x04read\x01\x15\x04\0\x05cl\
-ose\x01\x12\x03\0\x1akrate:camera/capture@0.1.0\x05y\x01B\x12\x01r\x01\x04texts\x04\
-\0\x0atranscript\x03\0\0\x01q\x05\x0finvalid-request\x01s\0\x0fmodel-not-found\0\
-\0\x0dmodel-invalid\x01s\0\x0bunsupported\x01s\0\x09inference\x01s\0\x04\0\x0csp\
-eech-error\x03\0\x02\x01m\x05\x0finvalid-request\x0fmodel-not-found\x0dmodel-inv\
-alid\x0bunsupported\x09inference\x04\0\x0bmatch-error\x03\0\x04\x01p}\x01ks\x01j\
-\x01\x01\x01\x03\x01@\x04\x0bmodel-assets\x0apcm-s16-le\x06\x0bsample-ratey\x08l\
-anguage\x07\0\x08\x04\0\x0atranscribe\x01\x09\x01j\x01}\x01\x05\x01@\x05\x0bmode\
-l-assets\x0apcm-s16-le\x06\x0bsample-ratey\x08language\x07\x08expecteds\0\x0a\x04\
-\0\x0amatch-line\x01\x0b\x01k}\x01j\x01\x0c\x01\x05\x01@\x06\x0bmodel-assets\x0a\
-pcm-s16-le\x06\x0bsample-ratey\x08language\x07\x08expecteds\x06finish\x7f\0\x0d\x04\
-\0\x11match-line-stream\x01\x0e\x03\0\x20krate:speech/transcription@0.1.0\x05z\x01\
-B\x12\x01r\x03\x02ids\x04names\x08languages\x04\0\x05voice\x03\0\0\x01q\x04\x11p\
-ermission-denied\0\0\x0finvalid-request\x01s\0\x0bunsupported\x01s\0\x08platform\
-\x01s\0\x04\0\x09say-error\x03\0\x02\x01p\x01\x01j\x01\x04\x01\x03\x01@\0\0\x05\x04\
-\0\x06voices\x01\x06\x01ks\x01kv\x01j\0\x01\x03\x01@\x03\x04texts\x05voice\x07\x04\
-rate\x08\0\x09\x04\0\x03say\x01\x0a\x01@\0\0\x09\x04\0\x04stop\x01\x0b\x01j\x01\x7f\
-\x01\x03\x01@\0\0\x0c\x04\0\x08speaking\x01\x0d\x03\0\x1ckrate:speech/synthesis@\
-0.1.0\x05{\x01@\0\0z\x04\0\x03run\x01|\x04\0\x13krate:app/gui@0.2.0\x04\0\x0b\x09\
-\x01\0\x03gui\x03\0\0\0G\x09producers\x01\x0cprocessed-by\x02\x0dwit-component\x07\
-0.227.1\x10wit-bindgen-rust\x060.41.0";
+ew\0\xd1\0\x04\0\x0amap-buffer\x01X\x04\0\x10begin-map-buffer\x01X\x01@\x02\x06b\
+uffer\x01\x04wait\x7f\0\xd5\0\x04\0\x10map-buffer-ready\x01Y\x01p}\x01j\x01\xda\0\
+\x01\x03\x01@\x03\x06buffer\x01\x06offsetw\x04sizew\0\xdb\0\x04\0\x0bread-mapped\
+\x01\\\x01@\x03\x06buffer\x01\x06offsetw\x04data\xda\0\0\xd1\0\x04\0\x0cwrite-ma\
+pped\x01]\x01@\x01\x06buffer\x01\0\xd1\0\x04\0\x0cunmap-buffer\x01^\x04\0\x0edes\
+troy-buffer\x01^\x01@\x02\x06device\x01\x0adescriptor\x13\0\xc2\0\x04\0\x0ecreat\
+e-texture\x01_\x01@\x01\x07texture\x01\0\xd1\0\x04\0\x0fdestroy-texture\x01`\x01\
+@\x02\x07texture\x01\x0adescriptor\x15\0\xc2\0\x04\0\x13create-texture-view\x01a\
+\x01@\x02\x06device\x01\x0adescriptor\x17\0\xc2\0\x04\0\x0ecreate-sampler\x01b\x01\
+@\x02\x06device\x01\x0adescriptor%\0\xc2\0\x04\0\x10create-query-set\x01c\x01@\x02\
+\x06device\x01\x0adescriptor\x19\0\xc2\0\x04\0\x18create-bind-group-layout\x01d\x01\
+@\x02\x06device\x01\x0adescriptor\x1b\0\xc2\0\x04\0\x11create-bind-group\x01e\x01\
+@\x02\x06device\x01\x0adescriptor\x1d\0\xc2\0\x04\0\x16create-pipeline-layout\x01\
+f\x01j\x01\x01\x01\x05\x01@\x02\x06device\x01\x0adescriptor\x1f\0\xe7\0\x04\0\x14\
+create-shader-module\x01h\x01p\x07\x01j\x01\xe9\0\x01\x03\x01@\x01\x06module\x01\
+\0\xea\0\x04\0\x17shader-compilation-info\x01k\x01@\x02\x06device\x01\x0adescrip\
+tor!\0\xc2\0\x04\0\x16create-render-pipeline\x01l\x01@\x02\x06device\x01\x0adesc\
+riptor#\0\xc2\0\x04\0\x17create-compute-pipeline\x01m\x01@\x02\x08pipeline\x01\x05\
+indexy\0\xc2\0\x04\0\x1apipeline-bind-group-layout\x01n\x01@\x02\x06device\x01\x05\
+label\xd3\0\0\xc2\0\x04\0\x16create-command-encoder\x01o\x01p1\x01@\x03\x07encod\
+er\x01\x0adescriptor/\x08commands\xf0\0\0\xd1\0\x04\0\x12encode-render-pass\x01q\
+\x01p5\x01@\x03\x07encoder\x01\x0adescriptor3\x08commands\xf2\0\0\xd1\0\x04\0\x13\
+encode-compute-pass\x01s\x01kw\x01@\x06\x07encoder\x01\x06source\x01\x0dsource-o\
+ffsetw\x0bdestination\x01\x12destination-offsetw\x04size\xf4\0\0\xd1\0\x04\0\x15\
+copy-buffer-to-buffer\x01u\x01@\x04\x07encoder\x01\x06source+\x0bdestination'\x04\
+size-\0\xd1\0\x04\0\x16copy-buffer-to-texture\x01v\x01@\x04\x07encoder\x01\x06so\
+urce'\x0bdestination+\x04size-\0\xd1\0\x04\0\x16copy-texture-to-buffer\x01w\x01@\
+\x04\x07encoder\x01\x06source'\x0bdestination'\x04size-\0\xd1\0\x04\0\x17copy-te\
+xture-to-texture\x01x\x01@\x04\x07encoder\x01\x06buffer\x01\x06offsetw\x04size\xf4\
+\0\0\xd1\0\x04\0\x0cclear-buffer\x01y\x01@\x06\x07encoder\x01\x09query-set\x01\x0b\
+first-queryy\x0bquery-county\x0bdestination\x01\x12destination-offsetw\0\xd1\0\x04\
+\0\x11resolve-query-set\x01z\x01@\x03\x07encoder\x01\x09query-set\x01\x05indexy\0\
+\xd1\0\x04\0\x0fwrite-timestamp\x01{\x01@\x02\x07encoder\x01\x05label\xd3\0\0\xc2\
+\0\x04\0\x0efinish-encoder\x01|\x01p\x01\x01j\x01w\x01\x03\x01@\x02\x06device\x01\
+\x0fcommand-buffers\xfd\0\0\xfe\0\x04\0\x06submit\x01\x7f\x01@\x04\x06device\x01\
+\x06buffer\x01\x06offsetw\x04data\xda\0\0\xd1\0\x04\0\x0cwrite-buffer\x01\x80\x01\
+\x01@\x05\x06device\x01\x0bdestination'\x04data\xda\0\x06layout)\x04size-\0\xd1\0\
+\x04\0\x0dwrite-texture\x01\x81\x01\x01j\x01v\x01\x03\x01@\x01\x06device\x01\0\x82\
+\x01\x04\0\x10timestamp-period\x01\x83\x01\x01@\x02\x06windoww\x06widgetw\0\xc2\0\
+\x04\0\x0ecreate-surface\x01\x84\x01\x01o\x02yy\x01j\x01\x85\x01\x01\x03\x01@\x01\
+\x07surface\x01\0\x86\x01\x04\0\x12surface-pixel-size\x01\x87\x01\x01j\x019\x01\x03\
+\x01@\x02\x07surface\x01\x07adapter\x01\0\x88\x01\x04\0\x18get-surface-capabilit\
+ies\x01\x89\x01\x01@\x03\x07surface\x01\x06device\x01\x0dconfiguration;\0\xd1\0\x04\
+\0\x11configure-surface\x01\x8a\x01\x01j\x01=\x01?\x01@\x01\x07surface\x01\0\x8b\
+\x01\x04\0\x0fcurrent-texture\x01\x8c\x01\x01@\x01\x07surface\x01\0\xd1\0\x04\0\x07\
+present\x01\x8d\x01\x01@\x01\x06object\x01\x01\0\x04\0\x07release\x01\x8e\x01\x03\
+\0\x13krate:gpu/gpu@0.1.0\x05k\x01B\x11\x02\x03\x02\x01?\x04\0\x04rect\x03\0\0\x02\
+\x03\x02\x01D\x04\0\x0ccorner-radii\x03\0\x02\x02\x03\x02\x01B\x04\0\x09gfx-erro\
+r\x03\0\x04\x01p}\x01j\x01w\x01\x05\x01@\x04\x06canvasw\x05widthy\x06heighty\x04\
+rgba\x06\0\x07\x04\0\x04keep\x01\x08\x01j\0\x01\x05\x01@\x03\x06canvasw\x05image\
+w\x04area\x01\0\x09\x04\0\x04draw\x01\x0a\x01@\x04\x06canvasw\x05imagew\x04area\x01\
+\x05radii\x03\0\x09\x04\0\x0adraw-round\x01\x0b\x01@\x02\x06canvasw\x05imagew\x01\
+\0\x04\0\x06forget\x01\x0c\x03\0\x1dkrate:gfx/canvas-images@0.1.0\x05l\x01B\x06\x01\
+m\x02\x07pcm-s16\x07float32\x04\0\x0dsample-format\x03\0\0\x01r\x04\x0bsample-ra\
+tey\x08channels{\x06format\x01\x0dbuffer-framesy\x04\0\x0dstream-config\x03\0\x02\
+\x01q\x05\x11permission-denied\0\0\x0einvalid-stream\0\0\x12device-unavailable\0\
+\0\x0bunsupported\x01s\0\x08platform\x01s\0\x04\0\x0baudio-error\x03\0\x04\x03\0\
+\x17krate:audio/types@0.1.0\x05m\x02\x03\0,\x0baudio-error\x02\x03\0,\x0dstream-\
+config\x01B\x15\x02\x03\x02\x01n\x04\0\x0baudio-error\x03\0\0\x02\x03\x02\x01o\x04\
+\0\x0dstream-config\x03\0\x02\x01j\x01w\x01\x01\x01@\x01\x06config\x03\0\x04\x04\
+\0\x04open\x01\x05\x01j\0\x01\x01\x01@\x01\x09stream-idw\0\x06\x04\0\x05start\x01\
+\x07\x04\0\x04stop\x01\x07\x01p}\x01j\x01y\x01\x01\x01@\x02\x09stream-idw\x05byt\
+es\x08\0\x09\x04\0\x05write\x01\x0a\x01@\x02\x09stream-idw\x05bytes\x08\0\x04\x04\
+\0\x0aload-sound\x01\x0b\x01@\x03\x09stream-idw\x05soundw\x04gainv\0\x06\x04\0\x0a\
+play-sound\x01\x0c\x01@\x02\x09stream-idw\x05soundw\0\x06\x04\0\x0astop-sound\x01\
+\x0d\x03\0\x1akrate:audio/playback@0.1.0\x05p\x01B\x05\x02\x03\x02\x01n\x04\0\x0b\
+audio-error\x03\0\0\x01j\x01y\x01\x01\x01@\x01\x09stream-idw\0\x02\x04\0\x06queu\
+ed\x01\x03\x03\0\x20krate:audio/playback-queue@0.1.0\x05q\x01B\x0f\x02\x03\x02\x01\
+n\x04\0\x0baudio-error\x03\0\0\x02\x03\x02\x01o\x04\0\x0dstream-config\x03\0\x02\
+\x01j\x01w\x01\x01\x01@\x01\x06config\x03\0\x04\x04\0\x04open\x01\x05\x01j\0\x01\
+\x01\x01@\x01\x09stream-idw\0\x06\x04\0\x05start\x01\x07\x04\0\x04stop\x01\x07\x01\
+p}\x01j\x01\x08\x01\x01\x01@\x02\x09stream-idw\x09max-bytesy\0\x09\x04\0\x04read\
+\x01\x0a\x03\0\x19krate:audio/capture@0.1.0\x05r\x01B\x0d\x01m\x01\x05rgba8\x04\0\
+\x0cframe-format\x03\0\0\x01r\x04\x05widthy\x06heighty\x03fpsy\x06format\x01\x04\
+\0\x0dstream-config\x03\0\x02\x01r\x04\x05widthy\x06heighty\x03fpsy\x06format\x01\
+\x04\0\x0aframe-info\x03\0\x04\x01r\x02\x02ids\x05labels\x04\0\x0bdevice-info\x03\
+\0\x06\x01p}\x01r\x04\x05bytes\x08\x05widthy\x06heighty\x0eelapsed-millisw\x04\0\
+\x05frame\x03\0\x09\x01q\x06\x11permission-denied\0\0\x0einvalid-stream\0\0\x12d\
+evice-unavailable\0\0\x0dsystem-denied\0\0\x0bunsupported\x01s\0\x08platform\x01\
+s\0\x04\0\x0ccamera-error\x03\0\x0b\x03\0\x18krate:camera/types@0.1.0\x05s\x02\x03\
+\00\x0ccamera-error\x02\x03\00\x0bdevice-info\x02\x03\00\x05frame\x02\x03\00\x0a\
+frame-info\x02\x03\00\x0dstream-config\x01B\x1d\x02\x03\x02\x01t\x04\0\x0ccamera\
+-error\x03\0\0\x02\x03\x02\x01u\x04\0\x0bdevice-info\x03\0\x02\x02\x03\x02\x01v\x04\
+\0\x05frame\x03\0\x04\x02\x03\x02\x01w\x04\0\x0aframe-info\x03\0\x06\x02\x03\x02\
+\x01x\x04\0\x0dstream-config\x03\0\x08\x01p\x03\x01j\x01\x0a\x01\x01\x01@\0\0\x0b\
+\x04\0\x07devices\x01\x0c\x01j\x01w\x01\x01\x01@\x02\x06devices\x06config\x09\0\x0d\
+\x04\0\x04open\x01\x0e\x01j\x01\x07\x01\x01\x01@\x01\x09stream-idw\0\x0f\x04\0\x04\
+info\x01\x10\x01j\0\x01\x01\x01@\x01\x09stream-idw\0\x11\x04\0\x05start\x01\x12\x04\
+\0\x04stop\x01\x12\x01k\x05\x01j\x01\x13\x01\x01\x01@\x01\x09stream-idw\0\x14\x04\
+\0\x04read\x01\x15\x04\0\x05close\x01\x12\x03\0\x1akrate:camera/capture@0.1.0\x05\
+y\x01B\x12\x01r\x01\x04texts\x04\0\x0atranscript\x03\0\0\x01q\x05\x0finvalid-req\
+uest\x01s\0\x0fmodel-not-found\0\0\x0dmodel-invalid\x01s\0\x0bunsupported\x01s\0\
+\x09inference\x01s\0\x04\0\x0cspeech-error\x03\0\x02\x01m\x05\x0finvalid-request\
+\x0fmodel-not-found\x0dmodel-invalid\x0bunsupported\x09inference\x04\0\x0bmatch-\
+error\x03\0\x04\x01p}\x01ks\x01j\x01\x01\x01\x03\x01@\x04\x0bmodel-assets\x0apcm\
+-s16-le\x06\x0bsample-ratey\x08language\x07\0\x08\x04\0\x0atranscribe\x01\x09\x01\
+j\x01}\x01\x05\x01@\x05\x0bmodel-assets\x0apcm-s16-le\x06\x0bsample-ratey\x08lan\
+guage\x07\x08expecteds\0\x0a\x04\0\x0amatch-line\x01\x0b\x01k}\x01j\x01\x0c\x01\x05\
+\x01@\x06\x0bmodel-assets\x0apcm-s16-le\x06\x0bsample-ratey\x08language\x07\x08e\
+xpecteds\x06finish\x7f\0\x0d\x04\0\x11match-line-stream\x01\x0e\x03\0\x20krate:s\
+peech/transcription@0.1.0\x05z\x01B\x12\x01r\x03\x02ids\x04names\x08languages\x04\
+\0\x05voice\x03\0\0\x01q\x04\x11permission-denied\0\0\x0finvalid-request\x01s\0\x0b\
+unsupported\x01s\0\x08platform\x01s\0\x04\0\x09say-error\x03\0\x02\x01p\x01\x01j\
+\x01\x04\x01\x03\x01@\0\0\x05\x04\0\x06voices\x01\x06\x01ks\x01kv\x01j\0\x01\x03\
+\x01@\x03\x04texts\x05voice\x07\x04rate\x08\0\x09\x04\0\x03say\x01\x0a\x01@\0\0\x09\
+\x04\0\x04stop\x01\x0b\x01j\x01\x7f\x01\x03\x01@\0\0\x0c\x04\0\x08speaking\x01\x0d\
+\x03\0\x1ckrate:speech/synthesis@0.1.0\x05{\x01@\0\0z\x04\0\x03run\x01|\x04\0\x13\
+krate:app/gui@0.2.0\x04\0\x0b\x09\x01\0\x03gui\x03\0\0\0G\x09producers\x01\x0cpr\
+ocessed-by\x02\x0dwit-component\x070.227.1\x10wit-bindgen-rust\x060.41.0";
 
 #[inline(never)]
 #[doc(hidden)]

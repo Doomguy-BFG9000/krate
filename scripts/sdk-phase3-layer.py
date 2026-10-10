@@ -165,6 +165,10 @@ def render(fns, types):
                 out.append("    }")
                 continue
             out.append(f"    /// `krate:{package}/{interface}`.")
+            if interface == package:
+                # krate:gpu/gpu: the WIT names the interface after its
+                # package, and the layer mirrors the WIT's paths.
+                out.append("    #[allow(clippy::module_inception)]")
             out.append(f"    pub mod {interface} {{")
             if names:
                 out.append(f"        pub use crate::bindings::krate::{package}::{interface}::{{{', '.join(names)}}};")

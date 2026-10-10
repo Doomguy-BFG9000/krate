@@ -128,7 +128,37 @@ fn defer(callback: Callback) {
     PENDING.lock().unwrap().push(callback);
 }
 
+/// A map the host has started and not yet finished.
+struct PendingMap {
+    buffer: u64,
+    mapped: Arc<Mutex<Option<Mapping>>>,
+    callback: BufferMapCallback,
+}
+
+static PENDING_MAPS: Mutex<Vec<PendingMap>> = Mutex::new(Vec::new());
+
+/// Finish the maps the GPU is done with, calling their callbacks.
+fn finish_maps() {
+    let waiting: Vec<PendingMap> = std::mem::take(&mut *PENDING_MAPS.lock().unwrap());
+    let mut still = Vec::new();
+    for map in waiting {
+        match g::map_buffer_ready(map.buffer, false) {
+            Ok(false) => still.push(map),
+            Ok(true) => {
+                *map.mapped.lock().unwrap() = Some(Mapping { zeroed: false });
+                (map.callback)(Ok(()));
+            }
+            Err(e) => {
+                eprintln!("wgpu-krate: a buffer map failed: {}", error_text(&e));
+                (map.callback)(Err(wgpu::BufferAsyncError));
+            }
+        }
+    }
+    PENDING_MAPS.lock().unwrap().extend(still);
+}
+
 fn run_pending() {
+    finish_maps();
     loop {
         let batch: Vec<Callback> = std::mem::take(&mut *PENDING.lock().unwrap());
         if batch.is_empty() {
@@ -1434,9 +1464,9 @@ impl DeviceInterface for KDevice {
         DispatchBuffer::custom(KBuffer {
             h: Owned(h),
             ctx: self.ctx.clone(),
-            mapped: Mutex::new(
+            mapped: Arc::new(Mutex::new(
                 (desc.mapped_at_creation && h != 0).then_some(Mapping { zeroed: true }),
-            ),
+            )),
         })
     }
 
@@ -1741,7 +1771,7 @@ struct Mapping {
 struct KBuffer {
     h: Owned,
     ctx: Arc<DeviceCtx>,
-    mapped: Mutex<Option<Mapping>>,
+    mapped: Arc<Mutex<Option<Mapping>>>,
 }
 
 #[derive(Debug)]
@@ -1785,7 +1815,7 @@ impl BufferInterface for KBuffer {
         callback: BufferMapCallback,
     ) {
         let write = mode == wgpu::MapMode::Write;
-        let result = g::map_buffer(
+        let result = g::begin_map_buffer(
             self.h.0,
             if write {
                 t::MapMode::Write
@@ -1795,17 +1825,21 @@ impl BufferInterface for KBuffer {
             range.start,
             range.end - range.start,
         );
-        let outcome = match result {
-            Ok(()) => {
-                *self.mapped.lock().unwrap() = Some(Mapping { zeroed: false });
-                Ok(())
-            }
+        match result {
+            // Finished by a later poll or submit, once the GPU is done with
+            // the buffer -- as WebGPU's mapAsync is. Waiting here made every
+            // map wait for all the GPU's work, so an engine that reads a few
+            // bytes back each frame (Bevy) ran its CPU and GPU in turn.
+            Ok(()) => PENDING_MAPS.lock().unwrap().push(PendingMap {
+                buffer: self.h.0,
+                mapped: Arc::clone(&self.mapped),
+                callback,
+            }),
             Err(e) => {
                 eprintln!("wgpu-krate: map_async refused: {}", error_text(&e));
-                Err(wgpu::BufferAsyncError)
+                defer(Box::new(move || callback(Err(wgpu::BufferAsyncError))));
             }
-        };
-        defer(Box::new(move || callback(outcome)));
+        }
     }
 
     fn get_mapped_range(&self, sub_range: Range<wgpu::BufferAddress>) -> DispatchBufferMappedRange {
