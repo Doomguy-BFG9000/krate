@@ -106,6 +106,7 @@ mod real {
     /// Must run on the thread that will pump the event loop, before the
     /// runtime first touches the adapter.
     pub fn set_android_app(app: winit::platform::android::activity::AndroidApp) {
+        crate::java::set_handles(app.vm_as_ptr(), app.activity_as_ptr());
         ANDROID_APP.with(|slot| *slot.borrow_mut() = Some(app));
     }
 
@@ -289,6 +290,7 @@ mod real {
         }
 
         fn suspended(&mut self, _event_loop: &ActiveEventLoop) {
+            BACKGROUNDED.store(true, std::sync::atomic::Ordering::Relaxed);
             // Android tears the native window down when the app leaves the
             // foreground. Drop every softbuffer surface now; the draw path
             // lazily recreates one against the fresh native window on the
@@ -901,6 +903,29 @@ mod real {
         })
     }
 
+    /// Set when Krate leaves the screen: the person may be going to look at
+    /// what an app did in a folder they gave it.
+    static BACKGROUNDED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+    /// Whether Krate left the screen since last asked.
+    pub fn take_backgrounded() -> bool {
+        BACKGROUNDED.swap(false, std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Pump the native event loop once and keep what it brings for the next
+    /// [`pump_native_events`]: Android's lifecycle waits on this thread,
+    /// so while Krate waits for the person (a picker, a prompt), it must
+    /// still answer.
+    pub fn keep_alive() {
+        if !host_initialized() {
+            return;
+        }
+        let _ = with_host(|host| {
+            pump(host);
+            Ok(())
+        });
+    }
+
     /// Pump the native event loop once and drain mapped window events.
     pub fn pump_native_events() -> Result<CollectedNativeEvents, UiAdapterError> {
         if !host_initialized() {
@@ -1040,6 +1065,11 @@ mod stub {
 
     pub fn window_scale(_krate: WindowId) -> f32 {
         1.0
+    }
+
+    /// No Android lifecycle off Android.
+    pub fn take_backgrounded() -> bool {
+        false
     }
 
     /// Winit windows are only available in Linux builds.

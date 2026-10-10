@@ -1,8 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- The Krate player is pure native code: NativeActivity loads
-     libkrate_player.so and calls android_main. hasCode=false because there
-     is not one line of Java or Kotlin in it, and extractNativeLibs=true so
-     the packaging stays a plain zip without page-alignment ceremony. -->
+<!-- The Krate player is native code: its activity is a NativeActivity
+     that loads libkrate_player.so and calls android_main. KrateActivity
+     (android/java) adds only what Android tells an activity alone, such as
+     what the person picked in the system's file picker, so hasCode is true
+     for that one small classes.dex. extractNativeLibs=true keeps the packaging
+     a plain zip without page-alignment ceremony. -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="tech.krate.player"
     android:versionCode="1"
@@ -16,10 +18,10 @@
 
   <application
       android:label="Krate"
-      android:hasCode="false"
+      android:hasCode="true"
       android:extractNativeLibs="true">
     <activity
-        android:name="android.app.NativeActivity"
+        android:name="tech.krate.player.KrateActivity"
         android:exported="true"
         android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|density">
       <meta-data android:name="android.app.lib_name" android:value="krate_player" />

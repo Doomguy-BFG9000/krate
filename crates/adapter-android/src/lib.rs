@@ -33,6 +33,9 @@ pub const HOST_FAMILY: &str = "android";
 pub mod winit_native;
 
 mod clipboard;
+mod documents;
+#[cfg(target_os = "android")]
+mod java;
 
 #[derive(Debug, Default)]
 pub struct AndroidUiAdapter {
@@ -416,6 +419,9 @@ impl WindowAdapter for AndroidWinitPrototypeUiAdapter {
 
     fn close_window(&self, id: WindowId) -> Result<(), UiAdapterError> {
         let _ = winit_native::close_native_window(id);
+        // The app is done with any folder it was given: what it changed
+        // goes back to the real folder (K-1032).
+        documents::put_back_folders();
         self.remove_session(id);
         WindowAdapter::close_window(&self.headless, id)
     }
@@ -598,6 +604,23 @@ impl UiAdapter for AndroidWinitPrototypeUiAdapter {
         clipboard::write_text(text)
     }
 
+    /// The system's document picker for a file or a folder, copied in as a
+    /// path of Krate's own (K-1032).
+    fn choose_path(
+        &self,
+        _window: WindowId,
+        folder: bool,
+        filter: &str,
+    ) -> Option<std::path::PathBuf> {
+        documents::choose(folder, filter)
+    }
+
+    /// A save the app wrote, to the place the person picks in the system's
+    /// "save to" picker (K-1032).
+    fn export_file(&self, _window: WindowId, path: &Path) -> bool {
+        documents::export(path)
+    }
+
     fn pump_event_loop_once(
         &self,
         window: WindowId,
@@ -605,6 +628,12 @@ impl UiAdapter for AndroidWinitPrototypeUiAdapter {
         if winit_native::has_native_window(window).unwrap_or(false) {
             for (target, event) in winit_native::pump_native_events()? {
                 self.record_winit_native_event(target, event)?;
+            }
+            // Leaving Krate, the person may go and look at a folder they
+            // gave the app: what it changed there is put back now, not only
+            // when it closes (K-1032).
+            if winit_native::take_backgrounded() {
+                documents::put_back_folders();
             }
             winit_native::redraw_all()?;
         }

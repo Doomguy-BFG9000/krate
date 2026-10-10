@@ -57,6 +57,16 @@ mod player {
             vm: app.vm_as_ptr(),
             activity: app.activity_as_ptr(),
         };
+        // An app's temporary space is the activity's cache: Rust's
+        // temp_dir() is /data/local/tmp on Android, which no app may write,
+        // and a save on a phone is written there before it is placed
+        // (K-1032). Picks and saves a run left behind go at the next start.
+        let cache = crate::intent::cache_dir(handles).unwrap_or_else(|| data_root.join("tmp"));
+        for left in ["krate-picked", "krate-saves"] {
+            let _ = std::fs::remove_dir_all(cache.join(left));
+        }
+        let _ = std::fs::create_dir_all(&cache);
+        std::env::set_var("TMPDIR", &cache);
         run_player(&data_root, handles);
         // The app is the process: when the flow ends -- back button, close,
         // cancel at the wall -- no blank activity shell may linger. Finish
