@@ -133,6 +133,7 @@ fn embed_sdk() {
         "src/bindings.rs",
         "src/bindings_gui.rs",
         "src/phase3.rs",
+        "src/layout.rs",
     ] {
         let path = bindings.join(rel);
         println!("cargo:rerun-if-changed={}", path.display());

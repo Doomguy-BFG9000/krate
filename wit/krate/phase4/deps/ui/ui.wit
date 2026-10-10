@@ -682,6 +682,69 @@ interface pointer {
   captured: func(window: u64) -> bool;
 }
 
+/// What kind of screen a window is on, so an app made once lays itself out
+/// for the phone, tablet or desktop it opened on (IC-912).
+///
+/// Ask on start and again on every `resized` event: a phone turns, a desktop
+/// window is narrowed. Lay out from the classes, not from one device's
+/// numbers: a compact width is a phone held upright, where panes go in one
+/// column and a sidebar becomes tabs or a menu; a compact height is a phone
+/// turned sideways, where a tall header costs the whole screen.
+interface screen {
+  /// How much room there is along one side.
+  enum size-class {
+    /// A phone: under 600 points wide, or under 500 points tall.
+    compact,
+    /// A tablet, or a small desktop window.
+    medium,
+    /// A desktop: 1000 points wide or more, or 900 points tall or more.
+    large,
+  }
+
+  /// How the person points at things.
+  enum input-kind {
+    /// A finger: targets at least 44 points, no hover, no right click.
+    touch,
+    /// A mouse or trackpad: hover and right click exist.
+    pointer,
+  }
+
+  /// Space at each edge that something else covers: a phone's notch and
+  /// home bar, the button Krate draws to close an app on a phone. Keep text
+  /// and controls out of it; a background may run underneath.
+  record insets {
+    /// Points covered along the top edge.
+    top: f32,
+    /// Points covered along the right edge.
+    right: f32,
+    /// Points covered along the bottom edge.
+    bottom: f32,
+    /// Points covered along the left edge.
+    left: f32,
+  }
+
+  /// One window's screen, now.
+  record screen-facts {
+    /// The window's width in points: what `canvas-size` answers for a
+    /// canvas that fills it.
+    width: f32,
+    /// The window's height in points.
+    height: f32,
+    /// The width's class.
+    width-class: size-class,
+    /// The height's class.
+    height-class: size-class,
+    /// A finger or a mouse.
+    input: input-kind,
+    /// The edges to keep text and controls out of.
+    safe: insets,
+  }
+
+  /// The screen of a window the app owns. A window the app does not own
+  /// answers as a desktop window of no size.
+  facts: func(window: u64) -> screen-facts;
+}
+
 /// The system's own text entry, for an app that draws its own text fields:
 /// a game's name box, an emulator, a canvas editor.
 ///

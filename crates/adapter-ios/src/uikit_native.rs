@@ -502,9 +502,39 @@ mod real {
 
     static APP_CHROME: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
+    /// The system's safe-area insets (top, right, bottom, left), as last
+    /// laid out: the notch, the status bar, the home bar.
+    static SAFE: Mutex<(f32, f32, f32, f32)> = Mutex::new((0.0, 0.0, 0.0, 0.0));
+
+    /// The edges an app should keep text and controls out of (IC-912): the
+    /// system's safe area and, while an app runs, the close button Krate
+    /// draws at the top right (placed in `view_laid_out`).
+    pub fn screen_safe() -> (f32, f32, f32, f32) {
+        let (top, right, bottom, left) = *SAFE.lock().expect("safe lock");
+        if APP_CHROME.load(std::sync::atomic::Ordering::Relaxed) {
+            // The capsule's bottom edge, and a little air under it.
+            (top.max(8.0) + 6.0 + 30.0 + 6.0, right, bottom, left)
+        } else {
+            (top, right, bottom, left)
+        }
+    }
+
     /// Which way up the app's window wants the screen: landscape when the
     /// app asked for a window wider than tall (a game), portrait otherwise.
     static LANDSCAPE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+    /// The running app lays itself out for any screen (IC-912): the screen
+    /// follows the way the phone is held, as the phone's own apps do,
+    /// instead of turning to the shape of the window the app asked for.
+    static ADAPTS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+    pub fn set_adapts(adapts: bool) {
+        ADAPTS.store(adapts, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    fn adapts() -> bool {
+        ADAPTS.load(std::sync::atomic::Ordering::Relaxed)
+    }
 
     define_class!(
         // SAFETY:
@@ -523,7 +553,9 @@ mod real {
             // SAFETY: signature matches UIViewController's.
             #[unsafe(method(supportedInterfaceOrientations))]
             fn supported_interface_orientations(&self) -> objc2_ui_kit::UIInterfaceOrientationMask {
-                if LANDSCAPE.load(std::sync::atomic::Ordering::Relaxed) {
+                if adapts() {
+                    objc2_ui_kit::UIInterfaceOrientationMask::AllButUpsideDown
+                } else if LANDSCAPE.load(std::sync::atomic::Ordering::Relaxed) {
                     objc2_ui_kit::UIInterfaceOrientationMask::Landscape
                 } else {
                     objc2_ui_kit::UIInterfaceOrientationMask::Portrait
@@ -532,12 +564,12 @@ mod real {
 
             #[unsafe(method(prefersStatusBarHidden))]
             fn prefers_status_bar_hidden(&self) -> bool {
-                LANDSCAPE.load(std::sync::atomic::Ordering::Relaxed)
+                !adapts() && LANDSCAPE.load(std::sync::atomic::Ordering::Relaxed)
             }
 
             #[unsafe(method(prefersHomeIndicatorAutoHidden))]
             fn prefers_home_indicator_auto_hidden(&self) -> bool {
-                LANDSCAPE.load(std::sync::atomic::Ordering::Relaxed)
+                !adapts() && LANDSCAPE.load(std::sync::atomic::Ordering::Relaxed)
             }
         }
     );
@@ -548,6 +580,27 @@ mod real {
     /// for -- Counter-Strike read 390x844 for its first frame otherwise and
     /// sized its picture for a portrait screen.
     fn request_orientation(size: WindowSize) {
+        if adapts() {
+            // Any way up: let iOS turn to how the phone is held, and leave
+            // the window whatever shape that gives. Nothing to wait for.
+            LANDSCAPE.store(false, std::sync::atomic::Ordering::Relaxed);
+            DispatchQueue::main().exec_async(move || {
+                let Some(main_side) = MAIN_SIDE.0.get() else {
+                    return;
+                };
+                main_side.controller.setNeedsUpdateOfSupportedInterfaceOrientations();
+                main_side.controller.setNeedsStatusBarAppearanceUpdate();
+                if let Some(scene) = main_side.window.windowScene() {
+                    let prefs =
+                        objc2_ui_kit::UIWindowSceneGeometryPreferencesIOS::initWithInterfaceOrientations(
+                            <objc2_ui_kit::UIWindowSceneGeometryPreferencesIOS as objc2::AnyThread>::alloc(),
+                            objc2_ui_kit::UIInterfaceOrientationMask::AllButUpsideDown,
+                        );
+                    scene.requestGeometryUpdateWithPreferences_errorHandler(&prefs, None);
+                }
+            });
+            return;
+        }
         let landscape = size.width > size.height;
         if LANDSCAPE.swap(landscape, std::sync::atomic::Ordering::Relaxed) == landscape {
             return;
@@ -604,6 +657,12 @@ mod real {
             // The capsule: top right, inside the safe area (clear of the
             // notch and the status bar), above the app.
             let safe = uiview.safeAreaInsets();
+            *SAFE.lock().expect("safe lock") = (
+                safe.top as f32,
+                safe.right as f32,
+                safe.bottom as f32,
+                safe.left as f32,
+            );
             let (cw, ch) = (44.0, 30.0);
             let close: &UIView = &main_side.close;
             close.setFrame(CGRect::new(
@@ -1625,6 +1684,12 @@ mod stub {
     }
 
     pub fn set_app_chrome(_visible: bool) {}
+
+    pub fn screen_safe() -> (f32, f32, f32, f32) {
+        (0.0, 0.0, 0.0, 0.0)
+    }
+
+    pub fn set_adapts(_adapts: bool) {}
 
     pub fn show_loading(_title: &str, _status: &str) {}
 

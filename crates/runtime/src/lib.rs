@@ -1249,6 +1249,14 @@ impl Runtime {
         .with_chosen_files(store.data().chosen.clone())
         .with_stepped_clock(store.data().stepped_clock.clone())
         .with_app_name(config.app_name.clone());
+        // An app that asks what screen it is on lays itself out for any
+        // screen: a phone follows the way it is held for it (IC-912).
+        let adapts = component
+            .component
+            .component_type()
+            .imports(&self.engine)
+            .any(|(name, _)| name.starts_with("krate:ui/screen@"));
+        gui_host.set_adapts(adapts);
         store.data_mut().phase3_gui = Some(gui_host);
 
         let linker = self.phase4_gui_linker()?;
@@ -1427,6 +1435,8 @@ impl Runtime {
         link_gui!(ui4::touch);
         // Phase 4 only: the on-screen keyboard for self-drawn text fields.
         link_gui!(ui4::text_entry);
+        // Phase 4 only: what kind of screen a window is on (IC-912).
+        link_gui!(ui4::screen);
         // Phase 4 only: pictures a canvas keeps and draws by handle.
         link_gui!(phase4_gui_bindings::krate::gfx::canvas_images);
 

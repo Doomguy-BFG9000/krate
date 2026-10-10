@@ -6271,6 +6271,71 @@ fn a_cpp_program_runs_and_its_constructors_run_once() {
     }
 }
 
+/// An app learns what kind of screen it is on (krate:ui/screen, IC-912).
+///
+/// `pointer-probe.wasm` prints what `krate::layout::Screen::of` reads. A
+/// headless window is a desktop one: a pointer, nothing covered. Given a
+/// phone's screen it is touched, its width or height is compact, and the
+/// notch, home bar and Krate's close button cover its edges -- the numbers
+/// an app keeps its text and controls clear of. A host that answered
+/// "pointer" everywhere would leave every phone app with 28-point targets
+/// under a finger.
+#[test]
+fn an_app_learns_what_kind_of_screen_it_is_on() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let wasm = dir.path().join("code.wasm");
+    std::fs::write(&wasm, include_bytes!("fixtures/pointer-probe.wasm")).expect("probe");
+    let manifest = dir.path().join("manifest.toml");
+    std::fs::write(
+        &manifest,
+        "[app]\nid = \"com.acme.pointer-probe\"\nname = \"pointer-probe\"\nversion = \"1.0.0\"\n\
+         entry = \"code.wasm\"\nworld = \"krate:app/gui@0.2.0\"\n\n\
+         [[capabilities]]\ncap = \"ui.window:create\"\nrationale = \"window\"\nrequired = true\n\n\
+         [[capabilities]]\ncap = \"io.stdout\"\nrationale = \"print\"\nrequired = true\n\n\
+         [[capabilities]]\ncap = \"io.args\"\nrationale = \"args\"\nrequired = true\n",
+    )
+    .expect("manifest");
+    let screen_line = |screen: Option<&str>| -> String {
+        let mut cmd = krate();
+        cmd.arg("run")
+            .arg("--headless")
+            .arg(&wasm)
+            .arg("--manifest")
+            .arg(&manifest)
+            .arg("--auto-grant");
+        if let Some(screen) = screen {
+            cmd.env("KRATE_SCREEN", screen);
+        }
+        let out = cmd.output().expect("run");
+        let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+        stdout
+            .lines()
+            .find(|line| line.starts_with("screen="))
+            .unwrap_or_else(|| {
+                panic!(
+                    "no screen line in: {stdout}{}",
+                    String::from_utf8_lossy(&out.stderr)
+                )
+            })
+            .to_string()
+    };
+    assert_eq!(
+        screen_line(None),
+        "screen=480x320 width=compact height=compact input=pointer safe=0,0,0,0",
+        "a headless window is a desktop one"
+    );
+    assert_eq!(
+        screen_line(Some("390x844")),
+        "screen=390x844 width=compact height=medium input=touch safe=89,0,34,0",
+        "a phone held upright"
+    );
+    assert_eq!(
+        screen_line(Some("844x390")),
+        "screen=844x390 width=medium height=compact input=touch safe=50,47,21,47",
+        "a phone turned sideways"
+    );
+}
+
 /// The binary a person runs measures a frame on a phone's screen (IC-911).
 ///
 /// `weather-card.wasm` is apps/krate-weather built: it lays out from its

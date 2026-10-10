@@ -7,7 +7,7 @@
 
 #![allow(clippy::too_many_arguments)]
 
-/// `krate:ui`: clipboard, dialog, events, image, launcher, menu, notify, pointer, print, text_entry, touch, tree, window.
+/// `krate:ui`: clipboard, dialog, events, image, launcher, menu, notify, pointer, print, screen, text_entry, touch, tree, window.
 pub mod ui {
     /// `krate:ui/clipboard`.
     pub mod clipboard {
@@ -292,6 +292,16 @@ pub mod ui {
         /// Print the pages added so far, wait for the person, and start over.
         pub fn finish(window: u64, title: &str) -> Result<PrintOutcome, UiError> {
             crate::bindings::krate::ui::print::finish(window, title)
+        }
+    }
+    /// `krate:ui/screen`.
+    pub mod screen {
+        pub use crate::bindings::krate::ui::screen::{InputKind, Insets, ScreenFacts, SizeClass};
+
+        /// The screen of a window the app owns. A window the app does not own
+        /// answers as a desktop window of no size.
+        pub fn facts(window: u64) -> ScreenFacts {
+            crate::bindings::krate::ui::screen::facts(window)
         }
     }
     /// `krate:ui/text_entry`.

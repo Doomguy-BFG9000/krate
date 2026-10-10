@@ -368,6 +368,42 @@ impl crate::phase4_gui_bindings::krate::gfx::canvas_images::Host for Phase3GuiHo
     }
 }
 
+/// What kind of screen a window is on (IC-912). Phase 4 only.
+impl ui4::screen::Host for Phase3GuiHost {
+    fn facts(&mut self, window: u64) -> wasmtime::Result<ui4::screen::ScreenFacts> {
+        use ui4::screen::{InputKind, Insets, ScreenFacts, SizeClass};
+        let (width, height, touch, (top, right, bottom, left)) = self
+            .screen_facts(window)
+            .unwrap_or((0.0, 0.0, false, (0.0, 0.0, 0.0, 0.0)));
+        let class = |side: f32, compact: f32, large: f32| {
+            if side < compact {
+                SizeClass::Compact
+            } else if side >= large {
+                SizeClass::Large
+            } else {
+                SizeClass::Medium
+            }
+        };
+        Ok(ScreenFacts {
+            width,
+            height,
+            width_class: class(width, 600.0, 1000.0),
+            height_class: class(height, 500.0, 900.0),
+            input: if touch {
+                InputKind::Touch
+            } else {
+                InputKind::Pointer
+            },
+            safe: Insets {
+                top,
+                right,
+                bottom,
+                left,
+            },
+        })
+    }
+}
+
 /// The on-screen keyboard, for apps that draw their own text fields.
 /// Phase 4 only.
 impl ui4::text_entry::Host for Phase3GuiHost {

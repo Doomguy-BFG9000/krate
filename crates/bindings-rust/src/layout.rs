@@ -1,0 +1,412 @@
+//! Laying a screen out for the device it is on (IC-912).
+//!
+//! An app is made once and opened on a phone held upright, a phone turned
+//! sideways, a tablet and a desktop window. Rectangles computed from one
+//! device's numbers -- a 260-point sidebar, four cards in a row -- cut the
+//! screen off on the others. This kit computes them from the screen in
+//! front of the app instead:
+//!
+//! ```ignore
+//! use krate::layout::{Rect, Screen};
+//!
+//! let screen = Screen::of(window);           // ask again on every `resized`
+//! let mut area = screen.safe_area().pad(16.0);
+//! let header = area.take_top(screen.tap() + 8.0);
+//! let nav = screen.nav(area, 240.0);         // a sidebar, or tabs on a phone
+//! if let Some(sidebar) = nav.sidebar { /* draw the list of places */ }
+//! if let Some(tabs) = nav.tabs { /* draw the same places as tabs */ }
+//! for card in nav.content.grid(items.len(), 160.0, 200.0, 12.0) {
+//!     // as many columns as fit, wrapping into rows
+//! }
+//! ```
+//!
+//! Every call is plain arithmetic on the numbers given, so a layout can be
+//! worked out and tested away from a screen. `Screen` is only the place the
+//! numbers come from.
+
+use alloc::vec::Vec;
+
+/// A rectangle in points, from its top-left corner.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct Rect {
+    pub x: f32,
+    pub y: f32,
+    pub w: f32,
+    pub h: f32,
+}
+
+impl Rect {
+    pub const fn new(x: f32, y: f32, w: f32, h: f32) -> Self {
+        Self { x, y, w, h }
+    }
+
+    /// The right edge.
+    pub fn right(&self) -> f32 {
+        self.x + self.w
+    }
+
+    /// The bottom edge.
+    pub fn bottom(&self) -> f32 {
+        self.y + self.h
+    }
+
+    /// Whether a point (a tap, a click) lands inside.
+    pub fn contains(&self, x: f32, y: f32) -> bool {
+        x >= self.x && x < self.right() && y >= self.y && y < self.bottom()
+    }
+
+    /// Smaller by `top`, `right`, `bottom` and `left` points; never
+    /// negative.
+    pub fn inset(&self, top: f32, right: f32, bottom: f32, left: f32) -> Rect {
+        Rect {
+            x: self.x + left,
+            y: self.y + top,
+            w: (self.w - left - right).max(0.0),
+            h: (self.h - top - bottom).max(0.0),
+        }
+    }
+
+    /// Smaller by the same margin on every side.
+    pub fn pad(&self, all: f32) -> Rect {
+        self.inset(all, all, all, all)
+    }
+
+    /// Cut a band `h` points tall off the top and return it; `self` keeps
+    /// what is left. A band never takes more than there is.
+    pub fn take_top(&mut self, h: f32) -> Rect {
+        let h = h.min(self.h).max(0.0);
+        let band = Rect { h, ..*self };
+        self.y += h;
+        self.h -= h;
+        band
+    }
+
+    /// Cut a band `h` points tall off the bottom and return it.
+    pub fn take_bottom(&mut self, h: f32) -> Rect {
+        let h = h.min(self.h).max(0.0);
+        self.h -= h;
+        Rect {
+            y: self.y + self.h,
+            h,
+            ..*self
+        }
+    }
+
+    /// Cut a band `w` points wide off the left and return it.
+    pub fn take_left(&mut self, w: f32) -> Rect {
+        let w = w.min(self.w).max(0.0);
+        let band = Rect { w, ..*self };
+        self.x += w;
+        self.w -= w;
+        band
+    }
+
+    /// Cut a band `w` points wide off the right and return it.
+    pub fn take_right(&mut self, w: f32) -> Rect {
+        let w = w.min(self.w).max(0.0);
+        self.w -= w;
+        Rect {
+            x: self.x + self.w,
+            w,
+            ..*self
+        }
+    }
+
+    /// `n` equal columns side by side, `gap` points apart.
+    pub fn columns(&self, n: usize, gap: f32) -> Vec<Rect> {
+        let n = n.max(1);
+        let w = ((self.w - gap * (n - 1) as f32) / n as f32).max(0.0);
+        (0..n)
+            .map(|i| Rect {
+                x: self.x + i as f32 * (w + gap),
+                w,
+                ..*self
+            })
+            .collect()
+    }
+
+    /// `n` equal rows one above the other, `gap` points apart.
+    pub fn rows(&self, n: usize, gap: f32) -> Vec<Rect> {
+        let n = n.max(1);
+        let h = ((self.h - gap * (n - 1) as f32) / n as f32).max(0.0);
+        (0..n)
+            .map(|i| Rect {
+                y: self.y + i as f32 * (h + gap),
+                h,
+                ..*self
+            })
+            .collect()
+    }
+
+    /// Cells for `count` items: as many columns as fit at `min_w` points
+    /// each (at least one), sharing the width, wrapping into rows of
+    /// `cell_h` points. Rows run past the bottom when there are more items
+    /// than fit -- that is what scrolling is for; add the scroll offset to
+    /// `y`.
+    pub fn grid(&self, count: usize, min_w: f32, cell_h: f32, gap: f32) -> Vec<Rect> {
+        let per_row = (((self.w + gap) / (min_w + gap)) as usize).max(1);
+        let w = ((self.w - gap * (per_row - 1) as f32) / per_row as f32).max(0.0);
+        (0..count)
+            .map(|i| {
+                let (col, row) = (i % per_row, i / per_row);
+                Rect::new(
+                    self.x + col as f32 * (w + gap),
+                    self.y + row as f32 * (cell_h + gap),
+                    w,
+                    cell_h,
+                )
+            })
+            .collect()
+    }
+
+    /// A `w` by `h` rectangle centred inside this one (shrunk to fit).
+    pub fn center(&self, w: f32, h: f32) -> Rect {
+        let (w, h) = (w.min(self.w), h.min(self.h));
+        Rect::new(
+            self.x + (self.w - w) / 2.0,
+            self.y + (self.h - h) / 2.0,
+            w,
+            h,
+        )
+    }
+}
+
+/// How much room there is along one side: a phone, a tablet, a desktop.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Size {
+    /// A phone: under 600 points wide, or under 500 tall.
+    Compact,
+    /// A tablet, or a small desktop window.
+    Medium,
+    /// A desktop: 1000 points wide or more, or 900 tall or more.
+    Large,
+}
+
+/// Where the places of an app go: a sidebar on a wide screen, tabs along
+/// the bottom on a phone (`Screen::nav`). Exactly one of `sidebar` and
+/// `tabs` is set.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Nav {
+    /// The sidebar, on a screen wide enough for one.
+    pub sidebar: Option<Rect>,
+    /// The tab bar along the bottom, on a phone. Draw the same places as
+    /// the sidebar would list, one tab each (five at most).
+    pub tabs: Option<Rect>,
+    /// Everything else.
+    pub content: Rect,
+}
+
+/// The screen a window is on, as numbers to lay out from.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Screen {
+    /// Width in points.
+    pub width: f32,
+    /// Height in points.
+    pub height: f32,
+    /// The width's class.
+    pub width_class: Size,
+    /// The height's class.
+    pub height_class: Size,
+    /// A finger rather than a mouse.
+    pub touch: bool,
+    /// Covered space at the top, right, bottom and left edges: the notch,
+    /// the home bar, the button Krate draws to close an app on a phone.
+    pub safe: (f32, f32, f32, f32),
+}
+
+impl Screen {
+    /// A screen from its numbers, with the classes worked out the way
+    /// `krate:ui/screen` does. For tests, and for laying out a size other
+    /// than the window's.
+    pub fn new(width: f32, height: f32, touch: bool, safe: (f32, f32, f32, f32)) -> Self {
+        let class = |side: f32, compact: f32, large: f32| {
+            if side < compact {
+                Size::Compact
+            } else if side >= large {
+                Size::Large
+            } else {
+                Size::Medium
+            }
+        };
+        Screen {
+            width,
+            height,
+            width_class: class(width, 600.0, 1000.0),
+            height_class: class(height, 500.0, 900.0),
+            touch,
+            safe,
+        }
+    }
+
+    /// The screen of a window the app owns. Ask again on every `resized`
+    /// event: a phone turns and a desktop window is narrowed.
+    #[cfg(feature = "gui")]
+    pub fn of(window: u64) -> Self {
+        use crate::ui::screen::{facts, InputKind};
+        let f = facts(window);
+        Screen::new(
+            f.width,
+            f.height,
+            matches!(f.input, InputKind::Touch),
+            (f.safe.top, f.safe.right, f.safe.bottom, f.safe.left),
+        )
+    }
+
+    /// A phone held upright: one column.
+    pub fn compact(&self) -> bool {
+        self.width_class == Size::Compact
+    }
+
+    /// A phone turned sideways: little height, so keep headers short.
+    pub fn short(&self) -> bool {
+        self.height_class == Size::Compact
+    }
+
+    /// The whole window.
+    pub fn area(&self) -> Rect {
+        Rect::new(0.0, 0.0, self.width, self.height)
+    }
+
+    /// The window inside its covered edges: where text and controls go. A
+    /// background may still fill `area()`.
+    pub fn safe_area(&self) -> Rect {
+        let (t, r, b, l) = self.safe;
+        self.area().inset(t, r, b, l)
+    }
+
+    /// The smallest a control may be in each direction to be hit reliably:
+    /// 44 points for a finger, 28 for a mouse.
+    pub fn tap(&self) -> f32 {
+        if self.touch {
+            44.0
+        } else {
+            28.0
+        }
+    }
+
+    /// Body text size: 17 points on a phone (the size a phone's own apps
+    /// use), 15 elsewhere. Headings scale from this, and nothing a person
+    /// must read goes below 13.
+    pub fn body(&self) -> f32 {
+        if self.compact() {
+            17.0
+        } else {
+            15.0
+        }
+    }
+
+    /// Split `area` for an app with places to go between (Library and
+    /// Search, Inbox and Sent): a sidebar `sidebar_w` points wide when the
+    /// screen is wide enough, otherwise a tab bar along the bottom of the
+    /// screen, above the home bar. A sidebar takes a third of the width at
+    /// most.
+    pub fn nav(&self, area: Rect, sidebar_w: f32) -> Nav {
+        let mut content = area;
+        if self.compact() {
+            // Down to the screen's bottom edge, the home bar inside it.
+            let bottom_gap = self.height - area.bottom();
+            let bar_h = 56.0 + (self.safe.2 - bottom_gap).max(0.0);
+            let mut tabs = content.take_bottom(bar_h);
+            tabs.h = (tabs.h - (self.safe.2 - bottom_gap).max(0.0)).max(0.0);
+            Nav {
+                sidebar: None,
+                tabs: Some(tabs),
+                content,
+            }
+        } else {
+            let sidebar = content.take_left(sidebar_w.min(area.w / 3.0));
+            Nav {
+                sidebar: Some(sidebar),
+                tabs: None,
+                content,
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn phone() -> Screen {
+        Screen::new(390.0, 844.0, true, (89.0, 0.0, 34.0, 0.0))
+    }
+
+    fn desktop() -> Screen {
+        Screen::new(1280.0, 800.0, false, (0.0, 0.0, 0.0, 0.0))
+    }
+
+    #[test]
+    fn the_classes_name_a_phone_a_turned_phone_a_tablet_and_a_desktop() {
+        assert!(phone().compact() && !phone().short());
+        let turned = Screen::new(844.0, 390.0, true, (50.0, 47.0, 21.0, 47.0));
+        assert!(!turned.compact() && turned.short());
+        let tablet = Screen::new(820.0, 1180.0, true, (0.0, 0.0, 0.0, 0.0));
+        assert_eq!(tablet.width_class, Size::Medium);
+        assert_eq!(desktop().width_class, Size::Large);
+    }
+
+    #[test]
+    fn bands_cut_from_a_rect_leave_the_rest() {
+        let mut area = Rect::new(0.0, 0.0, 390.0, 844.0);
+        let header = area.take_top(60.0);
+        let footer = area.take_bottom(50.0);
+        let side = area.take_left(100.0);
+        assert_eq!(header, Rect::new(0.0, 0.0, 390.0, 60.0));
+        assert_eq!(footer, Rect::new(0.0, 794.0, 390.0, 50.0));
+        assert_eq!(side, Rect::new(0.0, 60.0, 100.0, 734.0));
+        assert_eq!(area, Rect::new(100.0, 60.0, 290.0, 734.0));
+        // Never more than there is.
+        let all = area.take_top(10_000.0);
+        assert_eq!(all.h, 734.0);
+        assert_eq!(area.h, 0.0);
+    }
+
+    #[test]
+    fn a_grid_fits_as_many_columns_as_the_width_takes() {
+        let phone_cards = Rect::new(16.0, 0.0, 358.0, 0.0).grid(6, 160.0, 200.0, 12.0);
+        assert_eq!(phone_cards[1].y, 0.0, "two across on a phone");
+        assert_eq!(phone_cards[2].y, 212.0, "the third wraps");
+        assert!(
+            phone_cards.iter().all(|c| c.right() <= 374.01),
+            "nothing past the edge"
+        );
+        let desk_cards = Rect::new(0.0, 0.0, 1100.0, 0.0).grid(6, 160.0, 200.0, 12.0);
+        assert_eq!(desk_cards[5].y, 0.0, "six across on a desktop");
+        let narrow = Rect::new(0.0, 0.0, 100.0, 0.0).grid(2, 160.0, 50.0, 8.0);
+        assert_eq!(
+            narrow[0].w, 100.0,
+            "at least one column, shrunk to the width"
+        );
+    }
+
+    #[test]
+    fn the_sidebar_becomes_tabs_above_the_home_bar_on_a_phone() {
+        let p = phone();
+        let nav = p.nav(p.safe_area(), 240.0);
+        assert!(nav.sidebar.is_none());
+        let tabs = nav.tabs.unwrap();
+        assert_eq!(tabs.h, 56.0);
+        assert_eq!(tabs.bottom(), 844.0 - 34.0, "above the home bar");
+        assert_eq!(nav.content.bottom(), tabs.y);
+        assert_eq!(nav.content.w, 390.0);
+
+        let d = desktop();
+        let nav = d.nav(d.area(), 240.0);
+        assert_eq!(nav.sidebar.unwrap().w, 240.0);
+        assert!(nav.tabs.is_none());
+        assert_eq!(nav.content.x, 240.0);
+    }
+
+    #[test]
+    fn a_finger_gets_bigger_targets_and_a_phone_bigger_text() {
+        assert_eq!(phone().tap(), 44.0);
+        assert_eq!(desktop().tap(), 28.0);
+        assert!(phone().body() > desktop().body());
+    }
+
+    #[test]
+    fn the_safe_area_keeps_clear_of_the_notch_and_home_bar() {
+        assert_eq!(phone().safe_area(), Rect::new(0.0, 89.0, 390.0, 721.0));
+    }
+}

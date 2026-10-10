@@ -170,6 +170,10 @@ pub struct Phase3GuiHost {
     /// designs are tracked so asking, or setting a design, undoes them.
     requested_sizes: std::cell::RefCell<std::collections::BTreeMap<WindowId, (f32, f32)>>,
     canvases_that_asked: std::cell::RefCell<std::collections::BTreeSet<u64>>,
+    /// Windows whose app asked what screen it is on (krate:ui/screen): an
+    /// app that lays out from the screen's numbers is as responsive as one
+    /// that asks `canvas_size`, and must not be given a design to shrink.
+    screen_windows: std::cell::RefCell<Vec<WindowId>>,
     implicit_designs: std::cell::RefCell<std::collections::BTreeSet<u64>>,
     next_kept_image: std::cell::Cell<u64>,
     /// Connected gamepads, polled on demand.
@@ -413,6 +417,10 @@ fn interrupted() -> bool {
     INTERRUPTED.load(std::sync::atomic::Ordering::SeqCst)
 }
 
+/// A window's screen as `screen_facts` answers it: width, height, touch,
+/// and the covered edges (top, right, bottom, left), in points.
+pub(crate) type ScreenAnswer = (f32, f32, bool, (f32, f32, f32, f32));
+
 impl Phase3GuiHost {
     /// Create the GUI host with the requested host UI mode.
     pub fn new(guard: UapiGuard, mode: Phase3HostUiMode) -> Result<Self, UiDispatchError> {
@@ -452,6 +460,7 @@ impl Phase3GuiHost {
             kept_images: std::cell::RefCell::new(std::collections::BTreeMap::new()),
             requested_sizes: std::cell::RefCell::new(std::collections::BTreeMap::new()),
             canvases_that_asked: std::cell::RefCell::new(std::collections::BTreeSet::new()),
+            screen_windows: std::cell::RefCell::new(Vec::new()),
             implicit_designs: std::cell::RefCell::new(std::collections::BTreeSet::new()),
             next_kept_image: std::cell::Cell::new(1),
             gamepads: std::cell::RefCell::new(crate::gamepad::Gamepads::new()),
@@ -1646,7 +1655,9 @@ impl Phase3GuiHost {
     fn fit_facts(&self) -> Option<crate::usability::FitFacts> {
         let canvases = self.canvases.borrow();
         let (&canvas, (window, _, surface)) = canvases.iter().next()?;
-        if self.canvases_that_asked.borrow().contains(&canvas) {
+        if self.canvases_that_asked.borrow().contains(&canvas)
+            || self.screen_windows.borrow().contains(window)
+        {
             return Some(crate::usability::FitFacts { fixed: None });
         }
         let explicit = surface
@@ -2992,7 +3003,7 @@ impl Phase3GuiHost {
             };
             (*window, surface.design_size().is_some() && !implicit)
         };
-        if explicit {
+        if explicit || self.screen_windows.borrow().contains(&window) {
             return;
         }
         let Some(requested) = self.requested_sizes.borrow().get(&window).copied() else {
@@ -3095,6 +3106,48 @@ impl Phase3GuiHost {
     /// Let a kept picture go.
     pub(crate) fn forget_image(&self, canvas: u64, handle: u64) {
         self.kept_images.borrow_mut().remove(&(canvas, handle));
+    }
+
+    /// Tell the host the app adapts to any screen (see `set_adapts` on the
+    /// adapter), before it opens a window.
+    pub fn set_adapts(&self, adapts: bool) {
+        self.dispatcher().set_adapts(adapts);
+    }
+
+    /// A window's screen (krate:ui/screen, IC-912): width and height in
+    /// points, a finger or a mouse, and the edges something else covers
+    /// (top, right, bottom, left). None for a window the app does not own.
+    ///
+    /// Headless with `KRATE_SCREEN` set to a phone's size, the window
+    /// answers as an iPhone 13 Pro running an app does -- touch, the notch
+    /// and home bar, Krate's close button at the top right -- so check-app
+    /// judges an app on the phone it will meet, not on a phone-shaped
+    /// desktop window.
+    pub(crate) fn screen_facts(&self, window: u64) -> Option<ScreenAnswer> {
+        let id = self.window_id(window).ok()?;
+        // Asking is laying out from the screen: drop any design the host
+        // chose for this window's canvases (see `fit_unasked_canvas`).
+        if !self.screen_windows.borrow().contains(&id) {
+            self.screen_windows.borrow_mut().push(id);
+            let mut canvases = self.canvases.borrow_mut();
+            for (canvas, (bound, _, surface)) in canvases.iter_mut() {
+                if *bound == id && self.implicit_designs.borrow_mut().remove(canvas) {
+                    surface.set_design_size(0.0, 0.0);
+                }
+            }
+        }
+        let record = self.dispatcher().window(id).ok().flatten()?;
+        let (w, h) = (record.size.width as f32, record.size.height as f32);
+        let mut kind = self.dispatcher().screen_kind(id);
+        if self.headless && std::env::var_os("KRATE_SCREEN").is_some() && w.min(h) < 600.0 {
+            kind.touch = true;
+            kind.safe = if h >= w {
+                (89.0, 0.0, 34.0, 0.0)
+            } else {
+                (50.0, 47.0, 21.0, 47.0)
+            };
+        }
+        Some((w, h, kind.touch, kind.safe))
     }
 
     /// The on-screen keyboard for a window the app owns; never for one it

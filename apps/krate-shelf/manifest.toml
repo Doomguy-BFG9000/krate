@@ -1,0 +1,20 @@
+# The worked example of one app laid out for every screen (IC-912): a
+# record shelf that is a sidebar and a wide grid on a desktop, and bottom
+# tabs and two columns on a phone, from krate::layout.
+
+[app]
+id = "dev.krate.shelf"
+name = "Shelf"
+version = "0.1.0-dev"
+entry = "target/wasm32-wasip1/release/krate_shelf.wasm"
+world = "krate:app/gui@0.2.0"
+
+[[capabilities]]
+cap = "ui.window:create"
+rationale = "Show your records"
+required = true
+
+[[capabilities]]
+cap = "io.args"
+rationale = "Draw once and stop when checked"
+required = false

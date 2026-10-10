@@ -508,6 +508,15 @@ impl UiAdapter for AndroidWinitPrototypeUiAdapter {
         winit_native::drain_pointer_samples()
     }
 
+    /// A phone or tablet is touched. Its covered edges (cutout, gesture
+    /// bar) are not read yet, so none are reported.
+    fn screen_kind(&self, _window: WindowId) -> krate_adapter_common::ui::ScreenKind {
+        krate_adapter_common::ui::ScreenKind {
+            touch: true,
+            safe: (0.0, 0.0, 0.0, 0.0),
+        }
+    }
+
     /// Every finger on the window (krate:ui/touch).
     fn touches(&self, window: WindowId) -> Vec<(u64, f32, f32)> {
         winit_native::touches(window)

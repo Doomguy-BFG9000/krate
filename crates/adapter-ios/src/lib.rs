@@ -527,6 +527,17 @@ impl UiAdapter for IosUikitPrototypeUiAdapter {
         uikit_native::set_text_entry(window, on)
     }
 
+    fn set_adapts(&self, adapts: bool) {
+        uikit_native::set_adapts(adapts)
+    }
+
+    fn screen_kind(&self, _window: WindowId) -> krate_adapter_common::ui::ScreenKind {
+        krate_adapter_common::ui::ScreenKind {
+            touch: true,
+            safe: uikit_native::screen_safe(),
+        }
+    }
+
     fn drain_raw_pointer_input(&self) -> Vec<RawPointerSample> {
         uikit_native::drain_pointer_samples()
     }

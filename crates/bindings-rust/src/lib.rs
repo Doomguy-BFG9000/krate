@@ -135,6 +135,8 @@ pub use bindings::Guest;
 /// ease-out for things arriving (fast start, gentle landing), springs for
 /// things that follow input, 150-300ms for interface moves, and nothing
 /// that loops forever except ambient glow.
+pub mod layout;
+
 pub mod motion {
     /// Ease-out cubic: fast start, gentle landing. The default for anything
     /// entering the screen. `t` in 0..=1.

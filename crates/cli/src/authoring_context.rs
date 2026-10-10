@@ -303,8 +303,9 @@ cards and rows: those should USE a bigger window, and under a design size \
 they instead sit letterboxed with dead bands around them while the text \
 scales up soft. When in doubt, lay out from `canvas_size`. It is the \
 recoverable mistake; a design size baked into 2000 lines of drawing is not. \
-check-app measures it: an app made once runs on a phone, a tablet and a \
-desktop, and a fixed layout fails a screen it must shrink below 75% of \
+check-app measures it (and runs every app on each screen, below): an app \
+made once runs on a phone, a tablet and a desktop, and a fixed layout \
+fails a screen it must shrink below 75% of \
 its size to fit (too small to read: a 1180x760 layout on a phone shrinks \
 to 51%) or fills less than 60% of (a 320x470 card on a desktop fills \
 43%). A wide layout is measured with the phone held sideways.\n\n\
@@ -315,6 +316,41 @@ scroll, so `Event::Wheel` gets left out entirely. But the person is looking \
 at a window, not at your box -- they see cards running to the bottom edge, \
 they scroll, and nothing moves. Handle `Event::Wheel` in any app with a \
 list, a feed, rows, or cards, whichever layout choice you made.\n\n\
+## One app on a phone, a tablet and a desktop\n\n\
+The same app opens on a phone held upright (390 points wide), a phone \
+turned sideways (390 tall), a tablet and a desktop window, and check-app \
+runs it on each one: text cut off at the side of a screen, a card or panel \
+cut off there, or text smaller than 9 points as it lands on the screen \
+fails the app, naming the screen and the thing. A desktop layout squeezed \
+into a phone -- a 260-point sidebar beside a row of four cards -- is the \
+commonest way to fail it. Lay out with `krate::layout`, from the screen in \
+front of you, never from one device's numbers:\n\n\
+```rust\n\
+use krate::layout::{Rect, Screen};\n\
+let screen = Screen::of(win);          // again on every Event::Resized\n\
+let mut area = screen.safe_area();     // clear of the notch, home bar, close button\n\
+let header = area.take_top(if screen.short() { 44.0 } else { 64.0 });\n\
+let nav = screen.nav(area, 240.0);     // sidebar when wide, bottom tabs on a phone\n\
+let cards = nav.content.pad(16.0).grid(items.len(), 160.0, 200.0, 12.0);\n\
+```\n\n\
+- `screen.compact()`: a phone held upright -- one column. Side-by-side \
+  panels stack; a sidebar becomes tabs (`nav`); a row of cards wraps \
+  (`grid`) or becomes a list.\n\
+- `screen.short()`: a phone turned sideways -- keep headers short, put \
+  controls beside the content rather than above it.\n\
+- `screen.touch`: a finger -- every control at least `screen.tap()` (44) \
+  points both ways, nothing that needs hover or a right click.\n\
+- `screen.safe_area()`: keep text and controls inside it; a background \
+  fills `screen.area()`. On a phone Krate's close button sits at the top \
+  right inside the covered top edge.\n\
+- Text: `screen.body()` (17 on a phone, 15 elsewhere) for what is read, 13 \
+  the least for anything a person must read.\n\
+- A `Rect` is plain numbers: keep the rects you drew buttons in and hit-test \
+  taps with `rect.contains(x, y)`, so the layout and the taps never drift.\n\n\
+A game drawn at one fixed size (a design size) is the exception: it is \
+scaled to fit and judged on the phone the way Krate turns it -- landscape \
+for a wide design -- so draw its text big enough to survive the shrink, \
+and give it touch controls (`krate::ui::touch`) as well as keys.\n\n\
 ## Pixel buffers composited over a scene need faded edges\n\n\
 `draw-pixels` puts your buffer on screen as an exact rectangle. If the \
 buffer's border pixels are not fully transparent, that rectangle's edge is \

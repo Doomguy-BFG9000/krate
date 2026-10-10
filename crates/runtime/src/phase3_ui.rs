@@ -582,6 +582,16 @@ impl<'a> Phase3UiDispatcher<'a> {
         self.adapter.touches(id)
     }
 
+    /// Whether the app about to run adapts to any screen (IC-912).
+    pub fn set_adapts(&self, adapts: bool) {
+        self.adapter.set_adapts(adapts)
+    }
+
+    /// Touch or pointer, and the covered edges, of a window's screen.
+    pub fn screen_kind(&self, id: WindowId) -> krate_adapter_common::ui::ScreenKind {
+        self.adapter.screen_kind(id)
+    }
+
     /// Show or put away the on-screen keyboard; true when one is showing.
     pub fn set_text_entry(&self, id: WindowId, on: bool) -> bool {
         self.adapter.set_text_entry(id, on)

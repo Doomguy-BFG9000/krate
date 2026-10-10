@@ -128,6 +128,26 @@ impl Guest for Component {
             let _ = write_line(&out, "window=refused");
             return 1;
         };
+        // What kind of screen this is (krate:ui/screen, IC-912), through
+        // the SDK's layout kit the way an app reads it.
+        let screen = krate::layout::Screen::of(win);
+        let class = |c: krate::layout::Size| match c {
+            krate::layout::Size::Compact => "compact",
+            krate::layout::Size::Medium => "medium",
+            krate::layout::Size::Large => "large",
+        };
+        let (t, r, b, l) = screen.safe;
+        let _ = write_line(
+            &out,
+            &format!(
+                "screen={:.0}x{:.0} width={} height={} input={} safe={t:.0},{r:.0},{b:.0},{l:.0}",
+                screen.width,
+                screen.height,
+                class(screen.width_class),
+                class(screen.height_class),
+                if screen.touch { "touch" } else { "pointer" },
+            ),
+        );
         let watch = args::raw().split('\n').any(|w| w == "watch");
         if !watch {
             // A window is not focused the instant it is made; give the system

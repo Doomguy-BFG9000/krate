@@ -1663,6 +1663,17 @@ impl PointerTracker {
 /// renderer consumes it, and this crate only carries it between them.
 pub type CanvasListHandle = std::sync::Arc<dyn std::any::Any + Send + Sync>;
 
+/// A screen beyond its size (IC-912): touched or pointed at, and the
+/// space at each edge something else covers, in points (top, right,
+/// bottom, left).
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct ScreenKind {
+    /// A finger, not a mouse.
+    pub touch: bool,
+    /// Covered space at the top, right, bottom and left edges.
+    pub safe: (f32, f32, f32, f32),
+}
+
 pub trait UiAdapter: WindowAdapter {
     /// Whether this adapter renders canvas display lists itself (a GPU
     /// backend). False everywhere the CPU raster remains the renderer.
@@ -1804,6 +1815,19 @@ pub trait UiAdapter: WindowAdapter {
     /// without a touch screen have none.
     fn touches(&self, _window: WindowId) -> Vec<(u64, f32, f32)> {
         Vec::new()
+    }
+
+    /// The app about to run lays itself out for any screen (it imports
+    /// `krate:ui/screen`, IC-912), so a phone may follow the way it is held
+    /// rather than turning to the shape of the window the app asked for.
+    /// Said once per run, before the app's first window.
+    fn set_adapts(&self, _adapts: bool) {}
+
+    /// What the screen a window is on is like, beyond its size: a finger
+    /// or a mouse, and the edges something else covers (IC-912). Desktop
+    /// hosts are pointer screens with nothing covering an edge.
+    fn screen_kind(&self, _window: WindowId) -> ScreenKind {
+        ScreenKind::default()
     }
 
     /// Show (`true`) or put away (`false`) the on-screen keyboard for a
