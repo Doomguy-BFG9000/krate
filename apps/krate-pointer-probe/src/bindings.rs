@@ -25763,6 +25763,263 @@ pub mod krate {
                 }
             }
         }
+        /// Hand something to another app: a note to Messages, a picture to Photos
+        /// or AirDrop, a file to Mail (IC-919).
+        ///
+        /// The system's own share sheet opens with what the app gives it, and the
+        /// person picks where it goes -- or cancels. The pick is the grant, so no
+        /// capability: the app gives only what it already holds, and learns only
+        /// whether it was sent.
+        #[allow(dead_code, async_fn_in_trait, unused_imports, clippy::all)]
+        pub mod share {
+            #[used]
+            #[doc(hidden)]
+            static __FORCE_SECTION_REF: fn() = super::super::super::__link_custom_section_describing_imports;
+            use super::super::super::_rt;
+            /// A file to share: its name and its bytes.
+            #[derive(Clone)]
+            pub struct SharedFile {
+                /// The name the other app sees ("sketch.png"), extension included.
+                pub name: _rt::String,
+                /// The file's bytes.
+                pub data: _rt::Vec<u8>,
+            }
+            impl ::core::fmt::Debug for SharedFile {
+                fn fmt(
+                    &self,
+                    f: &mut ::core::fmt::Formatter<'_>,
+                ) -> ::core::fmt::Result {
+                    f.debug_struct("SharedFile")
+                        .field("name", &self.name)
+                        .field("data", &self.data)
+                        .finish()
+                }
+            }
+            /// Why the sheet did not open.
+            #[derive(Clone)]
+            pub enum ShareError {
+                /// This device has no share sheet (computers, for now).
+                Unavailable(_rt::String),
+                /// Nothing to share, a name with a path in it, or more than 64 MB.
+                Invalid(_rt::String),
+            }
+            impl ::core::fmt::Debug for ShareError {
+                fn fmt(
+                    &self,
+                    f: &mut ::core::fmt::Formatter<'_>,
+                ) -> ::core::fmt::Result {
+                    match self {
+                        ShareError::Unavailable(e) => {
+                            f.debug_tuple("ShareError::Unavailable").field(e).finish()
+                        }
+                        ShareError::Invalid(e) => {
+                            f.debug_tuple("ShareError::Invalid").field(e).finish()
+                        }
+                    }
+                }
+            }
+            impl ::core::fmt::Display for ShareError {
+                fn fmt(
+                    &self,
+                    f: &mut ::core::fmt::Formatter<'_>,
+                ) -> ::core::fmt::Result {
+                    write!(f, "{:?}", self)
+                }
+            }
+            #[cfg(feature = "std")]
+            impl std::error::Error for ShareError {}
+            #[allow(unused_unsafe, clippy::all)]
+            /// Open the share sheet with any of a text, a link and files. True when
+            /// the person sent it somewhere, false when they cancelled.
+            pub fn share(
+                window: u64,
+                text: Option<&str>,
+                url: Option<&str>,
+                files: &[SharedFile],
+            ) -> Result<bool, ShareError> {
+                unsafe {
+                    #[cfg_attr(target_pointer_width = "64", repr(align(8)))]
+                    #[cfg_attr(target_pointer_width = "32", repr(align(4)))]
+                    struct RetArea(
+                        [::core::mem::MaybeUninit<
+                            u8,
+                        >; 4 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let mut ret_area = RetArea(
+                        [::core::mem::MaybeUninit::uninit(); 4
+                            * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let (result1_0, result1_1, result1_2) = match text {
+                        Some(e) => {
+                            let vec0 = e;
+                            let ptr0 = vec0.as_ptr().cast::<u8>();
+                            let len0 = vec0.len();
+                            (1i32, ptr0.cast_mut(), len0)
+                        }
+                        None => (0i32, ::core::ptr::null_mut(), 0usize),
+                    };
+                    let (result3_0, result3_1, result3_2) = match url {
+                        Some(e) => {
+                            let vec2 = e;
+                            let ptr2 = vec2.as_ptr().cast::<u8>();
+                            let len2 = vec2.len();
+                            (1i32, ptr2.cast_mut(), len2)
+                        }
+                        None => (0i32, ::core::ptr::null_mut(), 0usize),
+                    };
+                    let vec7 = files;
+                    let len7 = vec7.len();
+                    let layout7 = _rt::alloc::Layout::from_size_align_unchecked(
+                        vec7.len() * (4 * ::core::mem::size_of::<*const u8>()),
+                        ::core::mem::size_of::<*const u8>(),
+                    );
+                    let result7 = if layout7.size() != 0 {
+                        let ptr = _rt::alloc::alloc(layout7).cast::<u8>();
+                        if ptr.is_null() {
+                            _rt::alloc::handle_alloc_error(layout7);
+                        }
+                        ptr
+                    } else {
+                        ::core::ptr::null_mut()
+                    };
+                    for (i, e) in vec7.into_iter().enumerate() {
+                        let base = result7
+                            .add(i * (4 * ::core::mem::size_of::<*const u8>()));
+                        {
+                            let SharedFile { name: name4, data: data4 } = e;
+                            let vec5 = name4;
+                            let ptr5 = vec5.as_ptr().cast::<u8>();
+                            let len5 = vec5.len();
+                            *base
+                                .add(::core::mem::size_of::<*const u8>())
+                                .cast::<usize>() = len5;
+                            *base.add(0).cast::<*mut u8>() = ptr5.cast_mut();
+                            let vec6 = data4;
+                            let ptr6 = vec6.as_ptr().cast::<u8>();
+                            let len6 = vec6.len();
+                            *base
+                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                .cast::<usize>() = len6;
+                            *base
+                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                .cast::<*mut u8>() = ptr6.cast_mut();
+                        }
+                    }
+                    let ptr8 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:ui/share@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "share"]
+                        fn wit_import9(
+                            _: i64,
+                            _: i32,
+                            _: *mut u8,
+                            _: usize,
+                            _: i32,
+                            _: *mut u8,
+                            _: usize,
+                            _: *mut u8,
+                            _: usize,
+                            _: *mut u8,
+                        );
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import9(
+                        _: i64,
+                        _: i32,
+                        _: *mut u8,
+                        _: usize,
+                        _: i32,
+                        _: *mut u8,
+                        _: usize,
+                        _: *mut u8,
+                        _: usize,
+                        _: *mut u8,
+                    ) {
+                        unreachable!()
+                    }
+                    unsafe {
+                        wit_import9(
+                            _rt::as_i64(&window),
+                            result1_0,
+                            result1_1,
+                            result1_2,
+                            result3_0,
+                            result3_1,
+                            result3_2,
+                            result7,
+                            len7,
+                            ptr8,
+                        )
+                    };
+                    let l10 = i32::from(*ptr8.add(0).cast::<u8>());
+                    let result20 = match l10 {
+                        0 => {
+                            let e = {
+                                let l11 = i32::from(
+                                    *ptr8.add(::core::mem::size_of::<*const u8>()).cast::<u8>(),
+                                );
+                                _rt::bool_lift(l11 as u8)
+                            };
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l12 = i32::from(
+                                    *ptr8.add(::core::mem::size_of::<*const u8>()).cast::<u8>(),
+                                );
+                                let v19 = match l12 {
+                                    0 => {
+                                        let e19 = {
+                                            let l13 = *ptr8
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l14 = *ptr8
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len15 = l14;
+                                            let bytes15 = _rt::Vec::from_raw_parts(
+                                                l13.cast(),
+                                                len15,
+                                                len15,
+                                            );
+                                            _rt::string_lift(bytes15)
+                                        };
+                                        ShareError::Unavailable(e19)
+                                    }
+                                    n => {
+                                        debug_assert_eq!(n, 1, "invalid enum discriminant");
+                                        let e19 = {
+                                            let l16 = *ptr8
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l17 = *ptr8
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len18 = l17;
+                                            let bytes18 = _rt::Vec::from_raw_parts(
+                                                l16.cast(),
+                                                len18,
+                                                len18,
+                                            );
+                                            _rt::string_lift(bytes18)
+                                        };
+                                        ShareError::Invalid(e19)
+                                    }
+                                };
+                                v19
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    };
+                    if layout7.size() != 0 {
+                        _rt::alloc::dealloc(result7.cast(), layout7);
+                    }
+                    result20
+                }
+            }
+        }
     }
 }
 #[rustfmt::skip]
@@ -26034,13 +26291,13 @@ pub(crate) use __export_gui_impl as export;
 )]
 #[doc(hidden)]
 #[allow(clippy::octal_escapes)]
-pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 16327] = *b"\
-\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\xcd~\x01A\x02\x01A\x95\
-\x01\x01B\x04\x01m\x05\x05trace\x05debug\x04info\x04warn\x05error\x04\0\x09log-l\
-evel\x03\0\0\x01q\x05\x06closed\0\0\x0binterrupted\0\0\x0eunexpected-eof\0\0\x0c\
-invalid-utf8\0\0\x05other\x01s\0\x04\0\x08io-error\x03\0\x02\x03\0\x14krate:io/t\
-ypes@0.1.0\x05\0\x02\x03\0\0\x08io-error\x01B\x15\x02\x03\x02\x01\x01\x04\0\x08i\
-o-error\x03\0\0\x04\0\x0cinput-stream\x03\x01\x04\0\x0doutput-stream\x03\x01\x01\
+pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 16489] = *b"\
+\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\xef\x7f\x01A\x02\x01\
+A\x97\x01\x01B\x04\x01m\x05\x05trace\x05debug\x04info\x04warn\x05error\x04\0\x09\
+log-level\x03\0\0\x01q\x05\x06closed\0\0\x0binterrupted\0\0\x0eunexpected-eof\0\0\
+\x0cinvalid-utf8\0\0\x05other\x01s\0\x04\0\x08io-error\x03\0\x02\x03\0\x14krate:\
+io/types@0.1.0\x05\0\x02\x03\0\0\x08io-error\x01B\x15\x02\x03\x02\x01\x01\x04\0\x08\
+io-error\x03\0\0\x04\0\x0cinput-stream\x03\x01\x04\0\x0doutput-stream\x03\x01\x01\
 h\x02\x01p}\x01j\x01\x05\x01\x01\x01@\x02\x04self\x04\x01ny\0\x06\x04\0\x19[meth\
 od]input-stream.read\x01\x07\x01j\x01s\x01\x01\x01@\x01\x04self\x04\0\x08\x04\0#\
 [method]input-stream.read-to-string\x01\x09\x01h\x03\x01j\x01y\x01\x01\x01@\x02\x04\
@@ -26278,136 +26535,140 @@ characteristics\x04data\x02\x0dwith-response\x7f\0\x0d\x04\0\x05write\x01\x0e\x0
 @\x03\x06devicew\x07services\x0echaracteristics\0\x0d\x04\0\x09subscribe\x01\x0f\
 \x01p\x04\x01@\x01\x06devicew\0\x10\x04\0\x0dnotifications\x01\x11\x01@\x01\x06d\
 evicew\0\x7f\x04\0\x09connected\x01\x12\x01@\x01\x06devicew\x01\0\x04\0\x0adisco\
-nnect\x01\x13\x03\0\x18krate:ui/bluetooth@0.1.0\x05?\x01B\x14\x01r\x04\x01rv\x01\
-gv\x01bv\x01av\x04\0\x05color\x03\0\0\x01r\x02\x01xv\x01yv\x04\0\x05point\x03\0\x02\
-\x01r\x02\x05widthv\x06heightv\x04\0\x04size\x03\0\x04\x01r\x04\x05widthv\x06hei\
-ghtv\x06ascentv\x07descentv\x04\0\x0ctext-metrics\x03\0\x06\x01r\x04\x01xv\x01yv\
-\x05widthv\x06heightv\x04\0\x04rect\x03\0\x08\x01r\x02\x06offsetv\x05color\x01\x04\
-\0\x0dgradient-stop\x03\0\x0a\x01m\x03\x04sans\x05serif\x04mono\x04\0\x0bfont-fa\
-mily\x03\0\x0c\x01r\x04\x06weight{\x06italic\x7f\x0eletter-spacingv\x06family\x0d\
-\x04\0\x0atext-style\x03\0\x0e\x01r\x04\x08top-leftv\x09top-rightv\x0cbottom-rig\
-htv\x0bbottom-leftv\x04\0\x0ccorner-radii\x03\0\x10\x01q\x04\x11permission-denie\
-d\0\0\x0einvalid-target\0\0\x0bunsupported\x01s\0\x08platform\x01s\0\x04\0\x09gf\
-x-error\x03\0\x12\x03\0\x15krate:gfx/types@0.1.0\x05@\x02\x03\0*\x05color\x02\x03\
-\0*\x05point\x02\x03\0*\x04rect\x02\x03\0*\x04size\x02\x03\0*\x0ctext-metrics\x02\
-\x03\0*\x09gfx-error\x02\x03\0*\x0dgradient-stop\x02\x03\0*\x0ccorner-radii\x02\x03\
-\0*\x0atext-style\x02\x03\0*\x0bfont-family\x01BK\x02\x03\x02\x01A\x04\0\x05colo\
-r\x03\0\0\x02\x03\x02\x01B\x04\0\x05point\x03\0\x02\x02\x03\x02\x01C\x04\0\x04re\
-ct\x03\0\x04\x02\x03\x02\x01D\x04\0\x04size\x03\0\x06\x02\x03\x02\x01E\x04\0\x0c\
-text-metrics\x03\0\x08\x02\x03\x02\x01F\x04\0\x09gfx-error\x03\0\x0a\x02\x03\x02\
-\x01G\x04\0\x0dgradient-stop\x03\0\x0c\x02\x03\x02\x01H\x04\0\x0ccorner-radii\x03\
-\0\x0e\x02\x03\x02\x01I\x04\0\x0atext-style\x03\0\x10\x02\x03\x02\x01J\x04\0\x0b\
-font-family\x03\0\x12\x01j\x01w\x01\x0b\x01@\x02\x06windoww\x06widgetw\0\x14\x04\
-\0\x04bind\x01\x15\x01j\x01\x07\x01\x0b\x01@\x01\x06canvasw\0\x16\x04\0\x0bcanva\
-s-size\x01\x17\x01j\0\x01\x0b\x01@\x02\x06canvasw\x04size\x07\0\x18\x04\0\x0fset\
--design-size\x01\x19\x01@\x05\x06canvasw\x01xv\x01yv\x01wv\x01hv\0\x18\x04\0\x08\
-set-clip\x01\x1a\x01@\x01\x06canvasw\0\x18\x04\0\x0aclear-clip\x01\x1b\x01@\x02\x06\
-canvasw\x04fill\x01\0\x18\x04\0\x05clear\x01\x1c\x01@\x03\x06canvasw\x04area\x05\
-\x04fill\x01\0\x18\x04\0\x09fill-rect\x01\x1d\x01@\x04\x06canvasw\x04area\x05\x06\
-stroke\x01\x05widthv\0\x18\x04\0\x0bstroke-rect\x01\x1e\x01@\x04\x06canvasw\x04a\
-rea\x05\x05radii\x0f\x04fill\x01\0\x18\x04\0\x0ffill-round-rect\x01\x1f\x01@\x05\
-\x06canvasw\x04area\x05\x05radii\x0f\x05widthv\x06stroke\x01\0\x18\x04\0\x11stro\
-ke-round-rect\x01\x20\x01@\x05\x06canvasw\x04area\x05\x05radii\x0f\x04blurv\x06s\
-hadow\x01\0\x18\x04\0\x16drop-shadow-round-rect\x01!\x01p\x0d\x01@\x04\x06canvas\
-w\x04area\x05\x0dangle-degreesv\x05stops\"\0\x18\x04\0\x15linear-gradient-stops\x01\
-#\x01@\x06\x06canvasw\x04texts\x06origin\x03\x09font-sizev\x03ink\x01\x05style\x11\
-\0\x18\x04\0\x10draw-text-styled\x01$\x01j\x01\x09\x01\x0b\x01@\x04\x06canvasw\x04\
-texts\x09font-sizev\x05style\x11\0%\x04\0\x13measure-text-styled\x01&\x01@\x07\x06\
-canvasw\x06center\x03\x06radiusv\x0dstart-degreesv\x0dsweep-degreesv\x05widthv\x06\
-stroke\x01\0\x18\x04\0\x0astroke-arc\x01'\x01p}\x01@\x06\x06canvasw\x04area\x05\x05\
-radii\x0f\x05widthy\x06heighty\x04rgba(\0\x18\x04\0\x11draw-pixels-round\x01)\x01\
-@\x04\x06canvasw\x06center\x03\x06radiusv\x04fill\x01\0\x18\x04\0\x0bfill-circle\
-\x01*\x01@\x05\x06canvasw\x06center\x03\x06radiusv\x05widthv\x06stroke\x01\0\x18\
-\x04\0\x0dstroke-circle\x01+\x01@\x05\x06canvasw\x06center\x03\x06radiusv\x05inn\
-er\x01\x05outer\x01\0\x18\x04\0\x0fradial-gradient\x01,\x01@\x04\x06canvasw\x04a\
-rea\x05\x03top\x01\x06bottom\x01\0\x18\x04\0\x0flinear-gradient\x01-\x01@\x05\x06\
-canvasw\x04texts\x06origin\x03\x09font-sizev\x03ink\x01\0\x18\x04\0\x09draw-text\
-\x01.\x01@\x03\x06canvasw\x04texts\x09font-sizev\0%\x04\0\x0cmeasure-text\x01/\x01\
-@\x05\x06canvasw\x04area\x05\x05widthy\x06heighty\x04rgba(\0\x18\x04\0\x0bdraw-p\
-ixels\x010\x01@\x07\x06canvasw\x06center\x03\x03dst\x07\x05anglev\x05widthy\x06h\
-eighty\x04rgba(\0\x18\x04\0\x0bdraw-sprite\x011\x04\0\x07present\x01\x1b\x03\0\x18\
-krate:gfx/canvas2d@0.1.0\x05K\x01B%\x02\x03\x02\x01A\x04\0\x05color\x03\0\0\x02\x03\
-\x02\x01F\x04\0\x09gfx-error\x03\0\x02\x01pv\x01r\x0a\x07ambientv\x08specularv\x09\
-shininessv\x0bfog-densityv\x09fog-color\x01\x0efill-direction\x04\x0afill-color\x01\
-\x0dshadow-radiusv\x0fshadow-softnessv\x08exposurev\x04\0\x08lighting\x03\0\x05\x01\
-j\x01w\x01\x03\x01@\x02\x06windoww\x06widgetw\0\x07\x04\0\x04bind\x01\x08\x01j\0\
-\x01\x03\x01@\x02\x05scenew\x03sky\x01\0\x09\x04\0\x05clear\x01\x0a\x01@\x04\x05\
-scenew\x03eye\x04\x07look-at\x04\x0bfov-degreesv\0\x09\x04\0\x06camera\x01\x0b\x01\
-@\x02\x05scenew\x09direction\x04\0\x09\x04\0\x05light\x01\x0c\x01@\x03\x05scenew\
-\x08vertices\x04\x04tint\x01\0\x09\x04\0\x09triangles\x01\x0d\x01@\x06\x05scenew\
-\x08vertices\x04\x09translate\x04\x0erotate-degrees\x04\x05scalev\x04tint\x01\0\x09\
-\x04\0\x05place\x01\x0e\x01p}\x01@\x04\x05scenew\x05widthy\x06heighty\x04rgba\x0f\
-\0\x07\x04\0\x0eupload-texture\x01\x10\x01@\x05\x05scenew\x08vertices\x04\x03uvs\
-\x04\x07texturew\x04tint\x01\0\x09\x04\0\x08textured\x01\x11\x01@\x06\x05scenew\x08\
-vertices\x04\x07normals\x04\x03uvs\x04\x07texturew\x04tint\x01\0\x09\x04\0\x06sm\
-ooth\x01\x12\x01@\x02\x05scenew\x08lighting\x06\0\x09\x04\0\x0cset-lighting\x01\x13\
-\x01@\x08\x05scenew\x08vertices\x04\x07normals\x04\x08tangents\x04\x03uvs\x04\x07\
-texturew\x0enormal-texturew\x04tint\x01\0\x09\x04\0\x0dnormal-mapped\x01\x14\x04\
-\0\x05unlit\x01\x11\x01@\x02\x05scenew\x07enabled\x7f\0\x09\x04\0\x0fcull-back-f\
-aces\x01\x15\x01@\x01\x05scenew\0\x09\x04\0\x07present\x01\x16\x03\0\x17krate:gf\
-x/scene3d@0.1.0\x05L\x01B\x11\x02\x03\x02\x01C\x04\0\x04rect\x03\0\0\x02\x03\x02\
-\x01H\x04\0\x0ccorner-radii\x03\0\x02\x02\x03\x02\x01F\x04\0\x09gfx-error\x03\0\x04\
-\x01p}\x01j\x01w\x01\x05\x01@\x04\x06canvasw\x05widthy\x06heighty\x04rgba\x06\0\x07\
-\x04\0\x04keep\x01\x08\x01j\0\x01\x05\x01@\x03\x06canvasw\x05imagew\x04area\x01\0\
-\x09\x04\0\x04draw\x01\x0a\x01@\x04\x06canvasw\x05imagew\x04area\x01\x05radii\x03\
-\0\x09\x04\0\x0adraw-round\x01\x0b\x01@\x02\x06canvasw\x05imagew\x01\0\x04\0\x06\
-forget\x01\x0c\x03\0\x1dkrate:gfx/canvas-images@0.1.0\x05M\x01B\x06\x01m\x02\x07\
-pcm-s16\x07float32\x04\0\x0dsample-format\x03\0\0\x01r\x04\x0bsample-ratey\x08ch\
-annels{\x06format\x01\x0dbuffer-framesy\x04\0\x0dstream-config\x03\0\x02\x01q\x05\
-\x11permission-denied\0\0\x0einvalid-stream\0\0\x12device-unavailable\0\0\x0buns\
-upported\x01s\0\x08platform\x01s\0\x04\0\x0baudio-error\x03\0\x04\x03\0\x17krate\
-:audio/types@0.1.0\x05N\x02\x03\0.\x0baudio-error\x02\x03\0.\x0dstream-config\x01\
-B\x15\x02\x03\x02\x01O\x04\0\x0baudio-error\x03\0\0\x02\x03\x02\x01P\x04\0\x0dst\
-ream-config\x03\0\x02\x01j\x01w\x01\x01\x01@\x01\x06config\x03\0\x04\x04\0\x04op\
-en\x01\x05\x01j\0\x01\x01\x01@\x01\x09stream-idw\0\x06\x04\0\x05start\x01\x07\x04\
-\0\x04stop\x01\x07\x01p}\x01j\x01y\x01\x01\x01@\x02\x09stream-idw\x05bytes\x08\0\
-\x09\x04\0\x05write\x01\x0a\x01@\x02\x09stream-idw\x05bytes\x08\0\x04\x04\0\x0al\
-oad-sound\x01\x0b\x01@\x03\x09stream-idw\x05soundw\x04gainv\0\x06\x04\0\x0aplay-\
-sound\x01\x0c\x01@\x02\x09stream-idw\x05soundw\0\x06\x04\0\x0astop-sound\x01\x0d\
-\x03\0\x1akrate:audio/playback@0.1.0\x05Q\x01B\x05\x02\x03\x02\x01O\x04\0\x0baud\
-io-error\x03\0\0\x01j\x01y\x01\x01\x01@\x01\x09stream-idw\0\x02\x04\0\x06queued\x01\
-\x03\x03\0\x20krate:audio/playback-queue@0.1.0\x05R\x01B\x0f\x02\x03\x02\x01O\x04\
-\0\x0baudio-error\x03\0\0\x02\x03\x02\x01P\x04\0\x0dstream-config\x03\0\x02\x01j\
-\x01w\x01\x01\x01@\x01\x06config\x03\0\x04\x04\0\x04open\x01\x05\x01j\0\x01\x01\x01\
-@\x01\x09stream-idw\0\x06\x04\0\x05start\x01\x07\x04\0\x04stop\x01\x07\x01p}\x01\
-j\x01\x08\x01\x01\x01@\x02\x09stream-idw\x09max-bytesy\0\x09\x04\0\x04read\x01\x0a\
-\x03\0\x19krate:audio/capture@0.1.0\x05S\x01B\x0d\x01m\x01\x05rgba8\x04\0\x0cfra\
-me-format\x03\0\0\x01r\x04\x05widthy\x06heighty\x03fpsy\x06format\x01\x04\0\x0ds\
-tream-config\x03\0\x02\x01r\x04\x05widthy\x06heighty\x03fpsy\x06format\x01\x04\0\
-\x0aframe-info\x03\0\x04\x01r\x02\x02ids\x05labels\x04\0\x0bdevice-info\x03\0\x06\
-\x01p}\x01r\x04\x05bytes\x08\x05widthy\x06heighty\x0eelapsed-millisw\x04\0\x05fr\
-ame\x03\0\x09\x01q\x06\x11permission-denied\0\0\x0einvalid-stream\0\0\x12device-\
-unavailable\0\0\x0dsystem-denied\0\0\x0bunsupported\x01s\0\x08platform\x01s\0\x04\
-\0\x0ccamera-error\x03\0\x0b\x03\0\x18krate:camera/types@0.1.0\x05T\x02\x03\02\x0c\
-camera-error\x02\x03\02\x0bdevice-info\x02\x03\02\x05frame\x02\x03\02\x0aframe-i\
-nfo\x02\x03\02\x0dstream-config\x01B\x1d\x02\x03\x02\x01U\x04\0\x0ccamera-error\x03\
-\0\0\x02\x03\x02\x01V\x04\0\x0bdevice-info\x03\0\x02\x02\x03\x02\x01W\x04\0\x05f\
-rame\x03\0\x04\x02\x03\x02\x01X\x04\0\x0aframe-info\x03\0\x06\x02\x03\x02\x01Y\x04\
-\0\x0dstream-config\x03\0\x08\x01p\x03\x01j\x01\x0a\x01\x01\x01@\0\0\x0b\x04\0\x07\
-devices\x01\x0c\x01j\x01w\x01\x01\x01@\x02\x06devices\x06config\x09\0\x0d\x04\0\x04\
-open\x01\x0e\x01j\x01\x07\x01\x01\x01@\x01\x09stream-idw\0\x0f\x04\0\x04info\x01\
-\x10\x01j\0\x01\x01\x01@\x01\x09stream-idw\0\x11\x04\0\x05start\x01\x12\x04\0\x04\
-stop\x01\x12\x01k\x05\x01j\x01\x13\x01\x01\x01@\x01\x09stream-idw\0\x14\x04\0\x04\
-read\x01\x15\x04\0\x05close\x01\x12\x03\0\x1akrate:camera/capture@0.1.0\x05Z\x01\
-B\x12\x01r\x01\x04texts\x04\0\x0atranscript\x03\0\0\x01q\x05\x0finvalid-request\x01\
-s\0\x0fmodel-not-found\0\0\x0dmodel-invalid\x01s\0\x0bunsupported\x01s\0\x09infe\
-rence\x01s\0\x04\0\x0cspeech-error\x03\0\x02\x01m\x05\x0finvalid-request\x0fmode\
-l-not-found\x0dmodel-invalid\x0bunsupported\x09inference\x04\0\x0bmatch-error\x03\
-\0\x04\x01p}\x01ks\x01j\x01\x01\x01\x03\x01@\x04\x0bmodel-assets\x0apcm-s16-le\x06\
-\x0bsample-ratey\x08language\x07\0\x08\x04\0\x0atranscribe\x01\x09\x01j\x01}\x01\
-\x05\x01@\x05\x0bmodel-assets\x0apcm-s16-le\x06\x0bsample-ratey\x08language\x07\x08\
-expecteds\0\x0a\x04\0\x0amatch-line\x01\x0b\x01k}\x01j\x01\x0c\x01\x05\x01@\x06\x0b\
-model-assets\x0apcm-s16-le\x06\x0bsample-ratey\x08language\x07\x08expecteds\x06f\
-inish\x7f\0\x0d\x04\0\x11match-line-stream\x01\x0e\x03\0\x20krate:speech/transcr\
-iption@0.1.0\x05[\x01B\x12\x01r\x03\x02ids\x04names\x08languages\x04\0\x05voice\x03\
-\0\0\x01q\x04\x11permission-denied\0\0\x0finvalid-request\x01s\0\x0bunsupported\x01\
-s\0\x08platform\x01s\0\x04\0\x09say-error\x03\0\x02\x01p\x01\x01j\x01\x04\x01\x03\
-\x01@\0\0\x05\x04\0\x06voices\x01\x06\x01ks\x01kv\x01j\0\x01\x03\x01@\x03\x04tex\
-ts\x05voice\x07\x04rate\x08\0\x09\x04\0\x03say\x01\x0a\x01@\0\0\x09\x04\0\x04sto\
-p\x01\x0b\x01j\x01\x7f\x01\x03\x01@\0\0\x0c\x04\0\x08speaking\x01\x0d\x03\0\x1ck\
-rate:speech/synthesis@0.1.0\x05\\\x01@\0\0z\x04\0\x03run\x01]\x04\0\x13krate:app\
-/gui@0.2.0\x04\0\x0b\x09\x01\0\x03gui\x03\0\0\0G\x09producers\x01\x0cprocessed-b\
-y\x02\x0dwit-component\x070.227.1\x10wit-bindgen-rust\x060.41.0";
+nnect\x01\x13\x03\0\x18krate:ui/bluetooth@0.1.0\x05?\x01B\x0a\x01p}\x01r\x02\x04\
+names\x04data\0\x04\0\x0bshared-file\x03\0\x01\x01q\x02\x0bunavailable\x01s\0\x07\
+invalid\x01s\0\x04\0\x0bshare-error\x03\0\x03\x01ks\x01p\x02\x01j\x01\x7f\x01\x04\
+\x01@\x04\x06windoww\x04text\x05\x03url\x05\x05files\x06\0\x07\x04\0\x05share\x01\
+\x08\x03\0\x14krate:ui/share@0.1.0\x05@\x01B\x14\x01r\x04\x01rv\x01gv\x01bv\x01a\
+v\x04\0\x05color\x03\0\0\x01r\x02\x01xv\x01yv\x04\0\x05point\x03\0\x02\x01r\x02\x05\
+widthv\x06heightv\x04\0\x04size\x03\0\x04\x01r\x04\x05widthv\x06heightv\x06ascen\
+tv\x07descentv\x04\0\x0ctext-metrics\x03\0\x06\x01r\x04\x01xv\x01yv\x05widthv\x06\
+heightv\x04\0\x04rect\x03\0\x08\x01r\x02\x06offsetv\x05color\x01\x04\0\x0dgradie\
+nt-stop\x03\0\x0a\x01m\x03\x04sans\x05serif\x04mono\x04\0\x0bfont-family\x03\0\x0c\
+\x01r\x04\x06weight{\x06italic\x7f\x0eletter-spacingv\x06family\x0d\x04\0\x0atex\
+t-style\x03\0\x0e\x01r\x04\x08top-leftv\x09top-rightv\x0cbottom-rightv\x0bbottom\
+-leftv\x04\0\x0ccorner-radii\x03\0\x10\x01q\x04\x11permission-denied\0\0\x0einva\
+lid-target\0\0\x0bunsupported\x01s\0\x08platform\x01s\0\x04\0\x09gfx-error\x03\0\
+\x12\x03\0\x15krate:gfx/types@0.1.0\x05A\x02\x03\0+\x05color\x02\x03\0+\x05point\
+\x02\x03\0+\x04rect\x02\x03\0+\x04size\x02\x03\0+\x0ctext-metrics\x02\x03\0+\x09\
+gfx-error\x02\x03\0+\x0dgradient-stop\x02\x03\0+\x0ccorner-radii\x02\x03\0+\x0at\
+ext-style\x02\x03\0+\x0bfont-family\x01BK\x02\x03\x02\x01B\x04\0\x05color\x03\0\0\
+\x02\x03\x02\x01C\x04\0\x05point\x03\0\x02\x02\x03\x02\x01D\x04\0\x04rect\x03\0\x04\
+\x02\x03\x02\x01E\x04\0\x04size\x03\0\x06\x02\x03\x02\x01F\x04\0\x0ctext-metrics\
+\x03\0\x08\x02\x03\x02\x01G\x04\0\x09gfx-error\x03\0\x0a\x02\x03\x02\x01H\x04\0\x0d\
+gradient-stop\x03\0\x0c\x02\x03\x02\x01I\x04\0\x0ccorner-radii\x03\0\x0e\x02\x03\
+\x02\x01J\x04\0\x0atext-style\x03\0\x10\x02\x03\x02\x01K\x04\0\x0bfont-family\x03\
+\0\x12\x01j\x01w\x01\x0b\x01@\x02\x06windoww\x06widgetw\0\x14\x04\0\x04bind\x01\x15\
+\x01j\x01\x07\x01\x0b\x01@\x01\x06canvasw\0\x16\x04\0\x0bcanvas-size\x01\x17\x01\
+j\0\x01\x0b\x01@\x02\x06canvasw\x04size\x07\0\x18\x04\0\x0fset-design-size\x01\x19\
+\x01@\x05\x06canvasw\x01xv\x01yv\x01wv\x01hv\0\x18\x04\0\x08set-clip\x01\x1a\x01\
+@\x01\x06canvasw\0\x18\x04\0\x0aclear-clip\x01\x1b\x01@\x02\x06canvasw\x04fill\x01\
+\0\x18\x04\0\x05clear\x01\x1c\x01@\x03\x06canvasw\x04area\x05\x04fill\x01\0\x18\x04\
+\0\x09fill-rect\x01\x1d\x01@\x04\x06canvasw\x04area\x05\x06stroke\x01\x05widthv\0\
+\x18\x04\0\x0bstroke-rect\x01\x1e\x01@\x04\x06canvasw\x04area\x05\x05radii\x0f\x04\
+fill\x01\0\x18\x04\0\x0ffill-round-rect\x01\x1f\x01@\x05\x06canvasw\x04area\x05\x05\
+radii\x0f\x05widthv\x06stroke\x01\0\x18\x04\0\x11stroke-round-rect\x01\x20\x01@\x05\
+\x06canvasw\x04area\x05\x05radii\x0f\x04blurv\x06shadow\x01\0\x18\x04\0\x16drop-\
+shadow-round-rect\x01!\x01p\x0d\x01@\x04\x06canvasw\x04area\x05\x0dangle-degrees\
+v\x05stops\"\0\x18\x04\0\x15linear-gradient-stops\x01#\x01@\x06\x06canvasw\x04te\
+xts\x06origin\x03\x09font-sizev\x03ink\x01\x05style\x11\0\x18\x04\0\x10draw-text\
+-styled\x01$\x01j\x01\x09\x01\x0b\x01@\x04\x06canvasw\x04texts\x09font-sizev\x05\
+style\x11\0%\x04\0\x13measure-text-styled\x01&\x01@\x07\x06canvasw\x06center\x03\
+\x06radiusv\x0dstart-degreesv\x0dsweep-degreesv\x05widthv\x06stroke\x01\0\x18\x04\
+\0\x0astroke-arc\x01'\x01p}\x01@\x06\x06canvasw\x04area\x05\x05radii\x0f\x05widt\
+hy\x06heighty\x04rgba(\0\x18\x04\0\x11draw-pixels-round\x01)\x01@\x04\x06canvasw\
+\x06center\x03\x06radiusv\x04fill\x01\0\x18\x04\0\x0bfill-circle\x01*\x01@\x05\x06\
+canvasw\x06center\x03\x06radiusv\x05widthv\x06stroke\x01\0\x18\x04\0\x0dstroke-c\
+ircle\x01+\x01@\x05\x06canvasw\x06center\x03\x06radiusv\x05inner\x01\x05outer\x01\
+\0\x18\x04\0\x0fradial-gradient\x01,\x01@\x04\x06canvasw\x04area\x05\x03top\x01\x06\
+bottom\x01\0\x18\x04\0\x0flinear-gradient\x01-\x01@\x05\x06canvasw\x04texts\x06o\
+rigin\x03\x09font-sizev\x03ink\x01\0\x18\x04\0\x09draw-text\x01.\x01@\x03\x06can\
+vasw\x04texts\x09font-sizev\0%\x04\0\x0cmeasure-text\x01/\x01@\x05\x06canvasw\x04\
+area\x05\x05widthy\x06heighty\x04rgba(\0\x18\x04\0\x0bdraw-pixels\x010\x01@\x07\x06\
+canvasw\x06center\x03\x03dst\x07\x05anglev\x05widthy\x06heighty\x04rgba(\0\x18\x04\
+\0\x0bdraw-sprite\x011\x04\0\x07present\x01\x1b\x03\0\x18krate:gfx/canvas2d@0.1.\
+0\x05L\x01B%\x02\x03\x02\x01B\x04\0\x05color\x03\0\0\x02\x03\x02\x01G\x04\0\x09g\
+fx-error\x03\0\x02\x01pv\x01r\x0a\x07ambientv\x08specularv\x09shininessv\x0bfog-\
+densityv\x09fog-color\x01\x0efill-direction\x04\x0afill-color\x01\x0dshadow-radi\
+usv\x0fshadow-softnessv\x08exposurev\x04\0\x08lighting\x03\0\x05\x01j\x01w\x01\x03\
+\x01@\x02\x06windoww\x06widgetw\0\x07\x04\0\x04bind\x01\x08\x01j\0\x01\x03\x01@\x02\
+\x05scenew\x03sky\x01\0\x09\x04\0\x05clear\x01\x0a\x01@\x04\x05scenew\x03eye\x04\
+\x07look-at\x04\x0bfov-degreesv\0\x09\x04\0\x06camera\x01\x0b\x01@\x02\x05scenew\
+\x09direction\x04\0\x09\x04\0\x05light\x01\x0c\x01@\x03\x05scenew\x08vertices\x04\
+\x04tint\x01\0\x09\x04\0\x09triangles\x01\x0d\x01@\x06\x05scenew\x08vertices\x04\
+\x09translate\x04\x0erotate-degrees\x04\x05scalev\x04tint\x01\0\x09\x04\0\x05pla\
+ce\x01\x0e\x01p}\x01@\x04\x05scenew\x05widthy\x06heighty\x04rgba\x0f\0\x07\x04\0\
+\x0eupload-texture\x01\x10\x01@\x05\x05scenew\x08vertices\x04\x03uvs\x04\x07text\
+urew\x04tint\x01\0\x09\x04\0\x08textured\x01\x11\x01@\x06\x05scenew\x08vertices\x04\
+\x07normals\x04\x03uvs\x04\x07texturew\x04tint\x01\0\x09\x04\0\x06smooth\x01\x12\
+\x01@\x02\x05scenew\x08lighting\x06\0\x09\x04\0\x0cset-lighting\x01\x13\x01@\x08\
+\x05scenew\x08vertices\x04\x07normals\x04\x08tangents\x04\x03uvs\x04\x07texturew\
+\x0enormal-texturew\x04tint\x01\0\x09\x04\0\x0dnormal-mapped\x01\x14\x04\0\x05un\
+lit\x01\x11\x01@\x02\x05scenew\x07enabled\x7f\0\x09\x04\0\x0fcull-back-faces\x01\
+\x15\x01@\x01\x05scenew\0\x09\x04\0\x07present\x01\x16\x03\0\x17krate:gfx/scene3\
+d@0.1.0\x05M\x01B\x11\x02\x03\x02\x01D\x04\0\x04rect\x03\0\0\x02\x03\x02\x01I\x04\
+\0\x0ccorner-radii\x03\0\x02\x02\x03\x02\x01G\x04\0\x09gfx-error\x03\0\x04\x01p}\
+\x01j\x01w\x01\x05\x01@\x04\x06canvasw\x05widthy\x06heighty\x04rgba\x06\0\x07\x04\
+\0\x04keep\x01\x08\x01j\0\x01\x05\x01@\x03\x06canvasw\x05imagew\x04area\x01\0\x09\
+\x04\0\x04draw\x01\x0a\x01@\x04\x06canvasw\x05imagew\x04area\x01\x05radii\x03\0\x09\
+\x04\0\x0adraw-round\x01\x0b\x01@\x02\x06canvasw\x05imagew\x01\0\x04\0\x06forget\
+\x01\x0c\x03\0\x1dkrate:gfx/canvas-images@0.1.0\x05N\x01B\x06\x01m\x02\x07pcm-s1\
+6\x07float32\x04\0\x0dsample-format\x03\0\0\x01r\x04\x0bsample-ratey\x08channels\
+{\x06format\x01\x0dbuffer-framesy\x04\0\x0dstream-config\x03\0\x02\x01q\x05\x11p\
+ermission-denied\0\0\x0einvalid-stream\0\0\x12device-unavailable\0\0\x0bunsuppor\
+ted\x01s\0\x08platform\x01s\0\x04\0\x0baudio-error\x03\0\x04\x03\0\x17krate:audi\
+o/types@0.1.0\x05O\x02\x03\0/\x0baudio-error\x02\x03\0/\x0dstream-config\x01B\x15\
+\x02\x03\x02\x01P\x04\0\x0baudio-error\x03\0\0\x02\x03\x02\x01Q\x04\0\x0dstream-\
+config\x03\0\x02\x01j\x01w\x01\x01\x01@\x01\x06config\x03\0\x04\x04\0\x04open\x01\
+\x05\x01j\0\x01\x01\x01@\x01\x09stream-idw\0\x06\x04\0\x05start\x01\x07\x04\0\x04\
+stop\x01\x07\x01p}\x01j\x01y\x01\x01\x01@\x02\x09stream-idw\x05bytes\x08\0\x09\x04\
+\0\x05write\x01\x0a\x01@\x02\x09stream-idw\x05bytes\x08\0\x04\x04\0\x0aload-soun\
+d\x01\x0b\x01@\x03\x09stream-idw\x05soundw\x04gainv\0\x06\x04\0\x0aplay-sound\x01\
+\x0c\x01@\x02\x09stream-idw\x05soundw\0\x06\x04\0\x0astop-sound\x01\x0d\x03\0\x1a\
+krate:audio/playback@0.1.0\x05R\x01B\x05\x02\x03\x02\x01P\x04\0\x0baudio-error\x03\
+\0\0\x01j\x01y\x01\x01\x01@\x01\x09stream-idw\0\x02\x04\0\x06queued\x01\x03\x03\0\
+\x20krate:audio/playback-queue@0.1.0\x05S\x01B\x0f\x02\x03\x02\x01P\x04\0\x0baud\
+io-error\x03\0\0\x02\x03\x02\x01Q\x04\0\x0dstream-config\x03\0\x02\x01j\x01w\x01\
+\x01\x01@\x01\x06config\x03\0\x04\x04\0\x04open\x01\x05\x01j\0\x01\x01\x01@\x01\x09\
+stream-idw\0\x06\x04\0\x05start\x01\x07\x04\0\x04stop\x01\x07\x01p}\x01j\x01\x08\
+\x01\x01\x01@\x02\x09stream-idw\x09max-bytesy\0\x09\x04\0\x04read\x01\x0a\x03\0\x19\
+krate:audio/capture@0.1.0\x05T\x01B\x0d\x01m\x01\x05rgba8\x04\0\x0cframe-format\x03\
+\0\0\x01r\x04\x05widthy\x06heighty\x03fpsy\x06format\x01\x04\0\x0dstream-config\x03\
+\0\x02\x01r\x04\x05widthy\x06heighty\x03fpsy\x06format\x01\x04\0\x0aframe-info\x03\
+\0\x04\x01r\x02\x02ids\x05labels\x04\0\x0bdevice-info\x03\0\x06\x01p}\x01r\x04\x05\
+bytes\x08\x05widthy\x06heighty\x0eelapsed-millisw\x04\0\x05frame\x03\0\x09\x01q\x06\
+\x11permission-denied\0\0\x0einvalid-stream\0\0\x12device-unavailable\0\0\x0dsys\
+tem-denied\0\0\x0bunsupported\x01s\0\x08platform\x01s\0\x04\0\x0ccamera-error\x03\
+\0\x0b\x03\0\x18krate:camera/types@0.1.0\x05U\x02\x03\03\x0ccamera-error\x02\x03\
+\03\x0bdevice-info\x02\x03\03\x05frame\x02\x03\03\x0aframe-info\x02\x03\03\x0dst\
+ream-config\x01B\x1d\x02\x03\x02\x01V\x04\0\x0ccamera-error\x03\0\0\x02\x03\x02\x01\
+W\x04\0\x0bdevice-info\x03\0\x02\x02\x03\x02\x01X\x04\0\x05frame\x03\0\x04\x02\x03\
+\x02\x01Y\x04\0\x0aframe-info\x03\0\x06\x02\x03\x02\x01Z\x04\0\x0dstream-config\x03\
+\0\x08\x01p\x03\x01j\x01\x0a\x01\x01\x01@\0\0\x0b\x04\0\x07devices\x01\x0c\x01j\x01\
+w\x01\x01\x01@\x02\x06devices\x06config\x09\0\x0d\x04\0\x04open\x01\x0e\x01j\x01\
+\x07\x01\x01\x01@\x01\x09stream-idw\0\x0f\x04\0\x04info\x01\x10\x01j\0\x01\x01\x01\
+@\x01\x09stream-idw\0\x11\x04\0\x05start\x01\x12\x04\0\x04stop\x01\x12\x01k\x05\x01\
+j\x01\x13\x01\x01\x01@\x01\x09stream-idw\0\x14\x04\0\x04read\x01\x15\x04\0\x05cl\
+ose\x01\x12\x03\0\x1akrate:camera/capture@0.1.0\x05[\x01B\x12\x01r\x01\x04texts\x04\
+\0\x0atranscript\x03\0\0\x01q\x05\x0finvalid-request\x01s\0\x0fmodel-not-found\0\
+\0\x0dmodel-invalid\x01s\0\x0bunsupported\x01s\0\x09inference\x01s\0\x04\0\x0csp\
+eech-error\x03\0\x02\x01m\x05\x0finvalid-request\x0fmodel-not-found\x0dmodel-inv\
+alid\x0bunsupported\x09inference\x04\0\x0bmatch-error\x03\0\x04\x01p}\x01ks\x01j\
+\x01\x01\x01\x03\x01@\x04\x0bmodel-assets\x0apcm-s16-le\x06\x0bsample-ratey\x08l\
+anguage\x07\0\x08\x04\0\x0atranscribe\x01\x09\x01j\x01}\x01\x05\x01@\x05\x0bmode\
+l-assets\x0apcm-s16-le\x06\x0bsample-ratey\x08language\x07\x08expecteds\0\x0a\x04\
+\0\x0amatch-line\x01\x0b\x01k}\x01j\x01\x0c\x01\x05\x01@\x06\x0bmodel-assets\x0a\
+pcm-s16-le\x06\x0bsample-ratey\x08language\x07\x08expecteds\x06finish\x7f\0\x0d\x04\
+\0\x11match-line-stream\x01\x0e\x03\0\x20krate:speech/transcription@0.1.0\x05\\\x01\
+B\x12\x01r\x03\x02ids\x04names\x08languages\x04\0\x05voice\x03\0\0\x01q\x04\x11p\
+ermission-denied\0\0\x0finvalid-request\x01s\0\x0bunsupported\x01s\0\x08platform\
+\x01s\0\x04\0\x09say-error\x03\0\x02\x01p\x01\x01j\x01\x04\x01\x03\x01@\0\0\x05\x04\
+\0\x06voices\x01\x06\x01ks\x01kv\x01j\0\x01\x03\x01@\x03\x04texts\x05voice\x07\x04\
+rate\x08\0\x09\x04\0\x03say\x01\x0a\x01@\0\0\x09\x04\0\x04stop\x01\x0b\x01j\x01\x7f\
+\x01\x03\x01@\0\0\x0c\x04\0\x08speaking\x01\x0d\x03\0\x1ckrate:speech/synthesis@\
+0.1.0\x05]\x01@\0\0z\x04\0\x03run\x01^\x04\0\x13krate:app/gui@0.2.0\x04\0\x0b\x09\
+\x01\0\x03gui\x03\0\0\0G\x09producers\x01\x0cprocessed-by\x02\x0dwit-component\x07\
+0.227.1\x10wit-bindgen-rust\x060.41.0";
 #[inline(never)]
 #[doc(hidden)]
 pub fn __link_custom_section_describing_imports() {
