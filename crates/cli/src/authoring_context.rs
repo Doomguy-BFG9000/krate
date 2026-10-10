@@ -432,7 +432,13 @@ draw one too. On a phone the game should also tap back: \
 a choice changes, `Success`/`Warning`/`Error` for outcomes, and \
 `impact(strength)` (0 to 1) for a hit or a landing. No capability; a \
 computer answers `available()` false and ignores the calls, so call them \
-everywhere and never make a tap the only sign something happened. A picture that does not change \
+everywhere and never make a tap the only sign something happened. \
+Tilt, shake and compass: `krate::ui::motion::read()` gives `gravity`, \
+`acceleration` (g), `rotation` (degrees a second) and `heading` in the \
+SCREEN's frame however the phone is turned -- x right, y down, z toward \
+the person -- so steer with `gravity.x` in portrait and landscape alike; \
+a phone lying flat reads gravity (0, 0, -1). It is none on a computer \
+(`available()` false): keep keys or the pad as the way to play there. A picture that does not change \
 between frames (a screenshot, an avatar, a sprite sheet) is kept once \
 with `krate::gfx::canvas_images::keep(canvas, w, h, &rgba)` and drawn \
 by handle with `draw`/`draw_round` each frame: `draw_pixels` sends \

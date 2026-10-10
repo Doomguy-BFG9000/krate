@@ -536,6 +536,14 @@ impl UiAdapter for IosUikitPrototypeUiAdapter {
         uikit_native::choose_path(folder, filter)
     }
 
+    fn motion_available(&self) -> bool {
+        uikit_native::motion_available()
+    }
+
+    fn motion(&self) -> Option<krate_adapter_common::ui::MotionReading> {
+        uikit_native::motion_read()
+    }
+
     fn haptics_available(&self) -> bool {
         true
     }

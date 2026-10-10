@@ -403,6 +403,26 @@ impl ui4::haptics::Host for Phase3GuiHost {
     }
 }
 
+/// How the phone is held and moves (IC-917). Phase 4 only. No capability,
+/// as with the screen's own facts: which way a phone is tilted while an app
+/// is on it tells the app nothing about the person beyond that.
+impl ui4::motion::Host for Phase3GuiHost {
+    fn available(&mut self) -> wasmtime::Result<bool> {
+        Ok(self.motion().0)
+    }
+
+    fn read(&mut self) -> wasmtime::Result<Option<ui4::motion::Reading>> {
+        use ui4::motion::{Reading, Vector};
+        let vector = |(x, y, z): (f32, f32, f32)| Vector { x, y, z };
+        Ok(self.motion().1.map(|m| Reading {
+            gravity: vector(m.gravity),
+            acceleration: vector(m.acceleration),
+            rotation: vector(m.rotation),
+            heading: m.heading,
+        }))
+    }
+}
+
 /// What kind of screen a window is on (IC-912). Phase 4 only.
 impl ui4::screen::Host for Phase3GuiHost {
     fn facts(&mut self, window: u64) -> wasmtime::Result<ui4::screen::ScreenFacts> {

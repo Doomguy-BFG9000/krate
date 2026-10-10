@@ -7,7 +7,7 @@
 
 #![allow(clippy::too_many_arguments)]
 
-/// `krate:ui`: clipboard, dialog, events, haptics, image, launcher, menu, notify, pointer, print, screen, text_entry, touch, tree, window.
+/// `krate:ui`: clipboard, dialog, events, haptics, image, launcher, menu, motion, notify, pointer, print, screen, text_entry, touch, tree, window.
 pub mod ui {
     /// `krate:ui/clipboard`.
     pub mod clipboard {
@@ -230,6 +230,21 @@ pub mod ui {
         /// Set the simple top-level menu for a window.
         pub fn set_items(window: u64, items: &[MenuItem]) -> Result<(), UiError> {
             crate::bindings::krate::ui::menu::set_items(window, items)
+        }
+    }
+    /// `krate:ui/motion`.
+    pub mod motion {
+        pub use crate::bindings::krate::ui::motion::{Reading, Vector};
+
+        /// Whether this device can tell how it is held.
+        pub fn available() -> bool {
+            crate::bindings::krate::ui::motion::available()
+        }
+
+        /// The latest reading, up to sixty a second; none on a device without
+        /// sensors, and for the first moment after the first ask.
+        pub fn read() -> Option<Reading> {
+            crate::bindings::krate::ui::motion::read()
         }
     }
     /// `krate:ui/notify`.

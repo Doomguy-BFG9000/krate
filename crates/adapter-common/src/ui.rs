@@ -1663,6 +1663,98 @@ impl PointerTracker {
 /// renderer consumes it, and this crate only carries it between them.
 pub type CanvasListHandle = std::sync::Arc<dyn std::any::Any + Send + Sync>;
 
+/// One reading of a phone's motion sensors (IC-917), in the screen's frame:
+/// x right, y down, z toward the person.
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
+pub struct MotionReading {
+    /// Which way is down, in g.
+    pub gravity: (f32, f32, f32),
+    /// The push given the phone, gravity removed, in g.
+    pub acceleration: (f32, f32, f32),
+    /// Turning about each axis, in degrees a second.
+    pub rotation: (f32, f32, f32),
+    /// Degrees clockwise from magnetic north the top of the screen faces.
+    pub heading: Option<f32>,
+}
+
+/// How the interface is turned, as UIKit and Android both number the four
+/// ways up (IC-917).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ScreenTurn {
+    /// Held upright.
+    Upright,
+    /// Upside down.
+    UpsideDown,
+    /// Turned so the phone's top points left (iOS: home button on the right).
+    TopLeft,
+    /// Turned so the phone's top points right (iOS: home button on the left).
+    TopRight,
+}
+
+/// A vector in a phone's own frame (x right and y up the phone held
+/// upright, z out of the glass) in the screen's frame for how the interface
+/// is turned: x right, y down, z out.
+pub fn device_to_screen(turn: ScreenTurn, (dx, dy, dz): (f64, f64, f64)) -> (f32, f32, f32) {
+    let (sx, sy) = match turn {
+        ScreenTurn::Upright => (dx, -dy),
+        ScreenTurn::UpsideDown => (-dx, dy),
+        ScreenTurn::TopLeft => (-dy, -dx),
+        ScreenTurn::TopRight => (dy, dx),
+    };
+    (sx as f32, sy as f32, dz as f32)
+}
+
+/// A compass heading of the phone's top as the heading of the screen's top.
+pub fn heading_to_screen(turn: ScreenTurn, heading: f64) -> f32 {
+    let offset = match turn {
+        ScreenTurn::Upright => 0.0,
+        ScreenTurn::UpsideDown => 180.0,
+        ScreenTurn::TopLeft => 90.0,
+        ScreenTurn::TopRight => 270.0,
+    };
+    ((heading + offset).rem_euclid(360.0)) as f32
+}
+
+#[cfg(test)]
+mod motion_tests {
+    use super::*;
+
+    #[test]
+    fn down_is_down_the_screen_however_the_phone_is_turned() {
+        // Held upright in each way, gravity points to the phone's bottom
+        // edge as the person sees it: down the screen, (0, 1).
+        let cases = [
+            (ScreenTurn::Upright, (0.0, -1.0, 0.0)),
+            (ScreenTurn::UpsideDown, (0.0, 1.0, 0.0)),
+            (ScreenTurn::TopLeft, (-1.0, 0.0, 0.0)),
+            (ScreenTurn::TopRight, (1.0, 0.0, 0.0)),
+        ];
+        for (turn, device) in cases {
+            assert_eq!(device_to_screen(turn, device), (0.0, 1.0, 0.0), "{turn:?}");
+        }
+        // Lying face up: down is into the table, through the back.
+        assert_eq!(
+            device_to_screen(ScreenTurn::TopLeft, (0.0, 0.0, -1.0)),
+            (0.0, 0.0, -1.0)
+        );
+        // Tilting the phone's right edge down, upright: down leans right.
+        assert_eq!(
+            device_to_screen(ScreenTurn::Upright, (0.5, -0.8, 0.0)).0,
+            0.5
+        );
+    }
+
+    #[test]
+    fn the_heading_is_where_the_top_of_the_screen_faces() {
+        // The phone's top faces north (0). Turned so its top points left,
+        // the screen's top is the phone's right side: 90 degrees on.
+        assert_eq!(heading_to_screen(ScreenTurn::Upright, 0.0), 0.0);
+        assert_eq!(heading_to_screen(ScreenTurn::TopLeft, 0.0), 90.0);
+        assert_eq!(heading_to_screen(ScreenTurn::TopRight, 0.0), 270.0);
+        assert_eq!(heading_to_screen(ScreenTurn::UpsideDown, 270.0), 90.0);
+    }
+}
+
 /// What a phone's tap back means (IC-917): the platform plays its own feel
 /// for each.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1859,6 +1951,16 @@ pub trait UiAdapter: WindowAdapter {
     /// `feel` is None. False when there is nothing to tap with.
     fn haptic(&self, _feel: Option<HapticFeel>, _strength: f32) -> bool {
         false
+    }
+
+    /// Whether this device can tell how it is held (IC-917).
+    fn motion_available(&self) -> bool {
+        false
+    }
+
+    /// The latest motion reading, starting the sensors on the first ask.
+    fn motion(&self) -> Option<MotionReading> {
+        None
     }
 
     /// Hand a file the app has written to the platform's own save sheet,

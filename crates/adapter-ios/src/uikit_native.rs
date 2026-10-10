@@ -493,6 +493,9 @@ mod real {
     /// the app to close, as a desktop close button does; a second tap closes
     /// an app that does not answer.
     pub fn set_app_chrome(visible: bool) {
+        if !visible {
+            stop_motion();
+        }
         if visible {
             // A close tapped before this app began (on the screen before
             // it) is not meant for it: it must not close the app at once.
@@ -689,6 +692,141 @@ mod real {
         main_side
             .controller
             .presentViewController_animated_completion(&picker, true, None);
+    }
+
+    // CoreMotion, through the Objective-C runtime: one manager, made on the
+    // first ask, read without a queue (the app pulls at its own frame rate).
+    #[link(name = "CoreMotion", kind = "framework")]
+    unsafe extern "C" {}
+
+    /// CMAcceleration and CMRotationRate: three doubles.
+    #[repr(C)]
+    #[derive(Clone, Copy, Default)]
+    struct CmVector {
+        x: f64,
+        y: f64,
+        z: f64,
+    }
+
+    // SAFETY: the C layout of CoreMotion's {double x, y, z} structs.
+    unsafe impl objc2::Encode for CmVector {
+        const ENCODING: objc2::Encoding = objc2::Encoding::Struct(
+            "?",
+            &[
+                objc2::Encoding::Double,
+                objc2::Encoding::Double,
+                objc2::Encoding::Double,
+            ],
+        );
+    }
+
+    struct MotionManager(Retained<objc2::runtime::AnyObject>);
+    // SAFETY: CMMotionManager's pull interface (deviceMotion, start, stop)
+    // may be used from any thread; it is only ever touched under the lock.
+    unsafe impl Send for MotionManager {}
+
+    static MOTION: Mutex<Option<MotionManager>> = Mutex::new(None);
+
+    /// The way the interface is turned, as UIKit numbers it (1 upright,
+    /// 2 upside down, 3 home button right, 4 home button left), kept from
+    /// the last layout so a reading can be turned into the screen's frame.
+    static INTERFACE_TURN: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(1);
+
+    fn motion_class() -> Option<&'static objc2::runtime::AnyClass> {
+        objc2::runtime::AnyClass::get(c"CMMotionManager")
+    }
+
+    pub fn motion_available() -> bool {
+        if let Some(manager) = MOTION.lock().expect("motion lock").as_ref() {
+            return unsafe { msg_send![&*manager.0, isDeviceMotionAvailable] };
+        }
+        let Some(class) = motion_class() else {
+            return false;
+        };
+        // SAFETY: a fresh CMMotionManager, asked one property, then dropped.
+        unsafe {
+            let fresh: Option<Retained<objc2::runtime::AnyObject>> = msg_send![class, new];
+            fresh.is_some_and(|m| msg_send![&*m, isDeviceMotionAvailable])
+        }
+    }
+
+    /// The latest reading in the screen's frame (x right, y down, z toward
+    /// the person), starting the sensors on the first ask (IC-917).
+    pub fn motion_read() -> Option<krate_adapter_common::ui::MotionReading> {
+        let mut slot = MOTION.lock().expect("motion lock");
+        if slot.is_none() {
+            let class = motion_class()?;
+            // SAFETY: CMMotionManager's documented setup: make, check, set
+            // the interval, start; the north-referenced frame only when the
+            // device offers it (it carries the compass heading).
+            unsafe {
+                let manager: Option<Retained<objc2::runtime::AnyObject>> = msg_send![class, new];
+                let manager = manager?;
+                let available: bool = msg_send![&*manager, isDeviceMotionAvailable];
+                if !available {
+                    return None;
+                }
+                let _: () = msg_send![&*manager, setDeviceMotionUpdateInterval: 1.0f64 / 60.0];
+                let frames: usize = msg_send![class, availableAttitudeReferenceFrames];
+                const NORTH_Z_VERTICAL: usize = 1 << 2;
+                if frames & NORTH_Z_VERTICAL != 0 {
+                    let _: () = msg_send![&*manager, startDeviceMotionUpdatesUsingReferenceFrame: NORTH_Z_VERTICAL];
+                } else {
+                    let _: () = msg_send![&*manager, startDeviceMotionUpdates];
+                }
+                *slot = Some(MotionManager(manager));
+            }
+        }
+        let manager = &slot.as_ref()?.0;
+        // SAFETY: deviceMotion is nil until the first sample; its struct
+        // properties are plain doubles.
+        let (g, a, r, heading) = unsafe {
+            let motion: Option<Retained<objc2::runtime::AnyObject>> =
+                msg_send![&**manager, deviceMotion];
+            let motion = motion?;
+            let g: CmVector = msg_send![&*motion, gravity];
+            let a: CmVector = msg_send![&*motion, userAcceleration];
+            let r: CmVector = msg_send![&*motion, rotationRate];
+            let heading: f64 = msg_send![&*motion, heading];
+            (g, a, r, heading)
+        };
+        let turn = INTERFACE_TURN.load(std::sync::atomic::Ordering::Relaxed);
+        Some(motion_in_screen_frame(turn, g, a, r, heading))
+    }
+
+    /// The device's readings in the screen's frame for the way the
+    /// interface is turned (UIKit's numbering).
+    fn motion_in_screen_frame(
+        turn: u8,
+        g: CmVector,
+        a: CmVector,
+        r: CmVector,
+        heading: f64,
+    ) -> krate_adapter_common::ui::MotionReading {
+        use krate_adapter_common::ui::{device_to_screen, heading_to_screen, ScreenTurn};
+        let turn = match turn {
+            2 => ScreenTurn::UpsideDown,
+            // UIInterfaceOrientationLandscapeRight: home button on the
+            // right, so the phone's top points left.
+            3 => ScreenTurn::TopLeft,
+            4 => ScreenTurn::TopRight,
+            _ => ScreenTurn::Upright,
+        };
+        let degrees = 180.0 / std::f64::consts::PI;
+        krate_adapter_common::ui::MotionReading {
+            gravity: device_to_screen(turn, (g.x, g.y, g.z)),
+            acceleration: device_to_screen(turn, (a.x, a.y, a.z)),
+            rotation: device_to_screen(turn, (r.x * degrees, r.y * degrees, r.z * degrees)),
+            heading: (heading >= 0.0).then(|| heading_to_screen(turn, heading)),
+        }
+    }
+
+    /// The app closed: stop the sensors so they cost nothing.
+    fn stop_motion() {
+        if let Some(manager) = MOTION.lock().expect("motion lock").take() {
+            // SAFETY: stopping updates on the manager that started them.
+            let _: () = unsafe { msg_send![&*manager.0, stopDeviceMotionUpdates] };
+        }
     }
 
     /// The phone's own feedback generators, made once and kept warm on the
@@ -1068,6 +1206,10 @@ mod real {
             objc2_quartz_core::CATransaction::commit();
             // The capsule: top right, inside the safe area (clear of the
             // notch and the status bar), above the app.
+            if let Some(scene) = main_side.window.windowScene() {
+                let turn = scene.interfaceOrientation().0;
+                INTERFACE_TURN.store(turn.clamp(0, 4) as u8, std::sync::atomic::Ordering::Relaxed);
+            }
             let safe = uiview.safeAreaInsets();
             *SAFE.lock().expect("safe lock") = (
                 safe.top as f32,
@@ -2142,6 +2284,14 @@ mod stub {
 
     pub fn haptic(_feel: Option<krate_adapter_common::ui::HapticFeel>, _strength: f32) -> bool {
         false
+    }
+
+    pub fn motion_available() -> bool {
+        false
+    }
+
+    pub fn motion_read() -> Option<krate_adapter_common::ui::MotionReading> {
+        None
     }
 
     pub fn show_loading(_title: &str, _status: &str) {}

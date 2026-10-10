@@ -723,6 +723,27 @@ impl Phase3GuiHost {
         self.runtime.dispatcher()
     }
 
+    /// How the device is held (IC-917). Headless, `KRATE_MOTION=gx,gy,gz`
+    /// stands in for a phone held so, to check an app's tilt handling.
+    pub(crate) fn motion(&self) -> (bool, Option<krate_adapter_common::ui::MotionReading>) {
+        if self.headless {
+            let held = std::env::var("KRATE_MOTION").ok().and_then(|spec| {
+                let v: Vec<f32> = spec
+                    .split(',')
+                    .filter_map(|n| n.trim().parse().ok())
+                    .collect();
+                (v.len() == 3).then(|| krate_adapter_common::ui::MotionReading {
+                    gravity: (v[0], v[1], v[2]),
+                    heading: Some(0.0),
+                    ..Default::default()
+                })
+            });
+            return (held.is_some(), held);
+        }
+        let dispatcher = self.dispatcher();
+        (dispatcher.motion_available(), dispatcher.motion())
+    }
+
     /// Whether the device can tap back (IC-917); never headless.
     pub(crate) fn haptics_available(&self) -> bool {
         !self.headless && self.dispatcher().haptics_available()

@@ -784,6 +784,51 @@ interface haptics {
   impact: func(strength: f32);
 }
 
+/// Which way the phone is held and how it moves: a level, a compass, a game
+/// steered by tilting (IC-917).
+///
+/// Every vector is in the screen's own frame, however the phone is turned:
+/// x to the right of the screen, y down it, z out of the glass toward the
+/// person. So a game in landscape steers with `gravity.x` exactly as one
+/// held upright does. Sensors start on the first `read` and stop when the
+/// app closes. A computer has none: `available` is false and `read` none.
+interface motion {
+  /// Three numbers along the screen's x, y and z.
+  record vector {
+    /// Along the screen, to the right.
+    x: f32,
+    /// Along the screen, down.
+    y: f32,
+    /// Out of the screen, toward the person.
+    z: f32,
+  }
+
+  /// One reading of the phone's sensors.
+  record reading {
+    /// Which way is down, in g: (0, 1, 0) held upright, (0, 0, -1) lying
+    /// face up on a table. Steer with x; a level is zero in x and y.
+    gravity: vector,
+    /// The push the person gives the phone, gravity taken out, in g: a
+    /// shake, a swing, a step.
+    acceleration: vector,
+    /// How fast the phone turns, in degrees a second: x above zero tips
+    /// the screen's top edge toward the person, y above zero swings its
+    /// right edge toward the person, z above zero turns the phone
+    /// anticlockwise as the person sees it.
+    rotation: vector,
+    /// Degrees clockwise from magnetic north that the top of the screen
+    /// faces, when the compass knows; none until it settles or without one.
+    heading: option<f32>,
+  }
+
+  /// Whether this device can tell how it is held.
+  available: func() -> bool;
+
+  /// The latest reading, up to sixty a second; none on a device without
+  /// sensors, and for the first moment after the first ask.
+  read: func() -> option<reading>;
+}
+
 /// The system's own text entry, for an app that draws its own text fields:
 /// a game's name box, an emulator, a canvas editor.
 ///

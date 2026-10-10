@@ -6378,6 +6378,64 @@ fn an_app_taps_back_on_a_phone_and_a_computer_says_it_cannot() {
     );
 }
 
+/// An app reads how the phone is held, and a computer says it cannot
+/// (krate:ui/motion, IC-917).
+///
+/// `motion-probe.wasm` is apps/krate-motion-probe built ("Level"). On a
+/// computer `available` is false. Headless with KRATE_MOTION standing in
+/// for a phone tilted so, the app reads back exactly that gravity: the
+/// reading reaches the app whole, axis for axis.
+#[test]
+fn an_app_reads_how_the_phone_is_held_and_a_computer_says_it_cannot() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let wasm = dir.path().join("code.wasm");
+    std::fs::write(&wasm, include_bytes!("fixtures/motion-probe.wasm")).expect("probe");
+    let manifest = dir.path().join("manifest.toml");
+    std::fs::write(
+        &manifest,
+        "[app]\nid = \"dev.krate.motion-probe\"\nname = \"Level\"\nversion = \"1.0.0\"\n\
+         entry = \"code.wasm\"\nworld = \"krate:app/gui@0.2.0\"\n\n\
+         [[capabilities]]\ncap = \"ui.window:create\"\nrationale = \"window\"\nrequired = true\n\n\
+         [[capabilities]]\ncap = \"io.stdout\"\nrationale = \"print\"\nrequired = true\n\n\
+         [[capabilities]]\ncap = \"io.args\"\nrationale = \"args\"\nrequired = true\n",
+    )
+    .expect("manifest");
+    let run = |motion: Option<&str>| -> String {
+        let mut cmd = krate();
+        cmd.arg("run")
+            .arg("--headless")
+            .arg(&wasm)
+            .arg("--manifest")
+            .arg(&manifest)
+            .arg("--auto-grant")
+            .arg("--")
+            .arg("quick")
+            .env_remove("KRATE_MOTION");
+        if let Some(motion) = motion {
+            cmd.env("KRATE_MOTION", motion);
+        }
+        let out = cmd.output().expect("run");
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+    let computer = run(None);
+    assert!(
+        computer.lines().any(|l| l == "motion:available=no"),
+        "a computer has no sensors and says so: {computer}"
+    );
+    let tilted = run(Some("0.25,-0.5,-0.83"));
+    assert!(
+        tilted
+            .lines()
+            .any(|l| l == "motion:gravity=0.25,-0.50,-0.83 heading=0"),
+        "the reading reaches the app axis for axis: {tilted}"
+    );
+}
+
 /// An app learns what kind of screen it is on (krate:ui/screen, IC-912).
 ///
 /// `pointer-probe.wasm` prints what `krate::layout::Screen::of` reads. A

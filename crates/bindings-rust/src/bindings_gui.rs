@@ -23695,6 +23695,166 @@ pub mod krate {
                 }
             }
         }
+
+        /// Which way the phone is held and how it moves: a level, a compass, a game
+        /// steered by tilting (IC-917).
+        ///
+        /// Every vector is in the screen's own frame, however the phone is turned:
+        /// x to the right of the screen, y down it, z out of the glass toward the
+        /// person. So a game in landscape steers with `gravity.x` exactly as one
+        /// held upright does. Sensors start on the first `read` and stop when the
+        /// app closes. A computer has none: `available` is false and `read` none.
+        #[allow(dead_code, async_fn_in_trait, unused_imports, clippy::all)]
+        pub mod motion {
+            #[used]
+            #[doc(hidden)]
+            static __FORCE_SECTION_REF: fn() =
+                super::super::super::__link_custom_section_describing_imports;
+
+            use super::super::super::_rt;
+            /// Three numbers along the screen's x, y and z.
+            #[repr(C)]
+            #[derive(Clone, Copy)]
+            pub struct Vector {
+                /// Along the screen, to the right.
+                pub x: f32,
+                /// Along the screen, down.
+                pub y: f32,
+                /// Out of the screen, toward the person.
+                pub z: f32,
+            }
+            impl ::core::fmt::Debug for Vector {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    f.debug_struct("Vector")
+                        .field("x", &self.x)
+                        .field("y", &self.y)
+                        .field("z", &self.z)
+                        .finish()
+                }
+            }
+            /// One reading of the phone's sensors.
+            #[repr(C)]
+            #[derive(Clone, Copy)]
+            pub struct Reading {
+                /// Which way is down, in g: (0, 1, 0) held upright, (0, 0, -1) lying
+                /// face up on a table. Steer with x; a level is zero in x and y.
+                pub gravity: Vector,
+                /// The push the person gives the phone, gravity taken out, in g: a
+                /// shake, a swing, a step.
+                pub acceleration: Vector,
+                /// How fast the phone turns, in degrees a second: x above zero tips
+                /// the screen's top edge toward the person, y above zero swings its
+                /// right edge toward the person, z above zero turns the phone
+                /// anticlockwise as the person sees it.
+                pub rotation: Vector,
+                /// Degrees clockwise from magnetic north that the top of the screen
+                /// faces, when the compass knows; none until it settles or without one.
+                pub heading: Option<f32>,
+            }
+            impl ::core::fmt::Debug for Reading {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    f.debug_struct("Reading")
+                        .field("gravity", &self.gravity)
+                        .field("acceleration", &self.acceleration)
+                        .field("rotation", &self.rotation)
+                        .field("heading", &self.heading)
+                        .finish()
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Whether this device can tell how it is held.
+            pub fn available() -> bool {
+                unsafe {
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:ui/motion@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "available"]
+                        fn wit_import0() -> i32;
+                    }
+
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import0() -> i32 {
+                        unreachable!()
+                    }
+                    let ret = unsafe { wit_import0() };
+                    _rt::bool_lift(ret as u8)
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// The latest reading, up to sixty a second; none on a device without
+            /// sensors, and for the first moment after the first ask.
+            pub fn read() -> Option<Reading> {
+                unsafe {
+                    #[repr(align(4))]
+                    struct RetArea([::core::mem::MaybeUninit<u8>; 48]);
+                    let mut ret_area = RetArea([::core::mem::MaybeUninit::uninit(); 48]);
+                    let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:ui/motion@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "read"]
+                        fn wit_import1(_: *mut u8);
+                    }
+
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import1(_: *mut u8) {
+                        unreachable!()
+                    }
+                    unsafe { wit_import1(ptr0) };
+                    let l2 = i32::from(*ptr0.add(0).cast::<u8>());
+                    let result14 = match l2 {
+                        0 => None,
+                        1 => {
+                            let e = {
+                                let l3 = *ptr0.add(4).cast::<f32>();
+                                let l4 = *ptr0.add(8).cast::<f32>();
+                                let l5 = *ptr0.add(12).cast::<f32>();
+                                let l6 = *ptr0.add(16).cast::<f32>();
+                                let l7 = *ptr0.add(20).cast::<f32>();
+                                let l8 = *ptr0.add(24).cast::<f32>();
+                                let l9 = *ptr0.add(28).cast::<f32>();
+                                let l10 = *ptr0.add(32).cast::<f32>();
+                                let l11 = *ptr0.add(36).cast::<f32>();
+                                let l12 = i32::from(*ptr0.add(40).cast::<u8>());
+
+                                Reading {
+                                    gravity: Vector {
+                                        x: l3,
+                                        y: l4,
+                                        z: l5,
+                                    },
+                                    acceleration: Vector {
+                                        x: l6,
+                                        y: l7,
+                                        z: l8,
+                                    },
+                                    rotation: Vector {
+                                        x: l9,
+                                        y: l10,
+                                        z: l11,
+                                    },
+                                    heading: match l12 {
+                                        0 => None,
+                                        1 => {
+                                            let e = {
+                                                let l13 = *ptr0.add(44).cast::<f32>();
+
+                                                l13
+                                            };
+                                            Some(e)
+                                        }
+                                        _ => _rt::invalid_enum_discriminant(),
+                                    },
+                                }
+                            };
+                            Some(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    };
+                    result14
+                }
+            }
+        }
     }
 }
 mod _rt {
@@ -24009,8 +24169,8 @@ pub(crate) use __export_gui_impl as export;
 #[unsafe(link_section = "component-type:wit-bindgen:0.41.0:krate:app@0.2.0:gui:encoded world")]
 #[doc(hidden)]
 #[allow(clippy::octal_escapes)]
-pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 15422] = *b"\
-\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\xc4w\x01A\x02\x01A\x8f\
+pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 15572] = *b"\
+\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\xdax\x01A\x02\x01A\x91\
 \x01\x01B\x04\x01m\x05\x05trace\x05debug\x04info\x04warn\x05error\x04\0\x09log-l\
 evel\x03\0\0\x01q\x05\x06closed\0\0\x0binterrupted\0\0\x0eunexpected-eof\0\0\x0c\
 invalid-utf8\0\0\x05other\x01s\0\x04\0\x08io-error\x03\0\x02\x03\0\x14krate:io/t\
@@ -24233,136 +24393,140 @@ ntent\x01s\0\x0bunavailable\x01s\0\x04\0\x0cnotify-error\x03\0\0\x01j\0\x01\x01\
 1.0\x05;\x01B\x08\x01m\x07\x05light\x06medium\x05heavy\x09selection\x07success\x07\
 warning\x05error\x04\0\x04feel\x03\0\0\x01@\0\0\x7f\x04\0\x09available\x01\x02\x01\
 @\x01\x04feel\x01\x01\0\x04\0\x04play\x01\x03\x01@\x01\x08strengthv\x01\0\x04\0\x06\
-impact\x01\x04\x03\0\x16krate:ui/haptics@0.1.0\x05<\x01B\x14\x01r\x04\x01rv\x01g\
-v\x01bv\x01av\x04\0\x05color\x03\0\0\x01r\x02\x01xv\x01yv\x04\0\x05point\x03\0\x02\
-\x01r\x02\x05widthv\x06heightv\x04\0\x04size\x03\0\x04\x01r\x04\x05widthv\x06hei\
-ghtv\x06ascentv\x07descentv\x04\0\x0ctext-metrics\x03\0\x06\x01r\x04\x01xv\x01yv\
-\x05widthv\x06heightv\x04\0\x04rect\x03\0\x08\x01r\x02\x06offsetv\x05color\x01\x04\
-\0\x0dgradient-stop\x03\0\x0a\x01m\x03\x04sans\x05serif\x04mono\x04\0\x0bfont-fa\
-mily\x03\0\x0c\x01r\x04\x06weight{\x06italic\x7f\x0eletter-spacingv\x06family\x0d\
-\x04\0\x0atext-style\x03\0\x0e\x01r\x04\x08top-leftv\x09top-rightv\x0cbottom-rig\
-htv\x0bbottom-leftv\x04\0\x0ccorner-radii\x03\0\x10\x01q\x04\x11permission-denie\
-d\0\0\x0einvalid-target\0\0\x0bunsupported\x01s\0\x08platform\x01s\0\x04\0\x09gf\
-x-error\x03\0\x12\x03\0\x15krate:gfx/types@0.1.0\x05=\x02\x03\0'\x05color\x02\x03\
-\0'\x05point\x02\x03\0'\x04rect\x02\x03\0'\x04size\x02\x03\0'\x0ctext-metrics\x02\
-\x03\0'\x09gfx-error\x02\x03\0'\x0dgradient-stop\x02\x03\0'\x0ccorner-radii\x02\x03\
-\0'\x0atext-style\x02\x03\0'\x0bfont-family\x01BK\x02\x03\x02\x01>\x04\0\x05colo\
-r\x03\0\0\x02\x03\x02\x01?\x04\0\x05point\x03\0\x02\x02\x03\x02\x01@\x04\0\x04re\
-ct\x03\0\x04\x02\x03\x02\x01A\x04\0\x04size\x03\0\x06\x02\x03\x02\x01B\x04\0\x0c\
-text-metrics\x03\0\x08\x02\x03\x02\x01C\x04\0\x09gfx-error\x03\0\x0a\x02\x03\x02\
-\x01D\x04\0\x0dgradient-stop\x03\0\x0c\x02\x03\x02\x01E\x04\0\x0ccorner-radii\x03\
-\0\x0e\x02\x03\x02\x01F\x04\0\x0atext-style\x03\0\x10\x02\x03\x02\x01G\x04\0\x0b\
-font-family\x03\0\x12\x01j\x01w\x01\x0b\x01@\x02\x06windoww\x06widgetw\0\x14\x04\
-\0\x04bind\x01\x15\x01j\x01\x07\x01\x0b\x01@\x01\x06canvasw\0\x16\x04\0\x0bcanva\
-s-size\x01\x17\x01j\0\x01\x0b\x01@\x02\x06canvasw\x04size\x07\0\x18\x04\0\x0fset\
--design-size\x01\x19\x01@\x05\x06canvasw\x01xv\x01yv\x01wv\x01hv\0\x18\x04\0\x08\
-set-clip\x01\x1a\x01@\x01\x06canvasw\0\x18\x04\0\x0aclear-clip\x01\x1b\x01@\x02\x06\
-canvasw\x04fill\x01\0\x18\x04\0\x05clear\x01\x1c\x01@\x03\x06canvasw\x04area\x05\
-\x04fill\x01\0\x18\x04\0\x09fill-rect\x01\x1d\x01@\x04\x06canvasw\x04area\x05\x06\
-stroke\x01\x05widthv\0\x18\x04\0\x0bstroke-rect\x01\x1e\x01@\x04\x06canvasw\x04a\
-rea\x05\x05radii\x0f\x04fill\x01\0\x18\x04\0\x0ffill-round-rect\x01\x1f\x01@\x05\
-\x06canvasw\x04area\x05\x05radii\x0f\x05widthv\x06stroke\x01\0\x18\x04\0\x11stro\
-ke-round-rect\x01\x20\x01@\x05\x06canvasw\x04area\x05\x05radii\x0f\x04blurv\x06s\
-hadow\x01\0\x18\x04\0\x16drop-shadow-round-rect\x01!\x01p\x0d\x01@\x04\x06canvas\
-w\x04area\x05\x0dangle-degreesv\x05stops\"\0\x18\x04\0\x15linear-gradient-stops\x01\
-#\x01@\x06\x06canvasw\x04texts\x06origin\x03\x09font-sizev\x03ink\x01\x05style\x11\
-\0\x18\x04\0\x10draw-text-styled\x01$\x01j\x01\x09\x01\x0b\x01@\x04\x06canvasw\x04\
-texts\x09font-sizev\x05style\x11\0%\x04\0\x13measure-text-styled\x01&\x01@\x07\x06\
-canvasw\x06center\x03\x06radiusv\x0dstart-degreesv\x0dsweep-degreesv\x05widthv\x06\
-stroke\x01\0\x18\x04\0\x0astroke-arc\x01'\x01p}\x01@\x06\x06canvasw\x04area\x05\x05\
-radii\x0f\x05widthy\x06heighty\x04rgba(\0\x18\x04\0\x11draw-pixels-round\x01)\x01\
-@\x04\x06canvasw\x06center\x03\x06radiusv\x04fill\x01\0\x18\x04\0\x0bfill-circle\
-\x01*\x01@\x05\x06canvasw\x06center\x03\x06radiusv\x05widthv\x06stroke\x01\0\x18\
-\x04\0\x0dstroke-circle\x01+\x01@\x05\x06canvasw\x06center\x03\x06radiusv\x05inn\
-er\x01\x05outer\x01\0\x18\x04\0\x0fradial-gradient\x01,\x01@\x04\x06canvasw\x04a\
-rea\x05\x03top\x01\x06bottom\x01\0\x18\x04\0\x0flinear-gradient\x01-\x01@\x05\x06\
-canvasw\x04texts\x06origin\x03\x09font-sizev\x03ink\x01\0\x18\x04\0\x09draw-text\
-\x01.\x01@\x03\x06canvasw\x04texts\x09font-sizev\0%\x04\0\x0cmeasure-text\x01/\x01\
-@\x05\x06canvasw\x04area\x05\x05widthy\x06heighty\x04rgba(\0\x18\x04\0\x0bdraw-p\
-ixels\x010\x01@\x07\x06canvasw\x06center\x03\x03dst\x07\x05anglev\x05widthy\x06h\
-eighty\x04rgba(\0\x18\x04\0\x0bdraw-sprite\x011\x04\0\x07present\x01\x1b\x03\0\x18\
-krate:gfx/canvas2d@0.1.0\x05H\x01B%\x02\x03\x02\x01>\x04\0\x05color\x03\0\0\x02\x03\
-\x02\x01C\x04\0\x09gfx-error\x03\0\x02\x01pv\x01r\x0a\x07ambientv\x08specularv\x09\
-shininessv\x0bfog-densityv\x09fog-color\x01\x0efill-direction\x04\x0afill-color\x01\
-\x0dshadow-radiusv\x0fshadow-softnessv\x08exposurev\x04\0\x08lighting\x03\0\x05\x01\
-j\x01w\x01\x03\x01@\x02\x06windoww\x06widgetw\0\x07\x04\0\x04bind\x01\x08\x01j\0\
-\x01\x03\x01@\x02\x05scenew\x03sky\x01\0\x09\x04\0\x05clear\x01\x0a\x01@\x04\x05\
-scenew\x03eye\x04\x07look-at\x04\x0bfov-degreesv\0\x09\x04\0\x06camera\x01\x0b\x01\
-@\x02\x05scenew\x09direction\x04\0\x09\x04\0\x05light\x01\x0c\x01@\x03\x05scenew\
-\x08vertices\x04\x04tint\x01\0\x09\x04\0\x09triangles\x01\x0d\x01@\x06\x05scenew\
-\x08vertices\x04\x09translate\x04\x0erotate-degrees\x04\x05scalev\x04tint\x01\0\x09\
-\x04\0\x05place\x01\x0e\x01p}\x01@\x04\x05scenew\x05widthy\x06heighty\x04rgba\x0f\
-\0\x07\x04\0\x0eupload-texture\x01\x10\x01@\x05\x05scenew\x08vertices\x04\x03uvs\
-\x04\x07texturew\x04tint\x01\0\x09\x04\0\x08textured\x01\x11\x01@\x06\x05scenew\x08\
-vertices\x04\x07normals\x04\x03uvs\x04\x07texturew\x04tint\x01\0\x09\x04\0\x06sm\
-ooth\x01\x12\x01@\x02\x05scenew\x08lighting\x06\0\x09\x04\0\x0cset-lighting\x01\x13\
-\x01@\x08\x05scenew\x08vertices\x04\x07normals\x04\x08tangents\x04\x03uvs\x04\x07\
-texturew\x0enormal-texturew\x04tint\x01\0\x09\x04\0\x0dnormal-mapped\x01\x14\x04\
-\0\x05unlit\x01\x11\x01@\x02\x05scenew\x07enabled\x7f\0\x09\x04\0\x0fcull-back-f\
-aces\x01\x15\x01@\x01\x05scenew\0\x09\x04\0\x07present\x01\x16\x03\0\x17krate:gf\
-x/scene3d@0.1.0\x05I\x01B\x11\x02\x03\x02\x01@\x04\0\x04rect\x03\0\0\x02\x03\x02\
-\x01E\x04\0\x0ccorner-radii\x03\0\x02\x02\x03\x02\x01C\x04\0\x09gfx-error\x03\0\x04\
-\x01p}\x01j\x01w\x01\x05\x01@\x04\x06canvasw\x05widthy\x06heighty\x04rgba\x06\0\x07\
-\x04\0\x04keep\x01\x08\x01j\0\x01\x05\x01@\x03\x06canvasw\x05imagew\x04area\x01\0\
-\x09\x04\0\x04draw\x01\x0a\x01@\x04\x06canvasw\x05imagew\x04area\x01\x05radii\x03\
-\0\x09\x04\0\x0adraw-round\x01\x0b\x01@\x02\x06canvasw\x05imagew\x01\0\x04\0\x06\
-forget\x01\x0c\x03\0\x1dkrate:gfx/canvas-images@0.1.0\x05J\x01B\x06\x01m\x02\x07\
-pcm-s16\x07float32\x04\0\x0dsample-format\x03\0\0\x01r\x04\x0bsample-ratey\x08ch\
-annels{\x06format\x01\x0dbuffer-framesy\x04\0\x0dstream-config\x03\0\x02\x01q\x05\
-\x11permission-denied\0\0\x0einvalid-stream\0\0\x12device-unavailable\0\0\x0buns\
-upported\x01s\0\x08platform\x01s\0\x04\0\x0baudio-error\x03\0\x04\x03\0\x17krate\
-:audio/types@0.1.0\x05K\x02\x03\0+\x0baudio-error\x02\x03\0+\x0dstream-config\x01\
-B\x15\x02\x03\x02\x01L\x04\0\x0baudio-error\x03\0\0\x02\x03\x02\x01M\x04\0\x0dst\
-ream-config\x03\0\x02\x01j\x01w\x01\x01\x01@\x01\x06config\x03\0\x04\x04\0\x04op\
-en\x01\x05\x01j\0\x01\x01\x01@\x01\x09stream-idw\0\x06\x04\0\x05start\x01\x07\x04\
-\0\x04stop\x01\x07\x01p}\x01j\x01y\x01\x01\x01@\x02\x09stream-idw\x05bytes\x08\0\
-\x09\x04\0\x05write\x01\x0a\x01@\x02\x09stream-idw\x05bytes\x08\0\x04\x04\0\x0al\
-oad-sound\x01\x0b\x01@\x03\x09stream-idw\x05soundw\x04gainv\0\x06\x04\0\x0aplay-\
-sound\x01\x0c\x01@\x02\x09stream-idw\x05soundw\0\x06\x04\0\x0astop-sound\x01\x0d\
-\x03\0\x1akrate:audio/playback@0.1.0\x05N\x01B\x05\x02\x03\x02\x01L\x04\0\x0baud\
-io-error\x03\0\0\x01j\x01y\x01\x01\x01@\x01\x09stream-idw\0\x02\x04\0\x06queued\x01\
-\x03\x03\0\x20krate:audio/playback-queue@0.1.0\x05O\x01B\x0f\x02\x03\x02\x01L\x04\
-\0\x0baudio-error\x03\0\0\x02\x03\x02\x01M\x04\0\x0dstream-config\x03\0\x02\x01j\
-\x01w\x01\x01\x01@\x01\x06config\x03\0\x04\x04\0\x04open\x01\x05\x01j\0\x01\x01\x01\
-@\x01\x09stream-idw\0\x06\x04\0\x05start\x01\x07\x04\0\x04stop\x01\x07\x01p}\x01\
-j\x01\x08\x01\x01\x01@\x02\x09stream-idw\x09max-bytesy\0\x09\x04\0\x04read\x01\x0a\
-\x03\0\x19krate:audio/capture@0.1.0\x05P\x01B\x0d\x01m\x01\x05rgba8\x04\0\x0cfra\
-me-format\x03\0\0\x01r\x04\x05widthy\x06heighty\x03fpsy\x06format\x01\x04\0\x0ds\
-tream-config\x03\0\x02\x01r\x04\x05widthy\x06heighty\x03fpsy\x06format\x01\x04\0\
-\x0aframe-info\x03\0\x04\x01r\x02\x02ids\x05labels\x04\0\x0bdevice-info\x03\0\x06\
-\x01p}\x01r\x04\x05bytes\x08\x05widthy\x06heighty\x0eelapsed-millisw\x04\0\x05fr\
-ame\x03\0\x09\x01q\x06\x11permission-denied\0\0\x0einvalid-stream\0\0\x12device-\
-unavailable\0\0\x0dsystem-denied\0\0\x0bunsupported\x01s\0\x08platform\x01s\0\x04\
-\0\x0ccamera-error\x03\0\x0b\x03\0\x18krate:camera/types@0.1.0\x05Q\x02\x03\0/\x0c\
-camera-error\x02\x03\0/\x0bdevice-info\x02\x03\0/\x05frame\x02\x03\0/\x0aframe-i\
-nfo\x02\x03\0/\x0dstream-config\x01B\x1d\x02\x03\x02\x01R\x04\0\x0ccamera-error\x03\
-\0\0\x02\x03\x02\x01S\x04\0\x0bdevice-info\x03\0\x02\x02\x03\x02\x01T\x04\0\x05f\
-rame\x03\0\x04\x02\x03\x02\x01U\x04\0\x0aframe-info\x03\0\x06\x02\x03\x02\x01V\x04\
-\0\x0dstream-config\x03\0\x08\x01p\x03\x01j\x01\x0a\x01\x01\x01@\0\0\x0b\x04\0\x07\
-devices\x01\x0c\x01j\x01w\x01\x01\x01@\x02\x06devices\x06config\x09\0\x0d\x04\0\x04\
-open\x01\x0e\x01j\x01\x07\x01\x01\x01@\x01\x09stream-idw\0\x0f\x04\0\x04info\x01\
-\x10\x01j\0\x01\x01\x01@\x01\x09stream-idw\0\x11\x04\0\x05start\x01\x12\x04\0\x04\
-stop\x01\x12\x01k\x05\x01j\x01\x13\x01\x01\x01@\x01\x09stream-idw\0\x14\x04\0\x04\
-read\x01\x15\x04\0\x05close\x01\x12\x03\0\x1akrate:camera/capture@0.1.0\x05W\x01\
-B\x12\x01r\x01\x04texts\x04\0\x0atranscript\x03\0\0\x01q\x05\x0finvalid-request\x01\
-s\0\x0fmodel-not-found\0\0\x0dmodel-invalid\x01s\0\x0bunsupported\x01s\0\x09infe\
-rence\x01s\0\x04\0\x0cspeech-error\x03\0\x02\x01m\x05\x0finvalid-request\x0fmode\
-l-not-found\x0dmodel-invalid\x0bunsupported\x09inference\x04\0\x0bmatch-error\x03\
-\0\x04\x01p}\x01ks\x01j\x01\x01\x01\x03\x01@\x04\x0bmodel-assets\x0apcm-s16-le\x06\
-\x0bsample-ratey\x08language\x07\0\x08\x04\0\x0atranscribe\x01\x09\x01j\x01}\x01\
-\x05\x01@\x05\x0bmodel-assets\x0apcm-s16-le\x06\x0bsample-ratey\x08language\x07\x08\
-expecteds\0\x0a\x04\0\x0amatch-line\x01\x0b\x01k}\x01j\x01\x0c\x01\x05\x01@\x06\x0b\
-model-assets\x0apcm-s16-le\x06\x0bsample-ratey\x08language\x07\x08expecteds\x06f\
-inish\x7f\0\x0d\x04\0\x11match-line-stream\x01\x0e\x03\0\x20krate:speech/transcr\
-iption@0.1.0\x05X\x01B\x12\x01r\x03\x02ids\x04names\x08languages\x04\0\x05voice\x03\
-\0\0\x01q\x04\x11permission-denied\0\0\x0finvalid-request\x01s\0\x0bunsupported\x01\
-s\0\x08platform\x01s\0\x04\0\x09say-error\x03\0\x02\x01p\x01\x01j\x01\x04\x01\x03\
-\x01@\0\0\x05\x04\0\x06voices\x01\x06\x01ks\x01kv\x01j\0\x01\x03\x01@\x03\x04tex\
-ts\x05voice\x07\x04rate\x08\0\x09\x04\0\x03say\x01\x0a\x01@\0\0\x09\x04\0\x04sto\
-p\x01\x0b\x01j\x01\x7f\x01\x03\x01@\0\0\x0c\x04\0\x08speaking\x01\x0d\x03\0\x1ck\
-rate:speech/synthesis@0.1.0\x05Y\x01@\0\0z\x04\0\x03run\x01Z\x04\0\x13krate:app/\
-gui@0.2.0\x04\0\x0b\x09\x01\0\x03gui\x03\0\0\0G\x09producers\x01\x0cprocessed-by\
-\x02\x0dwit-component\x070.227.1\x10wit-bindgen-rust\x060.41.0";
+impact\x01\x04\x03\0\x16krate:ui/haptics@0.1.0\x05<\x01B\x0a\x01r\x03\x01xv\x01y\
+v\x01zv\x04\0\x06vector\x03\0\0\x01kv\x01r\x04\x07gravity\x01\x0cacceleration\x01\
+\x08rotation\x01\x07heading\x02\x04\0\x07reading\x03\0\x03\x01@\0\0\x7f\x04\0\x09\
+available\x01\x05\x01k\x04\x01@\0\0\x06\x04\0\x04read\x01\x07\x03\0\x15krate:ui/\
+motion@0.1.0\x05=\x01B\x14\x01r\x04\x01rv\x01gv\x01bv\x01av\x04\0\x05color\x03\0\
+\0\x01r\x02\x01xv\x01yv\x04\0\x05point\x03\0\x02\x01r\x02\x05widthv\x06heightv\x04\
+\0\x04size\x03\0\x04\x01r\x04\x05widthv\x06heightv\x06ascentv\x07descentv\x04\0\x0c\
+text-metrics\x03\0\x06\x01r\x04\x01xv\x01yv\x05widthv\x06heightv\x04\0\x04rect\x03\
+\0\x08\x01r\x02\x06offsetv\x05color\x01\x04\0\x0dgradient-stop\x03\0\x0a\x01m\x03\
+\x04sans\x05serif\x04mono\x04\0\x0bfont-family\x03\0\x0c\x01r\x04\x06weight{\x06\
+italic\x7f\x0eletter-spacingv\x06family\x0d\x04\0\x0atext-style\x03\0\x0e\x01r\x04\
+\x08top-leftv\x09top-rightv\x0cbottom-rightv\x0bbottom-leftv\x04\0\x0ccorner-rad\
+ii\x03\0\x10\x01q\x04\x11permission-denied\0\0\x0einvalid-target\0\0\x0bunsuppor\
+ted\x01s\0\x08platform\x01s\0\x04\0\x09gfx-error\x03\0\x12\x03\0\x15krate:gfx/ty\
+pes@0.1.0\x05>\x02\x03\0(\x05color\x02\x03\0(\x05point\x02\x03\0(\x04rect\x02\x03\
+\0(\x04size\x02\x03\0(\x0ctext-metrics\x02\x03\0(\x09gfx-error\x02\x03\0(\x0dgra\
+dient-stop\x02\x03\0(\x0ccorner-radii\x02\x03\0(\x0atext-style\x02\x03\0(\x0bfon\
+t-family\x01BK\x02\x03\x02\x01?\x04\0\x05color\x03\0\0\x02\x03\x02\x01@\x04\0\x05\
+point\x03\0\x02\x02\x03\x02\x01A\x04\0\x04rect\x03\0\x04\x02\x03\x02\x01B\x04\0\x04\
+size\x03\0\x06\x02\x03\x02\x01C\x04\0\x0ctext-metrics\x03\0\x08\x02\x03\x02\x01D\
+\x04\0\x09gfx-error\x03\0\x0a\x02\x03\x02\x01E\x04\0\x0dgradient-stop\x03\0\x0c\x02\
+\x03\x02\x01F\x04\0\x0ccorner-radii\x03\0\x0e\x02\x03\x02\x01G\x04\0\x0atext-sty\
+le\x03\0\x10\x02\x03\x02\x01H\x04\0\x0bfont-family\x03\0\x12\x01j\x01w\x01\x0b\x01\
+@\x02\x06windoww\x06widgetw\0\x14\x04\0\x04bind\x01\x15\x01j\x01\x07\x01\x0b\x01\
+@\x01\x06canvasw\0\x16\x04\0\x0bcanvas-size\x01\x17\x01j\0\x01\x0b\x01@\x02\x06c\
+anvasw\x04size\x07\0\x18\x04\0\x0fset-design-size\x01\x19\x01@\x05\x06canvasw\x01\
+xv\x01yv\x01wv\x01hv\0\x18\x04\0\x08set-clip\x01\x1a\x01@\x01\x06canvasw\0\x18\x04\
+\0\x0aclear-clip\x01\x1b\x01@\x02\x06canvasw\x04fill\x01\0\x18\x04\0\x05clear\x01\
+\x1c\x01@\x03\x06canvasw\x04area\x05\x04fill\x01\0\x18\x04\0\x09fill-rect\x01\x1d\
+\x01@\x04\x06canvasw\x04area\x05\x06stroke\x01\x05widthv\0\x18\x04\0\x0bstroke-r\
+ect\x01\x1e\x01@\x04\x06canvasw\x04area\x05\x05radii\x0f\x04fill\x01\0\x18\x04\0\
+\x0ffill-round-rect\x01\x1f\x01@\x05\x06canvasw\x04area\x05\x05radii\x0f\x05widt\
+hv\x06stroke\x01\0\x18\x04\0\x11stroke-round-rect\x01\x20\x01@\x05\x06canvasw\x04\
+area\x05\x05radii\x0f\x04blurv\x06shadow\x01\0\x18\x04\0\x16drop-shadow-round-re\
+ct\x01!\x01p\x0d\x01@\x04\x06canvasw\x04area\x05\x0dangle-degreesv\x05stops\"\0\x18\
+\x04\0\x15linear-gradient-stops\x01#\x01@\x06\x06canvasw\x04texts\x06origin\x03\x09\
+font-sizev\x03ink\x01\x05style\x11\0\x18\x04\0\x10draw-text-styled\x01$\x01j\x01\
+\x09\x01\x0b\x01@\x04\x06canvasw\x04texts\x09font-sizev\x05style\x11\0%\x04\0\x13\
+measure-text-styled\x01&\x01@\x07\x06canvasw\x06center\x03\x06radiusv\x0dstart-d\
+egreesv\x0dsweep-degreesv\x05widthv\x06stroke\x01\0\x18\x04\0\x0astroke-arc\x01'\
+\x01p}\x01@\x06\x06canvasw\x04area\x05\x05radii\x0f\x05widthy\x06heighty\x04rgba\
+(\0\x18\x04\0\x11draw-pixels-round\x01)\x01@\x04\x06canvasw\x06center\x03\x06rad\
+iusv\x04fill\x01\0\x18\x04\0\x0bfill-circle\x01*\x01@\x05\x06canvasw\x06center\x03\
+\x06radiusv\x05widthv\x06stroke\x01\0\x18\x04\0\x0dstroke-circle\x01+\x01@\x05\x06\
+canvasw\x06center\x03\x06radiusv\x05inner\x01\x05outer\x01\0\x18\x04\0\x0fradial\
+-gradient\x01,\x01@\x04\x06canvasw\x04area\x05\x03top\x01\x06bottom\x01\0\x18\x04\
+\0\x0flinear-gradient\x01-\x01@\x05\x06canvasw\x04texts\x06origin\x03\x09font-si\
+zev\x03ink\x01\0\x18\x04\0\x09draw-text\x01.\x01@\x03\x06canvasw\x04texts\x09fon\
+t-sizev\0%\x04\0\x0cmeasure-text\x01/\x01@\x05\x06canvasw\x04area\x05\x05widthy\x06\
+heighty\x04rgba(\0\x18\x04\0\x0bdraw-pixels\x010\x01@\x07\x06canvasw\x06center\x03\
+\x03dst\x07\x05anglev\x05widthy\x06heighty\x04rgba(\0\x18\x04\0\x0bdraw-sprite\x01\
+1\x04\0\x07present\x01\x1b\x03\0\x18krate:gfx/canvas2d@0.1.0\x05I\x01B%\x02\x03\x02\
+\x01?\x04\0\x05color\x03\0\0\x02\x03\x02\x01D\x04\0\x09gfx-error\x03\0\x02\x01pv\
+\x01r\x0a\x07ambientv\x08specularv\x09shininessv\x0bfog-densityv\x09fog-color\x01\
+\x0efill-direction\x04\x0afill-color\x01\x0dshadow-radiusv\x0fshadow-softnessv\x08\
+exposurev\x04\0\x08lighting\x03\0\x05\x01j\x01w\x01\x03\x01@\x02\x06windoww\x06w\
+idgetw\0\x07\x04\0\x04bind\x01\x08\x01j\0\x01\x03\x01@\x02\x05scenew\x03sky\x01\0\
+\x09\x04\0\x05clear\x01\x0a\x01@\x04\x05scenew\x03eye\x04\x07look-at\x04\x0bfov-\
+degreesv\0\x09\x04\0\x06camera\x01\x0b\x01@\x02\x05scenew\x09direction\x04\0\x09\
+\x04\0\x05light\x01\x0c\x01@\x03\x05scenew\x08vertices\x04\x04tint\x01\0\x09\x04\
+\0\x09triangles\x01\x0d\x01@\x06\x05scenew\x08vertices\x04\x09translate\x04\x0er\
+otate-degrees\x04\x05scalev\x04tint\x01\0\x09\x04\0\x05place\x01\x0e\x01p}\x01@\x04\
+\x05scenew\x05widthy\x06heighty\x04rgba\x0f\0\x07\x04\0\x0eupload-texture\x01\x10\
+\x01@\x05\x05scenew\x08vertices\x04\x03uvs\x04\x07texturew\x04tint\x01\0\x09\x04\
+\0\x08textured\x01\x11\x01@\x06\x05scenew\x08vertices\x04\x07normals\x04\x03uvs\x04\
+\x07texturew\x04tint\x01\0\x09\x04\0\x06smooth\x01\x12\x01@\x02\x05scenew\x08lig\
+hting\x06\0\x09\x04\0\x0cset-lighting\x01\x13\x01@\x08\x05scenew\x08vertices\x04\
+\x07normals\x04\x08tangents\x04\x03uvs\x04\x07texturew\x0enormal-texturew\x04tin\
+t\x01\0\x09\x04\0\x0dnormal-mapped\x01\x14\x04\0\x05unlit\x01\x11\x01@\x02\x05sc\
+enew\x07enabled\x7f\0\x09\x04\0\x0fcull-back-faces\x01\x15\x01@\x01\x05scenew\0\x09\
+\x04\0\x07present\x01\x16\x03\0\x17krate:gfx/scene3d@0.1.0\x05J\x01B\x11\x02\x03\
+\x02\x01A\x04\0\x04rect\x03\0\0\x02\x03\x02\x01F\x04\0\x0ccorner-radii\x03\0\x02\
+\x02\x03\x02\x01D\x04\0\x09gfx-error\x03\0\x04\x01p}\x01j\x01w\x01\x05\x01@\x04\x06\
+canvasw\x05widthy\x06heighty\x04rgba\x06\0\x07\x04\0\x04keep\x01\x08\x01j\0\x01\x05\
+\x01@\x03\x06canvasw\x05imagew\x04area\x01\0\x09\x04\0\x04draw\x01\x0a\x01@\x04\x06\
+canvasw\x05imagew\x04area\x01\x05radii\x03\0\x09\x04\0\x0adraw-round\x01\x0b\x01\
+@\x02\x06canvasw\x05imagew\x01\0\x04\0\x06forget\x01\x0c\x03\0\x1dkrate:gfx/canv\
+as-images@0.1.0\x05K\x01B\x06\x01m\x02\x07pcm-s16\x07float32\x04\0\x0dsample-for\
+mat\x03\0\0\x01r\x04\x0bsample-ratey\x08channels{\x06format\x01\x0dbuffer-frames\
+y\x04\0\x0dstream-config\x03\0\x02\x01q\x05\x11permission-denied\0\0\x0einvalid-\
+stream\0\0\x12device-unavailable\0\0\x0bunsupported\x01s\0\x08platform\x01s\0\x04\
+\0\x0baudio-error\x03\0\x04\x03\0\x17krate:audio/types@0.1.0\x05L\x02\x03\0,\x0b\
+audio-error\x02\x03\0,\x0dstream-config\x01B\x15\x02\x03\x02\x01M\x04\0\x0baudio\
+-error\x03\0\0\x02\x03\x02\x01N\x04\0\x0dstream-config\x03\0\x02\x01j\x01w\x01\x01\
+\x01@\x01\x06config\x03\0\x04\x04\0\x04open\x01\x05\x01j\0\x01\x01\x01@\x01\x09s\
+tream-idw\0\x06\x04\0\x05start\x01\x07\x04\0\x04stop\x01\x07\x01p}\x01j\x01y\x01\
+\x01\x01@\x02\x09stream-idw\x05bytes\x08\0\x09\x04\0\x05write\x01\x0a\x01@\x02\x09\
+stream-idw\x05bytes\x08\0\x04\x04\0\x0aload-sound\x01\x0b\x01@\x03\x09stream-idw\
+\x05soundw\x04gainv\0\x06\x04\0\x0aplay-sound\x01\x0c\x01@\x02\x09stream-idw\x05\
+soundw\0\x06\x04\0\x0astop-sound\x01\x0d\x03\0\x1akrate:audio/playback@0.1.0\x05\
+O\x01B\x05\x02\x03\x02\x01M\x04\0\x0baudio-error\x03\0\0\x01j\x01y\x01\x01\x01@\x01\
+\x09stream-idw\0\x02\x04\0\x06queued\x01\x03\x03\0\x20krate:audio/playback-queue\
+@0.1.0\x05P\x01B\x0f\x02\x03\x02\x01M\x04\0\x0baudio-error\x03\0\0\x02\x03\x02\x01\
+N\x04\0\x0dstream-config\x03\0\x02\x01j\x01w\x01\x01\x01@\x01\x06config\x03\0\x04\
+\x04\0\x04open\x01\x05\x01j\0\x01\x01\x01@\x01\x09stream-idw\0\x06\x04\0\x05star\
+t\x01\x07\x04\0\x04stop\x01\x07\x01p}\x01j\x01\x08\x01\x01\x01@\x02\x09stream-id\
+w\x09max-bytesy\0\x09\x04\0\x04read\x01\x0a\x03\0\x19krate:audio/capture@0.1.0\x05\
+Q\x01B\x0d\x01m\x01\x05rgba8\x04\0\x0cframe-format\x03\0\0\x01r\x04\x05widthy\x06\
+heighty\x03fpsy\x06format\x01\x04\0\x0dstream-config\x03\0\x02\x01r\x04\x05width\
+y\x06heighty\x03fpsy\x06format\x01\x04\0\x0aframe-info\x03\0\x04\x01r\x02\x02ids\
+\x05labels\x04\0\x0bdevice-info\x03\0\x06\x01p}\x01r\x04\x05bytes\x08\x05widthy\x06\
+heighty\x0eelapsed-millisw\x04\0\x05frame\x03\0\x09\x01q\x06\x11permission-denie\
+d\0\0\x0einvalid-stream\0\0\x12device-unavailable\0\0\x0dsystem-denied\0\0\x0bun\
+supported\x01s\0\x08platform\x01s\0\x04\0\x0ccamera-error\x03\0\x0b\x03\0\x18kra\
+te:camera/types@0.1.0\x05R\x02\x03\00\x0ccamera-error\x02\x03\00\x0bdevice-info\x02\
+\x03\00\x05frame\x02\x03\00\x0aframe-info\x02\x03\00\x0dstream-config\x01B\x1d\x02\
+\x03\x02\x01S\x04\0\x0ccamera-error\x03\0\0\x02\x03\x02\x01T\x04\0\x0bdevice-inf\
+o\x03\0\x02\x02\x03\x02\x01U\x04\0\x05frame\x03\0\x04\x02\x03\x02\x01V\x04\0\x0a\
+frame-info\x03\0\x06\x02\x03\x02\x01W\x04\0\x0dstream-config\x03\0\x08\x01p\x03\x01\
+j\x01\x0a\x01\x01\x01@\0\0\x0b\x04\0\x07devices\x01\x0c\x01j\x01w\x01\x01\x01@\x02\
+\x06devices\x06config\x09\0\x0d\x04\0\x04open\x01\x0e\x01j\x01\x07\x01\x01\x01@\x01\
+\x09stream-idw\0\x0f\x04\0\x04info\x01\x10\x01j\0\x01\x01\x01@\x01\x09stream-idw\
+\0\x11\x04\0\x05start\x01\x12\x04\0\x04stop\x01\x12\x01k\x05\x01j\x01\x13\x01\x01\
+\x01@\x01\x09stream-idw\0\x14\x04\0\x04read\x01\x15\x04\0\x05close\x01\x12\x03\0\
+\x1akrate:camera/capture@0.1.0\x05X\x01B\x12\x01r\x01\x04texts\x04\0\x0atranscri\
+pt\x03\0\0\x01q\x05\x0finvalid-request\x01s\0\x0fmodel-not-found\0\0\x0dmodel-in\
+valid\x01s\0\x0bunsupported\x01s\0\x09inference\x01s\0\x04\0\x0cspeech-error\x03\
+\0\x02\x01m\x05\x0finvalid-request\x0fmodel-not-found\x0dmodel-invalid\x0bunsupp\
+orted\x09inference\x04\0\x0bmatch-error\x03\0\x04\x01p}\x01ks\x01j\x01\x01\x01\x03\
+\x01@\x04\x0bmodel-assets\x0apcm-s16-le\x06\x0bsample-ratey\x08language\x07\0\x08\
+\x04\0\x0atranscribe\x01\x09\x01j\x01}\x01\x05\x01@\x05\x0bmodel-assets\x0apcm-s\
+16-le\x06\x0bsample-ratey\x08language\x07\x08expecteds\0\x0a\x04\0\x0amatch-line\
+\x01\x0b\x01k}\x01j\x01\x0c\x01\x05\x01@\x06\x0bmodel-assets\x0apcm-s16-le\x06\x0b\
+sample-ratey\x08language\x07\x08expecteds\x06finish\x7f\0\x0d\x04\0\x11match-lin\
+e-stream\x01\x0e\x03\0\x20krate:speech/transcription@0.1.0\x05Y\x01B\x12\x01r\x03\
+\x02ids\x04names\x08languages\x04\0\x05voice\x03\0\0\x01q\x04\x11permission-deni\
+ed\0\0\x0finvalid-request\x01s\0\x0bunsupported\x01s\0\x08platform\x01s\0\x04\0\x09\
+say-error\x03\0\x02\x01p\x01\x01j\x01\x04\x01\x03\x01@\0\0\x05\x04\0\x06voices\x01\
+\x06\x01ks\x01kv\x01j\0\x01\x03\x01@\x03\x04texts\x05voice\x07\x04rate\x08\0\x09\
+\x04\0\x03say\x01\x0a\x01@\0\0\x09\x04\0\x04stop\x01\x0b\x01j\x01\x7f\x01\x03\x01\
+@\0\0\x0c\x04\0\x08speaking\x01\x0d\x03\0\x1ckrate:speech/synthesis@0.1.0\x05Z\x01\
+@\0\0z\x04\0\x03run\x01[\x04\0\x13krate:app/gui@0.2.0\x04\0\x0b\x09\x01\0\x03gui\
+\x03\0\0\0G\x09producers\x01\x0cprocessed-by\x02\x0dwit-component\x070.227.1\x10\
+wit-bindgen-rust\x060.41.0";
 
 #[inline(never)]
 #[doc(hidden)]

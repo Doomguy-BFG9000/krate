@@ -611,6 +611,16 @@ impl<'a> Phase3UiDispatcher<'a> {
         self.adapter.haptic(feel, strength)
     }
 
+    /// Whether the device can tell how it is held (IC-917).
+    pub fn motion_available(&self) -> bool {
+        self.adapter.motion_available()
+    }
+
+    /// The latest motion reading (IC-917).
+    pub fn motion(&self) -> Option<krate_adapter_common::ui::MotionReading> {
+        self.adapter.motion()
+    }
+
     /// Hand a written file to the platform's save sheet (phones).
     pub fn export_file(&self, id: WindowId, path: &std::path::Path) -> bool {
         self.adapter.export_file(id, path)
