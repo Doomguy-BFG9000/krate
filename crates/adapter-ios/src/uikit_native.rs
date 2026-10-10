@@ -952,6 +952,262 @@ mod real {
         }
     }
 
+    // PhotosUI and Photos, through the Objective-C runtime.
+    #[link(name = "PhotosUI", kind = "framework")]
+    unsafe extern "C" {}
+    #[link(name = "Photos", kind = "framework")]
+    unsafe extern "C" {}
+
+    /// Where the photos picked are copied, and who waits for them.
+    struct PhotoPick {
+        tx: std::cell::RefCell<
+            Option<std::sync::mpsc::Sender<Result<Vec<std::path::PathBuf>, String>>>,
+        >,
+    }
+
+    define_class!(
+        // SAFETY:
+        // - NSObject has no subclassing requirements for a delegate.
+        // - PhotosUI calls a picker's delegate on the main thread.
+        #[unsafe(super = objc2_foundation::NSObject)]
+        #[thread_kind = MainThreadOnly]
+        #[ivars = PhotoPick]
+        struct KratePhotoDelegate;
+
+        // SAFETY: NSObjectProtocol has no additional requirements.
+        unsafe impl NSObjectProtocol for KratePhotoDelegate {}
+
+        // PHPickerViewControllerDelegate, by selector.
+        impl KratePhotoDelegate {
+            #[unsafe(method(picker:didFinishPicking:))]
+            fn finished(&self, picker: &objc2::runtime::AnyObject, results: &objc2::runtime::AnyObject) {
+                // SAFETY: dismiss the picker PhotosUI handed us.
+                let _: () = unsafe { msg_send![picker, dismissViewControllerAnimated: true, completion: Option::<&objc2::runtime::AnyObject>::None] };
+                let Some(tx) = self.ivars().tx.borrow_mut().take() else {
+                    return;
+                };
+                PHOTO_DELEGATE.with(|slot| slot.borrow_mut().take());
+                // SAFETY: an NSArray of PHPickerResult.
+                let count: usize = unsafe { msg_send![results, count] };
+                if count == 0 {
+                    let _ = tx.send(Ok(Vec::new()));
+                    return;
+                }
+                static PICKS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+                let dir = std::env::temp_dir().join("krate-photos").join(format!(
+                    "{}-{}",
+                    std::process::id(),
+                    PICKS.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                ));
+                let _ = std::fs::create_dir_all(&dir);
+                let gathered = std::sync::Arc::new(std::sync::Mutex::new((count, vec![None; count], Some(tx))));
+                for index in 0..count {
+                    // SAFETY: each result's itemProvider.
+                    let provider: Retained<objc2::runtime::AnyObject> = unsafe {
+                        let result: Retained<objc2::runtime::AnyObject> = msg_send![results, objectAtIndex: index];
+                        msg_send![&*result, itemProvider]
+                    };
+                    load_photo(provider, index, dir.clone(), gathered.clone(), true);
+                }
+            }
+        }
+    );
+
+    /// What a pick gathers: photos still to come, each one's copy, and who
+    /// waits for the lot.
+    type Gathered = std::sync::Arc<
+        std::sync::Mutex<(
+            usize,
+            Vec<Option<std::path::PathBuf>>,
+            Option<std::sync::mpsc::Sender<Result<Vec<std::path::PathBuf>, String>>>,
+        )>,
+    >;
+
+    /// Copy one picked photo out: first as a JPEG (iOS converts a HEIC),
+    /// and if that is refused, in its own format. The file iOS lends is
+    /// gone once the block returns, so it is copied inside it. When the
+    /// last one is in, the pick is answered: an error if none could be
+    /// read -- never an empty list, which reads as a cancel.
+    fn load_photo(
+        provider: Retained<objc2::runtime::AnyObject>,
+        index: usize,
+        dir: std::path::PathBuf,
+        gathered: Gathered,
+        jpeg_first: bool,
+    ) {
+        let kind = if jpeg_first {
+            "public.jpeg"
+        } else {
+            "public.image"
+        };
+        let retry = provider.clone();
+        let got = block2::RcBlock::new(
+            move |file: *mut objc2::runtime::AnyObject, _error: *mut objc2::runtime::AnyObject| {
+                // SAFETY: the NSURL iOS lends for the duration of this block.
+                let source: Option<String> = (!file.is_null())
+                    .then(|| unsafe {
+                        let path: Option<Retained<objc2_foundation::NSString>> =
+                            msg_send![&*file, path];
+                        path.map(|p| p.to_string())
+                    })
+                    .flatten();
+                let Some(source) = source else {
+                    if jpeg_first {
+                        load_photo(retry.clone(), index, dir.clone(), gathered.clone(), false);
+                        return;
+                    }
+                    finish_photo(&gathered, index, None);
+                    return;
+                };
+                let extension = std::path::Path::new(&source)
+                    .extension()
+                    .map(|e| e.to_string_lossy().to_ascii_lowercase())
+                    .unwrap_or_else(|| "jpg".to_string());
+                let to = dir.join(format!("photo-{}.{extension}", index + 1));
+                let copied = std::fs::copy(&source, &to).ok().map(|_| to);
+                finish_photo(&gathered, index, copied);
+            },
+        );
+        let kind = objc2_foundation::NSString::from_str(kind);
+        // SAFETY: NSItemProvider's loadFileRepresentationForTypeIdentifier:.
+        let _: Option<Retained<objc2::runtime::AnyObject>> = unsafe {
+            msg_send![&*provider, loadFileRepresentationForTypeIdentifier: &*kind, completionHandler: &*got]
+        };
+    }
+
+    fn finish_photo(gathered: &Gathered, index: usize, copied: Option<std::path::PathBuf>) {
+        let mut g = gathered.lock().expect("photos lock");
+        g.1[index] = copied;
+        g.0 -= 1;
+        if g.0 == 0 {
+            let picked: Vec<std::path::PathBuf> = g.1.iter().flatten().cloned().collect();
+            if let Some(tx) = g.2.take() {
+                let _ = tx.send(if picked.is_empty() {
+                    Err("iOS would not hand over the photos picked".to_string())
+                } else {
+                    Ok(picked)
+                });
+            }
+        }
+    }
+
+    thread_local! {
+        static PHOTO_DELEGATE: std::cell::RefCell<Option<Retained<KratePhotoDelegate>>> =
+            const { std::cell::RefCell::new(None) };
+    }
+
+    /// The system's photo picker for up to `limit` photos (IC-920): the
+    /// picks copied out as JPEGs, empty when cancelled. No permission: the
+    /// picker runs outside Krate, and only what is picked comes back.
+    pub fn pick_photos(limit: u32) -> Result<Vec<std::path::PathBuf>, String> {
+        let (tx, rx) = std::sync::mpsc::channel();
+        DispatchQueue::main().exec_async(move || {
+            let (Some(mtm), Some(controller)) = (MainThreadMarker::new(), main_controller()) else {
+                let _ = tx.send(Err("no screen to pick from".to_string()));
+                return;
+            };
+            let (Some(config_class), Some(picker_class), Some(filter_class)) = (
+                objc2::runtime::AnyClass::get(c"PHPickerConfiguration"),
+                objc2::runtime::AnyClass::get(c"PHPickerViewController"),
+                objc2::runtime::AnyClass::get(c"PHPickerFilter"),
+            ) else {
+                let _ = tx.send(Err("this iOS has no photo picker".to_string()));
+                return;
+            };
+            // SAFETY: a PHPickerConfiguration limited to images and to
+            // `limit`, a picker over it, Krate's delegate held while it shows.
+            unsafe {
+                let config: Retained<objc2::runtime::AnyObject> = msg_send![config_class, new];
+                let _: () = msg_send![&*config, setSelectionLimit: limit as isize];
+                let images: Option<Retained<objc2::runtime::AnyObject>> = msg_send![filter_class, imagesFilter];
+                if let Some(images) = images {
+                    let _: () = msg_send![&*config, setFilter: &*images];
+                }
+                let made: objc2::rc::Allocated<objc2::runtime::AnyObject> = msg_send![picker_class, alloc];
+                let picker: Option<Retained<objc2::runtime::AnyObject>> = msg_send![made, initWithConfiguration: &*config];
+                let Some(picker) = picker else {
+                    let _ = tx.send(Err("the photo picker would not open".to_string()));
+                    return;
+                };
+                let delegate: Retained<KratePhotoDelegate> = {
+                    let this = KratePhotoDelegate::alloc(mtm).set_ivars(PhotoPick {
+                        tx: std::cell::RefCell::new(Some(tx)),
+                    });
+                    msg_send![super(this), init]
+                };
+                let _: () = msg_send![&*picker, setDelegate: &*delegate];
+                PHOTO_DELEGATE.with(|slot| *slot.borrow_mut() = Some(delegate));
+                let _: () = msg_send![&*controller, presentViewController: &*picker, animated: true, completion: Option::<&objc2::runtime::AnyObject>::None];
+            }
+        });
+        rx.recv_timeout(std::time::Duration::from_secs(900))
+            .unwrap_or_else(|_| Ok(Vec::new()))
+    }
+
+    /// Add a PNG or JPEG to Photos (IC-920): add-only access asked first
+    /// (the phone's own prompt), then one asset created from the picture.
+    pub fn save_photo(data: &[u8]) -> Result<(), Option<String>> {
+        let (Some(library), Some(image_class), Some(request_class)) = (
+            objc2::runtime::AnyClass::get(c"PHPhotoLibrary"),
+            objc2::runtime::AnyClass::get(c"UIImage"),
+            objc2::runtime::AnyClass::get(c"PHAssetChangeRequest"),
+        ) else {
+            return Err(Some("this iOS has no photo library".to_string()));
+        };
+        let (tx, rx) = std::sync::mpsc::channel::<Result<(), Option<String>>>();
+        let bytes = data.to_vec();
+        // SAFETY: requestAuthorizationForAccessLevel: with add-only (1); its
+        // handler, on success, decodes the picture as a UIImage and creates
+        // an asset from it in performChanges:, whose completion answers.
+        unsafe {
+            let tx_auth = tx.clone();
+            let asked = block2::RcBlock::new(move |status: isize| {
+                // Authorized (3) or limited (4).
+                if status != 3 && status != 4 {
+                    let _ = tx_auth.send(Err(None));
+                    return;
+                }
+                let Some(data_class) = objc2::runtime::AnyClass::get(c"NSData") else {
+                    let _ = tx_auth.send(Err(Some("no NSData".to_string())));
+                    return;
+                };
+                let ns_data: Option<Retained<objc2::runtime::AnyObject>> = msg_send![data_class, dataWithBytes: bytes.as_ptr() as *const std::ffi::c_void, length: bytes.len()];
+                let image: Option<Retained<objc2::runtime::AnyObject>> =
+                    ns_data.and_then(|d| msg_send![image_class, imageWithData: &*d]);
+                let Some(image) = image else {
+                    let _ = tx_auth.send(Err(Some("iOS could not read that picture".to_string())));
+                    return;
+                };
+                let change = block2::RcBlock::new(move || {
+                    let _: Option<Retained<objc2::runtime::AnyObject>> =
+                        msg_send![request_class, creationRequestForAssetFromImage: &*image];
+                });
+                let tx_done = tx_auth.clone();
+                let done = block2::RcBlock::new(
+                    move |ok: objc2::runtime::Bool, error: *mut objc2::runtime::AnyObject| {
+                        let _ = tx_done.send(if ok.as_bool() {
+                            Ok(())
+                        } else if error.is_null() {
+                            Err(Some("Photos refused the picture".to_string()))
+                        } else {
+                            let text: Option<Retained<objc2_foundation::NSString>> =
+                                msg_send![&*error, localizedDescription];
+                            Err(Some(text.map(|t| t.to_string()).unwrap_or_default()))
+                        });
+                    },
+                );
+                let shared: Retained<objc2::runtime::AnyObject> =
+                    msg_send![library, sharedPhotoLibrary];
+                let _: () =
+                    msg_send![&*shared, performChanges: &*change, completionHandler: &*done];
+            });
+            let _: () =
+                msg_send![library, requestAuthorizationForAccessLevel: 1isize, handler: &*asked];
+        }
+        rx.recv_timeout(std::time::Duration::from_secs(120))
+            .unwrap_or(Err(Some("Photos did not answer".to_string())))
+    }
+
     /// The system's share sheet with a text, a link and files (IC-919). Files
     /// are written to a fresh folder in the temporary space first: the sheet
     /// shares URLs, not bytes. Waits for the person: true when they sent it.
@@ -2657,6 +2913,14 @@ mod stub {
         _files: &[(String, Vec<u8>)],
     ) -> Result<bool, String> {
         Err("the share sheet is on the iOS player only".to_string())
+    }
+
+    pub fn pick_photos(_limit: u32) -> Result<Vec<std::path::PathBuf>, String> {
+        Err("the photo picker is on the iOS player only".to_string())
+    }
+
+    pub fn save_photo(_data: &[u8]) -> Result<(), Option<String>> {
+        Err(Some("Photos is on the iOS player only".to_string()))
     }
 
     pub fn notify(_sender: &str, _title: &str, _body: &str) -> Result<(), String> {

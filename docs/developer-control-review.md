@@ -15,8 +15,8 @@ Developer ownership and control is the default (IC-175, IC-176). Krate enforces 
 
 ## Summary
 
-- 65 boundaries reviewed, 56 of them WIT interfaces (56 declared under wit/krate).
-- 35 compulsory, each with a justification or a recorded gap; 30 optional.
+- 66 boundaries reviewed, 57 of them WIT interfaces (57 declared under wit/krate).
+- 35 compulsory, each with a justification or a recorded gap; 31 optional.
 - 7 recorded gaps where the escape hatch does not yet exist or the boundary is narrower than a developer would want.
 
 ## Every boundary
@@ -70,6 +70,7 @@ Developer ownership and control is the default (IC-175, IC-176). Krate enforces 
 | `krate:ui@0.1.0/menu` | wit | nothing yet: menu calls are declared and answer unsupported | any command scheme drawn in the app | the app's own drawn menus and key handling | no | -- |
 | `krate:ui@0.1.0/motion` | wit | one reading of the phone's sensors -- gravity, the push given it, its turning and the compass heading -- in the screen's own frame however the phone is turned | whether to read, how often, and what tilt or shake means to the app | none needed: no capability, and a device without sensors answers available() false | no | -- |
 | `krate:ui@0.1.0/notify` | wit | that a notification is attributed to the app the person consented to, never to a title the app chose, and is a grant | when and what | draw the message in the app's own window | yes | recipient-permission |
+| `krate:ui@0.1.0/photos` | wit | picking photos through the system's own photo picker, returned as chosen files, and adding a PNG or JPEG to the library behind photos.add with add-only access | when to pick, how many, and what to add | dialog.open-file and save-file, which already exist | no | -- |
 | `krate:ui@0.1.0/pointer` | wit | that the person can always take a held pointer back: Escape and focus loss release it on every system | what the pointer does: aiming, turning a camera, dragging, menus | the mouse's own motion, unfiltered, while the pointer is held | yes | platform |
 | `krate:ui@0.1.0/print` | wit | that nothing reaches a printer unless the person says so in the system's own dialog, and that the answer is what happened (printed, cancelled, or opened in the viewer), never a guess | what is on each page, how many pages, and when to offer printing | write a PDF the app built itself to a picked folder, or share it | no | -- |
 | `krate:ui@0.1.0/screen` | wit | how a window's screen is described: its size classes, touch or pointer, and the edges something else covers | every layout decision; the classes are information, not a layout | canvas-size and the app's own breakpoints | no | -- |

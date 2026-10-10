@@ -403,6 +403,42 @@ impl ui4::haptics::Host for Phase3GuiHost {
     }
 }
 
+/// The photo library (IC-920). Phase 4 only: picking needs no capability
+/// (the pick is the grant), adding is behind `photos.add`.
+impl ui4::photos::Host for Phase3GuiHost {
+    fn pick(
+        &mut self,
+        window: u64,
+        limit: u32,
+    ) -> wasmtime::Result<Result<Vec<ui4::types::ChosenFile>, ui4::photos::PhotosError>> {
+        Ok(self
+            .pick_photos(window, limit)
+            .map(|picked| {
+                picked
+                    .into_iter()
+                    .map(|(name, token)| ui4::types::ChosenFile { name, token })
+                    .collect()
+            })
+            .map_err(photos_error))
+    }
+
+    fn save(
+        &mut self,
+        _window: u64,
+        data: Vec<u8>,
+    ) -> wasmtime::Result<Result<(), ui4::photos::PhotosError>> {
+        Ok(self.save_photo(&data).map_err(photos_error))
+    }
+}
+
+fn photos_error((kind, why): (u8, String)) -> ui4::photos::PhotosError {
+    match kind {
+        0 => ui4::photos::PhotosError::NotAllowed,
+        2 => ui4::photos::PhotosError::Invalid(why),
+        _ => ui4::photos::PhotosError::Unavailable(why),
+    }
+}
+
 /// The system's share sheet (IC-919). Phase 4 only; no capability, the
 /// person's pick in the sheet is the grant.
 impl ui4::share::Host for Phase3GuiHost {

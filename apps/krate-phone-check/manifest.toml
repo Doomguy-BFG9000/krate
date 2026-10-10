@@ -46,6 +46,11 @@ rationale = "Open krate.tech in the browser"
 required = true
 
 [[capabilities]]
+cap = "photos.add"
+rationale = "Add one test picture to your Photos"
+required = true
+
+[[capabilities]]
 cap = "io.args"
 rationale = "Read the quick-run flag used by automated tests"
 required = true

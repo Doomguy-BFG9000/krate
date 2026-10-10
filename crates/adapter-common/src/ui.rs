@@ -1999,6 +1999,25 @@ pub trait UiAdapter: WindowAdapter {
         false
     }
 
+    /// Show the platform's photo picker for up to `limit` photos; the files
+    /// picked, as JPEGs on disk (IC-920). Empty when cancelled. None when
+    /// the host has no picker of its own (desktops use the file dialog).
+    fn pick_photos(
+        &self,
+        _window: WindowId,
+        _limit: u32,
+    ) -> Option<Result<Vec<std::path::PathBuf>, String>> {
+        None
+    }
+
+    /// Add a PNG or JPEG to the photo library; Err(None) when the person
+    /// said no, Err(Some(why)) when it could not.
+    fn save_photo(&self, _data: &[u8]) -> Result<(), Option<String>> {
+        Err(Some(
+            "this device has no photo library Krate can add to".to_string(),
+        ))
+    }
+
     /// Open the platform's share sheet with a text, a link and files (name,
     /// bytes); true when sent, false when cancelled (IC-919).
     fn share(

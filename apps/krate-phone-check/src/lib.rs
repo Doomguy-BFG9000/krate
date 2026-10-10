@@ -12,7 +12,7 @@ use krate::camera::capture as camera;
 use krate::gfx::{canvas2d, canvas_images, types as gfx};
 use krate::layout::{Rect, Screen};
 use krate::speech::synthesis;
-use krate::ui::{clipboard, launcher, notify, share};
+use krate::ui::{clipboard, launcher, notify, photos, share};
 use krate::{
     io::{args, stdio},
     time::clock,
@@ -77,9 +77,11 @@ enum Check {
     Notify,
     Link,
     Share,
+    Pick,
+    SavePhoto,
 }
 
-const CHECKS: [(Check, &str); 8] = [
+const CHECKS: [(Check, &str); 10] = [
     (Check::Copy, "Copy a line"),
     (Check::Paste, "Paste"),
     (Check::Record, "Record 3 s and play back"),
@@ -88,11 +90,13 @@ const CHECKS: [(Check, &str); 8] = [
     (Check::Notify, "Post a notification"),
     (Check::Link, "Open krate.tech"),
     (Check::Share, "Share a note and a file"),
+    (Check::Pick, "Pick photos"),
+    (Check::SavePhoto, "Save a picture to Photos"),
 ];
 
 struct Page {
     rows: Vec<Rect>,
-    results: [String; 8],
+    results: [String; 10],
     /// A recording in progress: the stream, when it started, the bytes so far.
     recording: Option<(u64, u64, Vec<u8>)>,
     camera: Option<u64>,
@@ -187,6 +191,28 @@ fn run_check(win: u64, check: Check, page: &mut Page, now: u64) {
             Ok(()) => String::from("ok: opened"),
             Err(e) => format!("failed: {e:?}"),
         },
+        Check::Pick => match photos::pick(win, 3) {
+            Ok(picked) if picked.is_empty() => String::from("ok: the picker opened, and you cancelled"),
+            Ok(picked) => {
+                let mut bytes = 0usize;
+                for file in &picked {
+                    if let Ok(f) = krate::bindings::krate::fs::files::open_chosen(&file.token, krate::bindings::krate::fs::types::OpenMode::Read) {
+                        while let Ok(chunk) = f.read(1 << 20) {
+                            if chunk.is_empty() {
+                                break;
+                            }
+                            bytes += chunk.len();
+                        }
+                    }
+                }
+                format!("ok: {} photo(s), {:.1} MB read", picked.len(), bytes as f32 / 1_048_576.0)
+            }
+            Err(e) => format!("failed: {e:?}"),
+        },
+        Check::SavePhoto => match photos::save(win, &gradient_png(240, 160)) {
+            Ok(()) => String::from("ok: added -- look in Photos"),
+            Err(e) => format!("failed: {e:?}"),
+        },
         Check::Share => {
             let note = share::SharedFile {
                 name: String::from("phone-check.txt"),
@@ -200,6 +226,66 @@ fn run_check(win: u64, check: Check, page: &mut Page, now: u64) {
         }
     };
     say_line(&format!("check:{} {}", CHECKS[slot].1, page.results[slot]));
+}
+
+/// A small PNG of Krate's blue fading to violet, for Save to Photos: a
+/// stored (uncompressed) zlib stream, which every decoder reads.
+fn gradient_png(w: usize, h: usize) -> Vec<u8> {
+    let mut table = [0u32; 256];
+    for (n, slot) in table.iter_mut().enumerate() {
+        let mut c = n as u32;
+        for _ in 0..8 {
+            c = if c & 1 != 0 { 0xEDB8_8320 ^ (c >> 1) } else { c >> 1 };
+        }
+        *slot = c;
+    }
+    let crc = |bytes: &[u8]| {
+        let mut c = 0xFFFF_FFFFu32;
+        for b in bytes {
+            c = table[((c ^ *b as u32) & 0xFF) as usize] ^ (c >> 8);
+        }
+        !c
+    };
+    let mut raw = Vec::with_capacity((1 + w * 3) * h);
+    for y in 0..h {
+        raw.push(0);
+        for x in 0..w {
+            let t = x as f32 / w as f32;
+            raw.extend_from_slice(&[(59.0 + 90.0 * t) as u8, (77.0 - 30.0 * t) as u8, (242.0 - 20.0 * (y as f32 / h as f32)) as u8]);
+        }
+    }
+    let mut z = Vec::with_capacity(raw.len() + raw.len() / 65535 * 5 + 16);
+    z.extend_from_slice(&[0x78, 0x01]);
+    let blocks: Vec<&[u8]> = raw.chunks(65535).collect();
+    for (i, block) in blocks.iter().enumerate() {
+        let n = block.len() as u16;
+        z.push(if i + 1 == blocks.len() { 1 } else { 0 });
+        z.extend_from_slice(&n.to_le_bytes());
+        z.extend_from_slice(&(!n).to_le_bytes());
+        z.extend_from_slice(block);
+    }
+    let (mut a, mut b) = (1u32, 0u32);
+    for v in &raw {
+        a = (a + *v as u32) % 65521;
+        b = (b + a) % 65521;
+    }
+    z.extend_from_slice(&((b << 16) | a).to_be_bytes());
+    let mut out = alloc::vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+    let mut chunk = |kind: &[u8], body: &[u8]| {
+        out.extend_from_slice(&(body.len() as u32).to_be_bytes());
+        let mut tagged = kind.to_vec();
+        tagged.extend_from_slice(body);
+        out.extend_from_slice(&tagged);
+        out.extend_from_slice(&crc(&tagged).to_be_bytes());
+    };
+    let mut ihdr = Vec::new();
+    ihdr.extend_from_slice(&(w as u32).to_be_bytes());
+    ihdr.extend_from_slice(&(h as u32).to_be_bytes());
+    ihdr.extend_from_slice(&[8, 2, 0, 0, 0]);
+    chunk(b"IHDR", &ihdr);
+    chunk(b"IDAT", &z);
+    chunk(b"IEND", &[]);
+    out
 }
 
 /// Keep a recording going, and play it back once three seconds are in.
@@ -278,6 +364,24 @@ impl Guest for Component {
         let Ok(canvas) = canvas2d::bind(win, 2) else {
             return 1;
         };
+        if args::raw().split('\n').any(|a| a == "quick-photos") {
+            // Picking where nothing is on screen answers as cancelled;
+            // adding refuses what is not a picture before anything else,
+            // then finds no library here.
+            let word = |r: Result<(), photos::PhotosError>| match r {
+                Ok(()) => String::from("ok"),
+                Err(photos::PhotosError::NotAllowed) => String::from("not-allowed"),
+                Err(photos::PhotosError::Invalid(_)) => String::from("invalid"),
+                Err(photos::PhotosError::Unavailable(_)) => String::from("unavailable"),
+            };
+            say_line(&format!(
+                "photos:pick={} junk={} png={}",
+                photos::pick(win, 3).map(|p| p.len()).unwrap_or(99),
+                word(photos::save(win, b"not a picture")),
+                word(photos::save(win, &gradient_png(8, 8))),
+            ));
+            return 0;
+        }
         if args::raw().split('\n').any(|a| a == "quick-share") {
             // What the share sheet refuses before it opens, then whether it
             // opens at all here.

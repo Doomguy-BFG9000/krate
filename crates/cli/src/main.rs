@@ -18717,6 +18717,7 @@ fn manifest_overreach(manifest: &krate_manifest::Manifest, imports: &[String]) -
             "camera.capture" => Some(":camera/capture"),
             "location.read" => Some(":ui/location"),
             "bluetooth.connect" => Some(":ui/bluetooth"),
+            "photos.add" => Some(":ui/photos"),
             "ui.dialog" => Some(":ui/dialog"),
             "ui.clipboard" => Some(":ui/clipboard"),
             // System and always-on families carry no signal here.

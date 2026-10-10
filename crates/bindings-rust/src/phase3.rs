@@ -7,7 +7,7 @@
 
 #![allow(clippy::too_many_arguments)]
 
-/// `krate:ui`: bluetooth, clipboard, dialog, events, haptics, image, launcher, location, menu, motion, notify, pointer, print, screen, share, text_entry, touch, tree, window.
+/// `krate:ui`: bluetooth, clipboard, dialog, events, haptics, image, launcher, location, menu, motion, notify, photos, pointer, print, screen, share, text_entry, touch, tree, window.
 pub mod ui {
     /// `krate:ui/bluetooth`.
     pub mod bluetooth {
@@ -345,6 +345,22 @@ pub mod ui {
         /// which keeps this from becoming a way to watch the person.
         pub fn show(title: &str, body: &str) -> Result<(), NotifyError> {
             crate::bindings::krate::ui::notify::show(title, body)
+        }
+    }
+    /// `krate:ui/photos`.
+    pub mod photos {
+        pub use crate::bindings::krate::ui::photos::{ChosenFile, PhotosError};
+
+        /// Show the photo picker for up to `limit` photos (1 to 20). The photos
+        /// picked, as JPEG files; empty when the person cancelled. On a computer,
+        /// the system's file picker for pictures.
+        pub fn pick(window: u64, limit: u32) -> Result<alloc::vec::Vec<ChosenFile>, PhotosError> {
+            crate::bindings::krate::ui::photos::pick(window, limit)
+        }
+
+        /// Add a picture -- PNG or JPEG bytes -- to the photo library.
+        pub fn save(window: u64, data: &[u8]) -> Result<(), PhotosError> {
+            crate::bindings::krate::ui::photos::save(window, data)
         }
     }
     /// `krate:ui/pointer`.

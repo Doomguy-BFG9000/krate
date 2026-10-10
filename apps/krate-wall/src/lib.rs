@@ -299,6 +299,7 @@ fn describe(cap: &str) -> (String, gfx::Color) {
         "camera.capture" | "camera" => ("Camera".to_string(), gray),
         "location.read" => ("Where you are".to_string(), blue),
         "bluetooth.connect" => ("Bluetooth devices you pick".to_string(), blue),
+        "photos.add" => ("Add to your Photos".to_string(), orange),
         "store.kv" | "store.sql" => ("Keep its data".to_string(), green),
         "store.shared" => ("Share data with people you invite".to_string(), green),
         "store.secret" => ("Keep secrets safe".to_string(), green),

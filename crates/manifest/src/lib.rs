@@ -218,6 +218,9 @@ const KRATE_CAPABILITY_SPECS: &[CapabilitySpec] = &[
     // Bluetooth devices the person picks (IC-917): opt-in, and even granted
     // an app reaches only the one device the person taps in Krate's list.
     CapabilitySpec::resource_free(CapabilityPhase::Phase3, "bluetooth", "connect", false),
+    // Adding pictures to the person's photo library (IC-920): opt-in, and
+    // the phone asks for add-only access, so the app can add, never look.
+    CapabilitySpec::resource_free(CapabilityPhase::Phase3, "photos", "add", false),
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]

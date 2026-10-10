@@ -723,6 +723,83 @@ impl Phase3GuiHost {
         self.runtime.dispatcher()
     }
 
+    /// Pick photos (IC-920): the phone's photo picker, or on a computer the
+    /// file dialog for pictures; each pick remembered as a chosen file.
+    /// Headless answers as cancelled, as open-file does.
+    pub(crate) fn pick_photos(
+        &self,
+        window: u64,
+        limit: u32,
+    ) -> Result<Vec<(String, String)>, (u8, String)> {
+        let limit = limit.clamp(1, 20);
+        if self.headless {
+            return Ok(Vec::new());
+        }
+        let id = self
+            .window_id(window)
+            .map_err(|_| (2, "no such window".to_string()))?;
+        let picked: Vec<std::path::PathBuf> = match self.dispatcher().pick_photos(id, limit) {
+            Some(Ok(paths)) => paths,
+            Some(Err(why)) => return Err((1, why)),
+            None => {
+                #[cfg(not(any(target_os = "android", target_os = "ios", target_arch = "wasm32")))]
+                {
+                    let mut dialog = rfd::FileDialog::new()
+                        .set_title("Choose photos")
+                        .add_filter("Pictures", &["jpg", "jpeg", "png", "heic", "gif", "webp"]);
+                    let _ = &mut dialog;
+                    let files = if limit == 1 {
+                        dialog.pick_file().into_iter().collect::<Vec<_>>()
+                    } else {
+                        dialog.pick_files().unwrap_or_default()
+                    };
+                    files.into_iter().take(limit as usize).collect()
+                }
+                #[cfg(any(target_os = "android", target_os = "ios", target_arch = "wasm32"))]
+                {
+                    return Err((1, "no photo picker on this device yet".to_string()));
+                }
+            }
+        };
+        let mut chosen = Vec::new();
+        for path in picked {
+            let name = crate::chosen_files::ChosenFiles::display_name(&path);
+            let Some(token) = self.chosen_files.borrow_mut().remember(path) else {
+                return Err((1, "too many files chosen in one run".to_string()));
+            };
+            chosen.push((name, token));
+        }
+        Ok(chosen)
+    }
+
+    /// Add a picture to the photo library (IC-920), behind `photos.add`;
+    /// only PNG and JPEG, at most 64 MB.
+    pub(crate) fn save_photo(&self, data: &[u8]) -> Result<(), (u8, String)> {
+        if self
+            .runtime
+            .guard()
+            .check(&UapiCall::Photos(crate::uapi::PhotosCall::Add))
+            .is_err()
+        {
+            return Err((0, String::new()));
+        }
+        let png = data.starts_with(&[0x89, b'P', b'N', b'G']);
+        let jpeg = data.starts_with(&[0xFF, 0xD8, 0xFF]);
+        if !(png || jpeg) {
+            return Err((2, "only PNG and JPEG pictures can be added".to_string()));
+        }
+        if data.len() > 64 * 1024 * 1024 {
+            return Err((2, "the picture is over 64 MB".to_string()));
+        }
+        if self.headless {
+            return Err((1, "no photo library when nothing is on screen".to_string()));
+        }
+        self.dispatcher().save_photo(data).map_err(|why| match why {
+            None => (0, String::new()),
+            Some(why) => (1, why),
+        })
+    }
+
     /// Open the share sheet (IC-919), after checking what is offered: at
     /// least one thing, file names without a path, 64 MB in all.
     pub(crate) fn share(

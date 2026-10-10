@@ -1592,6 +1592,25 @@ fn inspect_content(path: &str, text: &str, analysis: &mut Analysis) {
     );
     detect_pattern(
         analysis,
+        "photos",
+        &[
+            "phphotolibrary",
+            "phpickerviewcontroller",
+            "uiimagewritetosavedphotosalbum",
+            "uiimagepickercontroller",
+            "mediastore.images",
+            "pickvisualmedia",
+            "image_picker",
+        ],
+        path,
+        text,
+        Severity::Change,
+        "Photo library",
+        "Pick photos with krate::ui::photos::pick(win, limit) -- the system's photo picker; the picks come back as chosen files to read with fs open-chosen, no capability needed -- and add a picture with photos::save(win, &png_or_jpeg) behind photos.add, which the person grants on Krate's sheet and the phone asks for as add-only.",
+        Some("photos.add"),
+    );
+    detect_pattern(
+        analysis,
         "bluetooth",
         &[
             "corebluetooth",

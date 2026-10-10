@@ -6378,6 +6378,79 @@ fn an_app_taps_back_on_a_phone_and_a_computer_says_it_cannot() {
     );
 }
 
+/// Photos: picking with no one there answers as cancelled, adding refuses
+/// what is not a picture, and adding needs photos.add (krate:ui/photos,
+/// IC-920).
+///
+/// `phone-check.wasm` is apps/krate-phone-check built; its quick-photos mode
+/// picks, then adds junk bytes and then a real PNG. Granted, the junk is
+/// invalid and the PNG finds no library on a computer; without photos.add
+/// the PNG is not-allowed -- the guard answers before the library is asked.
+#[test]
+fn photos_pick_and_add_answer_as_they_must() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let wasm = dir.path().join("code.wasm");
+    std::fs::write(&wasm, include_bytes!("fixtures/phone-check.wasm")).expect("probe");
+    let manifest = |with_photos: bool| {
+        let path = dir.path().join(if with_photos {
+            "with.toml"
+        } else {
+            "without.toml"
+        });
+        let photos = if with_photos {
+            "[[capabilities]]\ncap = \"photos.add\"\nrationale = \"add\"\nrequired = true\n\n"
+        } else {
+            ""
+        };
+        std::fs::write(
+            &path,
+            format!(
+                "[app]\nid = \"dev.krate.phone-check\"\nname = \"Phone Check\"\nversion = \"1.0.0\"\n\
+                 entry = \"code.wasm\"\nworld = \"krate:app/gui@0.2.0\"\n\n\
+                 [[capabilities]]\ncap = \"ui.window:create\"\nrationale = \"window\"\nrequired = true\n\n\
+                 {photos}\
+                 [[capabilities]]\ncap = \"io.stdout\"\nrationale = \"print\"\nrequired = true\n\n\
+                 [[capabilities]]\ncap = \"io.args\"\nrationale = \"args\"\nrequired = true\n"
+            ),
+        )
+        .expect("manifest");
+        path
+    };
+    let run = |manifest: &std::path::Path| -> String {
+        let out = krate()
+            .arg("run")
+            .arg("--headless")
+            .arg(&wasm)
+            .arg("--manifest")
+            .arg(manifest)
+            .arg("--auto-grant")
+            .arg("--")
+            .arg("quick-photos")
+            .output()
+            .expect("run");
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+    let granted = run(&manifest(true));
+    assert!(
+        granted
+            .lines()
+            .any(|l| l == "photos:pick=0 junk=invalid png=unavailable"),
+        "granted: no pick headless, junk refused, no library on a computer: {granted}"
+    );
+    let refused = run(&manifest(false));
+    assert!(
+        refused
+            .lines()
+            .any(|l| l == "photos:pick=0 junk=not-allowed png=not-allowed"),
+        "without photos.add, adding is not allowed before anything else: {refused}"
+    );
+}
+
 /// The share sheet refuses what it must before it opens, and a computer
 /// says plainly it has none (krate:ui/share, IC-919).
 ///

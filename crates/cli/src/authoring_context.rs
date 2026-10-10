@@ -460,7 +460,12 @@ means nothing nearby offers the service: say so. A Share button: \
 data }])` opens the system's share sheet (Messages, Mail, AirDrop, Notes) \
 and answers `Ok(true)` when sent, `Ok(false)` when cancelled; no \
 capability. A computer answers `Err(Unavailable)` for now: offer \
-save-file or Copy there instead. A picture that does not change \
+save-file or Copy there instead. Photos: `krate::ui::photos::pick(win, \
+3)` opens the system's photo picker and returns the picks as chosen \
+files (read them with `fs::files::open_chosen(&f.token, Read)`); empty \
+means cancelled, no capability. To add a picture: declare `photos.add` \
+and call `photos::save(win, &png_or_jpeg_bytes)`. On a computer pick \
+opens the file dialog for pictures. A picture that does not change \
 between frames (a screenshot, an avatar, a sprite sheet) is kept once \
 with `krate::gfx::canvas_images::keep(canvas, w, h, &rgba)` and drawn \
 by handle with `draw`/`draw_round` each frame: `draw_pixels` sends \
@@ -821,6 +826,7 @@ fn capability_note(pattern: &str) -> &'static str {
         "camera.capture" => "see through the camera",
         "location.read" => "where the phone is; the person is asked on Krate's sheet and by the phone itself",
         "bluetooth.connect" => "Bluetooth devices the person picks in Krate's own list; only the picked one is reachable",
+        "photos.add" => "add pictures to the person's photo library (add-only: the app never sees the library)",
         _ => "",
     }
 }

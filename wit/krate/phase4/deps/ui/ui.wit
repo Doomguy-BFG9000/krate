@@ -1115,6 +1115,36 @@ interface launcher {
   open-url: func(url: string) -> result<_, launch-error>;
 }
 
+/// The person's photo library: pick photos from it, add a picture to it
+/// (IC-920).
+///
+/// Picking shows the system's own photo picker; the photos picked come back
+/// as files to read with `fs.files.open-chosen`, and the pick is the grant,
+/// as with `dialog.open-file` -- the app never sees the rest of the
+/// library. Adding is behind `photos.add`, and the phone asks too, for
+/// add-only access: the app can add, never look.
+interface photos {
+  use types.{chosen-file};
+
+  /// Why a photos call did not work.
+  variant photos-error {
+    /// The app did not declare `photos.add`, or the person said no.
+    not-allowed,
+    /// No photo library here, or it would not answer.
+    unavailable(string),
+    /// The picture's bytes are not a PNG or a JPEG, or are over 64 MB.
+    invalid(string),
+  }
+
+  /// Show the photo picker for up to `limit` photos (1 to 20). The photos
+  /// picked, as JPEG files; empty when the person cancelled. On a computer,
+  /// the system's file picker for pictures.
+  pick: func(window: u64, limit: u32) -> result<list<chosen-file>, photos-error>;
+
+  /// Add a picture -- PNG or JPEG bytes -- to the photo library.
+  save: func(window: u64, data: list<u8>) -> result<_, photos-error>;
+}
+
 /// Hand something to another app: a note to Messages, a picture to Photos
 /// or AirDrop, a file to Mail (IC-919).
 ///
