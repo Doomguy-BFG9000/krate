@@ -1199,6 +1199,27 @@ interface notify {
   show: func(title: string, body: string) -> result<_, notify-error>;
 }
 
+/// Reminders that arrive when the app is closed: a timer that rings, a
+/// habit nudged each evening, a meeting about to start (IC-921).
+///
+/// Behind `ui.notify`, and the phone asks the person once. The system
+/// delivers them; tapping one opens the app that set it. Each app sees and
+/// cancels only its own.
+interface reminders {
+  use notify.{notify-error};
+
+  /// Set reminder `id` (letters, digits, `-` and `_`, up to 64) to arrive
+  /// `after-seconds` from now (1 second to a year), replacing one with the
+  /// same id. With `daily`, it comes back at that time of day every day.
+  schedule: func(id: string, title: string, body: string, after-seconds: u64, daily: bool) -> result<_, notify-error>;
+
+  /// Take back a reminder not yet delivered. Unknown ids are ignored.
+  cancel: func(id: string);
+
+  /// The ids of this app's reminders still to come.
+  pending: func() -> list<string>;
+}
+
 /// Printing what the app's window shows.
 ///
 /// The host paints the window for paper and the system's print dialog does

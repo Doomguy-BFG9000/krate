@@ -619,6 +619,26 @@ impl UiAdapter for IosUikitPrototypeUiAdapter {
         uikit_native::motion_read()
     }
 
+    fn reminder_schedule(
+        &self,
+        id: &str,
+        sender: &str,
+        title: &str,
+        body: &str,
+        after_seconds: u64,
+        daily: bool,
+    ) -> Result<(), String> {
+        uikit_native::reminder_schedule(sender, id, title, body, after_seconds, daily)
+    }
+
+    fn reminder_cancel(&self, id: &str) {
+        uikit_native::reminder_cancel(id)
+    }
+
+    fn reminder_pending(&self) -> Vec<String> {
+        uikit_native::reminder_pending()
+    }
+
     fn pick_photos(
         &self,
         _window: WindowId,

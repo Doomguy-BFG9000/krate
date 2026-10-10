@@ -403,6 +403,44 @@ impl ui4::haptics::Host for Phase3GuiHost {
     }
 }
 
+/// Reminders delivered with the app closed (IC-921). Phase 4 only, behind
+/// `ui.notify`.
+impl ui4::reminders::Host for Phase3GuiHost {
+    fn schedule(
+        &mut self,
+        id: String,
+        title: String,
+        body: String,
+        after_seconds: u64,
+        daily: bool,
+    ) -> wasmtime::Result<Result<(), crate::phase3_gui_bindings::krate::ui::notify::NotifyError>>
+    {
+        use crate::desktop_host::NotifyError;
+        Ok(self
+            .reminder_schedule(&id, &title, &body, after_seconds, daily)
+            .map_err(|err| match err {
+                NotifyError::Denied => {
+                    crate::phase3_gui_bindings::krate::ui::notify::NotifyError::Denied
+                }
+                NotifyError::InvalidContent(m) => {
+                    crate::phase3_gui_bindings::krate::ui::notify::NotifyError::InvalidContent(m)
+                }
+                NotifyError::Unavailable(m) => {
+                    crate::phase3_gui_bindings::krate::ui::notify::NotifyError::Unavailable(m)
+                }
+            }))
+    }
+
+    fn cancel(&mut self, id: String) -> wasmtime::Result<()> {
+        self.reminder_cancel(&id);
+        Ok(())
+    }
+
+    fn pending(&mut self) -> wasmtime::Result<Vec<String>> {
+        Ok(self.reminder_pending())
+    }
+}
+
 /// The photo library (IC-920). Phase 4 only: picking needs no capability
 /// (the pick is the grant), adding is behind `photos.add`.
 impl ui4::photos::Host for Phase3GuiHost {

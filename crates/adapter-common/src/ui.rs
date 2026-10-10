@@ -1999,6 +1999,29 @@ pub trait UiAdapter: WindowAdapter {
         false
     }
 
+    /// Schedule a reminder for the running app (IC-921): the platform
+    /// delivers it with the app closed. `sender` is the app's consented
+    /// name for the sender line.
+    fn reminder_schedule(
+        &self,
+        _id: &str,
+        _sender: &str,
+        _title: &str,
+        _body: &str,
+        _after_seconds: u64,
+        _daily: bool,
+    ) -> Result<(), String> {
+        Err("reminders that arrive with the app closed are on phones only, for now".to_string())
+    }
+
+    /// Cancel one of the running app's reminders.
+    fn reminder_cancel(&self, _id: &str) {}
+
+    /// The running app's reminders still to come.
+    fn reminder_pending(&self) -> Vec<String> {
+        Vec::new()
+    }
+
     /// Show the platform's photo picker for up to `limit` photos; the files
     /// picked, as JPEGs on disk (IC-920). Empty when cancelled. None when
     /// the host has no picker of its own (desktops use the file dialog).

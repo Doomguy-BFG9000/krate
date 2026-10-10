@@ -1451,6 +1451,8 @@ impl Runtime {
         link_gui!(ui4::share);
         // Phase 4 only: the photo library (IC-920).
         link_gui!(ui4::photos);
+        // Phase 4 only: reminders delivered with the app closed (IC-921).
+        link_gui!(ui4::reminders);
         // Phase 4 only: pictures a canvas keeps and draws by handle.
         link_gui!(phase4_gui_bindings::krate::gfx::canvas_images);
 

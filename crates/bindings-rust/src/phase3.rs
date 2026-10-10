@@ -7,7 +7,7 @@
 
 #![allow(clippy::too_many_arguments)]
 
-/// `krate:ui`: bluetooth, clipboard, dialog, events, haptics, image, launcher, location, menu, motion, notify, photos, pointer, print, screen, share, text_entry, touch, tree, window.
+/// `krate:ui`: bluetooth, clipboard, dialog, events, haptics, image, launcher, location, menu, motion, notify, photos, pointer, print, reminders, screen, share, text_entry, touch, tree, window.
 pub mod ui {
     /// `krate:ui/bluetooth`.
     pub mod bluetooth {
@@ -430,6 +430,33 @@ pub mod ui {
         /// Print the pages added so far, wait for the person, and start over.
         pub fn finish(window: u64, title: &str) -> Result<PrintOutcome, UiError> {
             crate::bindings::krate::ui::print::finish(window, title)
+        }
+    }
+    /// `krate:ui/reminders`.
+    pub mod reminders {
+        pub use crate::bindings::krate::ui::reminders::NotifyError;
+
+        /// Set reminder `id` (letters, digits, `-` and `_`, up to 64) to arrive
+        /// `after-seconds` from now (1 second to a year), replacing one with the
+        /// same id. With `daily`, it comes back at that time of day every day.
+        pub fn schedule(
+            id: &str,
+            title: &str,
+            body: &str,
+            after_seconds: u64,
+            daily: bool,
+        ) -> Result<(), NotifyError> {
+            crate::bindings::krate::ui::reminders::schedule(id, title, body, after_seconds, daily)
+        }
+
+        /// Take back a reminder not yet delivered. Unknown ids are ignored.
+        pub fn cancel(id: &str) {
+            crate::bindings::krate::ui::reminders::cancel(id)
+        }
+
+        /// The ids of this app's reminders still to come.
+        pub fn pending() -> alloc::vec::Vec<alloc::string::String> {
+            crate::bindings::krate::ui::reminders::pending()
         }
     }
     /// `krate:ui/screen`.

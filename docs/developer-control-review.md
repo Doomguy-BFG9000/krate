@@ -15,8 +15,8 @@ Developer ownership and control is the default (IC-175, IC-176). Krate enforces 
 
 ## Summary
 
-- 66 boundaries reviewed, 57 of them WIT interfaces (57 declared under wit/krate).
-- 35 compulsory, each with a justification or a recorded gap; 31 optional.
+- 67 boundaries reviewed, 58 of them WIT interfaces (58 declared under wit/krate).
+- 35 compulsory, each with a justification or a recorded gap; 32 optional.
 - 7 recorded gaps where the escape hatch does not yet exist or the boundary is narrower than a developer would want.
 
 ## Every boundary
@@ -73,6 +73,7 @@ Developer ownership and control is the default (IC-175, IC-176). Krate enforces 
 | `krate:ui@0.1.0/photos` | wit | picking photos through the system's own photo picker, returned as chosen files, and adding a PNG or JPEG to the library behind photos.add with add-only access | when to pick, how many, and what to add | dialog.open-file and save-file, which already exist | no | -- |
 | `krate:ui@0.1.0/pointer` | wit | that the person can always take a held pointer back: Escape and focus loss release it on every system | what the pointer does: aiming, turning a camera, dragging, menus | the mouse's own motion, unfiltered, while the pointer is held | yes | platform |
 | `krate:ui@0.1.0/print` | wit | that nothing reaches a printer unless the person says so in the system's own dialog, and that the answer is what happened (printed, cancelled, or opened in the viewer), never a guess | what is on each page, how many pages, and when to offer printing | write a PDF the app built itself to a picked folder, or share it | no | -- |
+| `krate:ui@0.1.0/reminders` | wit | reminders the system delivers with the app closed -- set by an app's own id, after a delay or daily, cancelled, listed -- each app seeing only its own, a tap opening the app | what to remind, when, and how often | notify for one shown now | no | -- |
 | `krate:ui@0.1.0/screen` | wit | how a window's screen is described: its size classes, touch or pointer, and the edges something else covers | every layout decision; the classes are information, not a layout | canvas-size and the app's own breakpoints | no | -- |
 | `krate:ui@0.1.0/share` | wit | handing a text, a link and files (name and bytes) to the system's share sheet, and hearing only sent or cancelled | what to share and when; where it goes is the person's pick | save-file and the clipboard, which already exist | no | -- |
 | `krate:ui@0.1.0/text-entry` | wit | showing and hiding the system's on-screen keyboard for a window; typing arrives as ordinary text and key events | when a field wants text, and drawing the field and its caret | the raw text and key events, the same as a physical keyboard's | yes | platform |

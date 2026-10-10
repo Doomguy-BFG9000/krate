@@ -465,7 +465,13 @@ save-file or Copy there instead. Photos: `krate::ui::photos::pick(win, \
 files (read them with `fs::files::open_chosen(&f.token, Read)`); empty \
 means cancelled, no capability. To add a picture: declare `photos.add` \
 and call `photos::save(win, &png_or_jpeg_bytes)`. On a computer pick \
-opens the file dialog for pictures. A picture that does not change \
+opens the file dialog for pictures. A reminder that comes with the app \
+closed (a timer, a habit, a meeting): with `ui.notify`, \
+`krate::ui::reminders::schedule(\"tea\", \"Tea is ready\", \"Four minutes \
+are up.\", 240, false)` -- the same id replaces it, `true` repeats it \
+daily at that time, `cancel(id)` takes it back, `pending()` lists this \
+app's own; tapping it opens the app. A computer answers \
+`Err(Unavailable)` for now: keep an in-app timer there. A picture that does not change \
 between frames (a screenshot, an avatar, a sprite sheet) is kept once \
 with `krate::gfx::canvas_images::keep(canvas, w, h, &rgba)` and drawn \
 by handle with `draw`/`draw_round` each frame: `draw_pixels` sends \
