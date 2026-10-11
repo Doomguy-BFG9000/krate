@@ -19,7 +19,9 @@ use crate::window::{
     CustomCursor as RootCustomCursor, CustomCursorSource, Theme, WindowId as RootWindowId,
 };
 
-use super::{DeviceId, KeyEventExtra, MonitorHandle, PlatformSpecificEventLoopAttributes, WindowId};
+use super::{
+    DeviceId, KeyEventExtra, MonitorHandle, PlatformSpecificEventLoopAttributes, WindowId,
+};
 
 /// What the windows of one event loop share with it: each window's size
 /// probe (a krate:gpu surface on its canvas, asked only for its pixel size)
@@ -31,7 +33,10 @@ pub(crate) struct Shared {
 
 impl Shared {
     pub(crate) fn add(&self, window: u64, probe: u64, logical: (u32, u32)) {
-        self.windows.lock().unwrap().insert(window, (probe, logical));
+        self.windows
+            .lock()
+            .unwrap()
+            .insert(window, (probe, logical));
     }
 
     fn set_logical(&self, window: u64, logical: (u32, u32)) {
@@ -73,7 +78,11 @@ impl Shared {
 /// Krate's portable key names ("a", "Space", "ArrowUp", "F1") as winit keys.
 fn convert_key(name: &str) -> (PhysicalKey, Key, Option<SmolStr>) {
     let named = |code: KeyCode, key: NamedKey, text: Option<&str>| {
-        (PhysicalKey::Code(code), Key::Named(key), text.map(SmolStr::new))
+        (
+            PhysicalKey::Code(code),
+            Key::Named(key),
+            text.map(SmolStr::new),
+        )
     };
     match name {
         "Enter" => return named(KeyCode::Enter, NamedKey::Enter, Some("\r")),
@@ -90,7 +99,7 @@ fn convert_key(name: &str) -> (PhysicalKey, Key, Option<SmolStr>) {
         "ArrowRight" => return named(KeyCode::ArrowRight, NamedKey::ArrowRight, None),
         "ArrowUp" => return named(KeyCode::ArrowUp, NamedKey::ArrowUp, None),
         "ArrowDown" => return named(KeyCode::ArrowDown, NamedKey::ArrowDown, None),
-        _ => {},
+        _ => {}
     }
     if let Some(n) = name.strip_prefix('F').and_then(|n| n.parse::<u8>().ok()) {
         let pairs = [
@@ -198,7 +207,12 @@ struct Mods {
 
 impl Mods {
     fn of(m: &kt::Modifiers) -> Mods {
-        Mods { shift: m.shift, control: m.control, alt: m.alt, meta: m.meta }
+        Mods {
+            shift: m.shift,
+            control: m.control,
+            alt: m.alt,
+            meta: m.meta,
+        }
     }
 
     fn winit(self) -> Modifiers {
@@ -212,7 +226,10 @@ impl Mods {
         keys.set(ModifiersKeys::LALT, self.alt);
         state.set(ModifiersState::SUPER, self.meta);
         keys.set(ModifiersKeys::LSUPER, self.meta);
-        Modifiers { state, pressed_mods: keys }
+        Modifiers {
+            state,
+            pressed_mods: keys,
+        }
     }
 }
 
@@ -278,7 +295,12 @@ impl<T: 'static> EventLoop<T> {
         }
         let keys = [
             (before.shift, now.shift, KeyCode::ShiftLeft, NamedKey::Shift),
-            (before.control, now.control, KeyCode::ControlLeft, NamedKey::Control),
+            (
+                before.control,
+                now.control,
+                KeyCode::ControlLeft,
+                NamedKey::Control,
+            ),
             (before.alt, now.alt, KeyCode::AltLeft, NamedKey::Alt),
             (before.meta, now.meta, KeyCode::SuperLeft, NamedKey::Super),
         ];
@@ -332,7 +354,7 @@ impl<T: 'static> EventLoop<T> {
                 if let Some(w) = shared.ids().first().copied() {
                     shared.set_logical(w, (size.width, size.height));
                 }
-            },
+            }
             kt::Event::Key(k) => {
                 Self::modifiers(state, k.window, Mods::of(&k.modifiers), &mut handler);
                 let (physical_key, logical_key, text) = convert_key(&k.key);
@@ -364,7 +386,42 @@ impl<T: 'static> EventLoop<T> {
                         is_synthetic: false,
                     },
                 });
-            },
+            }
+            // Typed text (the host's own text input, after the keyboard
+            // layout): winit 0.30 carries typing as each key press's `text`,
+            // so each character arrives as a press and release with its text,
+            // as a real keyboard's would.
+            kt::Event::TextInput(text) => {
+                let Some(w) = shared.ids().first().copied() else {
+                    return;
+                };
+                for c in text.chars() {
+                    let s = SmolStr::new(c.to_string());
+                    for pressed in [true, false] {
+                        handler(event::Event::WindowEvent {
+                            window_id: wid(w),
+                            event: event::WindowEvent::KeyboardInput {
+                                device_id: event::DeviceId(DeviceId),
+                                event: event::KeyEvent {
+                                    physical_key: PhysicalKey::Unidentified(
+                                        NativeKeyCode::Unidentified,
+                                    ),
+                                    logical_key: Key::Character(s.clone()),
+                                    text: pressed.then(|| s.clone()),
+                                    location: KeyLocation::Standard,
+                                    state: element_state(pressed),
+                                    repeat: false,
+                                    platform_specific: KeyEventExtra {
+                                        key_without_modifiers: Key::Character(s.clone()),
+                                        text_with_all_modifiers: pressed.then(|| s.clone()),
+                                    },
+                                },
+                                is_synthetic: false,
+                            },
+                        });
+                    }
+                }
+            }
             kt::Event::Pointer(p) => {
                 Self::modifiers(state, p.window, Mods::of(&p.modifiers), &mut handler);
                 let scale = shared.scale(p.window);
@@ -394,7 +451,7 @@ impl<T: 'static> EventLoop<T> {
                         },
                     });
                 }
-            },
+            }
             kt::Event::Wheel(wh) => {
                 Self::modifiers(state, wh.window, Mods::of(&wh.modifiers), &mut handler);
                 let scale = shared.scale(wh.window);
@@ -410,8 +467,8 @@ impl<T: 'static> EventLoop<T> {
                         phase: event::TouchPhase::Moved,
                     },
                 });
-            },
-            _ => {},
+            }
+            _ => {}
         }
     }
 
@@ -464,7 +521,9 @@ impl<T: 'static> EventLoop<T> {
                 let next = self.state.pending.pop_front().or_else(events::poll);
                 let Some(ev) = next else { break };
                 let target = &self.window_target;
-                Self::process_event(&shared, ev, &mut self.state, |e| event_handler_inner(e, target));
+                Self::process_event(&shared, ev, &mut self.state, |e| {
+                    event_handler_inner(e, target)
+                });
             }
 
             // Each window: a canvas that changed size, and the held pointer's
@@ -500,8 +559,11 @@ impl<T: 'static> EventLoop<T> {
                 }
             }
 
-            while let Some(event) =
-                self.state.user.pop_front().or_else(|| self.user_events_receiver.try_recv().ok())
+            while let Some(event) = self
+                .state
+                .user
+                .pop_front()
+                .or_else(|| self.user_events_receiver.try_recv().ok())
             {
                 event_handler_inner(event::Event::UserEvent(event), &self.window_target);
             }
@@ -528,7 +590,7 @@ impl<T: 'static> EventLoop<T> {
                 ControlFlow::Poll => {
                     start_cause = StartCause::Poll;
                     continue;
-                },
+                }
                 ControlFlow::Wait => None,
                 ControlFlow::WaitUntil(instant) => Some(instant),
             };
@@ -543,23 +605,39 @@ impl<T: 'static> EventLoop<T> {
             }
             start_cause = loop {
                 let step = requested_resume
-                    .map(|r| r.saturating_duration_since(Instant::now()).as_millis().min(16) as u32)
+                    .map(|r| {
+                        r.saturating_duration_since(Instant::now())
+                            .as_millis()
+                            .min(16) as u32
+                    })
                     .unwrap_or(16);
                 if let Some(ev) = events::wait(Some(step)) {
                     self.state.pending.push_back(ev);
-                    break StartCause::WaitCancelled { start, requested_resume };
+                    break StartCause::WaitCancelled {
+                        start,
+                        requested_resume,
+                    };
                 }
                 if let Ok(user) = self.user_events_receiver.try_recv() {
                     self.state.user.push_back(user);
-                    break StartCause::WaitCancelled { start, requested_resume };
+                    break StartCause::WaitCancelled {
+                        start,
+                        requested_resume,
+                    };
                 }
                 if let Some(r) = requested_resume {
                     if Instant::now() >= r {
-                        break StartCause::ResumeTimeReached { start, requested_resume: r };
+                        break StartCause::ResumeTimeReached {
+                            start,
+                            requested_resume: r,
+                        };
                     }
                 }
                 if !self.window_target.p.redraws.lock().unwrap().is_empty() {
-                    break StartCause::WaitCancelled { start, requested_resume };
+                    break StartCause::WaitCancelled {
+                        start,
+                        requested_resume,
+                    };
                 }
             };
         }
@@ -573,7 +651,9 @@ impl<T: 'static> EventLoop<T> {
     }
 
     pub fn create_proxy(&self) -> EventLoopProxy<T> {
-        EventLoopProxy { user_events_sender: self.user_events_sender.clone() }
+        EventLoopProxy {
+            user_events_sender: self.user_events_sender.clone(),
+        }
     }
 }
 
@@ -591,7 +671,9 @@ impl<T> EventLoopProxy<T> {
 
 impl<T> Clone for EventLoopProxy<T> {
     fn clone(&self) -> Self {
-        Self { user_events_sender: self.user_events_sender.clone() }
+        Self {
+            user_events_sender: self.user_events_sender.clone(),
+        }
     }
 }
 
@@ -609,7 +691,9 @@ pub struct ActiveEventLoop {
 impl ActiveEventLoop {
     pub fn create_custom_cursor(&self, source: CustomCursorSource) -> RootCustomCursor {
         let _ = source.inner;
-        RootCustomCursor { inner: super::PlatformCustomCursor }
+        RootCustomCursor {
+            inner: super::PlatformCustomCursor,
+        }
     }
 
     pub fn primary_monitor(&self) -> Option<MonitorHandle> {
@@ -641,7 +725,9 @@ impl ActiveEventLoop {
     pub fn raw_display_handle_rwh_06(
         &self,
     ) -> Result<rwh_06::RawDisplayHandle, rwh_06::HandleError> {
-        Ok(rwh_06::RawDisplayHandle::Web(rwh_06::WebDisplayHandle::new()))
+        Ok(rwh_06::RawDisplayHandle::Web(
+            rwh_06::WebDisplayHandle::new(),
+        ))
     }
 
     pub fn set_control_flow(&self, control_flow: ControlFlow) {

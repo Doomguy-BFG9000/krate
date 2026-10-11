@@ -21,7 +21,9 @@
 //! the GPU surface answer only the app's main thread, as AppKit wants.
 
 use std::sync::atomic::{AtomicI32, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::Arc;
+
+use parking_lot::{FairMutex, FairMutexGuard};
 
 use wasmtime::{Caller, Linker, Module, SharedMemory, Store, UpdateDeadline};
 
@@ -435,10 +437,21 @@ impl std::ops::DerefMut for SendHost {
     }
 }
 
+fn lock_trace() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("KRATE_HOST_LOCK_TRACE").is_some())
+}
+
 /// Everything the app's threads share.
 pub(crate) struct Shared {
     memory: SharedMemory,
-    host: Mutex<SendHost>,
+    /// One host state, taken in turn. Fair on purpose: a std mutex lets the
+    /// thread that just released it take it straight back, and a main thread
+    /// drawing frames (hundreds of host calls each) starved a network thread
+    /// whose QUIC connection then timed out for want of a turn.
+    host: FairMutex<SendHost>,
+    /// The call that last took the host and its thread (KRATE_HOST_LOCK_TRACE).
+    last_holder: parking_lot::Mutex<Option<(&'static str, std::thread::ThreadId)>>,
     main: std::thread::ThreadId,
     next_tid: AtomicI32,
     /// Most threads the app may run at once.
@@ -456,15 +469,33 @@ impl Shared {
     pub(crate) fn host(
         &self,
         main_only: bool,
-        iface: &str,
-    ) -> wasmtime::Result<MutexGuard<'_, SendHost>> {
+        iface: &'static str,
+    ) -> wasmtime::Result<FairMutexGuard<'_, SendHost>> {
         if main_only && std::thread::current().id() != self.main {
             return Err(wasmtime::Error::msg(format!(
                 "krate:{iface} answers the app's main thread only: the window and \
                  the screen live there"
             )));
         }
-        Ok(self.host.lock().unwrap_or_else(|p| p.into_inner()))
+        if !lock_trace() {
+            return Ok(self.host.lock());
+        }
+        // KRATE_HOST_LOCK_TRACE=1: say who waits long for the host, and
+        // which call last took it -- the picture of a stall.
+        let me = std::thread::current().id();
+        let guard = match self.host.try_lock_for(std::time::Duration::from_secs(3)) {
+            Some(g) => g,
+            None => {
+                let last = *self.last_holder.lock();
+                eprintln!(
+                    "krate-threads: {me:?} has waited 3 s for the host to call krate:{iface}; \
+                     the last to take it was {last:?}"
+                );
+                self.host.lock()
+            }
+        };
+        *self.last_holder.lock() = Some((iface, me));
+        Ok(guard)
     }
 
     pub(crate) fn realloc<'a, 'b>(
@@ -694,7 +725,8 @@ impl super::Runtime {
 
         let shared = Arc::new(Shared {
             memory,
-            host: Mutex::new(SendHost(state)),
+            host: FairMutex::new(SendHost(state)),
+            last_holder: parking_lot::Mutex::new(None),
             main: std::thread::current().id(),
             next_tid: AtomicI32::new(1),
             max_threads: (parallelism() * 8).clamp(16, 512),
@@ -714,7 +746,7 @@ impl super::Runtime {
             store.epoch_deadline_callback(move |_| {
                 // Only when no other thread is in the host: the pump must
                 // never wait behind a worker.
-                if let Ok(host) = pump.host.try_lock() {
+                if let Some(host) = pump.host.try_lock() {
                     if let Some(gui) = host.phase3_gui.as_ref() {
                         gui.pump_native_windows_for_epoch();
                     }
@@ -761,7 +793,7 @@ impl super::Runtime {
             }
             other => other,
         };
-        let mut host = shared.host.lock().unwrap_or_else(|p| p.into_inner());
+        let mut host = shared.host.lock();
         finish_gui_run(&mut host, outcome)
     }
 }

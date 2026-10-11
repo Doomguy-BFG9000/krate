@@ -307,21 +307,27 @@ impl Window {
 
     #[inline]
     pub fn set_cursor_position(&self, _: Position) -> Result<(), error::ExternalError> {
-        Err(error::ExternalError::NotSupported(error::NotSupportedError::new()))
+        Err(error::ExternalError::NotSupported(
+            error::NotSupportedError::new(),
+        ))
     }
 
     /// Confined and Locked both hold the pointer (`krate:ui/pointer`
     /// capture): hidden, and reported as raw motion.
     #[inline]
-    pub fn set_cursor_grab(&self, mode: window::CursorGrabMode) -> Result<(), error::ExternalError> {
+    pub fn set_cursor_grab(
+        &self,
+        mode: window::CursorGrabMode,
+    ) -> Result<(), error::ExternalError> {
         match mode {
             window::CursorGrabMode::None => {
                 pointer::release(self.id);
                 Ok(())
-            },
+            }
             window::CursorGrabMode::Confined | window::CursorGrabMode::Locked => {
-                pointer::capture(self.id).map_err(|e| error::ExternalError::Os(os_error!(OsError::new(e))))
-            },
+                pointer::capture(self.id)
+                    .map_err(|e| error::ExternalError::Os(os_error!(OsError::new(e))))
+            }
         }
     }
 
@@ -331,7 +337,9 @@ impl Window {
 
     #[inline]
     pub fn drag_window(&self) -> Result<(), error::ExternalError> {
-        Err(error::ExternalError::NotSupported(error::NotSupportedError::new()))
+        Err(error::ExternalError::NotSupported(
+            error::NotSupportedError::new(),
+        ))
     }
 
     #[inline]
@@ -339,7 +347,9 @@ impl Window {
         &self,
         _direction: window::ResizeDirection,
     ) -> Result<(), error::ExternalError> {
-        Err(error::ExternalError::NotSupported(error::NotSupportedError::new()))
+        Err(error::ExternalError::NotSupported(
+            error::NotSupportedError::new(),
+        ))
     }
 
     #[inline]
@@ -347,7 +357,9 @@ impl Window {
 
     #[inline]
     pub fn set_cursor_hittest(&self, _hittest: bool) -> Result<(), error::ExternalError> {
-        Err(error::ExternalError::NotSupported(error::NotSupportedError::new()))
+        Err(error::ExternalError::NotSupported(
+            error::NotSupportedError::new(),
+        ))
     }
 
     /// The canvas, named as wgpu-krate reads it: a Web handle whose id is
@@ -355,7 +367,9 @@ impl Window {
     #[cfg(feature = "rwh_06")]
     #[inline]
     pub fn raw_window_handle_rwh_06(&self) -> Result<rwh_06::RawWindowHandle, rwh_06::HandleError> {
-        Ok(rwh_06::RawWindowHandle::Web(rwh_06::WebWindowHandle::new(super::web_id(self.id))))
+        Ok(rwh_06::RawWindowHandle::Web(rwh_06::WebWindowHandle::new(
+            super::web_id(self.id),
+        )))
     }
 
     #[cfg(feature = "rwh_06")]
@@ -363,7 +377,9 @@ impl Window {
     pub fn raw_display_handle_rwh_06(
         &self,
     ) -> Result<rwh_06::RawDisplayHandle, rwh_06::HandleError> {
-        Ok(rwh_06::RawDisplayHandle::Web(rwh_06::WebDisplayHandle::new()))
+        Ok(rwh_06::RawDisplayHandle::Web(
+            rwh_06::WebDisplayHandle::new(),
+        ))
     }
 
     #[cfg(feature = "rwh_05")]

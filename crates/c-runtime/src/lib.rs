@@ -14,7 +14,9 @@
 //!   directory, `/`, is the app's root.
 //! - stdout and stderr: `krate:io/stdio`. stdin reads nothing.
 //! - clocks, sleep: `krate:time`. Random: `krate:random`.
-//! - args: whatever the app sets with [`set_args`]. No environment.
+//! - args: whatever the app sets with [`set_args`], or else the arguments
+//!   the person ran it with (`krate:io/args`, ambient), after a program
+//!   name, so `std::env::args` and clap work unchanged. No environment.
 //! - sockets: not supported (Krate's network is `krate:net`).
 //! - dlopen: an app is one module, so there is nothing to open; `dlopen`
 //!   fails and `dlerror` says why, and a program takes its own error path.
@@ -89,6 +91,21 @@ fn listing_slot(fd: i32) -> &'static mut Option<Vec<(String, u8)>> {
     &mut listings[i]
 }
 static mut ARGS: Vec<String> = Vec::new();
+static mut ARGS_SET: bool = false;
+
+/// The program's arguments: [`set_args`]' if it called it, or else the run's
+/// own (`krate:io/args`, granted to every app), after the name "app" that a
+/// program expects first.
+unsafe fn args() -> &'static Vec<String> {
+    if !ARGS_SET {
+        ARGS_SET = true;
+        let raw = krate::bindings::krate::io::args::raw();
+        ARGS = core::iter::once("app".to_string())
+            .chain(raw.lines().filter(|l| !l.is_empty()).map(|l| l.to_string()))
+            .collect();
+    }
+    &ARGS
+}
 
 /// One lock over the descriptor table, for an app built with threads
 /// (IC-929): two threads opening or writing files at once would otherwise
@@ -138,6 +155,7 @@ pub fn finish() {
 pub fn set_args(args: &[&str]) {
     unsafe {
         ARGS = args.iter().map(|a| a.to_string()).collect();
+        ARGS_SET = true;
     }
 }
 
@@ -294,7 +312,7 @@ pub unsafe extern "C" fn __imported_wasi_snapshot_preview1_args_sizes_get(
     argc: i32,
     size: i32,
 ) -> i32 {
-    let args = &ARGS;
+    let args = args();
     put_u32(argc, args.len() as u32);
     put_u32(size, args.iter().map(|a| a.len() as u32 + 1).sum());
     SUCCESS
@@ -303,7 +321,7 @@ pub unsafe extern "C" fn __imported_wasi_snapshot_preview1_args_sizes_get(
 #[no_mangle]
 pub unsafe extern "C" fn __imported_wasi_snapshot_preview1_args_get(argv: i32, buf: i32) -> i32 {
     let mut at = buf;
-    for (i, a) in ARGS.iter().enumerate() {
+    for (i, a) in args().iter().enumerate() {
         put_u32(argv + 4 * i as i32, at as u32);
         let out = bytes_mut(at, a.len() as i32 + 1);
         out[..a.len()].copy_from_slice(a.as_bytes());
