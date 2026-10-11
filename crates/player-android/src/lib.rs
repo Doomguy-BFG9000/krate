@@ -199,6 +199,13 @@ mod player {
             sandbox_root: sandbox,
             app_store_path: Some(store.clone()),
             app_database_path: Some(store.with_extension("sqlite")),
+            // Its secrets (store.secret), encrypted with a key of this
+            // phone's: a Vault's entries had nowhere to live on Android.
+            app_secrets: Some((
+                store.with_extension("secrets"),
+                manifest.app.id.clone(),
+                machine_key(data_root),
+            )),
             bundle_assets_root: assets_root,
             // The name the person agreed to on the wall: a notification's
             // sender line, never text the app picks per call.
@@ -422,6 +429,27 @@ mod player {
             return Err("that download is larger than any Krate app".to_string());
         }
         Ok(bytes)
+    }
+
+    /// This phone's key for apps' secrets: 32 random bytes made once and
+    /// kept in Krate's own data, which no other app can read. Copying an
+    /// app's secrets file elsewhere carries nothing usable.
+    fn machine_key(data_root: &std::path::Path) -> Vec<u8> {
+        let path = data_root.join("machine.key");
+        if let Ok(existing) = std::fs::read(&path) {
+            if existing.len() >= 32 {
+                return existing;
+            }
+        }
+        let mut key = vec![0u8; 32];
+        let made = std::fs::File::open("/dev/urandom").and_then(|mut f| {
+            use std::io::Read;
+            f.read_exact(&mut key)
+        });
+        if made.is_ok() {
+            let _ = std::fs::write(&path, &key);
+        }
+        key
     }
 
     /// App ids become directory names; nothing an id says may escape the

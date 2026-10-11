@@ -706,6 +706,25 @@ public class KrateActivity extends NativeActivity {
         Video.close(id);
     }
 
+    // Unlock (krate:ui/unlock, IC-924).
+
+    public boolean krateUnlockAvailable() {
+        return Unlock.available(this);
+    }
+
+    public void krateUnlockCheck(String reason) {
+        Unlock.check(this, reason, Menu.appName());
+    }
+
+    /** -1 while the sheet is up; 0 yes, 1 no, 2 cannot check. */
+    public int krateUnlockAnswer() {
+        return Unlock.answer();
+    }
+
+    public String krateUnlockWhy() {
+        return Unlock.why();
+    }
+
     // Krate's menu (IC-934).
 
     /** The app now running, for the menu; a null name when none is. */

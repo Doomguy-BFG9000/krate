@@ -76,6 +76,11 @@ final class Menu {
         }
     }
 
+    /** The running app's name, or "An app". */
+    static synchronized String appName() {
+        return name == null ? "An app" : name;
+    }
+
     static synchronized boolean running() {
         return name != null;
     }
