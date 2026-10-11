@@ -11495,3 +11495,223 @@ fn an_unmodified_winit_example_runs_and_hears_its_keys() {
         assert!(stdout.contains(want), "no {want:?} in: {stdout}{stderr}");
     }
 }
+
+/// A from-scratch app whose crate compiles C (IC-941, K-1072): `cbits`'s
+/// build script compiles `answer.c` with cc-rs, which includes <string.h>,
+/// as SQLite and ring do. The app prints what the C returns.
+fn c_app(dir: &std::path::Path) {
+    let sdk = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../bindings-rust");
+    let crt = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../c-runtime");
+    let write = |path: &str, text: &str| {
+        let path = dir.join(path);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+    };
+    write(
+        "Cargo.toml",
+        &format!(
+            "[package]\nname = \"c-answer\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n\
+             [workspace]\n\n[lib]\ncrate-type = [\"cdylib\"]\n\n[dependencies]\n\
+             cbits = {{ path = \"cbits\" }}\n\
+             krate = {{ path = {sdk:?}, features = [\"std\"] }}\n\
+             krate-c-runtime = {{ path = {crt:?} }}\n\
+             wit-bindgen-rt = {{ version = \"0.44.0\", features = [\"bitflags\"] }}\n\n\
+             [profile.release]\npanic = \"abort\"\n"
+        ),
+    );
+    write(
+        "src/lib.rs",
+        "struct App;\nimpl krate::Guest for App {\n    fn run() -> i32 {\n        \
+         krate_c_runtime::start();\n        println!(\"the C says {}\", cbits::answer());\n        \
+         krate_c_runtime::finish();\n        0\n    }\n}\nkrate::export!(App);\n",
+    );
+    write(
+        "manifest.toml",
+        "[app]\nid = \"dev.krate.c-answer\"\nname = \"C answer\"\nversion = \"0.1.0\"\n\
+         entry = \"target/wasm32-wasip1/release/c_answer.wasm\"\nworld = \"krate:app/cli@0.1.0\"\n\n\
+         [[capabilities]]\ncap = \"io.stdout\"\nrationale = \"print\"\nrequired = true\n",
+    );
+    write(
+        "cbits/Cargo.toml",
+        "[package]\nname = \"cbits\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n\
+         [build-dependencies]\ncc = \"1\"\n",
+    );
+    write(
+        "cbits/build.rs",
+        "fn main() { cc::Build::new().file(\"answer.c\").compile(\"answer\"); }\n",
+    );
+    write(
+        "cbits/answer.c",
+        "#include <string.h>\nint krate_answer(void) { return (int)strlen(\"forty-two chars of C, compiled for WASI!!\"); }\n",
+    );
+    write(
+        "cbits/src/lib.rs",
+        "extern \"C\" { fn krate_answer() -> i32; }\n\
+         pub fn answer() -> i32 { unsafe { krate_answer() } }\n",
+    );
+}
+
+/// With no WASI C compiler anywhere Krate looks, an app whose crates compile
+/// C fails its build with the crate named and the one step that fixes it --
+/// not "fix the compiler errors above" about code its author never wrote
+/// (K-1072).
+#[test]
+fn an_app_whose_crate_compiles_c_says_how_to_get_a_compiler_when_there_is_none() {
+    if !has_cargo_component() {
+        eprintln!("skipping: cargo-component is not installed");
+        return;
+    }
+    let dir = tempfile::tempdir().expect("tempdir");
+    c_app(dir.path());
+    let empty = tempfile::tempdir().expect("no toolchains");
+    let out = krate()
+        .arg("check-app")
+        .arg(dir.path())
+        .args(["--no-run", "--json"])
+        .env("KRATE_TOOLCHAINS_DIR", empty.path())
+        .env_remove("WASI_SDK_PATH")
+        .env_remove("WASI_SDK")
+        .env_remove("CC_wasm32_wasip1")
+        .env_remove("CFLAGS_wasm32_wasip1")
+        .output()
+        .expect("check-app");
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let report: serde_json::Value =
+        serde_json::from_str(stdout.trim()).unwrap_or_else(|_| panic!("one JSON object: {stdout}"));
+    assert_eq!(report["stage"], "build", "{report}");
+    let fix = report["fix"].as_str().unwrap_or_default();
+    assert!(
+        fix.starts_with("cbits v0.1.0") && fix.contains("compiles C"),
+        "the fix names the crate that compiles C: {fix}"
+    );
+    assert!(
+        fix.contains("krate setup wasi-sdk") && fix.contains("WASI_SDK_PATH"),
+        "the fix is the step that gets a compiler: {fix}"
+    );
+}
+
+/// With a wasi-sdk found (WASI_SDK_PATH, Krate's folder or PATH), the same
+/// app builds and its C runs inside Krate. Stands down on a machine with no
+/// wasi-sdk, as the GPU tests do on one with no GPU.
+#[test]
+fn an_app_whose_crate_compiles_c_builds_and_runs_with_wasi_sdk() {
+    if !has_cargo_component() {
+        eprintln!("skipping: cargo-component is not installed");
+        return;
+    }
+    let doctor = krate().arg("doctor").output().expect("doctor");
+    let said = String::from_utf8_lossy(&doctor.stdout).into_owned();
+    if !said.contains("wasi-sdk        found") {
+        eprintln!("skipping: no wasi-sdk on this machine: {said}");
+        return;
+    }
+    let dir = tempfile::tempdir().expect("tempdir");
+    c_app(dir.path());
+    let out = krate()
+        .arg("check-app")
+        .arg(dir.path())
+        .output()
+        .expect("check-app");
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        out.status.success() && text.contains("run passed"),
+        "{text}"
+    );
+    let wasm = dir
+        .path()
+        .join("target/wasm32-wasip1/release/c_answer.wasm");
+    let ran = krate()
+        .arg("run")
+        .arg(&wasm)
+        .arg("--manifest")
+        .arg(dir.path().join("manifest.toml"))
+        .arg("--auto-grant")
+        .output()
+        .expect("run");
+    let stdout = String::from_utf8_lossy(&ran.stdout).into_owned();
+    assert!(
+        stdout.contains("the C says 41"),
+        "strlen ran inside Krate: {stdout}{}",
+        String::from_utf8_lossy(&ran.stderr)
+    );
+}
+
+/// `krate setup wasi-sdk` installs a release archive into Krate's folder only
+/// when it has the SHA-256 it must have, and a build then finds it. Proved
+/// with a stand-in archive of the release's shape, so no test downloads one.
+#[test]
+fn setup_installs_a_verified_wasi_sdk_into_krates_folder_and_refuses_a_bad_one() {
+    use sha2::Digest;
+    let work = tempfile::tempdir().expect("tempdir");
+    let toolchains = work.path().join("toolchains");
+    let stem = {
+        let arch = match std::env::consts::ARCH {
+            "aarch64" => "arm64",
+            other => other,
+        };
+        format!("wasi-sdk-34.0-{arch}-{}", std::env::consts::OS)
+    };
+    let release = work.path().join("release").join(&stem);
+    std::fs::create_dir_all(release.join("bin")).unwrap();
+    std::fs::create_dir_all(release.join("share/wasi-sysroot/include")).unwrap();
+    let clang = if cfg!(windows) { "clang.exe" } else { "clang" };
+    std::fs::write(release.join("bin").join(clang), "stand-in").unwrap();
+    let archive = work.path().join(format!("{stem}.tar.gz"));
+    let packed = Command::new("tar")
+        .arg("-czf")
+        .arg(&archive)
+        .arg("-C")
+        .arg(work.path().join("release"))
+        .arg(&stem)
+        .status()
+        .expect("tar");
+    assert!(packed.success());
+    let digest = format!(
+        "{:x}",
+        sha2::Sha256::digest(std::fs::read(&archive).unwrap())
+    );
+    let setup = |sha: &str| {
+        krate()
+            .args(["setup", "wasi-sdk", "--from"])
+            .arg(&archive)
+            .args(["--sha256", sha])
+            .env("KRATE_TOOLCHAINS_DIR", &toolchains)
+            .output()
+            .expect("setup")
+    };
+
+    // A digest that does not match: refused, nothing installed.
+    let bad = setup(&"0".repeat(64));
+    assert!(!bad.status.success());
+    let said = String::from_utf8_lossy(&bad.stderr).into_owned();
+    assert!(said.contains("failed its checksum"), "{said}");
+    assert!(!toolchains.join(&stem).exists(), "nothing was installed");
+
+    // The right one: installed where builds look.
+    let good = setup(&digest);
+    assert!(
+        good.status.success(),
+        "{}",
+        String::from_utf8_lossy(&good.stderr)
+    );
+    assert!(toolchains.join(&stem).join("bin").join(clang).is_file());
+    let doctor = krate()
+        .arg("doctor")
+        .env("KRATE_TOOLCHAINS_DIR", &toolchains)
+        .env_remove("WASI_SDK_PATH")
+        .env_remove("WASI_SDK")
+        .output()
+        .expect("doctor");
+    let line = String::from_utf8_lossy(&doctor.stdout).into_owned();
+    assert!(
+        line.contains(&format!(
+            "wasi-sdk        found ({}",
+            toolchains.join(&stem).display()
+        )),
+        "a build now finds it: {line}"
+    );
+}

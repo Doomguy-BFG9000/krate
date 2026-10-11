@@ -35,6 +35,7 @@ mod style;
 mod trace;
 mod tui;
 mod usage;
+mod wasi_sdk;
 #[cfg(windows)]
 mod winproc;
 
@@ -359,6 +360,21 @@ enum Command {
     Version,
     /// Check the local development environment.
     Doctor,
+    /// Fetch a toolchain app builds use into Krate's own folder. `wasi-sdk`
+    /// is the C compiler for apps whose crates compile C (SQLite, ring,
+    /// zstd): the pinned release for this machine, checksum-verified.
+    Setup {
+        /// What to set up: `wasi-sdk`.
+        #[arg(value_name = "TOOL")]
+        what: String,
+        /// Install from this local copy of the release archive instead of
+        /// downloading it.
+        #[arg(long, value_name = "ARCHIVE")]
+        from: Option<PathBuf>,
+        /// The SHA-256 the archive must have, instead of Krate's pinned one.
+        #[arg(long, value_name = "HEX")]
+        sha256: Option<String>,
+    },
     /// Your Krate account: who is signed in, sign in, sign out. Sign-in is
     /// GitHub's device flow -- a code, a browser page, and the wait ends the
     /// moment you approve it there.
@@ -2183,6 +2199,7 @@ fn run() -> Result<u8> {
             Ok(0)
         }
         Command::Doctor => doctor(),
+        Command::Setup { what, from, sha256 } => setup(&what, from.as_deref(), sha256.as_deref()),
         Command::Account { action, json } => account_command(action, json),
         Command::Ai { json } => ai_status(json),
         Command::ApiKey { action, vendor } => api_key_command(&action, vendor.as_deref()),
@@ -13383,6 +13400,11 @@ fn component_build_command(app_dir: &Path) -> ProcessCommand {
     };
     let mut command = ProcessCommand::new(&program);
     command.arg("build").arg("--release").current_dir(app_dir);
+    // C the app's crates compile (SQLite, ring, zstd) builds with wasi-sdk
+    // rather than the host's cc, which has no WASI libc (K-1072).
+    if let Some(sdk) = wasi_sdk::find() {
+        wasi_sdk::apply(&mut command, &sdk, "wasm32-wasip1");
+    }
     // Make rustup's toolchain win over a Homebrew rust for the child build.
     // cargo-component resolves `cargo` and `rustc` from PATH, and on a
     // machine with both installs Homebrew's can come first -- a rustc with
@@ -13781,6 +13803,10 @@ fn build_threaded(app_dir: &Path) -> std::result::Result<PathBuf, String> {
         .current_dir(app_dir)
         .env("RUSTFLAGS", rustflags)
         .env_remove("CARGO_TARGET_DIR");
+    // C the app's crates compile (SQLite, ring) builds with wasi-sdk (K-1072).
+    if let Some(sdk) = wasi_sdk::find() {
+        wasi_sdk::apply(&mut command, &sdk, "wasm32-wasip1-threads");
+    }
     if let Some(home) = home_dir() {
         let shims = home.join(".cargo").join("bin");
         let current = std::env::var_os("PATH").unwrap_or_default();
@@ -13799,6 +13825,9 @@ fn build_threaded(app_dir: &Path) -> std::result::Result<PathBuf, String> {
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         );
+        if let Some(missing) = wasi_sdk::explain_c_failure(&text) {
+            return Err(format!("{}\n\n{missing}", text.trim()));
+        }
         let hint = if text.contains("wasm32-wasip1-threads") && text.contains("target") {
             "\n\nThe threads target looks missing: `rustup target add wasm32-wasip1-threads` \
              for the toolchain the app pins."
@@ -13866,6 +13895,9 @@ fn build_component(app_dir: &Path) -> Result<PathBuf> {
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         );
+        if let Some(missing) = wasi_sdk::explain_c_failure(&text) {
+            anyhow::bail!("{missing}");
+        }
         if text.contains("wasm32-wasip1") {
             anyhow::bail!(
                 "cargo-component build failed: the `wasm32-wasip1` target looks missing. \
@@ -18428,6 +18460,29 @@ fn print_version() {
     println!("commit    {}", env!("KRATE_GIT_SHA"));
 }
 
+/// `krate setup wasi-sdk` (IC-941).
+fn setup(what: &str, from: Option<&Path>, sha256: Option<&str>) -> Result<u8> {
+    if what != "wasi-sdk" {
+        anyhow::bail!("Krate can set up `wasi-sdk`; `{what}` is not one it knows");
+    }
+    if from.is_none() {
+        if let Some(sdk) = wasi_sdk::find() {
+            println!(
+                "wasi-sdk is already here: {} (app builds compile C with it)",
+                sdk.root.display()
+            );
+            return Ok(0);
+        }
+    }
+    let sdk = wasi_sdk::install(from, sha256)?;
+    println!(
+        "wasi-sdk {} installed at {}; app builds now compile C with it",
+        wasi_sdk::VERSION,
+        sdk.root.display()
+    );
+    Ok(0)
+}
+
 fn doctor() -> Result<u8> {
     println!("Krate doctor");
     println!("--------------");
@@ -18445,6 +18500,9 @@ fn doctor() -> Result<u8> {
     print_jco_status();
     println!();
     print_rust_toolchain_status();
+    println!();
+    println!("C for apps");
+    println!("{}", wasi_sdk::doctor_line());
     println!();
     // Show the state dir, and say whether it exists. It is created lazily on
     // first use (the key-value store, the machine key), so on a fresh install
@@ -18896,6 +18954,11 @@ fn starter_cargo_toml(skeleton_cargo: &str, starter_lib: &str) -> String {
 }
 
 fn build_fix(detail: &str) -> String {
+    // The app's crates compile C and there is no WASI C compiler: nothing in
+    // the app to fix (K-1072).
+    if let Some(missing) = wasi_sdk::explain_c_failure(detail) {
+        return missing;
+    }
     let generic = "Fix the compiler errors above. The build uses rustup's toolchain and the \
                    wasm32-wasip1 target; run `krate doctor` if the target or toolchain looks \
                    wrong.";
