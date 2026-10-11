@@ -35,15 +35,30 @@ const TAG: &str = "wasi-sdk-34";
 /// SHA-256 of each release archive Krate may fetch, by asset name.
 ///
 /// An archive with no digest here is never downloaded: a toolchain that
-/// compiles every app's C is not something to take on trust. Recorded by
-/// someone allowed to fetch them (scripts/wasi-sdk-checksums.py prints this
-/// table); until then setup says so and names WASI_SDK_PATH instead.
+/// compiles every app's C is not something to take on trust. Printed by
+/// scripts/wasi-sdk-checksums.py on 2026-10-11, and each one matched the
+/// digest GitHub publishes for the release asset.
 const PINNED_SHA256: &[(&str, Option<&str>)] = &[
-    ("wasi-sdk-34.0-arm64-macos.tar.gz", None),
-    ("wasi-sdk-34.0-x86_64-macos.tar.gz", None),
-    ("wasi-sdk-34.0-arm64-linux.tar.gz", None),
-    ("wasi-sdk-34.0-x86_64-linux.tar.gz", None),
-    ("wasi-sdk-34.0-x86_64-windows.tar.gz", None),
+    (
+        "wasi-sdk-34.0-arm64-macos.tar.gz",
+        Some("9c59398106b417f8f14913380fdf0097a8cc0ff4af9eb3ce0065a859e88d49e9"),
+    ),
+    (
+        "wasi-sdk-34.0-x86_64-macos.tar.gz",
+        Some("87d27fa8adc68dee59bfbf2e22a6d34ef717c34d6bf1d8af2a56fc929d9ce0eb"),
+    ),
+    (
+        "wasi-sdk-34.0-arm64-linux.tar.gz",
+        Some("f7e243dff54d60bcc576e94d6166b69f410f2500ae4a9ceef34315be10e77971"),
+    ),
+    (
+        "wasi-sdk-34.0-x86_64-linux.tar.gz",
+        Some("b761e3a0721dbae9c09a0059e5fdb2bf917d1b4a8a7b430fb3b5aafb0984b2c4"),
+    ),
+    (
+        "wasi-sdk-34.0-x86_64-windows.tar.gz",
+        Some("cccb5c323a9b34f0349a9b09e8804a0a7632c68c3310f4b5f437ed57d7e71d8f"),
+    ),
 ];
 
 /// The largest archive accepted from the network (the real ones are about
@@ -377,6 +392,27 @@ fn sha256_of(path: &Path) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every platform setup offers has its digest pinned, in the form a
+    /// SHA-256 takes, and the Dockerfile's default is the Linux one.
+    #[test]
+    fn every_release_archive_setup_may_fetch_has_a_pinned_digest() {
+        for (asset, digest) in PINNED_SHA256 {
+            let digest = digest.unwrap_or_else(|| panic!("{asset} has no digest"));
+            assert_eq!(digest.len(), 64, "{asset}");
+            assert!(digest.bytes().all(|b| b.is_ascii_hexdigit()), "{asset}");
+        }
+        let dockerfile = include_str!("../../../cloud/builder/Dockerfile");
+        let linux = PINNED_SHA256
+            .iter()
+            .find(|(a, _)| *a == "wasi-sdk-34.0-x86_64-linux.tar.gz")
+            .and_then(|(_, d)| *d)
+            .unwrap();
+        assert!(
+            dockerfile.contains(&format!("ARG WASI_SDK_SHA256={linux}")),
+            "the builder image pins the same digest"
+        );
+    }
 
     #[test]
     fn a_build_for_each_wasm_target_gets_its_own_compiler_and_libc() {
