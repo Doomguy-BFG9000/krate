@@ -438,6 +438,332 @@ mod real {
     }
 
     // ------------------------------------------------------------------
+    // A web page inside an app (IC-927): WKWebView over Krate's view.
+
+    #[link(name = "WebKit", kind = "framework")]
+    unsafe extern "C" {}
+
+    define_class!(
+        // SAFETY:
+        // - NSObject has no subclassing requirements for a navigation
+        //   delegate.
+        // - WebKit calls it on the main thread.
+        #[unsafe(super = objc2_foundation::NSObject)]
+        #[thread_kind = MainThreadOnly]
+        #[ivars = std::cell::Cell<u64>]
+        struct KrateWebDelegate;
+
+        // SAFETY: NSObjectProtocol has no additional requirements.
+        unsafe impl NSObjectProtocol for KrateWebDelegate {}
+
+        // WKNavigationDelegate, by selector.
+        impl KrateWebDelegate {
+            /// Every navigation -- the first address, a link, a redirect, a
+            /// frame -- goes only to a granted https host.
+            #[unsafe(method(webView:decidePolicyForNavigationAction:decisionHandler:))]
+            fn decide(
+                &self,
+                _web: &objc2::runtime::AnyObject,
+                action: &objc2::runtime::AnyObject,
+                decide: &block2::DynBlock<dyn Fn(isize)>,
+            ) {
+                let page = self.ivars().get();
+                // SAFETY: the action's request and its URL's string.
+                let address: String = unsafe {
+                    let request: Option<Retained<objc2::runtime::AnyObject>> = msg_send![action, request];
+                    let url: Option<Retained<objc2::runtime::AnyObject>> =
+                        request.and_then(|r| msg_send![&*r, URL]);
+                    url.and_then(|u| {
+                        let text: Option<Retained<objc2_foundation::NSString>> = msg_send![&*u, absoluteString];
+                        text.map(|t| t.to_string())
+                    })
+                    .unwrap_or_default()
+                };
+                let verdict = WEB_PAGES.with(|pages| {
+                    pages.borrow().get(&page).map(|p| {
+                        // about:blank and the page's own fragments are not
+                        // somewhere new.
+                        if address == "about:blank" {
+                            Ok(())
+                        } else {
+                            krate_adapter_common::net::web_page_allowed(&address, &p.granted)
+                        }
+                    })
+                });
+                match verdict {
+                    Some(Ok(())) => decide.call((1,)),
+                    Some(Err(why)) => {
+                        WEB_PAGES.with(|pages| {
+                            if let Some(p) = pages.borrow_mut().get_mut(&page) {
+                                p.problem = why;
+                            }
+                        });
+                        decide.call((0,));
+                    }
+                    None => decide.call((0,)),
+                }
+            }
+
+            #[unsafe(method(webView:didFailProvisionalNavigation:withError:))]
+            fn failed_early(
+                &self,
+                _web: &objc2::runtime::AnyObject,
+                _navigation: &objc2::runtime::AnyObject,
+                error: &objc2::runtime::AnyObject,
+            ) {
+                web_page_failed(self.ivars().get(), error);
+            }
+
+            #[unsafe(method(webView:didFailNavigation:withError:))]
+            fn failed(
+                &self,
+                _web: &objc2::runtime::AnyObject,
+                _navigation: &objc2::runtime::AnyObject,
+                error: &objc2::runtime::AnyObject,
+            ) {
+                web_page_failed(self.ivars().get(), error);
+            }
+
+            #[unsafe(method(webView:didCommitNavigation:))]
+            fn committed(&self, _web: &objc2::runtime::AnyObject, _navigation: &objc2::runtime::AnyObject) {
+                WEB_PAGES.with(|pages| {
+                    if let Some(p) = pages.borrow_mut().get_mut(&self.ivars().get()) {
+                        p.problem.clear();
+                    }
+                });
+            }
+        }
+    );
+
+    /// One web page on screen: its view, its delegate, where it may go, and
+    /// what went wrong last.
+    struct WebPage {
+        view: Retained<objc2::runtime::AnyObject>,
+        _delegate: Retained<KrateWebDelegate>,
+        granted: Vec<(String, String)>,
+        problem: String,
+    }
+
+    thread_local! {
+        /// The web pages on screen, by handle. Main thread.
+        static WEB_PAGES: RefCell<std::collections::BTreeMap<u64, WebPage>> =
+            const { RefCell::new(std::collections::BTreeMap::new()) };
+    }
+
+    static NEXT_WEB_PAGE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+    /// A cancelled load (the delegate refused it) is not a failure to say.
+    fn web_page_failed(page: u64, error: &objc2::runtime::AnyObject) {
+        // SAFETY: an NSError's code and localizedDescription.
+        let (code, why): (isize, String) = unsafe {
+            let code: isize = msg_send![error, code];
+            let why: Retained<objc2_foundation::NSString> = msg_send![error, localizedDescription];
+            (code, why.to_string())
+        };
+        // NSURLErrorCancelled, and WebKit's "frame load interrupted".
+        if code == -999 || code == 102 {
+            return;
+        }
+        WEB_PAGES.with(|pages| {
+            if let Some(p) = pages.borrow_mut().get_mut(&page) {
+                p.problem = why;
+            }
+        });
+    }
+
+    fn rect_of(frame: (f32, f32, f32, f32)) -> CGRect {
+        CGRect::new(
+            CGPoint::new(frame.0 as f64, frame.1 as f64),
+            objc2_core_foundation::CGSize::new(frame.2 as f64, frame.3 as f64),
+        )
+    }
+
+    fn load(view: &objc2::runtime::AnyObject, address: &str) {
+        // SAFETY: an NSURLRequest for the address, loaded by the web view.
+        unsafe {
+            let (Some(url_class), Some(request_class)) = (
+                objc2::runtime::AnyClass::get(c"NSURL"),
+                objc2::runtime::AnyClass::get(c"NSURLRequest"),
+            ) else {
+                return;
+            };
+            let url: Option<Retained<objc2::runtime::AnyObject>> = msg_send![url_class, URLWithString: &*objc2_foundation::NSString::from_str(address)];
+            let Some(url) = url else {
+                return;
+            };
+            let request: Retained<objc2::runtime::AnyObject> =
+                msg_send![request_class, requestWithURL: &*url];
+            let _: Option<Retained<objc2::runtime::AnyObject>> =
+                msg_send![view, loadRequest: &*request];
+        }
+    }
+
+    /// Show a web page at `frame` over Krate's view: no stored data between
+    /// openings, nothing shared with the app, only the granted hosts.
+    pub fn open_web_page(
+        address: &str,
+        frame: (f32, f32, f32, f32),
+        granted: Vec<(String, String)>,
+    ) -> Result<u64, String> {
+        let page = NEXT_WEB_PAGE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let address = address.to_string();
+        let (tx, rx) = std::sync::mpsc::channel();
+        DispatchQueue::main().exec_async(move || {
+            let made = (|| -> Result<(), String> {
+                let mtm = MainThreadMarker::new().ok_or("not on the main thread")?;
+                let main_side = MAIN_SIDE.0.get().ok_or("no screen")?;
+                let (Some(config_class), Some(store_class), Some(web_class)) = (
+                    objc2::runtime::AnyClass::get(c"WKWebViewConfiguration"),
+                    objc2::runtime::AnyClass::get(c"WKWebsiteDataStore"),
+                    objc2::runtime::AnyClass::get(c"WKWebView"),
+                ) else {
+                    return Err("this iOS has no web view".to_string());
+                };
+                // SAFETY: a WKWebView with a non-persistent data store and
+                // Krate's delegate, added to Krate's view, on the main thread.
+                unsafe {
+                    let config: Retained<objc2::runtime::AnyObject> = msg_send![config_class, new];
+                    let store: Retained<objc2::runtime::AnyObject> =
+                        msg_send![store_class, nonPersistentDataStore];
+                    let _: () = msg_send![&*config, setWebsiteDataStore: &*store];
+                    let made: objc2::rc::Allocated<objc2::runtime::AnyObject> =
+                        msg_send![web_class, alloc];
+                    let view: Retained<objc2::runtime::AnyObject> =
+                        msg_send![made, initWithFrame: rect_of(frame), configuration: &*config];
+                    let delegate =
+                        KrateWebDelegate::alloc(mtm).set_ivars(std::cell::Cell::new(page));
+                    let delegate: Retained<KrateWebDelegate> = msg_send![super(delegate), init];
+                    if let Some(protocol) =
+                        objc2::runtime::AnyProtocol::get(c"WKNavigationDelegate")
+                    {
+                        objc2::ffi::class_addProtocol(
+                            <KrateWebDelegate as objc2::ClassType>::class()
+                                as *const objc2::runtime::AnyClass
+                                as *mut objc2::runtime::AnyClass,
+                            protocol,
+                        );
+                    }
+                    let _: () = msg_send![&*view, setNavigationDelegate: &*delegate];
+                    let as_view: &UIView = &*(Retained::as_ptr(&view) as *const UIView);
+                    as_view.layer().setCornerRadius(12.0);
+                    as_view.setClipsToBounds(true);
+                    let host: &UIView = &main_side.view;
+                    host.addSubview(as_view);
+                    load(&view, &address);
+                    WEB_PAGES.with(|pages| {
+                        pages.borrow_mut().insert(
+                            page,
+                            WebPage {
+                                view,
+                                _delegate: delegate,
+                                granted,
+                                problem: String::new(),
+                            },
+                        )
+                    });
+                }
+                Ok(())
+            })();
+            let _ = tx.send(made);
+        });
+        rx.recv_timeout(std::time::Duration::from_secs(5))
+            .map_err(|_| "the web view did not answer".to_string())??;
+        Ok(page)
+    }
+
+    /// Run `f` on the page's web view, on the main thread, without waiting.
+    fn with_web_page(page: u64, f: impl FnOnce(&WebPage) + Send + 'static) {
+        DispatchQueue::main().exec_async(move || {
+            WEB_PAGES.with(|pages| {
+                if let Some(p) = pages.borrow().get(&page) {
+                    f(p);
+                }
+            });
+        });
+    }
+
+    pub fn place_web_page(page: u64, frame: (f32, f32, f32, f32)) {
+        with_web_page(page, move |p| {
+            // SAFETY: a WKWebView's frame, on the main thread.
+            unsafe {
+                let _: () = msg_send![&*p.view, setFrame: rect_of(frame)];
+            }
+        });
+    }
+
+    pub fn web_page_go(page: u64, address: &str) {
+        let address = address.to_string();
+        with_web_page(page, move |p| load(&p.view, &address));
+    }
+
+    pub fn web_page_back(page: u64) {
+        with_web_page(page, |p| {
+            // SAFETY: WKWebView's goBack, on the main thread.
+            unsafe {
+                let _: Option<Retained<objc2::runtime::AnyObject>> = msg_send![&*p.view, goBack];
+            }
+        });
+    }
+
+    pub fn web_page_state(page: u64) -> Option<krate_adapter_common::ui::WebPageState> {
+        let (tx, rx) = std::sync::mpsc::channel();
+        DispatchQueue::main().exec_async(move || {
+            let state = WEB_PAGES.with(|pages| {
+                pages.borrow().get(&page).map(|p| {
+                    // SAFETY: WKWebView's URL, title and isLoading, on the
+                    // main thread.
+                    unsafe {
+                        let url: Option<Retained<objc2::runtime::AnyObject>> =
+                            msg_send![&*p.view, URL];
+                        let address = url
+                            .and_then(|u| {
+                                let t: Option<Retained<objc2_foundation::NSString>> =
+                                    msg_send![&*u, absoluteString];
+                                t.map(|t| t.to_string())
+                            })
+                            .unwrap_or_default();
+                        let title: Option<Retained<objc2_foundation::NSString>> =
+                            msg_send![&*p.view, title];
+                        let loading: bool = msg_send![&*p.view, isLoading];
+                        krate_adapter_common::ui::WebPageState {
+                            address,
+                            title: title.map(|t| t.to_string()).unwrap_or_default(),
+                            loading,
+                            problem: p.problem.clone(),
+                        }
+                    }
+                })
+            });
+            let _ = tx.send(state);
+        });
+        rx.recv_timeout(std::time::Duration::from_millis(500))
+            .ok()
+            .flatten()
+    }
+
+    pub fn close_web_page(page: u64) {
+        DispatchQueue::main().exec_async(move || {
+            if let Some(p) = WEB_PAGES.with(|pages| pages.borrow_mut().remove(&page)) {
+                // SAFETY: removing a WKWebView from its superview, main thread.
+                unsafe {
+                    let _: () = msg_send![&*p.view, removeFromSuperview];
+                }
+            }
+        });
+    }
+
+    /// The app is gone: every page it opened goes with it. Main thread.
+    fn close_all_web_pages() {
+        let pages = WEB_PAGES.with(|pages| std::mem::take(&mut *pages.borrow_mut()));
+        for (_, p) in pages {
+            // SAFETY: removing a WKWebView from its superview, main thread.
+            unsafe {
+                let _: () = msg_send![&*p.view, removeFromSuperview];
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------
     // The screen reader (IC-926).
 
     /// What the running app told VoiceOver it shows, and what Krate drew
@@ -1464,6 +1790,7 @@ mod real {
                         show_grab(mtm);
                     } else {
                         hide_menu();
+                        close_all_web_pages();
                     }
                 }
             }
@@ -4528,6 +4855,26 @@ mod stub {
     pub fn set_current_name(_name: Option<String>) {}
 
     pub fn capture_behind(_path: &std::path::Path) {}
+
+    pub fn open_web_page(
+        _address: &str,
+        _frame: (f32, f32, f32, f32),
+        _granted: Vec<(String, String)>,
+    ) -> Result<u64, String> {
+        Err("web pages show on the iOS player only".to_string())
+    }
+
+    pub fn place_web_page(_page: u64, _frame: (f32, f32, f32, f32)) {}
+
+    pub fn web_page_go(_page: u64, _address: &str) {}
+
+    pub fn web_page_back(_page: u64) {}
+
+    pub fn web_page_state(_page: u64) -> Option<krate_adapter_common::ui::WebPageState> {
+        None
+    }
+
+    pub fn close_web_page(_page: u64) {}
 
     pub fn describe_accessibility(_elements: &[krate_adapter_common::ui::AccessElement]) {}
 

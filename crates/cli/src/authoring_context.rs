@@ -509,7 +509,14 @@ person back to: check its `state`, read its `code`, then POST the code and \
 `code_verifier` to the token address with `net.connect` to that host, and \
 keep the token in `store.secret`. `Err(Cancelled)` means they closed the \
 sheet: offer the button again. A computer other than a Mac answers \
-`Err(Unavailable)` for now. Something private (a vault, a diary, a \
+`Err(Unavailable)` for now. A web page inside the app (a help page, a \
+checkout, a document): declare `net.connect:<host>:443` for each host it \
+shows, then `let page = krate::ui::web_page::open(win, \"https://docs.example.com/help\", \
+x, y, w, h)?` in a box of your layout, `place(page, ...)` when the layout \
+changes, `state(page)` for its title, `loading` and `problem`, `back`, \
+`go` and `close`. It goes only to the granted hosts (a link elsewhere is \
+refused and said in `problem`), keeps nothing between openings and \
+cannot reach the app. Something private (a vault, a diary, a \
 banking screen): show it only after `krate::ui::unlock::check(\"Unlock your \
 vault\")` answers `UnlockAnswer::Yes` -- Face ID or the passcode on an \
 iPhone, Touch ID or the password on a Mac, in the system's own sheet. \

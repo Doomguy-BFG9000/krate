@@ -745,6 +745,46 @@ interface screen {
   facts: func(window: u64) -> screen-facts;
 }
 
+/// A web page shown inside the app (IC-927): a help page, a checkout, a
+/// document, in a box of the app's window, in the system's own web view.
+///
+/// The page goes only where the app may go: its first address and every
+/// link it follows must be https on a host the person granted the app
+/// `net.connect` to; anything else is refused and said in `problem`. The
+/// page keeps no cookies or storage between openings and sees nothing of
+/// the app's own data, and its scripts have no way to reach the app.
+interface web-page {
+  use types.{ui-error};
+
+  /// Where a page is and what it is doing.
+  record page-state {
+    /// The address it shows now.
+    address: string,
+    /// The page's title, once it has one.
+    title: string,
+    /// True while it loads.
+    loading: bool,
+    /// Why the last address was not shown -- a host the app may not open,
+    /// a page that failed to load -- or empty.
+    problem: string,
+  }
+
+  /// Show `address` in a box of the window: `x`, `y`, `width` and `height`
+  /// in points, as the app lays it out. Refused when the address is not
+  /// https on a host the app was granted `net.connect` to.
+  open: func(window: u64, address: string, x: f32, y: f32, width: f32, height: f32) -> result<u64, ui-error>;
+  /// Move or resize its box (the screen turned, the layout changed).
+  place: func(page: u64, x: f32, y: f32, width: f32, height: f32) -> result<_, ui-error>;
+  /// Go to another address, judged as `open` judges the first.
+  go: func(page: u64, address: string) -> result<_, ui-error>;
+  /// Back to the page before, when there is one.
+  back: func(page: u64);
+  /// Where it is and what it is doing.
+  state: func(page: u64) -> result<page-state, ui-error>;
+  /// Take it away.
+  close: func(page: u64);
+}
+
 /// What a screen reader says about an app that draws itself (IC-926):
 /// VoiceOver on a Mac and an iPhone, TalkBack on Android.
 ///

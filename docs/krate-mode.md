@@ -686,6 +686,12 @@ takes this path, so any of them is a model for the wiring.
 - `pointer::release: func(window: u64)`
 - `pointer::captured: func(window: u64) -> bool`
 - `screen::facts: func(window: u64) -> screen-facts`
+- `web-page::open: func(window: u64, address: string, x: f32, y: f32, width: f32, height: f32) -> result<u64, ui-error>`
+- `web-page::place: func(page: u64, x: f32, y: f32, width: f32, height: f32) -> result<_, ui-error>`
+- `web-page::go: func(page: u64, address: string) -> result<_, ui-error>`
+- `web-page::back: func(page: u64)`
+- `web-page::state: func(page: u64) -> result<page-state, ui-error>`
+- `web-page::close: func(page: u64)`
 - `accessibility::describe: func(window: u64, elements: list<element>) -> result<_, ui-error>`
 - `accessibility::screen-reader-on: func() -> bool`
 - `appearance::current: func() -> look`

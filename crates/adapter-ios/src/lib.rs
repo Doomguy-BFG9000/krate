@@ -678,6 +678,36 @@ impl UiAdapter for IosUikitPrototypeUiAdapter {
         uikit_native::voice_over_on()
     }
 
+    fn open_web_page(
+        &self,
+        _window: WindowId,
+        address: &str,
+        frame: (f32, f32, f32, f32),
+        granted: Vec<(String, String)>,
+    ) -> Result<u64, String> {
+        uikit_native::open_web_page(address, frame, granted)
+    }
+
+    fn place_web_page(&self, page: u64, frame: (f32, f32, f32, f32)) {
+        uikit_native::place_web_page(page, frame);
+    }
+
+    fn web_page_go(&self, page: u64, address: &str) {
+        uikit_native::web_page_go(page, address);
+    }
+
+    fn web_page_back(&self, page: u64) {
+        uikit_native::web_page_back(page);
+    }
+
+    fn web_page_state(&self, page: u64) -> Option<krate_adapter_common::ui::WebPageState> {
+        uikit_native::web_page_state(page)
+    }
+
+    fn close_web_page(&self, page: u64) {
+        uikit_native::close_web_page(page);
+    }
+
     fn sign_in(
         &self,
         _window: WindowId,

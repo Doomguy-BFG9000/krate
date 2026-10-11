@@ -716,6 +716,76 @@ impl ui4::sign_in::Host for Phase3GuiHost {
     }
 }
 
+/// A web page inside the app (IC-927). Phase 4 only, behind the
+/// `net.connect` grants for the hosts it shows.
+impl ui4::web_page::Host for Phase3GuiHost {
+    fn open(
+        &mut self,
+        window: u64,
+        address: String,
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+    ) -> wasmtime::Result<Result<u64, ui4::types::UiError>> {
+        Ok(self
+            .open_web_page(window, &address, (x, y, width.max(0.0), height.max(0.0)))
+            .map_err(error_to_phase4))
+    }
+
+    fn place(
+        &mut self,
+        page: u64,
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+    ) -> wasmtime::Result<Result<(), ui4::types::UiError>> {
+        if !self.owns_web_page(page) {
+            return Ok(Err(error_to_phase4(ui3::types::UiError::InvalidWidget)));
+        }
+        if !self.headless_run() {
+            self.place_web_page(page, (x, y, width.max(0.0), height.max(0.0)));
+        }
+        Ok(Ok(()))
+    }
+
+    fn go(
+        &mut self,
+        page: u64,
+        address: String,
+    ) -> wasmtime::Result<Result<(), ui4::types::UiError>> {
+        Ok(self.web_page_go(page, &address).map_err(error_to_phase4))
+    }
+
+    fn back(&mut self, page: u64) -> wasmtime::Result<()> {
+        if self.owns_web_page(page) && !self.headless_run() {
+            Phase3GuiHost::web_page_back(self, page);
+        }
+        Ok(())
+    }
+
+    fn state(
+        &mut self,
+        page: u64,
+    ) -> wasmtime::Result<Result<ui4::web_page::PageState, ui4::types::UiError>> {
+        Ok(self
+            .web_page_state(page)
+            .map(|s| ui4::web_page::PageState {
+                address: s.address,
+                title: s.title,
+                loading: s.loading,
+                problem: s.problem,
+            })
+            .map_err(error_to_phase4))
+    }
+
+    fn close(&mut self, page: u64) -> wasmtime::Result<()> {
+        self.close_web_page(page);
+        Ok(())
+    }
+}
+
 /// What a screen reader says about an app that draws itself (IC-926).
 /// Phase 4 only. No capability: describing your own screen reaches
 /// nothing but the person's own screen reader.

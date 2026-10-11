@@ -1801,6 +1801,15 @@ mod motion_tests {
     }
 }
 
+/// Where a web page inside an app is and what it is doing (IC-927).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct WebPageState {
+    pub address: String,
+    pub title: String,
+    pub loading: bool,
+    pub problem: String,
+}
+
 /// What kind of thing a described element is (IC-926).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AccessRole {
@@ -2185,6 +2194,35 @@ pub trait UiAdapter: WindowAdapter {
     ) -> Result<bool, String> {
         Err("this device has no share sheet yet".to_string())
     }
+
+    /// Show a web page in a box of the window (IC-927), going only to the
+    /// granted hosts (`net::web_page_allowed`); its handle.
+    fn open_web_page(
+        &self,
+        _window: WindowId,
+        _address: &str,
+        _frame: (f32, f32, f32, f32),
+        _granted: Vec<(String, String)>,
+    ) -> Result<u64, String> {
+        Err("this device cannot show a web page inside an app yet".to_string())
+    }
+
+    /// Move or resize a web page's box.
+    fn place_web_page(&self, _page: u64, _frame: (f32, f32, f32, f32)) {}
+
+    /// Send a web page to another address (already judged).
+    fn web_page_go(&self, _page: u64, _address: &str) {}
+
+    /// A web page goes back one page.
+    fn web_page_back(&self, _page: u64) {}
+
+    /// Where a web page is and what it is doing.
+    fn web_page_state(&self, _page: u64) -> Option<WebPageState> {
+        None
+    }
+
+    /// Take a web page away.
+    fn close_web_page(&self, _page: u64) {}
 
     /// Tell the platform's screen reader what the window shows (IC-926).
     fn describe_accessibility(

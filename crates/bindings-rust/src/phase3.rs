@@ -7,7 +7,7 @@
 
 #![allow(clippy::too_many_arguments)]
 
-/// `krate:ui`: accessibility, appearance, bluetooth, clipboard, dialog, events, haptics, image, launcher, location, menu, motion, notify, photos, pointer, print, reminders, screen, share, sign_in, text_entry, touch, tree, unlock, window.
+/// `krate:ui`: accessibility, appearance, bluetooth, clipboard, dialog, events, haptics, image, launcher, location, menu, motion, notify, photos, pointer, print, reminders, screen, share, sign_in, text_entry, touch, tree, unlock, web_page, window.
 pub mod ui {
     /// `krate:ui/accessibility`.
     pub mod accessibility {
@@ -607,6 +607,49 @@ pub mod ui {
         /// vault"). Waits while the person looks or types their passcode.
         pub fn check(reason: &str) -> UnlockAnswer {
             crate::bindings::krate::ui::unlock::check(reason)
+        }
+    }
+    /// `krate:ui/web_page`.
+    pub mod web_page {
+        pub use crate::bindings::krate::ui::web_page::{PageState, UiError};
+
+        /// Show `address` in a box of the window: `x`, `y`, `width` and `height`
+        /// in points, as the app lays it out. Refused when the address is not
+        /// https on a host the app was granted `net.connect` to.
+        pub fn open(
+            window: u64,
+            address: &str,
+            x: f32,
+            y: f32,
+            width: f32,
+            height: f32,
+        ) -> Result<u64, UiError> {
+            crate::bindings::krate::ui::web_page::open(window, address, x, y, width, height)
+        }
+
+        /// Move or resize its box (the screen turned, the layout changed).
+        pub fn place(page: u64, x: f32, y: f32, width: f32, height: f32) -> Result<(), UiError> {
+            crate::bindings::krate::ui::web_page::place(page, x, y, width, height)
+        }
+
+        /// Go to another address, judged as `open` judges the first.
+        pub fn go(page: u64, address: &str) -> Result<(), UiError> {
+            crate::bindings::krate::ui::web_page::go(page, address)
+        }
+
+        /// Back to the page before, when there is one.
+        pub fn back(page: u64) {
+            crate::bindings::krate::ui::web_page::back(page)
+        }
+
+        /// Where it is and what it is doing.
+        pub fn state(page: u64) -> Result<PageState, UiError> {
+            crate::bindings::krate::ui::web_page::state(page)
+        }
+
+        /// Take it away.
+        pub fn close(page: u64) {
+            crate::bindings::krate::ui::web_page::close(page)
         }
     }
     /// `krate:ui/window`.
