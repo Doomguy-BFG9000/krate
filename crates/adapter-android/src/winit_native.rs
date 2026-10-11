@@ -142,6 +142,35 @@ mod real {
         hold_from: Option<std::time::Instant>,
         /// The hold opened the menu: the lift is no tap for the app.
         held: bool,
+        /// It began on something that drags -- a slider, or what the app
+        /// described as adjustable (a scrubber, a volume) -- so moving it
+        /// moves that, never scrolls (K-1059).
+        drags: bool,
+    }
+
+    /// What the app last described to the screen reader (IC-926), for
+    /// knowing what a finger may drag.
+    static DESCRIBED: std::sync::Mutex<Vec<krate_adapter_common::ui::AccessElement>> =
+        std::sync::Mutex::new(Vec::new());
+
+    /// Keep what the app described (krate:ui/accessibility).
+    pub fn set_described(elements: &[krate_adapter_common::ui::AccessElement]) {
+        *DESCRIBED.lock().expect("described lock") = elements.to_vec();
+    }
+
+    /// Whether a finger landing at (x, y) is on something that drags: a
+    /// slider Krate draws, or an element the app described as adjustable,
+    /// with 8 points to spare above and below -- the iPhone's rule.
+    fn drags_at(placements: &[WidgetPlacement], x: f32, y: f32) -> bool {
+        let inside =
+            |px: f32, py: f32, w: f32, h: f32| x >= px && x < px + w && y >= py && y < py + h;
+        placements.iter().any(|p| {
+            p.kind == krate_adapter_common::ui::WidgetKind::Slider
+                && inside(p.x, p.y, p.width, p.height)
+        }) || DESCRIBED.lock().expect("described lock").iter().any(|e| {
+            e.role == krate_adapter_common::ui::AccessRole::Adjustable
+                && inside(e.x, e.y - 8.0, e.width, e.height + 16.0)
+        })
     }
 
     #[derive(Default)]
@@ -405,6 +434,11 @@ mod real {
                                 let top = crate::phone::covered_edges().0 / scale as f32;
                                 let strip =
                                     crate::menu::chrome_on() && crate::menu::in_strip(y, top);
+                                let drags = !strip
+                                    && self
+                                        .windows
+                                        .get(&native)
+                                        .is_some_and(|t| drags_at(&t.placements, x, y));
                                 self.touch = Some(TouchGesture {
                                     finger: touch.id,
                                     native,
@@ -413,7 +447,18 @@ mod real {
                                     scrolling: false,
                                     hold_from: strip.then(std::time::Instant::now),
                                     held: false,
+                                    drags,
                                 });
+                                // Something that drags is pressed at once, so
+                                // the first movement already moves it.
+                                if drags {
+                                    self.pointer_samples.push(RawPointerSample {
+                                        window: krate,
+                                        x,
+                                        y,
+                                        pressed: true,
+                                    });
+                                }
                                 // The finger is the cursor: hit tests and
                                 // wheel positions read from here.
                                 self.cursor.insert(native, (x, y));
@@ -437,6 +482,19 @@ mod real {
                                 .is_some_and(|g| g.finger == touch.id && g.native == native);
                             if same {
                                 let gesture = self.touch.as_mut().expect("gesture checked");
+                                if gesture.drags {
+                                    // The finger moves what it is on: the
+                                    // press follows it, held, until it lifts.
+                                    gesture.last = (x, y);
+                                    self.cursor.insert(native, (x, y));
+                                    self.pointer_samples.push(RawPointerSample {
+                                        window: krate,
+                                        x,
+                                        y,
+                                        pressed: true,
+                                    });
+                                    return;
+                                }
                                 if !gesture.scrolling {
                                     let sx = x - gesture.start.0;
                                     let sy = y - gesture.start.1;
@@ -472,7 +530,16 @@ mod real {
                                 .is_some_and(|g| g.finger == touch.id && g.native == native);
                             if same {
                                 let gesture = self.touch.take().expect("gesture checked");
-                                if !gesture.scrolling && !gesture.held {
+                                if gesture.drags {
+                                    // Let go where the finger lifted.
+                                    self.cursor.insert(native, (x, y));
+                                    self.pointer_samples.push(RawPointerSample {
+                                        window: krate,
+                                        x,
+                                        y,
+                                        pressed: false,
+                                    });
+                                } else if !gesture.scrolling && !gesture.held {
                                     // A tap: one press and one release at
                                     // the touch point, exactly what a click
                                     // delivers. Apps' double-tap detection
@@ -1124,6 +1191,9 @@ mod stub {
     pub fn take_backgrounded() -> bool {
         false
     }
+
+    /// No touch screen to drag on off Android.
+    pub fn set_described(_elements: &[krate_adapter_common::ui::AccessElement]) {}
 
     /// Winit windows are only available in Linux builds.
     pub fn show_native_window(_krate: WindowId) -> Result<bool, UiAdapterError> {

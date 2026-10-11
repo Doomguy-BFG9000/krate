@@ -565,6 +565,18 @@ impl UiAdapter for AndroidWinitPrototypeUiAdapter {
         self.screen_kind(window).safe
     }
 
+    /// What the app drew, as it described it to the screen reader (IC-926):
+    /// kept so a finger on something adjustable drags it (K-1059). Android's
+    /// TalkBack does not read these yet.
+    fn describe_accessibility(
+        &self,
+        _window: WindowId,
+        elements: &[krate_adapter_common::ui::AccessElement],
+    ) -> Result<(), UiAdapterError> {
+        winit_native::set_described(elements);
+        Ok(())
+    }
+
     /// Every finger on the window (krate:ui/touch).
     fn touches(&self, window: WindowId) -> Vec<(u64, f32, f32)> {
         winit_native::touches(window)
