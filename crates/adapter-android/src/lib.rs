@@ -51,6 +51,7 @@ mod share;
 mod sign_in;
 pub mod unlock;
 pub mod video;
+mod web_page;
 
 #[derive(Debug, Default)]
 pub struct AndroidUiAdapter {
@@ -442,6 +443,8 @@ impl WindowAdapter for AndroidWinitPrototypeUiAdapter {
         location::stop();
         // Nothing stays connected after the app.
         bluetooth::disconnect_all();
+        // Its web pages go with it, and what they kept.
+        web_page::close_all();
         #[cfg(target_os = "android")]
         camera::close();
         self.remove_session(id);
@@ -575,6 +578,40 @@ impl UiAdapter for AndroidWinitPrototypeUiAdapter {
     ) -> Result<(), UiAdapterError> {
         winit_native::set_described(elements);
         Ok(())
+    }
+
+    /// A web page in a box of the app (IC-927): a WebView over it.
+    fn open_web_page(
+        &self,
+        window: WindowId,
+        address: &str,
+        frame: (f32, f32, f32, f32),
+        granted: Vec<(String, String)>,
+    ) -> Result<u64, String> {
+        if !winit_native::has_native_window(window).unwrap_or(false) {
+            return Err("the app's window is not on screen".to_string());
+        }
+        web_page::open(address, frame, winit_native::window_scale(window), granted)
+    }
+
+    fn place_web_page(&self, page: u64, frame: (f32, f32, f32, f32)) {
+        web_page::place(page, frame);
+    }
+
+    fn web_page_go(&self, page: u64, address: &str) {
+        web_page::go(page, address);
+    }
+
+    fn web_page_back(&self, page: u64) {
+        web_page::back(page);
+    }
+
+    fn web_page_state(&self, page: u64) -> Option<krate_adapter_common::ui::WebPageState> {
+        web_page::state(page)
+    }
+
+    fn close_web_page(&self, page: u64) {
+        web_page::close(page);
     }
 
     /// Every finger on the window (krate:ui/touch).

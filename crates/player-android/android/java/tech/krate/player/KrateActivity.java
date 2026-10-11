@@ -717,6 +717,42 @@ public class KrateActivity extends NativeActivity {
         Video.close(id);
     }
 
+    // A web page inside an app (krate:ui/web-page, IC-927).
+
+    /** Web.class, so Krate can give it its one rule for where pages go. */
+    public Class<?> krateWebClass() {
+        return Web.class;
+    }
+
+    /** box: x, y, width, height in screen pixels. */
+    public void krateWebOpen(long id, String address, int[] box) {
+        Web.open(this, id, address, box);
+    }
+
+    public void krateWebPlace(long id, int[] box) {
+        Web.place(this, id, box);
+    }
+
+    public void krateWebGo(long id, String address) {
+        Web.go(this, id, address);
+    }
+
+    public void krateWebBack(long id) {
+        Web.back(this, id);
+    }
+
+    public String[] krateWebState(long id) {
+        return Web.state(id);
+    }
+
+    public void krateWebClose(long id) {
+        Web.close(this, id);
+    }
+
+    public void krateWebCloseAll() {
+        Web.closeAll(this);
+    }
+
     // Appearance (krate:ui/appearance, IC-925).
 
     /**
