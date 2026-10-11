@@ -36,17 +36,20 @@ fn read(mtm: MainThreadMarker) -> Appearance {
     }
 }
 
-/// The look now, read on the main thread.
+/// The look the main thread read last, for an app on another thread.
+static LOOK: std::sync::Mutex<Option<Appearance>> = std::sync::Mutex::new(None);
+
+/// The look now: read directly on the main thread; from another thread,
+/// the last one the main thread saw, never waiting for it (the main thread
+/// may be waiting for this app's frame).
 pub(crate) fn current() -> Appearance {
     if let Some(mtm) = MainThreadMarker::new() {
         return read(mtm);
     }
-    let (tx, rx) = std::sync::mpsc::channel();
-    dispatch2::DispatchQueue::main().exec_async(move || {
+    dispatch2::DispatchQueue::main().exec_async(|| {
         // SAFETY: the main queue runs on the main thread.
         let mtm = unsafe { MainThreadMarker::new_unchecked() };
-        let _ = tx.send(read(mtm));
+        *LOOK.lock().expect("look lock") = Some(read(mtm));
     });
-    rx.recv_timeout(std::time::Duration::from_millis(500))
-        .unwrap_or_default()
+    LOOK.lock().expect("look lock").unwrap_or_default()
 }

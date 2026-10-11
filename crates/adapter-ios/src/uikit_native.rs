@@ -1325,15 +1325,24 @@ mod real {
         body / 17.0
     }
 
+    /// The look the main thread read last, for the app's thread to take
+    /// without waiting.
+    static LOOK: std::sync::Mutex<Option<krate_adapter_common::ui::Appearance>> =
+        std::sync::Mutex::new(None);
+
     /// How the person asked things to look (IC-925): dark mode, more
-    /// contrast and text size, read from Krate's own view controller's
-    /// traits on the main thread.
+    /// contrast and text size, from Krate's own view controller's traits.
+    ///
+    /// Never waits. The traits are read on the main thread, which may itself
+    /// be waiting for this app's frame; an app thread that waited for it
+    /// stalled half a second on every read, and a widget app never drew its
+    /// first frame (Timer, 2026-10-11). So this answers the last look the
+    /// main thread saw and asks it to look again.
     pub fn appearance() -> krate_adapter_common::ui::Appearance {
-        let (tx, rx) = std::sync::mpsc::channel();
-        DispatchQueue::main().exec_async(move || {
+        DispatchQueue::main().exec_async(|| {
             let look = main_controller().map(|controller| {
                 // SAFETY: the controller's UITraitCollection and three of its
-                // documented properties.
+                // documented properties, on the main thread.
                 unsafe {
                     let traits: Retained<objc2::runtime::AnyObject> =
                         msg_send![&*controller, traitCollection];
@@ -1348,10 +1357,11 @@ mod real {
                     }
                 }
             });
-            let _ = tx.send(look.unwrap_or_default());
+            if let Some(look) = look {
+                *LOOK.lock().expect("look lock") = Some(look);
+            }
         });
-        rx.recv_timeout(std::time::Duration::from_millis(500))
-            .unwrap_or_default()
+        LOOK.lock().expect("look lock").unwrap_or_default()
     }
 
     // Signing in through the system's sheet (IC-923).
@@ -2942,6 +2952,20 @@ mod real {
             }
             guest.krate = Some(krate);
             guest.placements.clear();
+            // A new app starts on the CPU path until it draws on the GPU
+            // itself. The flag used to stay set for the life of Krate, so a
+            // widget app opened after any canvas app -- Krate's own home is
+            // one -- painted nothing and the opening cover never lifted
+            // (Timer, 2026-10-11).
+            GPU_ACTIVE.store(false, std::sync::atomic::Ordering::Relaxed);
+            // The metal layer is a sublayer of the image view, so it draws
+            // OVER the CPU frame: its last GPU frame (the opening animation,
+            // the last app) hid every widget frame until it was hidden.
+            DispatchQueue::main().exec_async(|| {
+                if let Some(main_side) = MAIN_SIDE.0.get() {
+                    main_side.metal.setHidden(true);
+                }
+            });
             guest.gesture = None;
             guest.pointer_samples.clear();
             guest.wheel_samples.clear();
@@ -2987,6 +3011,17 @@ mod real {
     pub fn pump_native_events() -> Result<CollectedNativeEvents, UiAdapterError> {
         if !guest_initialized() {
             return Ok(Vec::new());
+        }
+        // The cover lifts after LOADING_MOST whether or not a frame came:
+        // the rule was only asked when one did, so an app that never drew
+        // kept it up for ever, with no way to close the app beneath it.
+        if LOADING.load(std::sync::atomic::Ordering::Relaxed)
+            && LOADING_SINCE
+                .lock()
+                .expect("loading lock")
+                .is_some_and(|since| since.elapsed() > LOADING_MOST)
+        {
+            hide_loading();
         }
         with_guest(|guest| {
             digest_touches(guest);
@@ -3293,7 +3328,8 @@ mod real {
                 .unwrap_or_else(|_| Err("gpu init panicked (unsupported device)".into()));
                 match created {
                     Ok(gpu) => {
-                        GPU_ACTIVE.store(true, std::sync::atomic::Ordering::Relaxed);
+                        // GPU_ACTIVE is set, and the metal layer shown, by
+                        // the first frame this app presents (below).
                         // The image view would cover the metal layer with
                         // its last CPU frame; hide it once the GPU owns
                         // the pixels.
@@ -3349,6 +3385,17 @@ mod real {
             match outcome {
                 Ok(()) => {
                     diag("gpu-present-done");
+                    // This app draws on the GPU: the CPU image would cover
+                    // the metal layer with a stale frame, so clear it the
+                    // first time.
+                    if !GPU_ACTIVE.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                        DispatchQueue::main().exec_async(|| {
+                            if let Some(main_side) = MAIN_SIDE.0.get() {
+                                main_side.view.setImage(None);
+                                main_side.metal.setHidden(false);
+                            }
+                        });
+                    }
                     frame_shown(WindowSize::new(list.logical_width, list.logical_height).ok());
                     true
                 }

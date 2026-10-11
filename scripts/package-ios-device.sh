@@ -128,13 +128,17 @@ echo "signed: $OUT"
 # field splitting lies. The identifier is the only 36-char hex-dash token.
 # With several iPhones paired, guessing installed onto somebody else's
 # phone once -- so multiple matches now require an explicit DEVICE=<uuid>.
+# A phone in use over USB lists as "connected", one in reach as "available
+# (paired)": both take an install. Finding none must not end the script
+# under `set -e` -- it did, silently, right after "signed", so a named
+# DEVICE was never installed to (2026-10-11).
 FOUND=$(xcrun devicectl list devices 2>/dev/null \
-  | grep 'available (paired)' | grep iPhone \
-  | grep -oE '[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}')
+  | grep -E 'available \(paired\)|connected' | grep iPhone \
+  | grep -oE '[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}' || true)
 COUNT=$(echo "$FOUND" | grep -c . || true)
 if [ -z "${DEVICE:-}" ] && [ "$COUNT" -gt 1 ]; then
   echo "several iPhones are paired; pick one and rerun with DEVICE=<uuid>:" >&2
-  xcrun devicectl list devices | grep 'available (paired)' | grep iPhone >&2
+  xcrun devicectl list devices | grep -E 'available \(paired\)|connected' | grep iPhone >&2
   exit 1
 fi
 DEVICE="${DEVICE:-$(echo "$FOUND" | head -1)}"
