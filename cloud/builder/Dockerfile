@@ -42,6 +42,8 @@ FROM rust:1.94.1-slim-trixie
 # like a 1980s terminal -- rendered correctly, and wrong in the only way a
 # stranger judging the product would notice. DejaVu and Liberation cover
 # sans, serif and mono; fontconfig is what lets the renderer find them.
+# zstd is how a big-file upload's source archive is read when it is judged
+# (IC-945): `tar --zstd` needs the program.
 RUN apt-get update -q && apt-get install -y -q --no-install-recommends \
       libasound2-dev \
       libwayland-dev \
@@ -51,6 +53,7 @@ RUN apt-get update -q && apt-get install -y -q --no-install-recommends \
       unzip \
       curl \
       xz-utils \
+      zstd \
       fontconfig \
       fonts-dejavu-core \
       fonts-liberation2 \

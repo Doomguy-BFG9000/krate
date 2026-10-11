@@ -15,7 +15,7 @@
 
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import {
   appendFile,
   mkdir,
@@ -31,6 +31,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { createGifts } from "./gift.js";
+import { createJudge } from "./judge.js";
 
 const PORT = Number(process.env.PORT || 8787);
 const KRATE = process.env.KRATE_BIN || "krate";
@@ -195,6 +196,24 @@ async function savePlans() {
  */
 const STATE_DIR = process.env.KRATE_STATE_DIR || "/work/state";
 const JOBS_DIR = join(STATE_DIR, "jobs");
+
+/* Judging for the hub's big-file path (IC-945): the hub asks, this box reads
+ * the upload, judges it with `krate judge --tier hub-big`, and answers. */
+const judge = createJudge({
+  hub: HUB,
+  secret: process.env.KRATE_BUILDER_SECRET || "",
+  dir: join(STATE_DIR, "judge"),
+  krate: KRATE,
+});
+
+/** Is this request from the hub? It carries the secret only the two hold. */
+function fromHub(req) {
+  const expected = process.env.KRATE_BUILDER_SECRET || "";
+  const offered = String(req.headers["x-krate-builder"] || "");
+  if (!expected || !offered) return false;
+  const digest = (s) => createHash("sha256").update(s).digest();
+  return timingSafeEqual(digest(expected), digest(offered));
+}
 let stateWritable = false;
 
 /* A finished bundle is handed over and then expires. We are not the file's
@@ -1378,6 +1397,15 @@ const server = createServer(async (req, res) => {
       });
     }
 
+    // The hub asks for a big upload to be judged (IC-945). Answered at once;
+    // the verdict goes back to the hub when the judging is done.
+    if (req.method === "POST" && url.pathname === "/judge") {
+      if (!fromHub(req)) return send(res, 404, "not found");
+      const body = await readBody(req);
+      if (!judge.accept(body)) return send(res, 400, "not a judging job");
+      return json(res, 202, { accepted: true });
+    }
+
     if (req.method === "POST" && url.pathname === "/build") {
       const body = await readBody(req);
       const request = String(body.request || "").trim();
@@ -1805,7 +1833,7 @@ server.listen(PORT, () => {
 if (IDLE_EXIT_MS > 0) {
   setInterval(() => {
     // A build in flight is activity: the idle clock starts when it ends.
-    if ([...jobs.values()].some((job) => job.state === "working")) {
+    if ([...jobs.values()].some((job) => job.state === "working") || judge.inFlight.size > 0) {
       lastActivity = Date.now();
       return;
     }
