@@ -11126,6 +11126,11 @@ fn a_threaded_app_runs_its_threads_and_rayon_pool_on_real_cores() {
         "four scoped threads shared one counter: {stdout}"
     );
     assert!(
+        stdout.contains("parking_lot: 8 threads took their turns (8) and counted 400000"),
+        "parking_lot's Mutex and Condvar parked and woke eight threads through \
+         make-parking-lot.py's std parker (IC-939): {stdout}"
+    );
+    assert!(
         stdout.contains(&format!("rayon on {cores} threads"))
             && stdout.contains("same answer: true"),
         "rayon sized its pool from the cores and agreed with one thread: {stdout}"
@@ -11178,7 +11183,8 @@ fn a_threaded_app_packs_into_a_krate_and_runs_from_it() {
     );
     assert!(stdout.contains("same answer: true"), "{stdout}");
     assert!(
-        stdout.contains("4 scoped threads counted 400000"),
+        stdout.contains("4 scoped threads counted 400000")
+            && stdout.contains("parking_lot: 8 threads took their turns (8)"),
         "{stdout}"
     );
 }

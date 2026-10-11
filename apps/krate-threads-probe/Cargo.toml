@@ -12,6 +12,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 rayon = "1"
+parking_lot = "0.12"
 krate = { path = "../../crates/bindings-rust", features = ["std"] }
 krate-c-runtime = { path = "../../crates/c-runtime" }
 wit-bindgen-rt = { version = "0.44.0", features = ["bitflags"] }
@@ -25,3 +26,9 @@ threads = true
 panic = "abort"
 opt-level = 3
 debug = false
+
+[patch.crates-io]
+# Made from the repo root by `python3 crates/parking-lot-krate/make-parking-lot.py patches`.
+# crates/parking-lot-krate/make-parking-lot.py's copy: threads park through
+# std::thread::park on wasm (IC-939).
+parking_lot_core = { path = "../../patches/parking_lot_core-0.9.12" }

@@ -17,8 +17,9 @@ krate-c-runtime = { path = "../../crates/c-runtime" }
 wit-bindgen-rt = { version = "0.44.0", features = ["bitflags"] }
 
 [patch.crates-io]
+# Made from the repo root by `python3 crates/gilrs-krate/make-gilrs.py patches`.
 # crates/gilrs-krate/make-gilrs.py's copy: gilrs-core with its Krate backend.
-gilrs-core = { path = "../../../../../../krate-bevy/patches/gilrs-core-0.6.8" }
+gilrs-core = { path = "../../patches/gilrs-core-0.6.8" }
 
 [profile.release]
 panic = "abort"

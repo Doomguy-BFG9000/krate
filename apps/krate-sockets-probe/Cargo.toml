@@ -20,9 +20,10 @@ krate-c-runtime = { path = "../../crates/c-runtime" }
 wit-bindgen-rt = { version = "0.44.0", features = ["bitflags"] }
 
 [patch.crates-io]
+# Made from the repo root by `python3 crates/net-krate/make-quinn.py patches`.
 # make-quinn.py's copies: QUIC without std sockets (crates/net-krate/make-quinn.py).
-quinn = { path = "../../../../../../krate-bevy/patches/quinn-0.11.11" }
-quinn-udp = { path = "../../../../../../krate-bevy/patches/quinn-udp-0.5.14" }
+quinn = { path = "../../patches/quinn-0.11.11" }
+quinn-udp = { path = "../../patches/quinn-udp-0.5.14" }
 
 [profile.release]
 panic = "abort"

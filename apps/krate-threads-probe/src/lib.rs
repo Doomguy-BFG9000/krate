@@ -49,6 +49,33 @@ impl krate::Guest for App {
             }
         });
         println!("4 scoped threads counted {}", counter.load(Ordering::Relaxed));
+        // parking_lot under contention: its threads park and unpark, which
+        // on wasm needs make-parking-lot.py's std parker (IC-939).
+        let total = parking_lot::Mutex::new(0u64);
+        let turn = (parking_lot::Mutex::new(0u32), parking_lot::Condvar::new());
+        std::thread::scope(|s| {
+            for i in 0..8u32 {
+                let (total, turn) = (&total, &turn);
+                s.spawn(move || {
+                    // Wait for this thread's turn, then hand it on.
+                    let mut t = turn.0.lock();
+                    while *t != i {
+                        turn.1.wait(&mut t);
+                    }
+                    *t += 1;
+                    turn.1.notify_all();
+                    drop(t);
+                    for _ in 0..50_000 {
+                        *total.lock() += 1;
+                    }
+                });
+            }
+        });
+        println!(
+            "parking_lot: 8 threads took their turns ({}) and counted {}",
+            *turn.0.lock(),
+            *total.lock()
+        );
         let jobs: Vec<u64> = (0..640).collect();
         let t0 = Instant::now();
         let one: u64 = jobs.iter().map(|&n| work(n)).fold(0, |a, b| a ^ b);
