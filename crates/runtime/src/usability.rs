@@ -110,7 +110,10 @@ pub struct UsabilityPlan {
 ///
 /// Clicks find a control by the label the host shows; text and keys go to
 /// whatever has focus, the way a person's would; an expectation looks at
-/// the labels on screen after the steps before it have settled.
+/// the labels on screen after the steps before it have settled. An app that
+/// draws its own interface (a game) is driven by `click_at` a point of the
+/// window and `hold` a key for a time, and `shoot` keeps a picture of what
+/// a step did.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Task {
@@ -126,6 +129,20 @@ pub struct TaskStep {
     /// Press the control whose label is this (case-insensitive, trimmed).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub click: Option<String>,
+    /// Press the window at a point, "x,y" as fractions of its width and
+    /// height ("0.5,0.5" is the middle): for what an app draws itself -- a
+    /// game's menu, a canvas -- where there is no labelled control to find.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub click_at: Option<String>,
+    /// Hold a key down for a while, "key milliseconds" ("w 3000"): walking
+    /// in a game, scrolling with an arrow key. Released when the time is up.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hold: Option<String>,
+    /// Write the window as it is now to this PNG: the evidence of a step
+    /// that only a picture shows (a game character that walked). Looks, does
+    /// not act.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shoot: Option<String>,
     /// Press and release one key, by the runtime's key name ("Enter", "a").
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub key: Option<String>,
@@ -148,6 +165,9 @@ impl TaskStep {
     pub fn validate(&self) -> Result<(), String> {
         let set = [
             self.click.is_some(),
+            self.click_at.is_some(),
+            self.hold.is_some(),
+            self.shoot.is_some(),
             self.key.is_some(),
             self.type_text.is_some(),
             self.wait_ms.is_some(),
@@ -157,9 +177,20 @@ impl TaskStep {
         .iter()
         .filter(|s| **s)
         .count();
+        if let Some(Err(why)) = self.click_point() {
+            return Err(why);
+        }
+        if let Some(Err(why)) = self.held_key() {
+            return Err(why);
+        }
+        if let Some(path) = &self.shoot {
+            if !path.to_lowercase().ends_with(".png") {
+                return Err(format!("shoot {path:?} must name a .png file"));
+            }
+        }
         match set {
             1 => Ok(()),
-            0 => Err("a step must do one thing: click, key, type, wait_ms, expect_text or expect_no_text".to_string()),
+            0 => Err("a step must do one thing: click, click_at, hold, key, type, wait_ms, shoot, expect_text or expect_no_text".to_string()),
             _ => Err(format!("a step does one thing, this one does {set}: {}", self.describe())),
         }
     }
@@ -167,6 +198,15 @@ impl TaskStep {
     pub fn describe(&self) -> String {
         if let Some(l) = &self.click {
             return format!("click {l:?}");
+        }
+        if let Some(at) = &self.click_at {
+            return format!("click at {at:?}");
+        }
+        if let Some(h) = &self.hold {
+            return format!("hold {h:?}");
+        }
+        if let Some(p) = &self.shoot {
+            return format!("shoot {p:?}");
         }
         if let Some(k) = &self.key {
             return format!("key {k:?}");
@@ -186,14 +226,72 @@ impl TaskStep {
         "an empty step".to_string()
     }
 
+    /// Where `click_at` presses, as fractions of the window, or why it cannot.
+    pub fn click_point(&self) -> Option<Result<(f32, f32), String>> {
+        let text = self.click_at.as_ref()?;
+        let bad = || {
+            format!(
+                "click_at {text:?} is not \"x,y\" with each between 0 and 1 (\"0.5,0.5\" is the middle)"
+            )
+        };
+        let mut parts = text.split(',').map(|p| p.trim().parse::<f32>());
+        Some(match (parts.next(), parts.next(), parts.next()) {
+            (Some(Ok(x)), Some(Ok(y)), None)
+                if (0.0..=1.0).contains(&x) && (0.0..=1.0).contains(&y) =>
+            {
+                Ok((x, y))
+            }
+            _ => Err(bad()),
+        })
+    }
+
+    /// The key `hold` presses and for how long, or why it cannot.
+    pub fn held_key(&self) -> Option<Result<(String, std::time::Duration), String>> {
+        let text = self.hold.as_ref()?;
+        let mut parts = text.split_whitespace();
+        Some(
+            match (
+                parts.next(),
+                parts.next().map(str::parse::<u64>),
+                parts.next(),
+            ) {
+                (Some(key), Some(Ok(ms)), None) if ms > 0 && ms <= 600_000 => {
+                    Ok((key.to_string(), std::time::Duration::from_millis(ms)))
+                }
+                _ => Err(format!(
+                    "hold {text:?} is not \"key milliseconds\" (\"w 3000\"), at most ten minutes"
+                )),
+            },
+        )
+    }
+
     /// Whether the step changes the app (and so needs a settle after it)
     /// or only looks.
     pub fn is_action(&self) -> bool {
-        self.expect_text.is_none() && self.expect_no_text.is_none()
+        self.expect_text.is_none() && self.expect_no_text.is_none() && self.shoot.is_none()
     }
 }
 
 impl Task {
+    /// How long the script itself takes at most: every wait and held key,
+    /// and `settle` for each other action (what the driver allows one).
+    pub fn scripted_time(&self, settle: std::time::Duration) -> std::time::Duration {
+        self.steps
+            .iter()
+            .map(|s| {
+                if let Some(ms) = s.wait_ms {
+                    std::time::Duration::from_millis(ms)
+                } else if let Some(Ok((_, held))) = s.held_key() {
+                    held.max(settle)
+                } else if s.is_action() {
+                    settle
+                } else {
+                    std::time::Duration::ZERO
+                }
+            })
+            .sum()
+    }
+
     pub fn validate(&self) -> Result<(), String> {
         if self.name.trim().is_empty() {
             return Err(

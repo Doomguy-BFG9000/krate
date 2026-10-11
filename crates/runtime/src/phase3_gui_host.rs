@@ -67,12 +67,15 @@ const HEADLESS_RUN_BUDGET: std::time::Duration = std::time::Duration::from_secs(
 /// start-up alone outlasts five seconds (a GPU engine loading a large scene)
 /// without a window; like `KRATE_GPU_UNPACED`, nothing a person runs sets it.
 fn headless_run_budget() -> std::time::Duration {
+    headless_secs_asked().unwrap_or(HEADLESS_RUN_BUDGET)
+}
+
+fn headless_secs_asked() -> Option<std::time::Duration> {
     std::env::var("KRATE_HEADLESS_SECS")
         .ok()
         .and_then(|v| v.trim().parse::<f64>().ok())
         .filter(|secs| secs.is_finite() && *secs > 0.0)
         .map(std::time::Duration::from_secs_f64)
-        .unwrap_or(HEADLESS_RUN_BUDGET)
 }
 
 /// How long a headless app has to leave after being told the window closed,
@@ -1481,14 +1484,27 @@ impl Phase3GuiHost {
         // An action is settling: give the app its frame before the next
         // step, the same grace the click and keyboard steps get.
         if let Some(at) = dispatched_at {
+            let held = step.held_key().and_then(Result::ok);
             let needed = step
                 .wait_ms
                 .map(std::time::Duration::from_millis)
+                .or(held.as_ref().map(|(_, ms)| *ms))
                 .unwrap_or(PRESS_SETTLE);
             let since = at.elapsed();
             let ready = (since >= needed && from_wait) || since >= needed.max(PRESS_GIVE_UP);
             if !ready {
                 return;
+            }
+            // A held key is let go when its time is up, before the next step.
+            if let Some((key, _)) = held {
+                let _ = self
+                    .dispatcher()
+                    .route_key_event(crate::phase3_ui::KeyRouteRequest {
+                        window,
+                        key,
+                        pressed: false,
+                        modifiers: Default::default(),
+                    });
             }
             if let Some(driver) = self.usability.as_mut() {
                 driver.task_index += 1;
@@ -1562,6 +1578,22 @@ impl Phase3GuiHost {
             }
             return;
         }
+        if let Some(path) = &step.shoot {
+            let scale = self.screenshot.as_ref().map(|(_, s)| *s).unwrap_or(1.0);
+            match self.render_window_png(window, scale, std::path::Path::new(path)) {
+                Ok(()) => {
+                    if trace {
+                        eprintln!("krate-check: task {name:?} step {number}: shot {path}");
+                    }
+                    if let Some(driver) = self.usability.as_mut() {
+                        driver.task_index += 1;
+                        driver.report.task_steps_done = number;
+                    }
+                }
+                Err(error) => broke(self, format!("could not write {path:?}: {error}")),
+            }
+            return;
+        }
         if step.wait_ms.is_some() {
             if let Some(driver) = self.usability.as_mut() {
                 driver.task_dispatched_at = Some(std::time::Instant::now());
@@ -1620,6 +1652,41 @@ impl Phase3GuiHost {
                     })
                     .is_ok()
             })
+        } else if let Some(Ok((fx, fy))) = step.click_point() {
+            let Ok(Some(record)) = dispatcher.window(window) else {
+                return;
+            };
+            let (w, h) = (record.size.width as f32, record.size.height as f32);
+            let Ok(viewport) = LayoutViewport::new(w, h) else {
+                return;
+            };
+            let (x, y) = (fx * w, fy * h);
+            if trace {
+                eprintln!("krate-check: task {name:?} step {number}: pressing the window at {x:.1},{y:.1}");
+            }
+            [true, false].iter().all(|&pressed| {
+                dispatcher
+                    .route_pointer_event(crate::phase3_ui::PointerRouteRequest {
+                        window,
+                        viewport,
+                        x,
+                        y,
+                        button: Some(krate_adapter_common::ui::PointerButton::Primary),
+                        pressed,
+                        modifiers: Default::default(),
+                    })
+                    .is_ok()
+            })
+        } else if let Some(Ok((key, _))) = step.held_key() {
+            // Pressed now; released when the step has settled (above).
+            dispatcher
+                .route_key_event(crate::phase3_ui::KeyRouteRequest {
+                    window,
+                    key,
+                    pressed: true,
+                    modifiers: Default::default(),
+                })
+                .is_ok()
         } else if let Some(key) = &step.key {
             [true, false].iter().all(|&pressed| {
                 dispatcher
@@ -1721,8 +1788,20 @@ impl Phase3GuiHost {
         // watch records the window as held first. After that, this two-strike
         // close is the backstop for an app whose loop ignores the driver's own
         // CloseRequested.
-        let budget = if self.usability.is_some() {
-            crate::usability::STAY_OPEN_WATCH + std::time::Duration::from_secs(5)
+        //
+        // A task runs before the watch, so its own scripted time (its waits
+        // and held keys, plus the settle every action gets) is added: a game
+        // that takes twenty seconds to reach its menu was closed mid-task.
+        let budget = if let Some(driver) = self.usability.as_ref() {
+            let scripted = driver
+                .plan
+                .task
+                .as_ref()
+                .map(|task| task.scripted_time(PRESS_GIVE_UP))
+                .unwrap_or_default();
+            let driven =
+                crate::usability::STAY_OPEN_WATCH + std::time::Duration::from_secs(5) + scripted;
+            driven.max(headless_secs_asked().unwrap_or_default())
         } else {
             headless_run_budget()
         };
@@ -6913,6 +6992,9 @@ mod tests {
         let mut s = crate::usability::TaskStep::default();
         match field {
             "click" => s.click = Some(value.to_string()),
+            "click_at" => s.click_at = Some(value.to_string()),
+            "hold" => s.hold = Some(value.to_string()),
+            "shoot" => s.shoot = Some(value.to_string()),
             "key" => s.key = Some(value.to_string()),
             "type" => s.type_text = Some(value.to_string()),
             "expect_text" => s.expect_text = Some(value.to_string()),
@@ -7035,6 +7117,92 @@ mod tests {
             "{report:?}"
         );
         assert_eq!(report.task_steps_done, 3);
+    }
+
+    /// An app that draws its own interface (a game) is driven by point and
+    /// by held key: `click_at` presses the window where it is told, and
+    /// `hold` keeps a key down for its time before letting it go.
+    #[test]
+    fn a_task_presses_a_point_and_holds_a_key_for_its_time() {
+        let shot = std::env::temp_dir().join(format!("krate-task-shot-{}.png", std::process::id()));
+        let _ = std::fs::remove_file(&shot);
+        let task = crate::usability::Task {
+            name: "walk".to_string(),
+            steps: vec![
+                step("click_at", "0.25,0.5"),
+                step("hold", "w 600"),
+                step("shoot", shot.to_str().unwrap()),
+                step("expect_no_text", "a crash dialog"),
+            ],
+        };
+        let mut host = host_with_labelled_button("Play", task_plan(task));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        let mut presses = Vec::new();
+        let mut keys = Vec::new();
+        let report = loop {
+            match ui::events::Host::wait(&mut host, Some(50)).expect("wait call") {
+                Some(ui::types::Event::Pointer(p)) => presses.push((p.pressed, p.x, p.y)),
+                Some(ui::types::Event::Key(k)) => {
+                    keys.push((k.key.clone(), k.pressed, std::time::Instant::now()))
+                }
+                _ => {}
+            }
+            let report = host.usability_report().expect("a plan");
+            if report.task.is_some() || std::time::Instant::now() > deadline {
+                break report;
+            }
+        };
+        assert_eq!(
+            report.task,
+            Some(crate::usability::Observation::Held),
+            "{report:?}"
+        );
+        assert_eq!(report.task_steps_done, 4);
+        let png = std::fs::read(&shot).expect("the shoot step wrote its picture");
+        assert!(png.starts_with(b"\x89PNG"), "a PNG");
+        let _ = std::fs::remove_file(&shot);
+        let pressed: Vec<bool> = presses.iter().map(|p| p.0).collect();
+        assert_eq!(pressed, vec![true, false], "one press, then its release");
+        // The window is 300 wide (host_with_labelled_button): a quarter in.
+        assert!(
+            (presses[0].1 - 75.0).abs() < 1.0,
+            "pressed at the point asked: {presses:?}"
+        );
+        assert_eq!(
+            keys.iter().map(|k| (k.0.as_str(), k.1)).collect::<Vec<_>>(),
+            vec![("w", true), ("w", false)],
+            "the key goes down, then up"
+        );
+        let held = keys[1].2.duration_since(keys[0].2);
+        assert!(
+            held >= std::time::Duration::from_millis(550),
+            "the key stays down for its time: {held:?}"
+        );
+        // The run's deadline grows by the script's own time: a wait, a held
+        // key (at least a settle), a settle per press, nothing for a look.
+        let long = crate::usability::Task {
+            name: "reach the menu".to_string(),
+            steps: vec![
+                step("wait_ms", "20000"),
+                step("click_at", "0.5,0.5"),
+                step("hold", "w 3000"),
+                step("expect_no_text", "x"),
+            ],
+        };
+        assert_eq!(
+            long.scripted_time(std::time::Duration::from_millis(1500)),
+            std::time::Duration::from_millis(24_500)
+        );
+        let bad = crate::usability::Task {
+            name: "nowhere".to_string(),
+            steps: vec![step("click_at", "1.5,0"), step("expect_text", "x")],
+        };
+        assert!(bad.validate().unwrap_err().contains("between 0 and 1"));
+        let bad = crate::usability::Task {
+            name: "forever".to_string(),
+            steps: vec![step("hold", "w"), step("expect_text", "x")],
+        };
+        assert!(bad.validate().unwrap_err().contains("key milliseconds"));
     }
 
     /// A row of a list answers Enter the way it answers a press: the pointer
