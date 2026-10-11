@@ -19702,6 +19702,20 @@ fn run_screens_stage(
     // Nothing measured is not a failure: an app that draws no text on its
     // first frame, or a run that could not paint, has nothing to judge.
     let Some(desktop) = run_on(1280.0, 800.0, "desktop") else {
+        // No canvas text to measure -- a widget app, which Krate draws in
+        // the person's look itself. Its own box colours are still its own,
+        // so judge how bright it stays in dark mode (IC-925).
+        let _ = run_looking(390.0, 844.0, "phone-dark-large", Some(LARGEST_LOOK));
+        if let Some(fault) = appearance_fault(None, None, &picture("phone-dark-large")) {
+            return Err(CheckFailure {
+                stage: CheckStage::Screens,
+                detail: format!("a phone in dark mode with the largest text: {fault}"),
+                fix: "Krate draws its own widgets dark in dark mode; the bright part is the \
+                      app's own: a box or text colour it set. Read `krate::layout::Look::now()` \
+                      and give those boxes a dark colour when `look.dark`."
+                    .to_string(),
+            });
+        }
         return Ok(());
     };
     let asked = desktop["asked"]
@@ -19742,7 +19756,9 @@ fn run_screens_stage(
             if let Some(fault) = screen_fit::fault(name, &dark) {
                 faults.push(fault);
             }
-            if let Some(fault) = appearance_fault(&light, &dark, &picture("phone-dark-large")) {
+            if let Some(fault) =
+                appearance_fault(Some(&light), Some(&dark), &picture("phone-dark-large"))
+            {
                 faults.push(format!("{name}: {fault}"));
                 ignores_look = true;
             }
@@ -19792,8 +19808,8 @@ const TOO_BRIGHT_IN_DARK: f32 = 0.6;
 /// the default text size and in dark at the largest: still bright, or text
 /// no larger. None when it follows both, or there was nothing to judge.
 fn appearance_fault(
-    light: &krate_runtime::screen_fit::ScreenFacts,
-    dark: &krate_runtime::screen_fit::ScreenFacts,
+    light: Option<&krate_runtime::screen_fit::ScreenFacts>,
+    dark: Option<&krate_runtime::screen_fit::ScreenFacts>,
     dark_png: &Path,
 ) -> Option<String> {
     let mut found = Vec::new();
@@ -19805,8 +19821,11 @@ fn appearance_fault(
             ));
         }
     }
-    if let (Some((before, _)), Some((after, text))) = (&light.smallest_text, &dark.smallest_text) {
-        if *after < before * 1.1 {
+    let smallest = |facts: Option<&krate_runtime::screen_fit::ScreenFacts>| {
+        facts.and_then(|f| f.smallest_text.clone())
+    };
+    if let (Some((before, _)), Some((after, text))) = (smallest(light), smallest(dark)) {
+        if after < before * 1.1 {
             found.push(format!(
                 "text stays at {after:.1} points (\"{}\") when the person asked for it larger",
                 text.chars().take(24).collect::<String>(),
@@ -22702,10 +22721,15 @@ mod look_tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let dark = frame(dir.path(), 20);
         let white = frame(dir.path(), 245);
-        assert_eq!(appearance_fault(&facts(15.0), &facts(20.25), &dark), None);
-        let bright = appearance_fault(&facts(15.0), &facts(20.25), &white).expect("bright");
+        let (normal, grown, same) = (facts(15.0), facts(20.25), facts(15.0));
+        assert_eq!(appearance_fault(Some(&normal), Some(&grown), &dark), None);
+        let bright = appearance_fault(Some(&normal), Some(&grown), &white).expect("bright");
         assert!(bright.contains("stays 96% bright"), "{bright}");
-        let fixed = appearance_fault(&facts(15.0), &facts(15.0), &dark).expect("fixed text");
+        assert!(
+            appearance_fault(None, None, &white).is_some(),
+            "a widget app is judged on brightness"
+        );
+        let fixed = appearance_fault(Some(&normal), Some(&same), &dark).expect("fixed text");
         assert!(fixed.contains("text stays at 15.0 points"), "{fixed}");
     }
 }

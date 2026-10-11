@@ -664,6 +664,8 @@ impl Phase3GuiHost {
     /// input. Capturing mid-construction (on every tree sync) grabbed a
     /// half-built frame -- a checklist with its title but not its rows.
     fn maybe_take_screenshot(&self) {
+        // A run that ends before it ever waits still shows the person's look.
+        self.follow_widget_look();
         let Some(window) = self.windows.first().copied() else {
             return;
         };
@@ -717,6 +719,7 @@ impl Phase3GuiHost {
     /// Capture a specific window, used on close so an app that never waits for
     /// input still gets its final frame shot.
     fn maybe_take_screenshot_for(&self, window: WindowId) {
+        self.follow_widget_look();
         if self.screenshot_taken.get() || self.screenshot.is_none() {
             return;
         }
@@ -941,6 +944,16 @@ impl Phase3GuiHost {
         let look = self.dispatcher().appearance();
         self.appearance_cache.set(Some((now, look)));
         look
+    }
+
+    /// Draw Krate's own widgets in the person's look (IC-925), checked at
+    /// the top of every frame: dark colours in dark mode, labels at their
+    /// text size, laid out at that size on the next layout.
+    fn follow_widget_look(&self) {
+        let look = self.appearance();
+        if look != krate_adapter_common::ui::widget_look() {
+            krate_adapter_common::ui::set_widget_look(look);
+        }
     }
 
     /// Whether this device can check it is the person (IC-924). Headless,
@@ -4680,6 +4693,7 @@ impl ui::window::Host for Phase3GuiHost {
         title: String,
         size: ui::types::WindowSize,
     ) -> wasmtime::Result<Result<u64, ui::types::UiError>> {
+        self.follow_widget_look();
         let size = match WindowSize::new(size.width, size.height) {
             Ok(size) => size,
             Err(err) => return Ok(Err(ui::types::UiError::Platform(err.to_string()))),
@@ -5067,6 +5081,7 @@ impl ui::events::Host for Phase3GuiHost {
         // No screenshot here for the same reason as key_held: poll is called at
         // the top of a frame loop, before this frame is drawn. wait (widget
         // apps) and present (canvas and scene apps) are the capture points.
+        self.follow_widget_look();
         self.pump_native_windows();
         // A game never calls `wait` -- it polls at the top of every frame and
         // draws regardless. Driving only from `wait` means such an app is never
@@ -5157,6 +5172,7 @@ impl ui::events::Host for Phase3GuiHost {
     }
 
     fn wait(&mut self, timeout_millis: Option<u32>) -> wasmtime::Result<Option<ui::types::Event>> {
+        self.follow_widget_look();
         // The app has built its window and is now waiting for input: the first
         // stable, fully-drawn frame. Capture here, before any budget check
         // that might end the run.

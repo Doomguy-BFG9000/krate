@@ -11752,3 +11752,75 @@ fn the_persons_look_reaches_the_app() {
         "dark mode, contrast and text size reach the app whole: {dark}"
     );
 }
+
+/// Krate draws a widget app's own widgets in the person's look (IC-925):
+/// in dark mode the window, fields and text go dark without the app doing
+/// anything, and at a larger text size its labels take more room.
+///
+/// `timer-widgets.wasm` is apps/krate-timer built: a title, a time, a
+/// progress bar and three buttons, with no colours of its own.
+#[test]
+fn a_widget_app_is_drawn_in_the_persons_look() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let wasm = dir.path().join("code.wasm");
+    std::fs::write(&wasm, include_bytes!("fixtures/timer-widgets.wasm")).expect("timer");
+    let manifest = dir.path().join("manifest.toml");
+    std::fs::copy(
+        concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../apps/krate-timer/manifest.toml"
+        ),
+        &manifest,
+    )
+    .expect("manifest");
+    let text = std::fs::read_to_string(&manifest).expect("read manifest");
+    let entry = text
+        .lines()
+        .find(|l| l.starts_with("entry"))
+        .expect("entry line")
+        .to_string();
+    std::fs::write(&manifest, text.replace(&entry, "entry = \"code.wasm\"")).expect("manifest");
+    let shoot = |look: &str| -> f64 {
+        let png = dir
+            .path()
+            .join(format!("{}.png", look.replace([',', '='], "-")));
+        let out = krate()
+            .arg("run")
+            .arg(&wasm)
+            .arg("--manifest")
+            .arg(&manifest)
+            .arg("--auto-grant")
+            .arg("--shoot")
+            .arg(&png)
+            .arg("--shoot-scale")
+            .arg("1")
+            .arg("--")
+            .arg("quick")
+            .env("KRATE_SCREEN", "390x844")
+            .env("KRATE_APPEARANCE", look)
+            .output()
+            .expect("run");
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let decoder = png::Decoder::new(std::io::BufReader::new(
+            std::fs::File::open(&png).expect("shot"),
+        ));
+        let mut reader = decoder.read_info().expect("png");
+        let mut buf = vec![0; reader.output_buffer_size().expect("size")];
+        let info = reader.next_frame(&mut buf).expect("frame");
+        let channels = info.color_type.samples();
+        let px = &buf[..info.buffer_size()];
+        let sum: f64 = px
+            .chunks_exact(channels)
+            .map(|p| (p[0] as f64 + p[1] as f64 + p[2] as f64) / (3.0 * 255.0))
+            .sum();
+        sum / (px.len() / channels) as f64
+    };
+    let light = shoot("light");
+    let dark = shoot("dark,text=1.35");
+    assert!(light > 0.8, "a light window by default: {light:.2}");
+    assert!(dark < 0.3, "the same app goes dark in dark mode: {dark:.2}");
+}

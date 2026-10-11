@@ -1822,6 +1822,32 @@ impl Default for Appearance {
     }
 }
 
+/// The look Krate's own widgets are drawn in, for every window of this
+/// process: set by the runtime each frame from the person's settings, read
+/// by layout (text sizes) and the painters (colours and text sizes).
+static LOOK_DARK: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static LOOK_CONTRAST: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static LOOK_TEXT_SCALE: std::sync::atomic::AtomicU32 =
+    std::sync::atomic::AtomicU32::new(0x3F80_0000);
+
+/// Draw Krate's widgets in this look from now on (IC-925).
+pub fn set_widget_look(look: Appearance) {
+    use std::sync::atomic::Ordering::Relaxed;
+    LOOK_DARK.store(look.dark, Relaxed);
+    LOOK_CONTRAST.store(look.high_contrast, Relaxed);
+    LOOK_TEXT_SCALE.store(look.text_scale.clamp(0.5, 4.0).to_bits(), Relaxed);
+}
+
+/// The look Krate's widgets are drawn in.
+pub fn widget_look() -> Appearance {
+    use std::sync::atomic::Ordering::Relaxed;
+    Appearance {
+        dark: LOOK_DARK.load(Relaxed),
+        high_contrast: LOOK_CONTRAST.load(Relaxed),
+        text_scale: f32::from_bits(LOOK_TEXT_SCALE.load(Relaxed)),
+    }
+}
+
 impl Appearance {
     /// Read `KRATE_APPEARANCE` as a stand-in for the person's settings:
     /// comma-separated `dark`, `contrast` and `text=1.35`, in any order.
