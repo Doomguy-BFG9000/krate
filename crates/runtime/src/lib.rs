@@ -73,6 +73,8 @@ pub mod scene3d;
 pub mod screen_fit;
 pub mod secret_host;
 pub mod shared_host;
+#[cfg(target_os = "macos")]
+mod speech_apple;
 mod speech_synthesis;
 mod speech_transcription;
 pub mod sql_host;

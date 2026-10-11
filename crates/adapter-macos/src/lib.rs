@@ -3,11 +3,13 @@
 //! This crate is the macOS ownership boundary. Shared behavior still comes from
 //! `krate-adapter-common`, while macOS-specific host wiring will land here.
 
+mod accessibility;
 mod appearance;
 mod appkit;
 mod clipboard;
 mod consent;
 mod open_document;
+mod share_photos;
 mod sign_in;
 mod web_page;
 
@@ -746,6 +748,40 @@ impl UiAdapter for MacosAppKitPrototypeUiAdapter {
 
     fn close_web_page(&self, page: u64) {
         web_page::close(page);
+    }
+
+    fn describe_accessibility(
+        &self,
+        window: WindowId,
+        elements: &[krate_adapter_common::ui::AccessElement],
+    ) -> Result<(), UiAdapterError> {
+        if let Ok(Some(handle)) = self.native_window(window) {
+            accessibility::describe(handle.raw_handle, window, elements);
+        }
+        Ok(())
+    }
+
+    fn screen_reader_on(&self) -> bool {
+        accessibility::voice_over_on()
+    }
+
+    fn share(
+        &self,
+        window: WindowId,
+        text: Option<&str>,
+        url: Option<&str>,
+        files: &[(String, Vec<u8>)],
+    ) -> Result<bool, String> {
+        let handle = self
+            .native_window(window)
+            .ok()
+            .flatten()
+            .ok_or("the app's window is not on screen")?;
+        share_photos::share(handle.raw_handle, text, url, files)
+    }
+
+    fn save_photo(&self, data: &[u8]) -> Result<(), Option<String>> {
+        share_photos::save_photo(data)
     }
 
     fn pump_event_loop_once(

@@ -16714,6 +16714,10 @@ fn install_bundle(bundle_path: &Path, prefix: &Path) -> Result<PathBuf> {
     <string>{name} asked for the camera, and you allowed it in Krate's permission window.</string>
     <key>NSMicrophoneUsageDescription</key>
     <string>{name} asked for the microphone, and you allowed it in Krate's permission window.</string>
+    <key>NSSpeechRecognitionUsageDescription</key>
+    <string>{name} asked to turn speech into text. Apple's recognizer does it, on this Mac where it can.</string>
+    <key>NSPhotoLibraryAddUsageDescription</key>
+    <string>{name} asked to add a picture to your Photos, and you allowed it in Krate's permission window.</string>
 {icon_entry}</dict>
 </plist>
 "#,
@@ -17178,6 +17182,9 @@ fn macos_launcher_bundle(dir: &Path, name: &str, engine: &Path) -> std::io::Resu
          \u{20}   <key>NSMicrophoneUsageDescription</key>\n\
          \u{20}   <string>{name} asked for the microphone, and you allowed it in Krate's \
          permission window.</string>\n\
+         \u{20}   <key>NSSpeechRecognitionUsageDescription</key>\n\
+         \u{20}   <string>{name} asked to turn speech into text. Apple's recognizer does \
+         it, on this Mac where it can.</string>\n\
          </dict>\n</plist>\n"
     );
     fs::write(app.join("Contents/Info.plist"), plist)?;

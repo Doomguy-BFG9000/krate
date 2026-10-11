@@ -123,6 +123,10 @@ cat > "$APP/Contents/Info.plist" << PLIST
     <string>Krate uses the microphone only for apps that request audio capture and only after you allow it.</string>
     <key>NSCameraUsageDescription</key>
     <string>Krate uses the camera only for apps that request camera access and only after you allow it.</string>
+    <key>NSPhotoLibraryAddUsageDescription</key>
+    <string>Krate adds a picture to your Photos only when an app asks and you allow it.</string>
+    <key>NSSpeechRecognitionUsageDescription</key>
+    <string>Krate turns speech into text only for apps that ask, with Apple's recognizer on this Mac where it can.</string>
     <key>CFBundleIconFile</key>
     <string>Krate</string>
     <key>CFBundleDocumentTypes</key>

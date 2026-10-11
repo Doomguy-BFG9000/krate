@@ -66,6 +66,15 @@ impl LocalSpeechRuntime {
             return krate_adapter_ios::uikit_native::transcribe(pcm_s16_le, sample_rate, language)
                 .map_err(SpeechError::Inference);
         }
+        // A Mac app that carries no files of its own: Apple's recognizer, the
+        // same one the iPhone uses. An app that bundles a model uses it, and
+        // a model it names but does not carry is still its own mistake.
+        #[cfg(target_os = "macos")]
+        if self.asset_root.is_none() {
+            let _ = model_asset;
+            return crate::speech_apple::transcribe(pcm_s16_le, sample_rate, language)
+                .map_err(SpeechError::Inference);
+        }
         #[allow(unreachable_code)]
         let model_path = self.model_path(model_asset)?;
 
