@@ -120,9 +120,13 @@ fn home(iface: &str) -> (&'static str, &'static str) {
 
 /// Interfaces a worker thread may not call: they reach the window and
 /// AppKit, which live on the main thread.
+///
+/// Audio is not among them: a sound engine feeds its stream from a thread of
+/// its own (cpal's Krate host, IC-932), and the host's streams are device
+/// handles that any thread may start, stop and write to.
 fn main_thread_only(iface: &str, func: &str) -> bool {
     let pkg = iface.split('/').next().unwrap_or("");
-    matches!(pkg, "ui" | "gfx" | "audio" | "camera" | "speech")
+    matches!(pkg, "ui" | "gfx" | "camera" | "speech")
         || (iface == "gpu/gpu"
             && matches!(
                 func,

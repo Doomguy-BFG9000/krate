@@ -17,8 +17,8 @@
 //! the WIT (build.rs writes `core_glue.rs`): each import lifts its arguments
 //! out of the shared memory into the Rust types wasmtime's bindgen made,
 //! calls the very `Host` trait method the component path calls, and lowers
-//! the result back. There is one host state, behind a lock; the window, the
-//! GPU surface and sound answer only the app's main thread, as AppKit wants.
+//! the result back. There is one host state, behind a lock; the window and
+//! the GPU surface answer only the app's main thread, as AppKit wants.
 
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -34,9 +34,14 @@ pub(crate) mod abi {
     use wasmtime::{SharedMemory, Val, ValType};
 
     /// A view of the app's shared memory.
+    ///
+    /// The base never moves (a shared memory is reserved whole), but the
+    /// length does: any thread may grow it, and so may the app's own
+    /// `cabi_realloc` while a call is lowering its result. So every check
+    /// reads the size now, not the size when the call began.
     pub(crate) struct Cx {
         base: *mut u8,
-        len: usize,
+        memory: SharedMemory,
     }
 
     pub(crate) fn bad(what: &str) -> wasmtime::Error {
@@ -45,19 +50,18 @@ pub(crate) mod abi {
 
     impl Cx {
         pub(crate) fn new(memory: &SharedMemory) -> Cx {
-            let data = memory.data();
             Cx {
-                base: data.as_ptr() as *mut u8,
-                len: data.len(),
+                base: memory.data().as_ptr() as *mut u8,
+                memory: memory.clone(),
             }
         }
 
         pub(crate) fn check(&self, a: u32, n: u32) -> wasmtime::Result<()> {
+            let len = self.memory.data_size();
             match (a as usize).checked_add(n as usize) {
-                Some(end) if end <= self.len => Ok(()),
+                Some(end) if end <= len => Ok(()),
                 _ => Err(wasmtime::Error::msg(format!(
-                    "the app pointed past its memory ({a}+{n} > {})",
-                    self.len
+                    "the app pointed past its memory ({a}+{n} > {len})"
                 ))),
             }
         }
@@ -447,8 +451,8 @@ impl Shared {
         abi::Cx::new(&self.memory)
     }
 
-    /// The host, for a call into `iface`. The window, the GPU surface and
-    /// sound answer the main thread only.
+    /// The host, for a call into `iface`. The window and the GPU surface
+    /// answer the main thread only.
     pub(crate) fn host(
         &self,
         main_only: bool,
@@ -779,5 +783,22 @@ mod tests {
         let threaded =
             wat::parse_str("(module (import \"env\" \"memory\" (memory 1 2 shared)))").unwrap();
         assert!(super::is_threaded_module(&threaded));
+    }
+
+    /// A call's view of memory follows a growth that happens during it (the
+    /// app's realloc while a result is lowered, or another thread): Veloren's
+    /// first file read failed "pointed past its memory" without this.
+    #[test]
+    fn a_view_sees_memory_grown_after_it_was_taken() {
+        let mut config = wasmtime::Config::new();
+        config.wasm_threads(true).shared_memory(true);
+        let engine = wasmtime::Engine::new(&config).unwrap();
+        let memory =
+            wasmtime::SharedMemory::new(&engine, wasmtime::MemoryType::shared(1, 4)).unwrap();
+        let cx = super::abi::Cx::new(&memory);
+        assert!(cx.check(65_536, 4).is_err(), "page two is not there yet");
+        memory.grow(1).unwrap();
+        assert!(cx.check(65_536, 4).is_ok(), "page two, grown since");
+        assert!(cx.check(131_072, 1).is_err());
     }
 }
