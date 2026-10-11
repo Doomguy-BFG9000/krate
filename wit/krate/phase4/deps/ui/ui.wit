@@ -1174,6 +1174,44 @@ interface share {
   share: func(window: u64, text: option<string>, url: option<string>, files: list<shared-file>) -> result<bool, share-error>;
 }
 
+/// Signing the person in to a service the app talks to (IC-923): GitHub,
+/// Google, the developer's own backend.
+///
+/// OAuth 2 with PKCE, through the platform's own sign-in sheet
+/// (ASWebAuthenticationSession on a Mac and an iPhone). The person types
+/// their password into the service's real page in the system browser,
+/// never into the app; the app only learns the address the service sends
+/// them back to, which carries the one-time code. It then trades that code
+/// for a token with an ordinary fetch to the service's token address
+/// (`net.connect` to that host), sending the PKCE verifier, and keeps the
+/// token in `store.secret`.
+interface sign-in {
+  /// Why there is no code.
+  variant sign-in-error {
+    /// The person closed the sheet.
+    cancelled,
+    /// This device has no sign-in sheet (computers other than a Mac, for
+    /// now), or it would not open.
+    unavailable(string),
+    /// The address is not https, or the callback scheme is not one an app
+    /// may use.
+    invalid(string),
+  }
+
+  /// A fresh PKCE pair: the verifier the app keeps for the token request,
+  /// and its S256 challenge for the authorize address
+  /// (`code_challenge=...&code_challenge_method=S256`).
+  pkce: func() -> tuple<string, string>;
+
+  /// Open the sign-in sheet at `authorize-url` (https, carrying the app's
+  /// client id, its redirect address, a `state` and the PKCE challenge)
+  /// and wait for the service to send the person back to an address that
+  /// starts with `callback-scheme:` -- the one registered with the service
+  /// ("myapp" for `myapp://signed-in`). Returns that whole address: read
+  /// `code` from it, and check its `state` is the one you sent.
+  start: func(window: u64, authorize-url: string, callback-scheme: string) -> result<string, sign-in-error>;
+}
+
 /// Desktop notifications.
 ///
 /// An app that finishes a long task, receives a message, or hits a timer needs

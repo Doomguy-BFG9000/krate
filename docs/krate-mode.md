@@ -716,6 +716,8 @@ takes this path, so any of them is a model for the wiring.
 - `photos::pick: func(window: u64, limit: u32) -> result<list<chosen-file>, photos-error>`
 - `photos::save: func(window: u64, data: list<u8>) -> result<_, photos-error>`
 - `share::share: func(window: u64, text: option<string>, url: option<string>, files: list<shared-file>) -> result<bool, share-error>`
+- `sign-in::pkce: func() -> tuple<string, string>`
+- `sign-in::start: func(window: u64, authorize-url: string, callback-scheme: string) -> result<string, sign-in-error>`
 - `notify::show: func(title: string, body: string) -> result<_, notify-error>`
 - `reminders::schedule: func(id: string, title: string, body: string, after-seconds: u64, daily: bool) -> result<_, notify-error>`
 - `reminders::cancel: func(id: string)`

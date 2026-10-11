@@ -43,6 +43,7 @@ mod camera_macos;
 #[cfg(any(target_os = "windows", target_os = "linux"))]
 mod camera_nokhwa;
 mod canvas_raster;
+mod sign_in;
 mod video;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 mod video_apple;
@@ -1456,6 +1457,8 @@ impl Runtime {
         link_gui!(ui4::photos);
         // Phase 4 only: reminders delivered with the app closed (IC-921).
         link_gui!(ui4::reminders);
+        // Phase 4 only: signing in through the system sheet (IC-923).
+        link_gui!(ui4::sign_in);
         // Phase 4 only: pictures a canvas keeps and draws by handle.
         link_gui!(phase4_gui_bindings::krate::gfx::canvas_images);
         link_gui!(phase4_gui_bindings::krate::gfx::video);

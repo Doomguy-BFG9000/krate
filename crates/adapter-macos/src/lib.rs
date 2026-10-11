@@ -7,6 +7,7 @@ mod appkit;
 mod clipboard;
 mod consent;
 mod open_document;
+mod sign_in;
 
 use krate_adapter_common::{
     locale::{DateStyle, HostLocale, LocaleId, NumberStyle},
@@ -521,6 +522,16 @@ impl UiAdapter for MacosUiAdapter {
     fn write_clipboard_text(&self, text: &str) -> Result<(), UiAdapterError> {
         clipboard::write_text(text)
     }
+
+    /// The system's sign-in sheet (IC-923).
+    fn sign_in(
+        &self,
+        _window: WindowId,
+        authorize_url: &str,
+        scheme: &str,
+    ) -> Result<Option<String>, String> {
+        sign_in::sign_in(authorize_url, scheme)
+    }
 }
 
 impl UiAdapter for MacosAppKitPrototypeUiAdapter {
@@ -680,6 +691,15 @@ impl UiAdapter for MacosAppKitPrototypeUiAdapter {
 
     fn write_clipboard_text(&self, text: &str) -> Result<(), UiAdapterError> {
         self.headless.write_clipboard_text(text)
+    }
+
+    fn sign_in(
+        &self,
+        window: WindowId,
+        authorize_url: &str,
+        scheme: &str,
+    ) -> Result<Option<String>, String> {
+        self.headless.sign_in(window, authorize_url, scheme)
     }
 
     fn pump_event_loop_once(

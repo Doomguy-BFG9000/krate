@@ -7,7 +7,7 @@
 
 #![allow(clippy::too_many_arguments)]
 
-/// `krate:ui`: bluetooth, clipboard, dialog, events, haptics, image, launcher, location, menu, motion, notify, photos, pointer, print, reminders, screen, share, text_entry, touch, tree, window.
+/// `krate:ui`: bluetooth, clipboard, dialog, events, haptics, image, launcher, location, menu, motion, notify, photos, pointer, print, reminders, screen, share, sign_in, text_entry, touch, tree, window.
 pub mod ui {
     /// `krate:ui/bluetooth`.
     pub mod bluetooth {
@@ -482,6 +482,31 @@ pub mod ui {
             files: &[SharedFile],
         ) -> Result<bool, ShareError> {
             crate::bindings::krate::ui::share::share(window, text, url, files)
+        }
+    }
+    /// `krate:ui/sign_in`.
+    pub mod sign_in {
+        pub use crate::bindings::krate::ui::sign_in::SignInError;
+
+        /// A fresh PKCE pair: the verifier the app keeps for the token request,
+        /// and its S256 challenge for the authorize address
+        /// (`code_challenge=...&code_challenge_method=S256`).
+        pub fn pkce() -> (alloc::string::String, alloc::string::String) {
+            crate::bindings::krate::ui::sign_in::pkce()
+        }
+
+        /// Open the sign-in sheet at `authorize-url` (https, carrying the app's
+        /// client id, its redirect address, a `state` and the PKCE challenge)
+        /// and wait for the service to send the person back to an address that
+        /// starts with `callback-scheme:` -- the one registered with the service
+        /// ("myapp" for `myapp://signed-in`). Returns that whole address: read
+        /// `code` from it, and check its `state` is the one you sent.
+        pub fn start(
+            window: u64,
+            authorize_url: &str,
+            callback_scheme: &str,
+        ) -> Result<alloc::string::String, SignInError> {
+            crate::bindings::krate::ui::sign_in::start(window, authorize_url, callback_scheme)
         }
     }
     /// `krate:ui/text_entry`.

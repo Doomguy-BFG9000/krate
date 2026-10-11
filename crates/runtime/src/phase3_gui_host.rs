@@ -919,6 +919,36 @@ impl Phase3GuiHost {
             .map_err(|why| (true, why))
     }
 
+    /// Sign the person in through the system's sheet (IC-923): the address
+    /// the service sent them back to, None when they closed it; Err((true,
+    /// why)) when there is no sheet, Err((false, why)) for a bad request.
+    /// Headless, `KRATE_SIGN_IN` stands in for the person: `cancel`, or the
+    /// code the service sends back.
+    pub(crate) fn sign_in(
+        &self,
+        window: u64,
+        authorize_url: &str,
+        scheme: &str,
+    ) -> Result<Option<String>, (bool, String)> {
+        crate::sign_in::check(authorize_url, scheme).map_err(|why| (false, why))?;
+        if self.headless {
+            return match std::env::var("KRATE_SIGN_IN") {
+                Ok(answer) => crate::sign_in::stand_in(&answer, authorize_url, scheme)
+                    .map_err(|why| (true, why)),
+                Err(_) => Err((
+                    true,
+                    "no sign-in sheet when nothing is on screen".to_string(),
+                )),
+            };
+        }
+        let id = self
+            .window_id(window)
+            .map_err(|_| (false, "no such window".to_string()))?;
+        self.dispatcher()
+            .sign_in(id, authorize_url, scheme)
+            .map_err(|why| (true, why))
+    }
+
     /// Whether `bluetooth.connect` was granted (IC-917).
     fn bluetooth_granted(&self) -> bool {
         self.runtime

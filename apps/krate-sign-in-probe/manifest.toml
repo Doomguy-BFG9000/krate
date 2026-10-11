@@ -1,0 +1,36 @@
+[app]
+id = "dev.krate.sign-in-probe"
+name = "Sign In"
+version = "0.1.0"
+entry = "target/wasm32-wasip1/release/krate_sign_in_probe.wasm"
+world = "krate:app/gui@0.2.0"
+
+[[capabilities]]
+cap = "ui.window:create"
+rationale = "A window with a Sign in with GitHub button and your repositories"
+required = true
+
+[[capabilities]]
+cap = "net.connect:github.com:443"
+rationale = "Trade the one-time code GitHub sends back for a token"
+required = true
+
+[[capabilities]]
+cap = "net.connect:api.github.com:443"
+rationale = "List your repositories once you are signed in"
+required = true
+
+[[capabilities]]
+cap = "io.stdout"
+rationale = "Report how signing in went, for automated runs"
+required = true
+
+[[capabilities]]
+cap = "io.args"
+rationale = "Read the quick-run flag used by automated tests"
+required = true
+
+[[capabilities]]
+cap = "random.bytes"
+rationale = "A fresh state for each sign-in, so a forged answer is refused"
+required = true

@@ -11555,3 +11555,73 @@ fn an_app_plays_a_video_from_its_assets() {
         );
     }
 }
+
+/// An app signs the person in through the system's sheet and checks what
+/// comes back (krate:ui/sign-in, IC-923).
+///
+/// `sign-in-probe.wasm` is apps/krate-sign-in-probe built ("Sign In").
+/// Headless, KRATE_SIGN_IN stands in for the person: the code the service
+/// sends back reaches the app with the app's own `state`, beside a 43-
+/// character PKCE verifier; `cancel` is the person closing the sheet; with
+/// no stand-in there is no sheet and the app is told so. An http address
+/// is refused before any sheet opens.
+#[test]
+fn an_app_signs_in_through_the_system_sheet() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let wasm = dir.path().join("code.wasm");
+    std::fs::write(&wasm, include_bytes!("fixtures/sign-in-probe.wasm")).expect("probe");
+    let manifest = dir.path().join("manifest.toml");
+    std::fs::write(
+        &manifest,
+        "[app]\nid = \"dev.krate.sign-in-probe\"\nname = \"Sign In\"\nversion = \"1.0.0\"\n\
+         entry = \"code.wasm\"\nworld = \"krate:app/gui@0.2.0\"\n\n\
+         [[capabilities]]\ncap = \"ui.window:create\"\nrationale = \"window\"\nrequired = true\n\n\
+         [[capabilities]]\ncap = \"random.bytes\"\nrationale = \"state\"\nrequired = true\n\n\
+         [[capabilities]]\ncap = \"io.stdout\"\nrationale = \"print\"\nrequired = true\n\n\
+         [[capabilities]]\ncap = \"io.args\"\nrationale = \"args\"\nrequired = true\n",
+    )
+    .expect("manifest");
+    let run = |answer: Option<&str>| -> String {
+        let mut cmd = krate();
+        cmd.arg("run")
+            .arg("--headless")
+            .arg(&wasm)
+            .arg("--manifest")
+            .arg(&manifest)
+            .arg("--auto-grant")
+            .arg("--")
+            .arg("quick")
+            .env_remove("KRATE_SIGN_IN");
+        if let Some(answer) = answer {
+            cmd.env("KRATE_SIGN_IN", answer);
+        }
+        let out = cmd.output().expect("run");
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+    let signed = run(Some("c0de42"));
+    assert!(
+        signed
+            .lines()
+            .any(|l| l == "sign-in:code=c0de42 state=ok pkce=43"),
+        "the code comes back with the app's own state, beside a full verifier: {signed}"
+    );
+    assert!(
+        signed.lines().any(|l| l == "sign-in:http-refused"),
+        "an http address never reaches the sheet: {signed}"
+    );
+    let closed = run(Some("cancel"));
+    assert!(
+        closed.lines().any(|l| l == "sign-in:cancelled"),
+        "closing the sheet is a cancel, not an error: {closed}"
+    );
+    let none = run(None);
+    assert!(
+        none.contains("sign-in:problem=SignInError::Unavailable"),
+        "with nothing on screen there is no sheet, and the app is told: {none}"
+    );
+}

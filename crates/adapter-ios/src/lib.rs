@@ -661,6 +661,15 @@ impl UiAdapter for IosUikitPrototypeUiAdapter {
         uikit_native::share(text, url, files)
     }
 
+    fn sign_in(
+        &self,
+        _window: WindowId,
+        authorize_url: &str,
+        scheme: &str,
+    ) -> Result<Option<String>, String> {
+        uikit_native::sign_in(authorize_url, scheme)
+    }
+
     fn haptics_available(&self) -> bool {
         true
     }

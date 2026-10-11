@@ -1305,6 +1305,141 @@ mod real {
         answer
     }
 
+    // Signing in through the system's sheet (IC-923).
+    #[link(name = "AuthenticationServices", kind = "framework")]
+    unsafe extern "C" {}
+
+    define_class!(
+        // SAFETY:
+        // - NSObject has no subclassing requirements for a presentation
+        //   context provider.
+        // - AuthenticationServices asks it on the main thread.
+        #[unsafe(super = objc2_foundation::NSObject)]
+        #[thread_kind = MainThreadOnly]
+        struct KrateSignInAnchor;
+
+        // SAFETY: NSObjectProtocol has no additional requirements.
+        unsafe impl NSObjectProtocol for KrateSignInAnchor {}
+
+        // ASWebAuthenticationPresentationContextProviding, by selector.
+        impl KrateSignInAnchor {
+            /// The window the sheet rises over: Krate's own.
+            #[unsafe(method_id(presentationAnchorForWebAuthenticationSession:))]
+            fn anchor(&self, _session: &objc2::runtime::AnyObject) -> Option<Retained<objc2::runtime::AnyObject>> {
+                let controller = main_controller();
+                // SAFETY: the controller's view and that view's window.
+                controller.and_then(|controller| unsafe {
+                    let view: Option<Retained<objc2::runtime::AnyObject>> = msg_send![&*controller, view];
+                    view.and_then(|view| msg_send![&*view, window])
+                })
+            }
+        }
+    );
+
+    thread_local! {
+        /// The sheet that is up and its anchor, kept alive until it answers.
+        static SIGN_IN: RefCell<Option<(Retained<objc2::runtime::AnyObject>, Retained<KrateSignInAnchor>)>> =
+            const { RefCell::new(None) };
+    }
+
+    /// Open the sign-in sheet at `url` and wait for the service to send the
+    /// person back to `scheme:`; that address, or None when they closed it.
+    pub fn sign_in(url: &str, scheme: &str) -> Result<Option<String>, String> {
+        let (url, scheme) = (url.to_string(), scheme.to_string());
+        let (tx, rx) = std::sync::mpsc::channel();
+        DispatchQueue::main().exec_async(move || {
+            let Some(mtm) = MainThreadMarker::new() else {
+                let _ = tx.send(Err("not on the main thread".to_string()));
+                return;
+            };
+            let (Some(class), Some(url_class)) = (
+                objc2::runtime::AnyClass::get(c"ASWebAuthenticationSession"),
+                objc2::runtime::AnyClass::get(c"NSURL"),
+            ) else {
+                let _ = tx.send(Err("this iOS has no sign-in sheet".to_string()));
+                return;
+            };
+            if SIGN_IN.with(|up| up.borrow().is_some()) {
+                let _ = tx.send(Err("a sign-in sheet is already open".to_string()));
+                return;
+            }
+            // SAFETY: an ASWebAuthenticationSession over an NSURL with a
+            // completion block answering on the channel, given Krate's
+            // window as its anchor, started on the main thread, and kept
+            // alive in SIGN_IN until the block runs.
+            unsafe {
+                let link: Option<Retained<objc2::runtime::AnyObject>> =
+                    msg_send![url_class, URLWithString: &*objc2_foundation::NSString::from_str(&url)];
+                let Some(link) = link else {
+                    let _ = tx.send(Err("iOS could not read the sign-in address".to_string()));
+                    return;
+                };
+                let tx = std::sync::Arc::new(std::sync::Mutex::new(Some(tx)));
+                let fail = {
+                    let tx = tx.clone();
+                    move |why: &str| {
+                        if let Some(tx) = tx.lock().expect("sign-in lock").take() {
+                            let _ = tx.send(Err(why.to_string()));
+                        }
+                    }
+                };
+                let done = block2::RcBlock::new(
+                    move |back: *mut objc2::runtime::AnyObject, error: *mut objc2::runtime::AnyObject| {
+                        let answer = if let Some(back) = back.as_ref() {
+                            let text: Retained<objc2_foundation::NSString> = msg_send![back, absoluteString];
+                            Ok(Some(text.to_string()))
+                        } else if let Some(error) = error.as_ref() {
+                            // ASWebAuthenticationSessionErrorCodeCanceledLogin.
+                            let code: isize = msg_send![error, code];
+                            if code == 1 {
+                                Ok(None)
+                            } else {
+                                let why: Retained<objc2_foundation::NSString> = msg_send![error, localizedDescription];
+                                Err(why.to_string())
+                            }
+                        } else {
+                            Ok(None)
+                        };
+                        if let Some(tx) = tx.lock().expect("sign-in lock").take() {
+                            let _ = tx.send(answer);
+                        }
+                        SIGN_IN.with(|up| up.borrow_mut().take());
+                    },
+                );
+                let made: objc2::rc::Allocated<objc2::runtime::AnyObject> = msg_send![class, alloc];
+                let session: Option<Retained<objc2::runtime::AnyObject>> = msg_send![
+                    made,
+                    initWithURL: &*link,
+                    callbackURLScheme: &*objc2_foundation::NSString::from_str(&scheme),
+                    completionHandler: &*done
+                ];
+                let Some(session) = session else {
+                    fail("the sign-in sheet would not open");
+                    return;
+                };
+                let anchor = KrateSignInAnchor::alloc(mtm).set_ivars(());
+                let anchor: Retained<KrateSignInAnchor> = msg_send![super(anchor), init];
+                if let Some(protocol) = objc2::runtime::AnyProtocol::get(c"ASWebAuthenticationPresentationContextProviding") {
+                    objc2::ffi::class_addProtocol(
+                        <KrateSignInAnchor as objc2::ClassType>::class() as *const objc2::runtime::AnyClass as *mut objc2::runtime::AnyClass,
+                        protocol,
+                    );
+                }
+                let _: () = msg_send![&*session, setPresentationContextProvider: &*anchor];
+                SIGN_IN.with(|up| *up.borrow_mut() = Some((session.clone(), anchor)));
+                let started: bool = msg_send![&*session, start];
+                if !started {
+                    SIGN_IN.with(|up| up.borrow_mut().take());
+                    fail("the sign-in sheet would not open");
+                }
+            }
+        });
+        // The person may take minutes: a password manager, a two-factor
+        // code. Fifteen is the most the sheet waits.
+        rx.recv_timeout(std::time::Duration::from_secs(900))
+            .unwrap_or(Ok(None))
+    }
+
     /// Open a link that has passed the runtime's checks (IC-918): iOS hands
     /// it to Safari, Mail or the app that owns it.
     pub fn open_url(url: &str) -> Result<(), String> {
@@ -3282,6 +3417,10 @@ mod stub {
 
     pub fn pick_photos(_limit: u32) -> Result<Vec<std::path::PathBuf>, String> {
         Err("the photo picker is on the iOS player only".to_string())
+    }
+
+    pub fn sign_in(_url: &str, _scheme: &str) -> Result<Option<String>, String> {
+        Err("the sign-in sheet is on the iOS player only".to_string())
     }
 
     pub fn save_photo(_data: &[u8]) -> Result<(), Option<String>> {

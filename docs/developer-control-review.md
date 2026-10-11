@@ -15,8 +15,8 @@ Developer ownership and control is the default (IC-175, IC-176). Krate enforces 
 
 ## Summary
 
-- 68 boundaries reviewed, 59 of them WIT interfaces (59 declared under wit/krate).
-- 35 compulsory, each with a justification or a recorded gap; 33 optional.
+- 69 boundaries reviewed, 60 of them WIT interfaces (60 declared under wit/krate).
+- 35 compulsory, each with a justification or a recorded gap; 34 optional.
 - 7 recorded gaps where the escape hatch does not yet exist or the boundary is narrower than a developer would want.
 
 ## Every boundary
@@ -77,6 +77,7 @@ Developer ownership and control is the default (IC-175, IC-176). Krate enforces 
 | `krate:ui@0.1.0/reminders` | wit | reminders the system delivers with the app closed -- set by an app's own id, after a delay or daily, cancelled, listed -- each app seeing only its own, a tap opening the app | what to remind, when, and how often | notify for one shown now | no | -- |
 | `krate:ui@0.1.0/screen` | wit | how a window's screen is described: its size classes, touch or pointer, and the edges something else covers | every layout decision; the classes are information, not a layout | canvas-size and the app's own breakpoints | no | -- |
 | `krate:ui@0.1.0/share` | wit | handing a text, a link and files (name and bytes) to the system's share sheet, and hearing only sent or cancelled | what to share and when; where it goes is the person's pick | save-file and the clipboard, which already exist | no | -- |
+| `krate:ui@0.1.0/sign-in` | wit | an OAuth 2 PKCE pair and the system sign-in sheet that returns the address a service sends the person back to | which service, its client id, scopes and redirect, when to ask, how to trade the code and where to keep the token | open-url to the browser and a code the person pastes back | no | -- |
 | `krate:ui@0.1.0/text-entry` | wit | showing and hiding the system's on-screen keyboard for a window; typing arrives as ordinary text and key events | when a field wants text, and drawing the field and its caret | the raw text and key events, the same as a physical keyboard's | yes | platform |
 | `krate:ui@0.1.0/touch` | wit | every finger on a touch screen, by a stable id, in logical pixels, cleared when the window loses focus | what each finger does: a stick, a look, a button, a gesture | the raw finger positions, unfiltered | yes | platform |
 | `krate:ui@0.1.0/tree` | wit | nothing: an optional portable widget tree the hosts lower to native controls or paint | any UI approach; a canvas of the app's own pixels is equal to a tree | image and canvas widgets with the app's own rendering | no | -- |

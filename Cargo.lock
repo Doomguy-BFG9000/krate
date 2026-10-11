@@ -2233,6 +2233,8 @@ name = "krate-adapter-macos"
 version = "0.5.5"
 dependencies = [
  "arboard",
+ "block2 0.6.2",
+ "dispatch2",
  "krate-adapter-common",
  "krate-presenter-gpu",
  "libc",

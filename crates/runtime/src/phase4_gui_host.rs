@@ -669,6 +669,33 @@ impl ui4::share::Host for Phase3GuiHost {
     }
 }
 
+/// Signing in to a service through the system's sheet (IC-923). Phase 4
+/// only. No capability: the person signs in on the service's own page in
+/// the system browser, and the app learns only the address it is sent back
+/// to; trading the code for a token needs `net.connect` like any fetch.
+impl ui4::sign_in::Host for Phase3GuiHost {
+    fn pkce(&mut self) -> wasmtime::Result<(String, String)> {
+        Ok(crate::sign_in::pkce())
+    }
+
+    fn start(
+        &mut self,
+        window: u64,
+        authorize_url: String,
+        callback_scheme: String,
+    ) -> wasmtime::Result<Result<String, ui4::sign_in::SignInError>> {
+        use ui4::sign_in::SignInError;
+        Ok(
+            match Phase3GuiHost::sign_in(self, window, &authorize_url, &callback_scheme) {
+                Ok(Some(back)) => Ok(back),
+                Ok(None) => Err(SignInError::Cancelled),
+                Err((true, why)) => Err(SignInError::Unavailable(why)),
+                Err((false, why)) => Err(SignInError::Invalid(why)),
+            },
+        )
+    }
+}
+
 /// Bluetooth devices the person picks (IC-917). Phase 4 only, behind
 /// `bluetooth.connect`.
 impl ui4::bluetooth::Host for Phase3GuiHost {

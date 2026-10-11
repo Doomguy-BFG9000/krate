@@ -2053,6 +2053,18 @@ pub trait UiAdapter: WindowAdapter {
         Err("this device has no share sheet yet".to_string())
     }
 
+    /// Open the platform's sign-in sheet at `authorize_url` and wait for the
+    /// service to send the person back to an address starting `scheme:`;
+    /// that address, or None when they closed the sheet (IC-923).
+    fn sign_in(
+        &self,
+        _window: WindowId,
+        _authorize_url: &str,
+        _scheme: &str,
+    ) -> Result<Option<String>, String> {
+        Err("this device has no sign-in sheet yet".to_string())
+    }
+
     /// Whether this device has Bluetooth (IC-917).
     fn bluetooth_available(&self) -> bool {
         false

@@ -471,7 +471,18 @@ closed (a timer, a habit, a meeting): with `ui.notify`, \
 are up.\", 240, false)` -- the same id replaces it, `true` repeats it \
 daily at that time, `cancel(id)` takes it back, `pending()` lists this \
 app's own; tapping it opens the app. A computer answers \
-`Err(Unavailable)` for now: keep an in-app timer there. A picture that does not change \
+`Err(Unavailable)` for now: keep an in-app timer there. Signing the \
+person in to a service (GitHub, Google, your own backend): never draw a \
+password field. `let (verifier, challenge) = krate::ui::sign_in::pkce();` \
+then `sign_in::start(win, &authorize_url, \"myapp\")` with the service's \
+https authorize address carrying `client_id`, `redirect_uri=myapp://signed-in`, \
+a random `state`, `code_challenge` and `code_challenge_method=S256`. It opens \
+the system's sign-in sheet and answers the address the service sent the \
+person back to: check its `state`, read its `code`, then POST the code and \
+`code_verifier` to the token address with `net.connect` to that host, and \
+keep the token in `store.secret`. `Err(Cancelled)` means they closed the \
+sheet: offer the button again. A computer other than a Mac answers \
+`Err(Unavailable)` for now. A picture that does not change \
 between frames (a screenshot, an avatar, a sprite sheet) is kept once \
 with `krate::gfx::canvas_images::keep(canvas, w, h, &rgba)` and drawn \
 by handle with `draw`/`draw_round` each frame: `draw_pixels` sends \
