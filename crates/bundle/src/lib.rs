@@ -58,6 +58,9 @@ pub mod signing;
 /// The canonical statement a publisher signature covers (IC-015).
 pub mod statement;
 
+mod opened;
+pub use opened::{open_cached, opened_cache_entries};
+
 pub const MANIFEST_ENTRY: &str = "manifest.toml";
 /// The component entry name inside a bundle.
 pub const COMPONENT_ENTRY: &str = "code.wasm";
@@ -1792,7 +1795,7 @@ fn staging_path_for(output_path: &Path) -> PathBuf {
 /// fetched bundle leaves nothing behind after the run.
 #[derive(Debug)]
 pub struct OpenBundle {
-    _dir: TempDir,
+    _dir: BundleDir,
     manifest_path: PathBuf,
     component_path: PathBuf,
     assets_path: Option<PathBuf>,
@@ -1804,6 +1807,26 @@ pub struct OpenBundle {
     records: Vec<Record>,
     extensions: Vec<ExtensionRecord>,
     closure: Option<Closure>,
+}
+
+/// Where an open bundle's files are.
+///
+/// A temporary unpack is removed when the bundle is dropped. A kept one is
+/// the unpacked cache ([`open_cached`]): it outlives the run, and the shared
+/// lock held here is what stops a sweep from removing it while it is used.
+#[derive(Debug)]
+enum BundleDir {
+    Temp(TempDir),
+    Kept { path: PathBuf, _lock: Option<File> },
+}
+
+impl BundleDir {
+    fn path(&self) -> &Path {
+        match self {
+            BundleDir::Temp(dir) => dir.path(),
+            BundleDir::Kept { path, .. } => path,
+        }
+    }
 }
 
 /// What a bundle carries where a signature would be (K-258).
@@ -2941,6 +2964,13 @@ fn open_archive<R: Read + io::Seek>(reader: R) -> Result<OpenBundle> {
     let dir = new_extract_dir().map_err(|err| BundleError::Unpack {
         detail: err.to_string(),
     })?;
+    unpack_into(archive, dir)
+}
+
+/// Unpack a preflighted archive into `dir` and judge it: everything
+/// [`open`] does after the whole-archive checks. The directory is the
+/// bundle's from here; a refusal drops it, and with it what was written.
+fn unpack_into<R: Read + io::Seek>(mut archive: ZipArchive<R>, dir: TempDir) -> Result<OpenBundle> {
     let manifest_path = dir.path().join(MANIFEST_ENTRY);
     let component_path = dir.path().join(COMPONENT_ENTRY);
     let assets_path = dir.path().join("assets");
@@ -3205,7 +3235,7 @@ fn open_archive<R: Read + io::Seek>(reader: R) -> Result<OpenBundle> {
     check_component(&component, COMPONENT_ENTRY, &manifest)?;
 
     Ok(OpenBundle {
-        _dir: dir,
+        _dir: BundleDir::Temp(dir),
         manifest_path,
         component_path,
         assets_path: (!asset_names.is_empty()).then_some(assets_path),
@@ -8277,6 +8307,165 @@ required = true
             MINIMAL_COMPONENT
         );
         assert!(opened.assets_path().is_none());
+    }
+
+    /// A bundle packed with one asset, at `dir/demo.krate`.
+    fn cached_fixture(dir: &Path, asset: &[u8]) -> PathBuf {
+        let manifest = write_temp(dir, "manifest.toml", MANIFEST.as_bytes());
+        let component = write_temp(dir, "code.wasm", MINIMAL_COMPONENT);
+        let assets = dir.join("assets");
+        fs::create_dir_all(&assets).expect("assets");
+        fs::write(assets.join("level.bin"), asset).expect("asset");
+        let bundle = dir.join("demo.krate");
+        let _ = fs::remove_file(&bundle);
+        pack_with_assets(&manifest, &component, Some(&assets), &bundle).expect("pack");
+        bundle
+    }
+
+    fn modified_of(path: &Path) -> std::time::SystemTime {
+        fs::metadata(path).expect("meta").modified().expect("mtime")
+    }
+
+    /// IC-944: the second open of the same bundle reuses its unpacked files
+    /// instead of writing them again.
+    #[test]
+    fn a_second_cached_open_does_not_unpack_again() {
+        let dir = TempDir::new().expect("tempdir");
+        let root = dir.path().join("opened");
+        let bundle = cached_fixture(dir.path(), &[7u8; 64 * 1024]);
+
+        let first = open_cached(&bundle, &root).expect("first open");
+        let asset = first.assets_path().expect("assets").join("level.bin");
+        assert!(
+            asset.starts_with(&root),
+            "unpacked into the cache: {asset:?}"
+        );
+        let written = modified_of(&asset);
+        let component = fs::read(first.component_path()).expect("component");
+        drop(first);
+        assert_eq!(opened_cache_entries(&root).len(), 1);
+
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        let second = open_cached(&bundle, &root).expect("second open");
+        let again = second.assets_path().expect("assets").join("level.bin");
+        assert_eq!(again, asset, "the same entry");
+        assert_eq!(
+            modified_of(&again),
+            written,
+            "the second open did not write the asset again"
+        );
+        assert_eq!(fs::read(second.component_path()).expect("c"), component);
+        assert_eq!(second.manifest().app.id, "com.example.demo");
+        assert_eq!(opened_cache_entries(&root).len(), 1);
+        // Dropping a cached bundle keeps its files: that is the point.
+        drop(second);
+        assert!(asset.is_file());
+    }
+
+    /// A changed bundle is unpacked fresh, and the app's old entry goes.
+    #[test]
+    fn a_changed_bundle_is_unpacked_fresh_and_the_old_entry_swept() {
+        let dir = TempDir::new().expect("tempdir");
+        let root = dir.path().join("opened");
+        let bundle = cached_fixture(dir.path(), b"version one");
+        let first = open_cached(&bundle, &root).expect("first");
+        let old = opened_cache_entries(&root);
+        drop(first);
+
+        let bundle = cached_fixture(dir.path(), b"version two, longer");
+        let second = open_cached(&bundle, &root).expect("second");
+        let asset = second.assets_path().expect("assets").join("level.bin");
+        assert_eq!(fs::read(&asset).expect("asset"), b"version two, longer");
+        let now = opened_cache_entries(&root);
+        assert_eq!(now.len(), 1, "one entry per app: {now:?}");
+        assert_ne!(now, old, "a new entry for the new bytes");
+    }
+
+    /// An entry a running app holds is not swept from under it; once it is
+    /// let go, the next open removes it.
+    #[test]
+    fn a_held_entry_is_kept_until_it_is_let_go() {
+        let dir = TempDir::new().expect("tempdir");
+        let root = dir.path().join("opened");
+        let bundle = cached_fixture(dir.path(), b"old");
+        let running = open_cached(&bundle, &root).expect("old");
+        let held = running.assets_path().expect("assets").join("level.bin");
+
+        let bundle = cached_fixture(dir.path(), b"newer");
+        let newer = open_cached(&bundle, &root).expect("newer");
+        assert!(held.is_file(), "the running app's files stay");
+        assert_eq!(opened_cache_entries(&root).len(), 2);
+        drop(newer);
+        drop(running);
+
+        let _again = open_cached(&bundle, &root).expect("newer again");
+        // A hit does not sweep; the next new entry would. Opening a third
+        // version shows the old one goes once nobody holds it.
+        let bundle = cached_fixture(dir.path(), b"third");
+        let _third = open_cached(&bundle, &root).expect("third");
+        assert!(!held.exists(), "let go, the old entry is swept");
+    }
+
+    /// A half-written entry (no marker) and one whose files changed after
+    /// it was made are never used: the bundle is unpacked again.
+    #[test]
+    fn a_half_written_or_changed_entry_is_never_used() {
+        let dir = TempDir::new().expect("tempdir");
+        let root = dir.path().join("opened");
+        let bundle = cached_fixture(dir.path(), b"the real level");
+        let first = open_cached(&bundle, &root).expect("first");
+        let entry = first
+            .assets_path()
+            .expect("assets")
+            .parent()
+            .expect("entry")
+            .to_path_buf();
+        drop(first);
+
+        // Changed: a file edited after the entry was made.
+        let asset = entry.join("assets/level.bin");
+        fs::write(&asset, b"a planted level!").expect("plant");
+        let opened = open_cached(&bundle, &root).expect("reopen");
+        let read = fs::read(opened.assets_path().expect("a").join("level.bin")).expect("r");
+        assert_eq!(read, b"the real level", "a changed entry is not trusted");
+        drop(opened);
+
+        // Changed: a file added.
+        fs::write(entry.join("assets/extra.bin"), b"x").expect("extra");
+        let opened = open_cached(&bundle, &root).expect("reopen");
+        assert!(
+            !opened.assets_path().expect("a").join("extra.bin").exists(),
+            "an added file is not trusted"
+        );
+        drop(opened);
+
+        // Half-written: the marker never landed.
+        fs::remove_file(entry.join(".krate-opened.json")).expect("marker");
+        fs::write(entry.join("assets/level.bin"), b"half").expect("half");
+        let opened = open_cached(&bundle, &root).expect("reopen");
+        let read = fs::read(opened.assets_path().expect("a").join("level.bin")).expect("r");
+        assert_eq!(read, b"the real level", "a half-written entry is not used");
+        assert_eq!(opened_cache_entries(&root).len(), 1);
+    }
+
+    /// The cache judges exactly as open does: a bundle open refuses is
+    /// refused here too, and leaves nothing behind.
+    #[test]
+    fn the_cache_refuses_what_open_refuses() {
+        let dir = TempDir::new().expect("tempdir");
+        let root = dir.path().join("opened");
+        let junk = write_temp(dir.path(), "junk.krate", b"not a zip at all");
+        assert!(open(&junk).is_err());
+        assert!(open_cached(&junk, &root).is_err());
+        assert!(opened_cache_entries(&root).is_empty());
+        let left: Vec<_> = fs::read_dir(&root)
+            .map(|d| {
+                d.flatten()
+                    .filter(|e| e.file_name().to_string_lossy().starts_with(".opening-"))
+                    .collect()
+            })
+            .unwrap_or_default();
+        assert!(left.is_empty(), "no staging left: {left:?}");
     }
 
     #[test]

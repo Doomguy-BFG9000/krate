@@ -7184,6 +7184,112 @@ fn a_grant_the_manifest_never_declared_is_refused_on_the_command_line() {
     assert_eq!(String::from_utf8_lossy(&fine.stdout).trim(), "held=10");
 }
 
+/// A large bundle is unpacked once and reused (IC-944): the second run of
+/// the same file writes nothing again, and nothing of it lands in the temp
+/// folder, where a killed run used to leave every byte (687 MB for Veloren).
+#[test]
+fn a_large_bundle_is_unpacked_once_and_reused() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let cache = tempfile::tempdir().expect("cache");
+    let tmp = tempfile::tempdir().expect("tmp");
+    let wasm = dir.path().join("code.wasm");
+    std::fs::write(
+        &wasm,
+        include_bytes!("../../bundle/tests/fixtures/minimal-run.wasm"),
+    )
+    .expect("component");
+    let manifest = dir.path().join("manifest.toml");
+    std::fs::write(
+        &manifest,
+        "[app]\nid = \"dev.krate.large\"\nname = \"large\"\nversion = \"1.0.0\"\n\
+         entry = \"code.wasm\"\nworld = \"krate:app/cli@0.1.0\"\n",
+    )
+    .expect("manifest");
+    // Nine MiB that deflate cannot shrink, so the bundle is over the
+    // cache's 8 MiB floor.
+    let assets = dir.path().join("assets");
+    std::fs::create_dir_all(&assets).expect("assets");
+    let mut x: u64 = 0x9E37_79B9_7F4A_7C15;
+    let noise: Vec<u8> = (0..9 * 1024 * 1024)
+        .map(|_| {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            (x >> 24) as u8
+        })
+        .collect();
+    std::fs::write(assets.join("noise.bin"), &noise).expect("noise");
+    let bundle = dir.path().join("large.krate");
+    let packed = krate()
+        .arg("pack")
+        .arg(&wasm)
+        .arg("--manifest")
+        .arg(&manifest)
+        .arg("-o")
+        .arg(&bundle)
+        .output()
+        .expect("pack");
+    assert!(
+        packed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&packed.stderr)
+    );
+    assert!(std::fs::metadata(&bundle).expect("meta").len() >= 8 * 1024 * 1024);
+
+    let run = || {
+        let out = krate()
+            .arg("run")
+            .arg(&bundle)
+            .arg("--auto-grant")
+            .env("KRATE_CACHE_DIR", cache.path())
+            .env("TMPDIR", tmp.path())
+            .output()
+            .expect("run");
+        assert!(
+            out.status.success(),
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+    };
+    let unpacked_noise = || {
+        let opened = cache.path().join("opened");
+        let entries: Vec<_> = std::fs::read_dir(&opened)
+            .expect("opened")
+            .flatten()
+            .filter(|e| e.path().join(".krate-opened.json").is_file())
+            .collect();
+        assert_eq!(entries.len(), 1, "one entry for one bundle");
+        entries[0].path().join("assets/noise.bin")
+    };
+    let in_tmp = || {
+        std::fs::read_dir(tmp.path())
+            .expect("tmp")
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().starts_with("krate-open-"))
+            .count()
+    };
+
+    run();
+    let noise_file = unpacked_noise();
+    assert_eq!(std::fs::read(&noise_file).expect("noise"), noise);
+    let written = std::fs::metadata(&noise_file)
+        .and_then(|m| m.modified())
+        .expect("mtime");
+    assert_eq!(in_tmp(), 0, "nothing unpacked into the temp folder");
+
+    run();
+    assert_eq!(unpacked_noise(), noise_file, "the same entry");
+    assert_eq!(
+        std::fs::metadata(&noise_file)
+            .and_then(|m| m.modified())
+            .expect("mtime"),
+        written,
+        "the second run did not unpack again"
+    );
+    assert_eq!(in_tmp(), 0);
+}
+
 /// An installed app's own files live outside its `.app` and survive
 /// installing it again (IC-943, K-1076).
 ///

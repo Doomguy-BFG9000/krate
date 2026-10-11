@@ -14532,8 +14532,23 @@ fn resolve_run_target(
     }
 
     if krate_bundle::is_bundle_path(&path) {
-        let bundle = krate_bundle::open(&path)
-            .with_context(|| format!("could not open bundle {}", path.display()))?;
+        // A large bundle opens from its unpacked cache (IC-944): unpacked
+        // once, reused while its bytes are the same, instead of written out
+        // to the temp folder on every launch (687 MB for Veloren). Small
+        // ones unpack in milliseconds and are not worth a cache entry. Any
+        // trouble with the cache falls back to the ordinary open, whose
+        // error is the one to show.
+        let large = fs::metadata(&path)
+            .map(|meta| meta.len() >= OPEN_CACHE_MIN_BYTES)
+            .unwrap_or(false);
+        let cached = opened_cache_root()
+            .filter(|_| large)
+            .and_then(|root| krate_bundle::open_cached(&path, &root).ok());
+        let bundle = match cached {
+            Some(bundle) => bundle,
+            None => krate_bundle::open(&path)
+                .with_context(|| format!("could not open bundle {}", path.display()))?,
+        };
         return Ok((
             bundle.component_path().to_path_buf(),
             Some(bundle.manifest_path().to_path_buf()),
@@ -14542,6 +14557,28 @@ fn resolve_run_target(
     }
 
     Ok((path, None, None))
+}
+
+/// The smallest bundle worth an unpacked-cache entry (IC-944).
+const OPEN_CACHE_MIN_BYTES: u64 = 8 * 1024 * 1024;
+
+/// Where opened bundles are kept unpacked (IC-944): `KRATE_CACHE_DIR`,
+/// else the platform's cache folder, under `opened` -- beside the compiled
+/// code the runtime keeps. `KRATE_NO_OPEN_CACHE=1` turns it off.
+fn opened_cache_root() -> Option<PathBuf> {
+    if std::env::var_os("KRATE_NO_OPEN_CACHE").is_some() {
+        return None;
+    }
+    let root = if let Some(root) = std::env::var_os("KRATE_CACHE_DIR") {
+        PathBuf::from(root)
+    } else if cfg!(windows) {
+        PathBuf::from(std::env::var_os("LOCALAPPDATA")?)
+            .join("Krate")
+            .join("cache")
+    } else {
+        home_dir()?.join(".cache").join("krate")
+    };
+    Some(root.join("opened"))
 }
 
 /// Read a task file (`krate-check.toml`): the app's primary task as steps
