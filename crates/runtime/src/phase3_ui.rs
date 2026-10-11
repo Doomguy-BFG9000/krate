@@ -641,6 +641,11 @@ impl<'a> Phase3UiDispatcher<'a> {
         self.adapter.share(id, text, url, files)
     }
 
+    /// How the person asked things to look (IC-925).
+    pub fn appearance(&self) -> krate_adapter_common::ui::Appearance {
+        self.adapter.appearance()
+    }
+
     /// Open the sign-in sheet (IC-923).
     pub fn sign_in(
         &self,

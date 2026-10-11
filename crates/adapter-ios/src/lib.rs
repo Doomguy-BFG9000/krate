@@ -661,6 +661,10 @@ impl UiAdapter for IosUikitPrototypeUiAdapter {
         uikit_native::share(text, url, files)
     }
 
+    fn appearance(&self) -> krate_adapter_common::ui::Appearance {
+        uikit_native::appearance()
+    }
+
     fn sign_in(
         &self,
         _window: WindowId,

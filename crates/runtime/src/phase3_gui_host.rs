@@ -169,6 +169,9 @@ pub struct Phase3GuiHost {
     pub(crate) video_frames: std::cell::RefCell<std::collections::BTreeMap<u64, Arc<ImagePixels>>>,
     /// Where the app's bundled assets are, for a video named by path.
     pub(crate) asset_root: Option<std::path::PathBuf>,
+    /// The look the platform reported last, and when (IC-925).
+    appearance_cache:
+        std::cell::Cell<Option<(std::time::Instant, krate_adapter_common::ui::Appearance)>>,
     /// The size each window was asked for, and the canvases whose apps have
     /// asked how big they are (`canvas-size`). A canvas app that never asks
     /// can only be drawing for the size it requested; where the window is
@@ -494,6 +497,7 @@ impl Phase3GuiHost {
             videos: std::cell::RefCell::new(crate::video::Videos::default()),
             video_frames: std::cell::RefCell::new(std::collections::BTreeMap::new()),
             asset_root: None,
+            appearance_cache: std::cell::Cell::new(None),
             requested_sizes: std::cell::RefCell::new(std::collections::BTreeMap::new()),
             canvases_that_asked: std::cell::RefCell::new(std::collections::BTreeSet::new()),
             screen_windows: std::cell::RefCell::new(Vec::new()),
@@ -917,6 +921,26 @@ impl Phase3GuiHost {
         self.dispatcher()
             .share(id, text.as_deref(), url.as_deref(), &files)
             .map_err(|why| (true, why))
+    }
+
+    /// How the person asked things to look (IC-925), read at most twice a
+    /// second: an app asks every frame and the platform answers on its main
+    /// thread. Headless, `KRATE_APPEARANCE` stands in (`dark,text=1.35`).
+    pub(crate) fn appearance(&self) -> krate_adapter_common::ui::Appearance {
+        if self.headless {
+            return std::env::var("KRATE_APPEARANCE")
+                .map(|text| krate_adapter_common::ui::Appearance::parse(&text))
+                .unwrap_or_default();
+        }
+        let now = std::time::Instant::now();
+        if let Some((at, look)) = self.appearance_cache.get() {
+            if now.duration_since(at) < std::time::Duration::from_millis(500) {
+                return look;
+            }
+        }
+        let look = self.dispatcher().appearance();
+        self.appearance_cache.set(Some((now, look)));
+        look
     }
 
     /// Whether this device can check it is the person (IC-924). Headless,

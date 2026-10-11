@@ -1801,6 +1801,51 @@ mod motion_tests {
     }
 }
 
+/// How the person asked things to look (IC-925).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Appearance {
+    /// The system is in dark mode.
+    pub dark: bool,
+    /// The person asked for more contrast.
+    pub high_contrast: bool,
+    /// The person's text size against the default: 1.0 by default.
+    pub text_scale: f32,
+}
+
+impl Default for Appearance {
+    fn default() -> Self {
+        Self {
+            dark: false,
+            high_contrast: false,
+            text_scale: 1.0,
+        }
+    }
+}
+
+impl Appearance {
+    /// Read `KRATE_APPEARANCE` as a stand-in for the person's settings:
+    /// comma-separated `dark`, `contrast` and `text=1.35`, in any order.
+    pub fn parse(text: &str) -> Self {
+        let mut look = Self::default();
+        for part in text.split(',').map(str::trim) {
+            match part {
+                "dark" => look.dark = true,
+                "light" => look.dark = false,
+                "contrast" => look.high_contrast = true,
+                _ => {
+                    if let Some(scale) = part
+                        .strip_prefix("text=")
+                        .and_then(|v| v.parse::<f32>().ok())
+                    {
+                        look.text_scale = scale.clamp(0.5, 4.0);
+                    }
+                }
+            }
+        }
+        look
+    }
+}
+
 /// What a phone's tap back means (IC-917): the platform plays its own feel
 /// for each.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -2051,6 +2096,12 @@ pub trait UiAdapter: WindowAdapter {
         _files: &[(String, Vec<u8>)],
     ) -> Result<bool, String> {
         Err("this device has no share sheet yet".to_string())
+    }
+
+    /// How the person asked things to look: dark mode, contrast, text size
+    /// (IC-925).
+    fn appearance(&self) -> Appearance {
+        Appearance::default()
     }
 
     /// Open the platform's sign-in sheet at `authorize_url` and wait for the

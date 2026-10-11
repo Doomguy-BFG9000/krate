@@ -11694,3 +11694,61 @@ fn a_vault_opens_only_for_its_owner() {
         "a device that cannot check keeps it locked and says so: {cannot}"
     );
 }
+
+/// The person's dark mode, contrast and text size reach an app
+/// (krate:ui/appearance, IC-925).
+///
+/// `look-probe.wasm` is apps/krate-look-probe built ("Look"). Headless,
+/// KRATE_APPEARANCE stands in for the phone's settings; without it the
+/// look is the default: light, no extra contrast, text at 1.
+#[test]
+fn the_persons_look_reaches_the_app() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let wasm = dir.path().join("code.wasm");
+    std::fs::write(&wasm, include_bytes!("fixtures/look-probe.wasm")).expect("probe");
+    let manifest = dir.path().join("manifest.toml");
+    std::fs::write(
+        &manifest,
+        "[app]\nid = \"dev.krate.look-probe\"\nname = \"Look\"\nversion = \"1.0.0\"\n\
+         entry = \"code.wasm\"\nworld = \"krate:app/gui@0.2.0\"\n\n\
+         [[capabilities]]\ncap = \"ui.window:create\"\nrationale = \"window\"\nrequired = true\n\n\
+         [[capabilities]]\ncap = \"io.stdout\"\nrationale = \"print\"\nrequired = true\n\n\
+         [[capabilities]]\ncap = \"io.args\"\nrationale = \"args\"\nrequired = true\n",
+    )
+    .expect("manifest");
+    let run = |look: Option<&str>| -> String {
+        let mut cmd = krate();
+        cmd.arg("run")
+            .arg("--headless")
+            .arg(&wasm)
+            .arg("--manifest")
+            .arg(&manifest)
+            .arg("--auto-grant")
+            .arg("--")
+            .arg("quick")
+            .env_remove("KRATE_APPEARANCE");
+        if let Some(look) = look {
+            cmd.env("KRATE_APPEARANCE", look);
+        }
+        let out = cmd.output().expect("run");
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+    let plain = run(None);
+    assert!(
+        plain
+            .lines()
+            .any(|l| l == "look:dark=no contrast=no text=1.00"),
+        "{plain}"
+    );
+    let dark = run(Some("dark,contrast,text=1.35"));
+    assert!(
+        dark.lines()
+            .any(|l| l == "look:dark=yes contrast=yes text=1.35"),
+        "dark mode, contrast and text size reach the app whole: {dark}"
+    );
+}

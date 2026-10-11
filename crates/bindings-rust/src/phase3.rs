@@ -7,8 +7,17 @@
 
 #![allow(clippy::too_many_arguments)]
 
-/// `krate:ui`: bluetooth, clipboard, dialog, events, haptics, image, launcher, location, menu, motion, notify, photos, pointer, print, reminders, screen, share, sign_in, text_entry, touch, tree, unlock, window.
+/// `krate:ui`: appearance, bluetooth, clipboard, dialog, events, haptics, image, launcher, location, menu, motion, notify, photos, pointer, print, reminders, screen, share, sign_in, text_entry, touch, tree, unlock, window.
 pub mod ui {
+    /// `krate:ui/appearance`.
+    pub mod appearance {
+        pub use crate::bindings::krate::ui::appearance::Look;
+
+        /// How things should look right now.
+        pub fn current() -> Look {
+            crate::bindings::krate::ui::appearance::current()
+        }
+    }
     /// `krate:ui/bluetooth`.
     pub mod bluetooth {
         pub use crate::bindings::krate::ui::bluetooth::{BluetoothError, Device, Notification};

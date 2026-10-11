@@ -696,6 +696,20 @@ impl ui4::sign_in::Host for Phase3GuiHost {
     }
 }
 
+/// Dark mode, more contrast and text size (IC-925). Phase 4 only. No
+/// capability: how the person wants things to look is theirs to give every
+/// app, as on the phones themselves.
+impl ui4::appearance::Host for Phase3GuiHost {
+    fn current(&mut self) -> wasmtime::Result<ui4::appearance::Look> {
+        let look = self.appearance();
+        Ok(ui4::appearance::Look {
+            dark: look.dark,
+            high_contrast: look.high_contrast,
+            text_scale: look.text_scale,
+        })
+    }
+}
+
 /// Face ID, Touch ID or the passcode before something private (IC-924).
 /// Phase 4 only. No capability: the system asks the person itself, and the
 /// app learns only whether they passed.

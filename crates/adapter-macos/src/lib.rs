@@ -3,6 +3,7 @@
 //! This crate is the macOS ownership boundary. Shared behavior still comes from
 //! `krate-adapter-common`, while macOS-specific host wiring will land here.
 
+mod appearance;
 mod appkit;
 mod clipboard;
 mod consent;
@@ -523,6 +524,11 @@ impl UiAdapter for MacosUiAdapter {
         clipboard::write_text(text)
     }
 
+    /// Dark appearance and Increase contrast (IC-925).
+    fn appearance(&self) -> krate_adapter_common::ui::Appearance {
+        appearance::current()
+    }
+
     /// The system's sign-in sheet (IC-923).
     fn sign_in(
         &self,
@@ -700,6 +706,10 @@ impl UiAdapter for MacosAppKitPrototypeUiAdapter {
         scheme: &str,
     ) -> Result<Option<String>, String> {
         self.headless.sign_in(window, authorize_url, scheme)
+    }
+
+    fn appearance(&self) -> krate_adapter_common::ui::Appearance {
+        self.headless.appearance()
     }
 
     fn pump_event_loop_once(

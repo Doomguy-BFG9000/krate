@@ -48,6 +48,7 @@ world gui {
   import krate:ui/reminders@0.1.0;
   import krate:ui/sign-in@0.1.0;
   import krate:ui/unlock@0.1.0;
+  import krate:ui/appearance@0.1.0;
 
   import krate:gfx/canvas2d@0.1.0;
   import krate:gfx/scene3d@0.1.0;

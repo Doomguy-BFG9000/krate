@@ -1305,6 +1305,55 @@ mod real {
         answer
     }
 
+    /// The person's text size against the default (Large, 17 points), from
+    /// UIKit's content size category: Apple's own body sizes, 14 to 53.
+    pub(crate) fn text_scale_for(category: &str) -> f32 {
+        let body = match category.trim_start_matches("UICTContentSizeCategory") {
+            "XS" => 14.0,
+            "S" => 15.0,
+            "M" => 16.0,
+            "XL" => 19.0,
+            "XXL" => 21.0,
+            "XXXL" => 23.0,
+            "AccessibilityM" => 28.0,
+            "AccessibilityL" => 33.0,
+            "AccessibilityXL" => 40.0,
+            "AccessibilityXXL" => 47.0,
+            "AccessibilityXXXL" => 53.0,
+            _ => 17.0,
+        };
+        body / 17.0
+    }
+
+    /// How the person asked things to look (IC-925): dark mode, more
+    /// contrast and text size, read from Krate's own view controller's
+    /// traits on the main thread.
+    pub fn appearance() -> krate_adapter_common::ui::Appearance {
+        let (tx, rx) = std::sync::mpsc::channel();
+        DispatchQueue::main().exec_async(move || {
+            let look = main_controller().map(|controller| {
+                // SAFETY: the controller's UITraitCollection and three of its
+                // documented properties.
+                unsafe {
+                    let traits: Retained<objc2::runtime::AnyObject> =
+                        msg_send![&*controller, traitCollection];
+                    let style: isize = msg_send![&*traits, userInterfaceStyle];
+                    let contrast: isize = msg_send![&*traits, accessibilityContrast];
+                    let category: Option<Retained<objc2_foundation::NSString>> =
+                        msg_send![&*traits, preferredContentSizeCategory];
+                    krate_adapter_common::ui::Appearance {
+                        dark: style == 2,
+                        high_contrast: contrast == 1,
+                        text_scale: category.map_or(1.0, |c| text_scale_for(&c.to_string())),
+                    }
+                }
+            });
+            let _ = tx.send(look.unwrap_or_default());
+        });
+        rx.recv_timeout(std::time::Duration::from_millis(500))
+            .unwrap_or_default()
+    }
+
     // Signing in through the system's sheet (IC-923).
     #[link(name = "AuthenticationServices", kind = "framework")]
     unsafe extern "C" {}
@@ -3421,6 +3470,10 @@ mod stub {
 
     pub fn sign_in(_url: &str, _scheme: &str) -> Result<Option<String>, String> {
         Err("the sign-in sheet is on the iOS player only".to_string())
+    }
+
+    pub fn appearance() -> krate_adapter_common::ui::Appearance {
+        krate_adapter_common::ui::Appearance::default()
     }
 
     pub fn save_photo(_data: &[u8]) -> Result<(), Option<String>> {

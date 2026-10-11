@@ -745,6 +745,32 @@ interface screen {
   facts: func(window: u64) -> screen-facts;
 }
 
+/// How the person asked things to look (IC-925): dark mode, more
+/// contrast, larger text.
+///
+/// Read it every frame -- it is cheap, and the person can change it in
+/// Settings while the app is open -- and draw from it: dark colours when
+/// `dark`, every text size times `text-scale`. The layout kit's `Look` does
+/// both. An app that stays bright white in a dark room, or keeps its text
+/// small for someone who asked for it large, fails check-app.
+interface appearance {
+  /// The person's choices, now.
+  record look {
+    /// The system is in dark mode.
+    dark: bool,
+    /// The person asked for more contrast: stronger borders, no faint grey
+    /// text.
+    high-contrast: bool,
+    /// How much larger (or smaller) the person wants text than the
+    /// default: 1.0 by default, up to about 3 on a phone at the largest
+    /// accessibility size. Multiply every font size by it.
+    text-scale: f32,
+  }
+
+  /// How things should look right now.
+  current: func() -> look;
+}
+
 /// The phone tapping back under the finger: a button pressed, a picker's
 /// tick, a game's hit (IC-917).
 ///
