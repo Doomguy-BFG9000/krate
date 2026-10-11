@@ -42,11 +42,44 @@ use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
+use krate::bindings::krate::fs::files;
 use krate::bindings::krate::io::{args, stdio};
 use krate::bindings::krate::time::clock;
-use krate::gfx::{canvas2d, types as gfx};
+use krate::gfx::{canvas2d, canvas_images, types as gfx};
 use krate::motion::Spring;
 use krate::ui::{events, tree, types, window};
+
+/// The screen the person came from, as the player left it: a small picture
+/// (an 8-byte header of width and height, little-endian, then RGBA),
+/// stretched across the screen behind the sheet so it reads as that screen
+/// blurred, the way the phone's own sheets sit over the app they came from.
+fn behind(canvas: u64) -> Option<u64> {
+    let size = files::stat("behind.rgba").ok()?.size as usize;
+    if !(8..=8 + 512 * 512 * 4).contains(&size) {
+        return None;
+    }
+    let file = files::open("behind.rgba", files::OpenMode::Read).ok()?;
+    let mut bytes = Vec::with_capacity(size);
+    while bytes.len() < size {
+        let chunk = file.read((size - bytes.len()) as u32).ok()?;
+        if chunk.is_empty() {
+            break;
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    let w = u32::from_le_bytes(bytes.get(0..4)?.try_into().ok()?);
+    let h = u32::from_le_bytes(bytes.get(4..8)?.try_into().ok()?);
+    let px = bytes.get(8..)?;
+    if w == 0 || h == 0 || px.len() != (w * h * 4) as usize {
+        return None;
+    }
+    canvas_images::keep(canvas, w, h, px).ok()
+}
+
+/// Krate's file icon, 180 pixels square, straight RGBA: what an app without
+/// an icon of its own wears on the sheet (F-314).
+const FILE_ICON: &[u8] = include_bytes!("krate-file-180.rgba");
+const FILE_ICON_SIDE: u32 = 180;
 
 const ROOT_ID: u64 = 1;
 const CANVAS_ID: u64 = 2;
@@ -224,6 +257,8 @@ enum Target {
     Cancel,
     Close,
     Row(usize),
+    /// The card's "See details" link.
+    Details,
     /// The dimmed screen around the sheet: a tap there does nothing.
     Outside,
     /// The sheet itself, away from anything that acts.
@@ -260,6 +295,15 @@ struct Sheet {
     open_button: gfx::Rect,
     cancel_button: gfx::Rect,
     close_button: gfx::Rect,
+    /// The card's "See details" link, and whether the details are shown.
+    details_button: gfx::Rect,
+    details: bool,
+    /// The sheet's window, to describe it to a screen reader.
+    window: u64,
+    /// Krate's file icon, kept on the canvas once.
+    file_icon: Option<u64>,
+    /// The screen the person came from, small, to blur behind the sheet.
+    behind: Option<u64>,
 }
 
 /// What a request is, said the way a person says it, with the colour of its
@@ -284,6 +328,7 @@ fn describe(cap: &str) -> (String, gfx::Color) {
             (format!("Internet \u{00b7} {host}"), blue)
         }
         "net.fetch" | "net.connect" => ("Internet".to_string(), blue),
+        "ui.window" => ("Its own window".to_string(), gray),
         "net.listen" => ("Local network".to_string(), blue),
         "net.ws" => ("Live connection".to_string(), blue),
         "hub" | "hub.rooms" => ("Krate online".to_string(), blue),
@@ -361,6 +406,23 @@ fn ask_icon(canvas: u64, cap: &str, x: f32, y: f32) -> Result<(), gfx::GfxError>
                 w,
                 ink,
             )?;
+        }
+        "photos.add" => {
+            // A picture: a frame, a sun and a hill.
+            canvas2d::stroke_round_rect(
+                canvas,
+                rect(x - 9.0, y - 7.0, 18.0, 14.0),
+                radii(3.0),
+                w,
+                ink,
+            )?;
+            canvas2d::fill_circle(canvas, p(x - 3.5, y - 2.5), 1.8, ink)?;
+            for k in 0..9 {
+                let t = k as f32 / 8.0;
+                let hx = x - 7.0 + t * 14.0;
+                let hy = y + 5.0 - (1.0 - (2.0 * t - 1.2).abs()).max(0.0) * 6.0;
+                canvas2d::fill_circle(canvas, p(hx, hy), 1.3, ink)?;
+            }
         }
         k if k.starts_with("camera") => {
             canvas2d::fill_round_rect(canvas, rect(x - 9.0, y - 5.5, 18.0, 13.0), radii(3.0), ink)?;
@@ -539,6 +601,11 @@ impl Sheet {
             open_button: zero,
             cancel_button: zero,
             close_button: zero,
+            details_button: zero,
+            details: false,
+            window: 0,
+            file_icon: None,
+            behind: None,
         }
     }
 
@@ -572,6 +639,403 @@ impl Sheet {
     /// phone held upright; a centred card of two columns on a phone turned
     /// sideways; a centred card on anything wider.
     fn draw(&mut self, canvas: u64, l: &Layout) -> Result<(), gfx::GfxError> {
+        if self.details {
+            self.draw_details(canvas, l)
+        } else {
+            self.draw_compact(canvas, l)
+        }
+    }
+
+    /// What every app has and the sheet does not ask about: its window, its
+    /// output, the clock and randomness.
+    fn worth_asking(cap: &str) -> bool {
+        let kind = cap.split(':').next().unwrap_or("");
+        !matches!(
+            kind,
+            "ui.window"
+                | "io.stdout"
+                | "io.stderr"
+                | "io.stdin"
+                | "io.args"
+                | "io.env"
+                | "time.clock"
+                | "time.monotonic"
+                | "random.bytes"
+                | "memory.budget"
+        )
+    }
+
+    /// The first thing a person sees (F-314): a small card, not a page.
+    /// The app's mark and name, one row of tiles and one line for what it
+    /// uses, a link to the details, and two buttons. The details -- every
+    /// request with its reason and the switches for what is optional -- are
+    /// one tap away.
+    fn draw_compact(&mut self, canvas: u64, l: &Layout) -> Result<(), gfx::GfxError> {
+        let ink = color(0.07, 0.07, 0.09, 1.0);
+        let muted = color(0.45, 0.46, 0.50, 1.0);
+        let accent = color(0.23, 0.30, 0.95, 1.0);
+        let hue = name_hue(&self.name);
+        let e = self.entrance.value.clamp(0.0, 1.2);
+
+        // Behind the card: the screen the person came from, blurred, dimmed
+        // a little as the card arrives; without one, light lit faintly in
+        // the app's colour.
+        match self.behind {
+            Some(behind) => {
+                canvas2d::clear(canvas, color(0.0, 0.0, 0.0, 1.0))?;
+                canvas_images::draw(canvas, behind, rect(0.0, 0.0, l.w, l.h))?;
+                canvas2d::fill_rect(
+                    canvas,
+                    rect(0.0, 0.0, l.w, l.h),
+                    color(0.0, 0.0, 0.0, 0.22 * e.min(1.0)),
+                )?;
+            }
+            None => {
+                canvas2d::clear(canvas, color(0.90, 0.905, 0.92, 1.0))?;
+                canvas2d::radial_gradient(
+                    canvas,
+                    gfx::Point {
+                        x: l.w * 0.5,
+                        y: l.h * 0.25,
+                    },
+                    l.w.max(l.h) * 0.8,
+                    color(hue.r, hue.g, hue.b, 0.30 * e.min(1.0)),
+                    color(hue.r, hue.g, hue.b, 0.0),
+                )?;
+            }
+        }
+
+        let (top, right, bottom, left) = l.safe;
+        let pad = 24.0;
+        let cw = (l.w - left - right - 24.0).min(420.0);
+        let cx = left + (l.w - left - right - cw) / 2.0;
+        let inner = cw - pad * 2.0;
+
+        // What it uses, said plainly.
+        let shown: Vec<usize> = (0..self.asks.len())
+            .filter(|&i| Self::worth_asking(&self.asks[i].cap))
+            .collect();
+        let mut names: Vec<String> = Vec::new();
+        for &i in &shown {
+            let (title, _) = describe(&self.asks[i].cap);
+            let title = title.split(" \u{00b7} ").next().unwrap_or("").to_string();
+            if !names.contains(&title) {
+                names.push(title);
+            }
+        }
+        // As many of them by name as fit on one line, then how many more.
+        let said = |named: usize| -> String {
+            let n = names.len();
+            match (n, named) {
+                (0, _) => String::from("Nothing beyond its own window."),
+                (1, _) => format!("Uses {}.", names[0]),
+                (_, k) if k >= n => {
+                    format!("Uses {} and {}.", names[..n - 1].join(", "), names[n - 1])
+                }
+                (_, k) => format!("Uses {} and {} more.", names[..k].join(", "), n - k),
+            }
+        };
+        let mut summary = said(names.len());
+        for named in (1..=names.len().min(3)).rev() {
+            summary = said(named);
+            let fits = canvas2d::measure_text_styled(canvas, &summary, 15.0, style(500, 0.0))
+                .map(|m| m.width <= inner)
+                .unwrap_or(true);
+            if fits {
+                break;
+            }
+        }
+        if names.len() <= 3 {
+            let all = said(names.len());
+            if canvas2d::measure_text_styled(canvas, &all, 15.0, style(500, 0.0))
+                .map(|m| m.width <= inner)
+                .unwrap_or(true)
+            {
+                summary = all;
+            }
+        }
+        let summary_lines = wrap_at_most(canvas, &summary, 15.0, inner, 2);
+        let title = format!("Open {}?", self.name);
+        let title_lines = wrap_at_most(canvas, &title, 22.0, inner - 40.0, 2);
+        let tiles = shown.len().min(6) + usize::from(shown.len() > 6);
+
+        // Measure, then place the card at the bottom (centred on a wide or
+        // turned screen).
+        let tile = 36.0;
+        let mut h = pad + 60.0 + 16.0 + title_lines.len() as f32 * 28.0 + 22.0;
+        if tiles > 0 {
+            h += 18.0 + tile;
+        }
+        h += 14.0 + summary_lines.len() as f32 * 21.0 + 10.0 + 20.0 + 22.0 + 52.0 + pad;
+        let upright = l.h >= l.w || l.h >= 520.0;
+        let foot = bottom.max(10.0) + 8.0;
+        let slide = (1.0 - e) * (h + foot + 40.0);
+        let cy = if upright && l.w < 600.0 {
+            l.h - foot - h + slide
+        } else {
+            (top + (l.h - top - bottom - h) / 2.0).max(top + 8.0) + slide * 0.35
+        };
+        let card = rect(cx, cy, cw, h);
+        self.sheet_area = card;
+        canvas2d::drop_shadow_round_rect(
+            canvas,
+            card,
+            radii(30.0),
+            36.0,
+            color(0.0, 0.0, 0.0, 0.18),
+        )?;
+        canvas2d::fill_round_rect(canvas, card, radii(30.0), color(1.0, 1.0, 1.0, 1.0))?;
+
+        // Close, top right: a cross in a soft circle; it means Not now.
+        let (xx, xy) = (cx + cw - 20.0 - 14.0, cy + 20.0 + 14.0);
+        let close_fill = if self.pressed(Target::Close) {
+            color(0.86, 0.86, 0.89, 1.0)
+        } else {
+            color(0.94, 0.94, 0.96, 1.0)
+        };
+        canvas2d::fill_circle(canvas, gfx::Point { x: xx, y: xy }, 14.0, close_fill)?;
+        for k in 0..9 {
+            let d = (k as f32 - 4.0) * 0.9;
+            canvas2d::fill_circle(
+                canvas,
+                gfx::Point {
+                    x: xx + d,
+                    y: xy + d,
+                },
+                1.0,
+                muted,
+            )?;
+            canvas2d::fill_circle(
+                canvas,
+                gfx::Point {
+                    x: xx + d,
+                    y: xy - d,
+                },
+                1.0,
+                muted,
+            )?;
+        }
+        self.close_button = rect(xx - 22.0, xy - 22.0, 44.0, 44.0);
+
+        // The app's mark, centred.
+        let mid = cx + cw / 2.0;
+        let mut y = cy + pad;
+        let mark = rect(mid - 30.0, y, 60.0, 60.0);
+        if let Some(icon) = self.file_icon {
+            canvas_images::draw(canvas, icon, mark)?;
+        } else {
+            canvas2d::drop_shadow_round_rect(
+                canvas,
+                mark,
+                radii(15.0),
+                10.0,
+                color(hue.r, hue.g, hue.b, 0.35),
+            )?;
+            canvas2d::fill_round_rect(canvas, mark, radii(15.0), hue)?;
+            let initial: String = self.name.chars().take(1).collect::<String>().to_uppercase();
+            let im = canvas2d::measure_text_styled(canvas, &initial, 28.0, style(800, 0.0))?;
+            canvas2d::draw_text_styled(
+                canvas,
+                &initial,
+                gfx::Point {
+                    x: mid - im.width / 2.0,
+                    y: y + 40.0,
+                },
+                28.0,
+                color(1.0, 1.0, 1.0, 1.0),
+                style(800, 0.0),
+            )?;
+        }
+        y += 60.0 + 16.0;
+
+        // "Open Phone Check?", and its version and size.
+        for line in &title_lines {
+            let m = canvas2d::measure_text_styled(canvas, line, 22.0, style(750, -0.4))?;
+            canvas2d::draw_text_styled(
+                canvas,
+                line,
+                gfx::Point {
+                    x: mid - m.width / 2.0,
+                    y: y + 22.0,
+                },
+                22.0,
+                ink,
+                style(750, -0.4),
+            )?;
+            y += 28.0;
+        }
+        let detail = if self.detail.is_empty() {
+            String::from("Krate app")
+        } else {
+            self.detail.clone()
+        };
+        let detail = fit_line(canvas, &detail, 14.0, style(500, 0.0), inner);
+        let dm = canvas2d::measure_text_styled(canvas, &detail, 14.0, style(500, 0.0))?;
+        canvas2d::draw_text_styled(
+            canvas,
+            &detail,
+            gfx::Point {
+                x: mid - dm.width / 2.0,
+                y: y + 14.0,
+            },
+            14.0,
+            muted,
+            style(500, 0.0),
+        )?;
+        y += 22.0;
+
+        // One row of tiles for what it uses.
+        if tiles > 0 {
+            y += 18.0;
+            let gap = 8.0;
+            let row_w = tiles as f32 * tile + (tiles - 1) as f32 * gap;
+            let mut tx = mid - row_w / 2.0;
+            for (n, &i) in shown.iter().take(6).enumerate() {
+                let cap = &self.asks[i].cap;
+                let (_, tint) = describe(cap);
+                canvas2d::fill_round_rect(canvas, rect(tx, y, tile, tile), radii(10.0), tint)?;
+                ask_icon(canvas, cap, tx + tile / 2.0, y + tile / 2.0)?;
+                tx += tile + gap;
+                let _ = n;
+            }
+            if shown.len() > 6 {
+                canvas2d::fill_round_rect(
+                    canvas,
+                    rect(tx, y, tile, tile),
+                    radii(10.0),
+                    color(0.93, 0.93, 0.95, 1.0),
+                )?;
+                let more = format!("+{}", shown.len() - 6);
+                let mm = canvas2d::measure_text_styled(canvas, &more, 13.0, style(700, 0.0))?;
+                canvas2d::draw_text_styled(
+                    canvas,
+                    &more,
+                    gfx::Point {
+                        x: tx + (tile - mm.width) / 2.0,
+                        y: y + 23.0,
+                    },
+                    13.0,
+                    muted,
+                    style(700, 0.0),
+                )?;
+            }
+            y += tile;
+        }
+
+        // The same, in words.
+        y += 14.0;
+        for line in &summary_lines {
+            let m = canvas2d::measure_text_styled(canvas, line, 15.0, style(500, 0.0))?;
+            canvas2d::draw_text_styled(
+                canvas,
+                line,
+                gfx::Point {
+                    x: mid - m.width / 2.0,
+                    y: y + 15.0,
+                },
+                15.0,
+                muted,
+                style(500, 0.0),
+            )?;
+            y += 21.0;
+        }
+
+        // See details.
+        y += 10.0;
+        let link = "See details";
+        let lm = canvas2d::measure_text_styled(canvas, link, 14.0, style(600, 0.0))?;
+        let link_ink = if self.pressed(Target::Details) {
+            color(0.15, 0.20, 0.70, 1.0)
+        } else {
+            accent
+        };
+        canvas2d::draw_text_styled(
+            canvas,
+            link,
+            gfx::Point {
+                x: mid - lm.width / 2.0,
+                y: y + 14.0,
+            },
+            14.0,
+            link_ink,
+            style(600, 0.0),
+        )?;
+        self.details_button = rect(mid - lm.width / 2.0 - 16.0, y - 10.0, lm.width + 32.0, 40.0);
+        y += 20.0 + 22.0;
+
+        // Not now and Open, side by side.
+        let gap = 12.0;
+        let bw = (inner - gap) / 2.0;
+        let not_now = rect(cx + pad, y, bw, 52.0);
+        let open = rect(cx + pad + bw + gap, y, bw, 52.0);
+        let nn_fill = if self.pressed(Target::Cancel) {
+            color(0.94, 0.94, 0.96, 1.0)
+        } else {
+            color(1.0, 1.0, 1.0, 1.0)
+        };
+        canvas2d::fill_round_rect(canvas, not_now, radii(26.0), nn_fill)?;
+        canvas2d::stroke_round_rect(
+            canvas,
+            not_now,
+            radii(26.0),
+            1.2,
+            color(0.85, 0.86, 0.89, 1.0),
+        )?;
+        let open_fill = if self.pressed(Target::Open) {
+            color(0.22, 0.22, 0.26, 1.0)
+        } else {
+            ink
+        };
+        canvas2d::fill_round_rect(canvas, open, radii(26.0), open_fill)?;
+        for (r, text, fill) in [
+            (not_now, "Not now", ink),
+            (open, "Open", color(1.0, 1.0, 1.0, 1.0)),
+        ] {
+            let m = canvas2d::measure_text_styled(canvas, text, 17.0, style(600, 0.0))?;
+            canvas2d::draw_text_styled(
+                canvas,
+                text,
+                gfx::Point {
+                    x: r.x + (r.width - m.width) / 2.0,
+                    y: r.y + 32.0,
+                },
+                17.0,
+                fill,
+                style(600, 0.0),
+            )?;
+        }
+        self.cancel_button = not_now;
+        self.open_button = open;
+        self.rows_area = rect(0.0, 0.0, 0.0, 0.0);
+        self.rows.clear();
+
+        // What a screen reader says (IC-926).
+        let mut said = krate::layout::Said::new();
+        said.heading(krate::layout::Rect::new(cx, cy, cw, 120.0), &title);
+        said.text(krate::layout::Rect::new(cx, cy + 120.0, cw, 40.0), &summary);
+        said.button(
+            krate::layout::Rect::new(
+                self.details_button.x,
+                self.details_button.y,
+                self.details_button.width,
+                self.details_button.height,
+            ),
+            link,
+        );
+        said.button(
+            krate::layout::Rect::new(not_now.x, not_now.y, not_now.width, not_now.height),
+            "Not now",
+        );
+        said.button(
+            krate::layout::Rect::new(open.x, open.y, open.width, open.height),
+            "Open",
+        );
+        said.send(self.window);
+
+        canvas2d::present(canvas)
+    }
+
+    fn draw_details(&mut self, canvas: u64, l: &Layout) -> Result<(), gfx::GfxError> {
         let ink = color(0.07, 0.07, 0.09, 1.0);
         let muted = color(0.43, 0.44, 0.48, 1.0);
         let faint = color(0.60, 0.61, 0.65, 1.0);
@@ -770,38 +1234,42 @@ impl Sheet {
         // The app: its mark, its name, what it is.
         let hy = sy + grabber_h;
         let mark = rect(head_x, hy, 64.0, 64.0);
-        canvas2d::drop_shadow_round_rect(
-            canvas,
-            mark,
-            radii(16.0),
-            10.0,
-            color(hue.r, hue.g, hue.b, 0.35),
-        )?;
-        canvas2d::fill_round_rect(canvas, mark, radii(16.0), hue)?;
-        canvas2d::fill_round_rect(
-            canvas,
-            rect(mark.x, mark.y, 64.0, 32.0),
-            gfx::CornerRadii {
-                top_left: 16.0,
-                top_right: 16.0,
-                bottom_right: 0.0,
-                bottom_left: 0.0,
-            },
-            color(1.0, 1.0, 1.0, 0.10),
-        )?;
-        let initial: String = self.name.chars().take(1).collect::<String>().to_uppercase();
-        let im = canvas2d::measure_text_styled(canvas, &initial, 30.0, style(800, 0.0))?;
-        canvas2d::draw_text_styled(
-            canvas,
-            &initial,
-            gfx::Point {
-                x: mark.x + 32.0 - im.width / 2.0,
-                y: mark.y + 43.0,
-            },
-            30.0,
-            color(1.0, 1.0, 1.0, 1.0),
-            style(800, 0.0),
-        )?;
+        if let Some(icon) = self.file_icon {
+            canvas_images::draw(canvas, icon, mark)?;
+        } else {
+            canvas2d::drop_shadow_round_rect(
+                canvas,
+                mark,
+                radii(16.0),
+                10.0,
+                color(hue.r, hue.g, hue.b, 0.35),
+            )?;
+            canvas2d::fill_round_rect(canvas, mark, radii(16.0), hue)?;
+            canvas2d::fill_round_rect(
+                canvas,
+                rect(mark.x, mark.y, 64.0, 32.0),
+                gfx::CornerRadii {
+                    top_left: 16.0,
+                    top_right: 16.0,
+                    bottom_right: 0.0,
+                    bottom_left: 0.0,
+                },
+                color(1.0, 1.0, 1.0, 0.10),
+            )?;
+            let initial: String = self.name.chars().take(1).collect::<String>().to_uppercase();
+            let im = canvas2d::measure_text_styled(canvas, &initial, 30.0, style(800, 0.0))?;
+            canvas2d::draw_text_styled(
+                canvas,
+                &initial,
+                gfx::Point {
+                    x: mark.x + 32.0 - im.width / 2.0,
+                    y: mark.y + 43.0,
+                },
+                30.0,
+                color(1.0, 1.0, 1.0, 1.0),
+                style(800, 0.0),
+            )?;
+        }
 
         let name_x = head_x + 64.0 + 14.0;
         let name_w = if sideways {
@@ -1081,6 +1549,9 @@ impl Sheet {
         if inside(self.close_button, x, y) {
             return Target::Close;
         }
+        if !self.details && inside(self.details_button, x, y) {
+            return Target::Details;
+        }
         if inside(self.rows_area, x, y) {
             if let Some(row) = self.rows.iter().find(|r| y >= r.y0 && y < r.y1) {
                 return Target::Row(row.index);
@@ -1140,7 +1611,17 @@ impl Sheet {
                 }
                 match press.target {
                     Target::Open => Some(true),
+                    // In the details, the cross goes back to the card.
+                    Target::Close if self.details => {
+                        self.details = false;
+                        None
+                    }
                     Target::Cancel | Target::Close => Some(false),
+                    Target::Details => {
+                        self.details = true;
+                        self.scroll = 0.0;
+                        None
+                    }
                     // The screen around the sheet does nothing: whether an
                     // app opens is a choice made on the sheet's own buttons.
                     Target::Outside => None,
@@ -1519,6 +2000,10 @@ impl krate::Guest for Component {
         };
 
         let mut sheet = Sheet::new(name, detail, asks);
+        sheet.window = win;
+        sheet.file_icon =
+            canvas_images::keep(canvas, FILE_ICON_SIDE, FILE_ICON_SIDE, FILE_ICON).ok();
+        sheet.behind = behind(canvas);
         if quick {
             // The sample is drawn at rest, as a person sees it once it has
             // slid in.

@@ -746,6 +746,12 @@ mod real {
     }
 
     /// Drop Krate's menu from the top. Main thread.
+    ///
+    /// One glass panel, one row: an icon over a short word for each way
+    /// about, the way the phone's own menus put Copy, Move and Share
+    /// (F-314). Liquid Glass on iOS 26 and later, the system's material
+    /// before it. It slides in rather than fading: glass whose view fades
+    /// from nothing is not drawn at all.
     fn show_menu(mtm: MainThreadMarker, target: &KrateMenuTarget) {
         if MENU.with(|m| m.borrow().is_some()) {
             return;
@@ -753,45 +759,51 @@ mod real {
         let Some(main_side) = MAIN_SIDE.0.get() else {
             return;
         };
-        let name = CURRENT_NAME
-            .lock()
-            .expect("name lock")
-            .clone()
-            .unwrap_or_else(|| "This app".to_string());
         let host: &UIView = &main_side.view;
         let bounds = host.bounds();
         let top = SAFE.lock().expect("safe lock").0.max(20.0) as f64;
-        let rows: [(&str, &str, objc2::runtime::Sel); 5] = [
-            ("xmark.circle", "Close", objc2::sel!(krateMenuClose:)),
-            ("arrow.clockwise", "Restart", objc2::sel!(krateMenuRestart:)),
+        let items: [(&str, &str, &str, objc2::runtime::Sel); 5] = [
+            ("xmark", "Close", "Close", objc2::sel!(krateMenuClose:)),
+            (
+                "arrow.clockwise",
+                "Restart",
+                "Restart",
+                objc2::sel!(krateMenuRestart:),
+            ),
             (
                 "square.and.arrow.up",
+                "Share",
                 "Share this app",
                 objc2::sel!(krateMenuShare:),
             ),
             (
                 "checkmark.shield",
+                "Access",
                 "What it can use",
                 objc2::sel!(krateMenuUses:),
             ),
             (
                 "exclamationmark.bubble",
+                "Report",
                 "Report a problem",
                 objc2::sel!(krateMenuReport:),
             ),
         ];
-        let (row_h, head_h) = (50.0f64, 66.0f64);
-        let width = (bounds.size.width - 20.0).min(420.0);
-        let height = head_h + rows.len() as f64 * row_h + 8.0;
+        let width = (bounds.size.width - 32.0).min(380.0);
+        let height = 80.0f64;
         let x = (bounds.size.width - width) / 2.0;
-        let y = top + 4.0;
+        let y = top + 6.0;
+        let cell = width / items.len() as f64;
         // SAFETY: UIKit views built and added on the main thread; selectors
         // name methods KrateMenuTarget implements.
         unsafe {
+            // Catches a tap anywhere else, to lift the menu; nearly clear, so
+            // the app stays in view behind it.
             let shade = UIView::new(mtm);
             shade.setFrame(bounds);
-            shade.setBackgroundColor(Some(&objc2_ui_kit::UIColor::colorWithWhite_alpha(0.0, 0.3)));
-            shade.setAlpha(0.0);
+            shade.setBackgroundColor(Some(&objc2_ui_kit::UIColor::colorWithWhite_alpha(
+                0.0, 0.12,
+            )));
             if let Some(tap_class) = objc2::runtime::AnyClass::get(c"UITapGestureRecognizer") {
                 let made: objc2::rc::Allocated<objc2::runtime::AnyObject> =
                     msg_send![tap_class, alloc];
@@ -799,9 +811,14 @@ mod real {
                     msg_send![made, initWithTarget: target, action: objc2::sel!(krateMenuDismiss:)];
                 let _: () = msg_send![&*shade, addGestureRecognizer: &*tap];
             }
-            let effect: Option<Retained<objc2::runtime::AnyObject>> =
+            // Liquid Glass where the phone has it, the thick material where
+            // it does not.
+            let glass: Option<Retained<objc2::runtime::AnyObject>> =
+                objc2::runtime::AnyClass::get(c"UIGlassEffect").and_then(|c| msg_send![c, new]);
+            let effect: Option<Retained<objc2::runtime::AnyObject>> = glass.or_else(|| {
                 objc2::runtime::AnyClass::get(c"UIBlurEffect")
-                    .and_then(|c| msg_send![c, effectWithStyle: 8isize]);
+                    .and_then(|c| msg_send![c, effectWithStyle: 9isize])
+            });
             let panel: Retained<UIView> =
                 match (objc2::runtime::AnyClass::get(c"UIVisualEffectView"), effect) {
                     (Some(class), Some(effect)) => {
@@ -817,76 +834,57 @@ mod real {
                         view
                     }
                 };
-            panel.setFrame(CGRect::new(CGPoint::new(x, y - 16.0), size(width, height)));
-            panel.layer().setCornerRadius(22.0);
+            panel.setFrame(CGRect::new(CGPoint::new(x, y - 14.0), size(width, height)));
+            panel.layer().setCornerRadius(26.0);
             panel.setClipsToBounds(true);
-            panel.setAlpha(0.0);
             let content: Retained<UIView> = {
                 let maybe: Option<Retained<UIView>> = msg_send![&*panel, contentView];
                 maybe.unwrap_or_else(|| panel.clone())
             };
-            let label = |text: &str, font: f64, weight: f64, secondary: bool| {
-                let label = objc2_ui_kit::UILabel::new(mtm);
-                label.setText(Some(&objc2_foundation::NSString::from_str(text)));
-                label.setFont(Some(&objc2_ui_kit::UIFont::systemFontOfSize_weight(
-                    font, weight,
-                )));
-                label.setTextColor(Some(&*if secondary {
-                    ui_color("secondaryLabel")
-                } else {
-                    ui_color("label")
-                }));
-                label
-            };
-            let title = label(&name, 17.0, objc2_ui_kit::UIFontWeightSemibold, false);
-            title.setFrame(CGRect::new(
-                CGPoint::new(20.0, 14.0),
-                size(width - 40.0, 22.0),
-            ));
-            content.addSubview(&title);
-            let sub = label("Krate", 13.0, objc2_ui_kit::UIFontWeightRegular, true);
-            sub.setFrame(CGRect::new(
-                CGPoint::new(20.0, 37.0),
-                size(width - 40.0, 18.0),
-            ));
-            content.addSubview(&sub);
-            let line = UIView::new(mtm);
-            line.setBackgroundColor(Some(&ui_color("separator")));
-            line.setFrame(CGRect::new(
-                CGPoint::new(16.0, head_h - 1.0),
-                size(width - 32.0, 0.5),
-            ));
-            content.addSubview(&line);
-            for (i, (symbol, text, action)) in rows.iter().enumerate() {
-                let button =
+            for (i, (symbol, word, said, action)) in items.iter().enumerate() {
+                let item =
                     objc2_ui_kit::UIButton::buttonWithType(objc2_ui_kit::UIButtonType::System, mtm);
-                button.setTitle_forState(
-                    Some(&objc2_foundation::NSString::from_str(text)),
-                    objc2_ui_kit::UIControlState::Normal,
-                );
-                button.setImage_forState(
-                    UIImage::systemImageNamed(&objc2_foundation::NSString::from_str(symbol))
-                        .as_deref(),
-                    objc2_ui_kit::UIControlState::Normal,
-                );
-                button.setTintColor(Some(&ui_color("label")));
-                if let Some(title_label) = button.titleLabel() {
-                    title_label.setFont(Some(&objc2_ui_kit::UIFont::systemFontOfSize_weight(
-                        17.0,
-                        objc2_ui_kit::UIFontWeightRegular,
-                    )));
-                }
-                let _: () = msg_send![&*button, setContentHorizontalAlignment: 1isize];
-                let _: () = msg_send![
-                    &*button,
-                    setTitleEdgeInsets: objc2_ui_kit::UIEdgeInsets { top: 0.0, left: 14.0, bottom: 0.0, right: 0.0 }
-                ];
-                let as_view: &UIView = &button;
+                let as_view: &UIView = &item;
                 as_view.setFrame(CGRect::new(
-                    CGPoint::new(20.0, head_h + 4.0 + i as f64 * row_h),
-                    size(width - 40.0, row_h),
+                    CGPoint::new(i as f64 * cell, 0.0),
+                    size(cell, height),
                 ));
-                button.addTarget_action_forControlEvents(
+                let configuration: Option<Retained<objc2::runtime::AnyObject>> =
+                    objc2::runtime::AnyClass::get(c"UIImageSymbolConfiguration").and_then(
+                        |c| msg_send![c, configurationWithPointSize: 19.0f64, weight: 5isize],
+                    );
+                let image =
+                    UIImage::systemImageNamed(&objc2_foundation::NSString::from_str(symbol));
+                let image: Option<Retained<UIImage>> = match (image, configuration) {
+                    (Some(image), Some(configuration)) => {
+                        msg_send![&*image, imageWithConfiguration: &*configuration]
+                    }
+                    (image, _) => image,
+                };
+                let icon = UIImageView::initWithImage(UIImageView::alloc(mtm), image.as_deref());
+                icon.setTintColor(Some(&ui_color("label")));
+                let _: () = msg_send![&*icon, setContentMode: 1isize];
+                let icon_view: &UIView = &icon;
+                icon_view.setFrame(CGRect::new(CGPoint::new(0.0, 16.0), size(cell, 26.0)));
+                icon_view.setUserInteractionEnabled(false);
+                as_view.addSubview(icon_view);
+                let label = objc2_ui_kit::UILabel::new(mtm);
+                label.setText(Some(&objc2_foundation::NSString::from_str(word)));
+                label.setFont(Some(&objc2_ui_kit::UIFont::systemFontOfSize_weight(
+                    12.0,
+                    objc2_ui_kit::UIFontWeightMedium,
+                )));
+                label.setTextColor(Some(&ui_color("label")));
+                label.setTextAlignment(objc2_ui_kit::NSTextAlignment::Center);
+                let label_view: &UIView = &label;
+                label_view.setFrame(CGRect::new(CGPoint::new(0.0, 48.0), size(cell, 16.0)));
+                label_view.setUserInteractionEnabled(false);
+                as_view.addSubview(label_view);
+                let _: () = msg_send![
+                    as_view,
+                    setAccessibilityLabel: &*objc2_foundation::NSString::from_str(said)
+                ];
+                item.addTarget_action_forControlEvents(
                     Some(target),
                     *action,
                     objc2_ui_kit::UIControlEvents::TouchUpInside,
@@ -895,26 +893,147 @@ mod real {
             }
             host.addSubview(&shade);
             host.addSubview(&panel);
-            let (shade_a, panel_a) = (shade.clone(), panel.clone());
+            let panel_a = panel.clone();
             let settle = block2::RcBlock::new(move || {
-                shade_a.setAlpha(1.0);
-                panel_a.setAlpha(1.0);
                 panel_a.setFrame(CGRect::new(CGPoint::new(x, y), size(width, height)));
             });
             if let Some(view_class) = objc2::runtime::AnyClass::get(c"UIView") {
                 let _: () = msg_send![
                     view_class,
-                    animateWithDuration: 0.24f64,
+                    animateWithDuration: 0.26f64,
                     delay: 0.0f64,
-                    usingSpringWithDamping: 0.86f64,
+                    usingSpringWithDamping: 0.78f64,
                     initialSpringVelocity: 0.0f64,
                     options: 0usize,
                     animations: &*settle,
                     completion: Option::<&objc2::runtime::AnyObject>::None
                 ];
             }
+            // A light tap under the finger: the hold was heard.
+            haptic(Some(krate_adapter_common::ui::HapticFeel::Light), 1.0);
             MENU.with(|m| *m.borrow_mut() = Some((shade, panel)));
         }
+    }
+
+    /// Keep a small, blurred picture of the screen as it is now at `path`
+    /// (an 8-byte header of width and height, then RGBA), for Krate's
+    /// permission sheet to sit over: the screen the person came from,
+    /// softened, as the phone's own sheets do. Waits for the main thread.
+    pub fn capture_behind(path: &std::path::Path) {
+        let path = path.to_path_buf();
+        let (tx, rx) = std::sync::mpsc::channel();
+        DispatchQueue::main().exec_async(move || {
+            let _ = tx.send(snapshot_small());
+        });
+        let Ok(Some((w, h, mut rgba))) = rx.recv_timeout(std::time::Duration::from_millis(800))
+        else {
+            let _ = std::fs::remove_file(&path);
+            return;
+        };
+        for _ in 0..3 {
+            box_blur(&mut rgba, w as usize, h as usize, 4);
+        }
+        let mut out = Vec::with_capacity(8 + rgba.len());
+        out.extend_from_slice(&w.to_le_bytes());
+        out.extend_from_slice(&h.to_le_bytes());
+        out.extend_from_slice(&rgba);
+        let part = path.with_extension("part");
+        if std::fs::write(&part, &out).is_ok() {
+            let _ = std::fs::rename(&part, &path);
+        }
+    }
+
+    #[link(name = "UIKit", kind = "framework")]
+    unsafe extern "C" {
+        fn UIGraphicsBeginImageContextWithOptions(
+            size: objc2_core_foundation::CGSize,
+            opaque: bool,
+            scale: f64,
+        );
+        fn UIGraphicsGetCurrentContext() -> *mut std::ffi::c_void;
+        fn UIGraphicsEndImageContext();
+    }
+    #[link(name = "CoreGraphics", kind = "framework")]
+    unsafe extern "C" {
+        fn CGBitmapContextGetData(context: *mut std::ffi::c_void) -> *mut u8;
+        fn CGBitmapContextGetBytesPerRow(context: *mut std::ffi::c_void) -> usize;
+    }
+
+    /// Krate's view drawn at a third of its size, as RGBA. Main thread.
+    fn snapshot_small() -> Option<(u32, u32, Vec<u8>)> {
+        let main_side = MAIN_SIDE.0.get()?;
+        let host: &UIView = &main_side.view;
+        let bounds = host.bounds();
+        let (w, h) = (
+            (bounds.size.width / 3.0).round(),
+            (bounds.size.height / 3.0).round(),
+        );
+        if w < 1.0 || h < 1.0 {
+            return None;
+        }
+        // SAFETY: a UIKit image context on the main thread, the view's
+        // hierarchy drawn into it, its bytes read while it is current, then
+        // ended. The context is 32-bit premultiplied-first little-endian:
+        // BGRA in memory, opaque here.
+        unsafe {
+            UIGraphicsBeginImageContextWithOptions(size(w, h), true, 1.0);
+            let drawn: bool = msg_send![
+                host,
+                drawViewHierarchyInRect: CGRect::new(CGPoint::new(0.0, 0.0), size(w, h)),
+                afterScreenUpdates: false
+            ];
+            let context = UIGraphicsGetCurrentContext();
+            let data = if context.is_null() {
+                std::ptr::null_mut()
+            } else {
+                CGBitmapContextGetData(context)
+            };
+            let result = if drawn && !data.is_null() {
+                let stride = CGBitmapContextGetBytesPerRow(context);
+                let (w, h) = (w as usize, h as usize);
+                let mut rgba = Vec::with_capacity(w * h * 4);
+                for row in 0..h {
+                    let line = std::slice::from_raw_parts(data.add(row * stride), w * 4);
+                    for px in line.chunks_exact(4) {
+                        rgba.extend_from_slice(&[px[2], px[1], px[0], 255]);
+                    }
+                }
+                Some((w as u32, h as u32, rgba))
+            } else {
+                None
+            };
+            UIGraphicsEndImageContext();
+            result
+        }
+    }
+
+    /// One pass of a box blur of `radius` over RGBA pixels, across then down.
+    fn box_blur(rgba: &mut [u8], w: usize, h: usize, radius: usize) {
+        let mut tmp = vec![0u8; rgba.len()];
+        let pass =
+            |src: &[u8], dst: &mut [u8], along: usize, across: usize, step: usize, line: usize| {
+                for a in 0..across {
+                    for i in 0..along {
+                        let lo = i.saturating_sub(radius);
+                        let hi = (i + radius).min(along - 1);
+                        let mut sum = [0u32; 3];
+                        for j in lo..=hi {
+                            let at = (a * line + j * step) * 4;
+                            for c in 0..3 {
+                                sum[c] += u32::from(src[at + c]);
+                            }
+                        }
+                        let n = (hi - lo + 1) as u32;
+                        let at = (a * line + i * step) * 4;
+                        for c in 0..3 {
+                            dst[at + c] = (sum[c] / n) as u8;
+                        }
+                        dst[at + 3] = 255;
+                    }
+                }
+            };
+        pass(rgba, &mut tmp, w, h, 1, w);
+        pass(&tmp, rgba, h, w, w, 1);
     }
 
     /// Lift Krate's menu. Main thread.
@@ -4360,6 +4479,8 @@ mod stub {
     pub fn set_current_app(_app: Option<(String, String)>) {}
 
     pub fn set_current_name(_name: Option<String>) {}
+
+    pub fn capture_behind(_path: &std::path::Path) {}
 
     pub fn describe_accessibility(_elements: &[krate_adapter_common::ui::AccessElement]) {}
 

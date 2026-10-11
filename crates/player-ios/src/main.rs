@@ -760,6 +760,12 @@ mod player {
 
     /// Ask, then run. Every open asks: the answer is never remembered.
     fn launch(app: App, data_root: &Path) {
+        // The screen the person tapped from, blurred, for the permission
+        // sheet to sit over (F-314): taken now, before anything covers it.
+        let _ = std::fs::create_dir_all(data_root.join("wall"));
+        krate_adapter_ios::uikit_native::capture_behind(
+            &data_root.join("wall").join("behind.rgba"),
+        );
         let preview_path = data_root
             .join("home-ui")
             .join("art")
