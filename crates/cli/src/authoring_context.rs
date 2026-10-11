@@ -373,7 +373,10 @@ then `said.heading(r, \"Inbox\")`, `said.button(r, \"New message\")`, \
 `said.text(r, &line)`, `said.toggle(r, \"Sound\", on)`, `said.image(r, \"A \
 red bicycle\")`, and `said.send(win)` after `present`. A double-tap on an \
 element reaches you as an ordinary tap at its centre, so your controls \
-work unchanged. check-app fails a canvas app that draws text and \
+work unchanged. A slider or a scrubber you draw: describe it with \
+`said.adjustable(rect, \"Volume\", \"60%\")` -- on a phone a finger that \
+moves is a scroll, except on something described as adjustable, where it \
+drags it. check-app fails a canvas app that draws text and \
 describes none of it. Widget apps need nothing: Krate describes widgets.\n\n\
 A game drawn at one fixed size (a design size) is the exception: it is \
 scaled to fit and judged on the phone the way Krate turns it -- landscape \
@@ -498,15 +501,24 @@ app's own; tapping it opens the app. A computer answers \
 `Err(Unavailable)` for now: keep an in-app timer there. Signing the \
 person in to a service (GitHub, Google, your own backend): never draw a \
 password field. `let (verifier, challenge) = krate::ui::sign_in::pkce();` \
-then `sign_in::start(win, &authorize_url, \"myapp\")` with the service's \
-https authorize address carrying `client_id`, `redirect_uri=myapp://signed-in`, \
+then `sign_in::start(win, &authorize_url, \"krate-signin\")` with the service's \
+https authorize address carrying `client_id`, \
+`redirect_uri=krate-signin://<your app id>/signed-in` (register that \
+address with the service: it is the one that returns on every phone), \
 a random `state`, `code_challenge` and `code_challenge_method=S256`. It opens \
 the system's sign-in sheet and answers the address the service sent the \
 person back to: check its `state`, read its `code`, then POST the code and \
 `code_verifier` to the token address with `net.connect` to that host, and \
 keep the token in `store.secret`. `Err(Cancelled)` means they closed the \
 sheet: offer the button again. A computer other than a Mac answers \
-`Err(Unavailable)` for now. Something private (a vault, a diary, a \
+`Err(Unavailable)` for now. A web page inside the app (a help page, a \
+checkout, a document): declare `net.connect:<host>:443` for each host it \
+shows, then `let page = krate::ui::web_page::open(win, \"https://docs.example.com/help\", \
+x, y, w, h)?` in a box of your layout, `place(page, ...)` when the layout \
+changes, `state(page)` for its title, `loading` and `problem`, `back`, \
+`go` and `close`. It goes only to the granted hosts (a link elsewhere is \
+refused and said in `problem`), keeps nothing between openings and \
+cannot reach the app. Something private (a vault, a diary, a \
 banking screen): show it only after `krate::ui::unlock::check(\"Unlock your \
 vault\")` answers `UnlockAnswer::Yes` -- Face ID or the passcode on an \
 iPhone, Touch ID or the password on a Mac, in the system's own sheet. \

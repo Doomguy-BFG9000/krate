@@ -450,7 +450,8 @@ impl crate::phase4_gui_bindings::krate::gfx::video::Host for Phase3GuiHost {
         if !self.videos.borrow().owns(video) {
             return Ok(Err(gfx3::types::GfxError::InvalidTarget));
         }
-        Ok(crate::video::state(video)
+        Ok(self
+            .video_state_now(video)
             .map(
                 |state| crate::phase4_gui_bindings::krate::gfx::video::VideoState {
                     position_millis: state.position_millis,
@@ -503,7 +504,26 @@ impl Phase3GuiHost {
         if !self.videos.borrow().owns(video) {
             return Err(gfx3::types::GfxError::InvalidTarget);
         }
+        // What was read before the change is no longer true.
+        self.video_states.borrow_mut().remove(&video);
         crate::video::control(video, control).map_err(gfx3::types::GfxError::Platform)
+    }
+
+    /// A video's state, read from the platform at most once a frame: an
+    /// app asks on every finger movement, and each ask waits for the
+    /// phone's main thread, so a scrubber fell behind the finger.
+    fn video_state_now(&self, video: u64) -> Result<crate::video::State, String> {
+        const FRAME: std::time::Duration = std::time::Duration::from_millis(16);
+        if let Some((at, state)) = self.video_states.borrow().get(&video) {
+            if at.elapsed() < FRAME {
+                return Ok(state.clone());
+            }
+        }
+        let state = crate::video::state(video)?;
+        self.video_states
+            .borrow_mut()
+            .insert(video, (std::time::Instant::now(), state.clone()));
+        Ok(state)
     }
 
     /// Draw a video's newest frame, or the one it showed last when no newer
@@ -693,6 +713,76 @@ impl ui4::sign_in::Host for Phase3GuiHost {
                 Err((false, why)) => Err(SignInError::Invalid(why)),
             },
         )
+    }
+}
+
+/// A web page inside the app (IC-927). Phase 4 only, behind the
+/// `net.connect` grants for the hosts it shows.
+impl ui4::web_page::Host for Phase3GuiHost {
+    fn open(
+        &mut self,
+        window: u64,
+        address: String,
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+    ) -> wasmtime::Result<Result<u64, ui4::types::UiError>> {
+        Ok(self
+            .open_web_page(window, &address, (x, y, width.max(0.0), height.max(0.0)))
+            .map_err(error_to_phase4))
+    }
+
+    fn place(
+        &mut self,
+        page: u64,
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+    ) -> wasmtime::Result<Result<(), ui4::types::UiError>> {
+        if !self.owns_web_page(page) {
+            return Ok(Err(error_to_phase4(ui3::types::UiError::InvalidWidget)));
+        }
+        if !self.headless_run() {
+            self.place_web_page(page, (x, y, width.max(0.0), height.max(0.0)));
+        }
+        Ok(Ok(()))
+    }
+
+    fn go(
+        &mut self,
+        page: u64,
+        address: String,
+    ) -> wasmtime::Result<Result<(), ui4::types::UiError>> {
+        Ok(self.web_page_go(page, &address).map_err(error_to_phase4))
+    }
+
+    fn back(&mut self, page: u64) -> wasmtime::Result<()> {
+        if self.owns_web_page(page) && !self.headless_run() {
+            Phase3GuiHost::web_page_back(self, page);
+        }
+        Ok(())
+    }
+
+    fn state(
+        &mut self,
+        page: u64,
+    ) -> wasmtime::Result<Result<ui4::web_page::PageState, ui4::types::UiError>> {
+        Ok(self
+            .web_page_state(page)
+            .map(|s| ui4::web_page::PageState {
+                address: s.address,
+                title: s.title,
+                loading: s.loading,
+                problem: s.problem,
+            })
+            .map_err(error_to_phase4))
+    }
+
+    fn close(&mut self, page: u64) -> wasmtime::Result<()> {
+        self.close_web_page(page);
+        Ok(())
     }
 }
 

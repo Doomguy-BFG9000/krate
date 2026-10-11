@@ -167,8 +167,18 @@ pub struct Phase3GuiHost {
     /// same picture and they upload it once.
     pub(crate) videos: std::cell::RefCell<crate::video::Videos>,
     pub(crate) video_frames: std::cell::RefCell<std::collections::BTreeMap<u64, Arc<ImagePixels>>>,
+    /// Each video's state as last read, and when (read at most once a frame).
+    pub(crate) video_states: std::cell::RefCell<
+        std::collections::BTreeMap<u64, (std::time::Instant, crate::video::State)>,
+    >,
     /// Where the app's bundled assets are, for a video named by path.
     pub(crate) asset_root: Option<std::path::PathBuf>,
+    /// The web pages this run opened (IC-927): their windows, and headless,
+    /// what each shows.
+    pub(crate) web_pages: std::cell::RefCell<
+        std::collections::BTreeMap<u64, (u64, krate_adapter_common::ui::WebPageState)>,
+    >,
+    next_web_page: std::cell::Cell<u64>,
     /// What each window last told the screen reader (IC-926), for
     /// check-app and `KRATE_ACCESS_DUMP`.
     pub(crate) described: std::cell::RefCell<
@@ -501,9 +511,12 @@ impl Phase3GuiHost {
             kept_images: std::cell::RefCell::new(std::collections::BTreeMap::new()),
             videos: std::cell::RefCell::new(crate::video::Videos::default()),
             video_frames: std::cell::RefCell::new(std::collections::BTreeMap::new()),
+            video_states: std::cell::RefCell::new(std::collections::BTreeMap::new()),
             asset_root: None,
             appearance_cache: std::cell::Cell::new(None),
             described: std::cell::RefCell::new(std::collections::BTreeMap::new()),
+            web_pages: std::cell::RefCell::new(std::collections::BTreeMap::new()),
+            next_web_page: std::cell::Cell::new(1),
             requested_sizes: std::cell::RefCell::new(std::collections::BTreeMap::new()),
             canvases_that_asked: std::cell::RefCell::new(std::collections::BTreeSet::new()),
             screen_windows: std::cell::RefCell::new(Vec::new()),
@@ -950,6 +963,136 @@ impl Phase3GuiHost {
         let look = self.dispatcher().appearance();
         self.appearance_cache.set(Some((now, look)));
         look
+    }
+
+    /// The hosts a web page may go to (IC-927): each `net.connect` (or
+    /// `net.fetch`) grant's host and port.
+    fn web_page_hosts(&self) -> Vec<(String, String)> {
+        self.runtime
+            .guard()
+            .policy()
+            .grants()
+            .iter()
+            .map(ToString::to_string)
+            .filter_map(|cap| {
+                let rest = cap
+                    .strip_prefix("net.connect:")
+                    .or_else(|| cap.strip_prefix("net.fetch:"))?;
+                let (host, port) = rest.rsplit_once(':').unwrap_or((rest, "443"));
+                Some((host.to_string(), port.to_string()))
+            })
+            .collect()
+    }
+
+    /// Show a web page in a box of a window (IC-927), when its address is
+    /// one the app may open.
+    pub(crate) fn open_web_page(
+        &self,
+        window: u64,
+        address: &str,
+        frame: (f32, f32, f32, f32),
+    ) -> Result<u64, ui::types::UiError> {
+        let id = self.window_id(window)?;
+        let hosts = self.web_page_hosts();
+        krate_adapter_common::net::web_page_allowed(address, &hosts)
+            .map_err(|_| ui::types::UiError::PermissionDenied)?;
+        let page = if self.headless {
+            let page = self.next_web_page.get();
+            self.next_web_page.set(page + 1);
+            page
+        } else {
+            self.dispatcher()
+                .bluetooth()
+                .open_web_page(id, address, frame, hosts)
+                .map_err(ui::types::UiError::Unsupported)?
+        };
+        self.web_pages.borrow_mut().insert(
+            page,
+            (
+                window,
+                krate_adapter_common::ui::WebPageState {
+                    address: address.to_string(),
+                    ..Default::default()
+                },
+            ),
+        );
+        Ok(page)
+    }
+
+    /// Whether this run opened `page`.
+    pub(crate) fn owns_web_page(&self, page: u64) -> bool {
+        self.web_pages.borrow().contains_key(&page)
+    }
+
+    /// Send a page this run owns to another address, judged as at open.
+    pub(crate) fn web_page_go(&self, page: u64, address: &str) -> Result<(), ui::types::UiError> {
+        if !self.owns_web_page(page) {
+            return Err(ui::types::UiError::InvalidWidget);
+        }
+        if let Err(why) =
+            krate_adapter_common::net::web_page_allowed(address, &self.web_page_hosts())
+        {
+            if let Some((_, state)) = self.web_pages.borrow_mut().get_mut(&page) {
+                state.problem = why;
+            }
+            return Err(ui::types::UiError::PermissionDenied);
+        }
+        if self.headless {
+            if let Some((_, state)) = self.web_pages.borrow_mut().get_mut(&page) {
+                state.address = address.to_string();
+                state.problem.clear();
+            }
+        } else {
+            self.dispatcher().bluetooth().web_page_go(page, address);
+        }
+        Ok(())
+    }
+
+    /// Where a page this run owns is, and what it is doing.
+    pub(crate) fn web_page_state(
+        &self,
+        page: u64,
+    ) -> Result<krate_adapter_common::ui::WebPageState, ui::types::UiError> {
+        let held = self
+            .web_pages
+            .borrow()
+            .get(&page)
+            .map(|(_, state)| state.clone())
+            .ok_or(ui::types::UiError::InvalidWidget)?;
+        if self.headless {
+            return Ok(held);
+        }
+        let mut live = self
+            .dispatcher()
+            .bluetooth()
+            .web_page_state(page)
+            .unwrap_or(held.clone());
+        // A refusal the host made (a `go` to an ungranted host) is said too.
+        if live.problem.is_empty() {
+            live.problem = held.problem;
+        }
+        Ok(live)
+    }
+
+    /// Whether nothing is on screen (a headless run).
+    pub(crate) fn headless_run(&self) -> bool {
+        self.headless
+    }
+
+    /// Move a page's box, or send it back a page.
+    pub(crate) fn place_web_page(&self, page: u64, frame: (f32, f32, f32, f32)) {
+        self.dispatcher().bluetooth().place_web_page(page, frame);
+    }
+
+    pub(crate) fn web_page_back(&self, page: u64) {
+        self.dispatcher().bluetooth().web_page_back(page);
+    }
+
+    /// Take a page this run owns away.
+    pub(crate) fn close_web_page(&self, page: u64) {
+        if self.web_pages.borrow_mut().remove(&page).is_some() && !self.headless {
+            self.dispatcher().bluetooth().close_web_page(page);
+        }
     }
 
     /// The most elements one description may carry, and the longest label.

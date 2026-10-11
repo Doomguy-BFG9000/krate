@@ -14,7 +14,7 @@ extern crate alloc;
 use alloc::format;
 use alloc::string::String;
 use krate::gfx::{canvas2d, types as gfx, video};
-use krate::layout::{Rect, Screen};
+use krate::layout::{Rect, Said, Screen};
 use krate::{
     io::{args, stdio},
     ui::{
@@ -115,6 +115,9 @@ struct Page {
     muted: bool,
     /// The finger on the scrubber, as a share of the bar, while dragging.
     dragging: Option<f32>,
+    /// The video's state as the last frame drew it, for the touches that
+    /// arrive between frames.
+    last: Option<video::VideoState>,
 }
 
 fn pill(canvas: u64, at: Rect, label: &str, on: bool) -> Result<(), gfx::GfxError> {
@@ -125,7 +128,7 @@ fn pill(canvas: u64, at: Rect, label: &str, on: bool) -> Result<(), gfx::GfxErro
     canvas2d::draw_text_styled(canvas, label, gfx::Point { x: at.x + (at.w - m.width) / 2.0, y: at.y + 26.0 }, 15.0, ink, style(600))
 }
 
-fn draw(canvas: u64, screen: &Screen, page: &Page) -> Result<(), gfx::GfxError> {
+fn draw(win: u64, canvas: u64, screen: &Screen, page: &Page) -> Result<(), gfx::GfxError> {
     let ink = rgb(0.07, 0.07, 0.09);
     let muted = rgb(0.43, 0.44, 0.48);
     canvas2d::clear(canvas, rgb(0.96, 0.96, 0.97))?;
@@ -181,7 +184,18 @@ fn draw(canvas: u64, screen: &Screen, page: &Page) -> Result<(), gfx::GfxError> 
     }
     pill(canvas, at.looping, "Loop", page.looping)?;
     pill(canvas, at.sound, if page.muted { "Muted" } else { "Sound" }, !page.muted)?;
-    canvas2d::present(canvas)
+    canvas2d::present(canvas)?;
+    // What a screen reader says, and what a finger may drag on a phone: the
+    // scrubber is adjustable, so moving a finger on it seeks, not scrolls.
+    let mut said = Said::new();
+    said.heading(Rect::new(area.x, area.y, area.w, 40.0), "Clip");
+    said.image(at.picture, "The video");
+    said.adjustable(at.bar, "Position", &format!("{} of {}", clock_text(shown), total));
+    said.button(at.play, if state.playing { "Pause" } else { "Play" });
+    said.toggle(at.looping, "Loop", page.looping);
+    said.toggle(at.sound, "Sound", !page.muted);
+    said.send(win);
+    Ok(())
 }
 
 fn quick(canvas: u64, source: &str) -> i32 {
@@ -253,7 +267,7 @@ impl Guest for Component {
             let source = raw.split('\n').find(|a| a.starts_with("https://")).unwrap_or(CLIP);
             return quick(canvas, source);
         }
-        let mut page = Page { video: None, problem: String::new(), looping: false, muted: false, dragging: None };
+        let mut page = Page { video: None, problem: String::new(), looping: false, muted: false, dragging: None, last: None };
         match video::open(CLIP) {
             Ok(v) => {
                 let _ = video::play(v);
@@ -261,17 +275,28 @@ impl Guest for Component {
             }
             Err(e) => page.problem = format!("This video cannot play here: {e:?}"),
         }
+        let mut frames = 0u32;
         loop {
-            // While a finger holds the scrubber, follow it between events.
+            if let Some(v) = page.video {
+                page.last = video::state(v).ok();
+            }
+            // While a finger holds the scrubber, follow it between events,
+            // and every sixth frame (about a tenth of a second) show the
+            // picture there too.
             if page.dragging.is_some() {
-                if let (Some(v), Some((x, _))) = (page.video, pointer::position(win)) {
-                    if let Ok(state) = video::state(v) {
-                        let at = layout(&Screen::of(win), &state);
-                        page.dragging = Some(((x - at.bar.x) / at.bar.w).clamp(0.0, 1.0));
+                if let (Some(state), Some((x, _))) = (page.last.as_ref(), pointer::position(win)) {
+                    let at = layout(&Screen::of(win), state);
+                    let share = ((x - at.bar.x) / at.bar.w).clamp(0.0, 1.0);
+                    page.dragging = Some(share);
+                    frames += 1;
+                    if frames % 6 == 0 {
+                        if let Some(v) = page.video {
+                            let _ = video::seek(v, (share * state.duration_millis as f32) as u64);
+                        }
                     }
                 }
             }
-            if draw(canvas, &Screen::of(win), &page).is_err() {
+            if draw(win, canvas, &Screen::of(win), &page).is_err() {
                 return 1;
             }
             let mut next = events::wait(Some(16));
@@ -279,7 +304,8 @@ impl Guest for Component {
                 match event {
                     Event::CloseRequested(_) => return 0,
                     Event::Pointer(p) => {
-                        if let (Some(v), Ok(state)) = (page.video, page.video.map_or(Err(()), |v| video::state(v).map_err(|_| ()))) {
+                        if let (Some(v), Some(state)) = (page.video, page.last.as_ref()) {
+                            let state = state.clone();
                             let at = layout(&Screen::of(win), &state);
                             let share = ((p.x - at.bar.x) / at.bar.w).clamp(0.0, 1.0);
                             let on_bar = at.bar.inset(-14.0, 0.0, -14.0, 0.0).contains(p.x, p.y);

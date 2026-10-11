@@ -11886,3 +11886,62 @@ fn an_app_tells_the_screen_reader_what_it_drew() {
         .skip(2)
         .all(|e| e["role"] == "text" && e["frame"][2].as_f64().unwrap_or(0.0) > 100.0));
 }
+
+/// A web page inside an app goes only where the app may go
+/// (krate:ui/web-page, IC-927).
+///
+/// `web-probe.wasm` is apps/krate-web-probe built ("Help"), granted
+/// net.connect to krate.tech only. Its page opens on krate.tech; a `go` to
+/// example.com, an `open` of it, and a plain http address are all refused,
+/// and the refusal is said in the page's `problem`.
+#[test]
+fn a_web_page_inside_an_app_goes_only_where_the_app_may() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let wasm = dir.path().join("code.wasm");
+    std::fs::write(&wasm, include_bytes!("fixtures/web-probe.wasm")).expect("probe");
+    let manifest = dir.path().join("manifest.toml");
+    std::fs::write(
+        &manifest,
+        "[app]\nid = \"dev.krate.web-probe\"\nname = \"Help\"\nversion = \"1.0.0\"\n\
+         entry = \"code.wasm\"\nworld = \"krate:app/gui@0.2.0\"\n\n\
+         [[capabilities]]\ncap = \"ui.window:create\"\nrationale = \"window\"\nrequired = true\n\n\
+         [[capabilities]]\ncap = \"net.connect:krate.tech:443\"\nrationale = \"help\"\nrequired = true\n\n\
+         [[capabilities]]\ncap = \"io.stdout\"\nrationale = \"print\"\nrequired = true\n\n\
+         [[capabilities]]\ncap = \"io.args\"\nrationale = \"args\"\nrequired = true\n",
+    )
+    .expect("manifest");
+    let out = krate()
+        .arg("run")
+        .arg("--headless")
+        .arg(&wasm)
+        .arg("--manifest")
+        .arg(&manifest)
+        .arg("--auto-grant")
+        .arg("--")
+        .arg("quick")
+        .output()
+        .expect("run");
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let said = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        said.lines().any(|l| l == "web:open=ok"),
+        "a granted host opens: {said}"
+    );
+    assert!(
+        said.lines().any(|l| l
+            == "web:go-ungranted=refused problem=example.com is not a place this app may open"),
+        "a host it was never granted is refused, and said: {said}"
+    );
+    assert!(
+        said.lines().any(|l| l == "web:open-ungranted=refused"),
+        "{said}"
+    );
+    assert!(
+        said.lines().any(|l| l == "web:open-http=refused"),
+        "plain http never: {said}"
+    );
+}
