@@ -696,6 +696,48 @@ impl ui4::sign_in::Host for Phase3GuiHost {
     }
 }
 
+/// What a screen reader says about an app that draws itself (IC-926).
+/// Phase 4 only. No capability: describing your own screen reaches
+/// nothing but the person's own screen reader.
+impl ui4::accessibility::Host for Phase3GuiHost {
+    fn describe(
+        &mut self,
+        window: u64,
+        elements: Vec<ui4::accessibility::Element>,
+    ) -> wasmtime::Result<Result<(), ui4::types::UiError>> {
+        use krate_adapter_common::ui::{AccessElement, AccessRole};
+        use ui4::accessibility::Role;
+        let elements = elements
+            .into_iter()
+            .map(|e| AccessElement {
+                x: e.x,
+                y: e.y,
+                width: e.width.max(0.0),
+                height: e.height.max(0.0),
+                role: match e.role {
+                    Role::Button => AccessRole::Button,
+                    Role::Link => AccessRole::Link,
+                    Role::Heading => AccessRole::Heading,
+                    Role::Text => AccessRole::Text,
+                    Role::Image => AccessRole::Image,
+                    Role::Toggle => AccessRole::Toggle,
+                    Role::Adjustable => AccessRole::Adjustable,
+                    Role::Field => AccessRole::Field,
+                },
+                label: e.label,
+                value: e.value,
+                checked: e.checked,
+                enabled: e.enabled,
+            })
+            .collect();
+        Ok(Phase3GuiHost::describe_accessibility(self, window, elements).map_err(error_to_phase4))
+    }
+
+    fn screen_reader_on(&mut self) -> wasmtime::Result<bool> {
+        Ok(Phase3GuiHost::screen_reader_on(self))
+    }
+}
+
 /// Dark mode, more contrast and text size (IC-925). Phase 4 only. No
 /// capability: how the person wants things to look is theirs to give every
 /// app, as on the phones themselves.

@@ -366,6 +366,15 @@ then lay out from the sizes text really takes -- measure it -- so larger \
 text wraps or the row grows instead of being cut. Pick your own colours \
 if you like, but pick a dark set for `look.dark`; a brand colour can stay \
 the same in both.\n\n\
+A person who cannot see the screen uses VoiceOver or TalkBack, and a \
+canvas is one silent picture to it: describe each frame as you draw it, \
+with the rects you drew in. `let mut said = krate::layout::Said::new();` \
+then `said.heading(r, \"Inbox\")`, `said.button(r, \"New message\")`, \
+`said.text(r, &line)`, `said.toggle(r, \"Sound\", on)`, `said.image(r, \"A \
+red bicycle\")`, and `said.send(win)` after `present`. A double-tap on an \
+element reaches you as an ordinary tap at its centre, so your controls \
+work unchanged. check-app fails a canvas app that draws text and \
+describes none of it. Widget apps need nothing: Krate describes widgets.\n\n\
 A game drawn at one fixed size (a design size) is the exception: it is \
 scaled to fit and judged on the phone the way Krate turns it -- landscape \
 for a wide design -- so draw its text big enough to survive the shrink, \

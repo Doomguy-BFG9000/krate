@@ -196,6 +196,125 @@ pub struct Nav {
     pub content: Rect,
 }
 
+/// What a screen reader is told about a frame, built as the frame is drawn
+/// (IC-926): every button, heading and line of text, where it is and what
+/// it says. Send it once the frame is drawn; a person using VoiceOver or
+/// TalkBack then hears the screen and double-taps a button to press it,
+/// which reaches the app as an ordinary tap at its centre.
+///
+/// ```ignore
+/// let mut said = Said::new();
+/// said.heading(title_rect, "Inbox");
+/// said.button(compose_rect, "New message");
+/// said.text(row_rect, "Anna: lunch tomorrow?");
+/// said.send(win);
+/// ```
+#[cfg(feature = "gui")]
+#[derive(Default)]
+pub struct Said {
+    elements: Vec<crate::ui::accessibility::Element>,
+}
+
+#[cfg(feature = "gui")]
+impl Said {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    fn push(
+        &mut self,
+        at: Rect,
+        role: crate::ui::accessibility::Role,
+        label: &str,
+        value: &str,
+        checked: Option<bool>,
+    ) -> &mut Self {
+        self.elements.push(crate::ui::accessibility::Element {
+            x: at.x,
+            y: at.y,
+            width: at.w,
+            height: at.h,
+            role,
+            label: alloc::string::String::from(label),
+            value: alloc::string::String::from(value),
+            checked,
+            enabled: true,
+        });
+        self
+    }
+
+    /// Something to press.
+    pub fn button(&mut self, at: Rect, label: &str) -> &mut Self {
+        self.push(at, crate::ui::accessibility::Role::Button, label, "", None)
+    }
+
+    /// A link to somewhere else.
+    pub fn link(&mut self, at: Rect, label: &str) -> &mut Self {
+        self.push(at, crate::ui::accessibility::Role::Link, label, "", None)
+    }
+
+    /// A title over a part of the screen.
+    pub fn heading(&mut self, at: Rect, label: &str) -> &mut Self {
+        self.push(at, crate::ui::accessibility::Role::Heading, label, "", None)
+    }
+
+    /// Text to read.
+    pub fn text(&mut self, at: Rect, text: &str) -> &mut Self {
+        self.push(at, crate::ui::accessibility::Role::Text, text, "", None)
+    }
+
+    /// A picture, said as what it shows.
+    pub fn image(&mut self, at: Rect, says: &str) -> &mut Self {
+        self.push(at, crate::ui::accessibility::Role::Image, says, "", None)
+    }
+
+    /// An on/off switch.
+    pub fn toggle(&mut self, at: Rect, label: &str, on: bool) -> &mut Self {
+        self.push(
+            at,
+            crate::ui::accessibility::Role::Toggle,
+            label,
+            "",
+            Some(on),
+        )
+    }
+
+    /// A value that goes up and down, said with its value ("Volume", "60%").
+    pub fn adjustable(&mut self, at: Rect, label: &str, value: &str) -> &mut Self {
+        self.push(
+            at,
+            crate::ui::accessibility::Role::Adjustable,
+            label,
+            value,
+            None,
+        )
+    }
+
+    /// A field to type into, with what it holds.
+    pub fn field(&mut self, at: Rect, label: &str, value: &str) -> &mut Self {
+        self.push(
+            at,
+            crate::ui::accessibility::Role::Field,
+            label,
+            value,
+            None,
+        )
+    }
+
+    /// The last element, unusable right now (a greyed-out button).
+    pub fn disabled(&mut self) -> &mut Self {
+        if let Some(last) = self.elements.last_mut() {
+            last.enabled = false;
+        }
+        self
+    }
+
+    /// Tell the screen reader. Call it once per frame, after drawing.
+    pub fn send(&self, window: u64) {
+        let _ = crate::ui::accessibility::describe(window, &self.elements);
+    }
+}
+
 /// How the person asked things to look (IC-925): dark mode, more contrast,
 /// larger text. Read it every frame with `Look::now()` (or through
 /// `Screen::of`, which carries it) and draw from it:

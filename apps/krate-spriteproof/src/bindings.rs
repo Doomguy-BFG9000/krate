@@ -27994,6 +27994,321 @@ pub mod krate {
                 }
             }
         }
+        /// What a screen reader says about an app that draws itself (IC-926):
+        /// VoiceOver on a Mac and an iPhone, TalkBack on Android.
+        ///
+        /// A canvas is one picture to a screen reader: without this, a person who
+        /// cannot see the screen hears nothing and can do nothing. The app lists
+        /// what it drew -- each button, heading, line of text, switch -- with where
+        /// it is and what it says, and Krate hands that to the platform. When the
+        /// person double-taps an element, the app receives an ordinary tap at its
+        /// centre, so the controls it already has work unchanged. Widget apps need
+        /// none of this: Krate describes their widgets itself.
+        #[allow(dead_code, async_fn_in_trait, unused_imports, clippy::all)]
+        pub mod accessibility {
+            #[used]
+            #[doc(hidden)]
+            static __FORCE_SECTION_REF: fn() = super::super::super::__link_custom_section_describing_imports;
+            use super::super::super::_rt;
+            pub type UiError = super::super::super::krate::ui::types::UiError;
+            /// What kind of thing an element is; the screen reader says it after the
+            /// label ("Save, button").
+            #[repr(u8)]
+            #[derive(Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
+            pub enum Role {
+                /// Something to press.
+                Button,
+                /// A link to somewhere else.
+                Link,
+                /// A title over a part of the screen; the person can jump between them.
+                Heading,
+                /// Text to read.
+                Text,
+                /// A picture; give it a label that says what it shows.
+                Image,
+                /// An on/off switch or a checkbox: put its state in `checked`.
+                Toggle,
+                /// A value that goes up and down (volume, a slider): put it in `value`.
+                Adjustable,
+                /// A field to type into.
+                Field,
+            }
+            impl ::core::fmt::Debug for Role {
+                fn fmt(
+                    &self,
+                    f: &mut ::core::fmt::Formatter<'_>,
+                ) -> ::core::fmt::Result {
+                    match self {
+                        Role::Button => f.debug_tuple("Role::Button").finish(),
+                        Role::Link => f.debug_tuple("Role::Link").finish(),
+                        Role::Heading => f.debug_tuple("Role::Heading").finish(),
+                        Role::Text => f.debug_tuple("Role::Text").finish(),
+                        Role::Image => f.debug_tuple("Role::Image").finish(),
+                        Role::Toggle => f.debug_tuple("Role::Toggle").finish(),
+                        Role::Adjustable => f.debug_tuple("Role::Adjustable").finish(),
+                        Role::Field => f.debug_tuple("Role::Field").finish(),
+                    }
+                }
+            }
+            impl Role {
+                #[doc(hidden)]
+                pub unsafe fn _lift(val: u8) -> Role {
+                    if !cfg!(debug_assertions) {
+                        return ::core::mem::transmute(val);
+                    }
+                    match val {
+                        0 => Role::Button,
+                        1 => Role::Link,
+                        2 => Role::Heading,
+                        3 => Role::Text,
+                        4 => Role::Image,
+                        5 => Role::Toggle,
+                        6 => Role::Adjustable,
+                        7 => Role::Field,
+                        _ => panic!("invalid enum discriminant"),
+                    }
+                }
+            }
+            /// One thing on screen.
+            #[derive(Clone)]
+            pub struct Element {
+                /// Left edge in points, as drawn.
+                pub x: f32,
+                /// Top edge in points.
+                pub y: f32,
+                /// Width in points.
+                pub width: f32,
+                /// Height in points.
+                pub height: f32,
+                /// What it is.
+                pub role: Role,
+                /// What it says ("Start timer", "Inbox", "Photo of a red bicycle").
+                pub label: _rt::String,
+                /// Its current value, when it has one ("24:37", "60%"); empty if not.
+                pub value: _rt::String,
+                /// On or off, for a toggle; none for anything else.
+                pub checked: Option<bool>,
+                /// False for something that cannot be used right now.
+                pub enabled: bool,
+            }
+            impl ::core::fmt::Debug for Element {
+                fn fmt(
+                    &self,
+                    f: &mut ::core::fmt::Formatter<'_>,
+                ) -> ::core::fmt::Result {
+                    f.debug_struct("Element")
+                        .field("x", &self.x)
+                        .field("y", &self.y)
+                        .field("width", &self.width)
+                        .field("height", &self.height)
+                        .field("role", &self.role)
+                        .field("label", &self.label)
+                        .field("value", &self.value)
+                        .field("checked", &self.checked)
+                        .field("enabled", &self.enabled)
+                        .finish()
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Say what the window shows now, in reading order (top to bottom, then
+            /// left to right, as the person would read it). Replaces what was said
+            /// before; call it again whenever the screen changes. An empty list says
+            /// the window shows nothing to read.
+            pub fn describe(window: u64, elements: &[Element]) -> Result<(), UiError> {
+                unsafe {
+                    #[cfg_attr(target_pointer_width = "64", repr(align(8)))]
+                    #[cfg_attr(target_pointer_width = "32", repr(align(4)))]
+                    struct RetArea(
+                        [::core::mem::MaybeUninit<
+                            u8,
+                        >; 4 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let mut ret_area = RetArea(
+                        [::core::mem::MaybeUninit::uninit(); 4
+                            * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let vec3 = elements;
+                    let len3 = vec3.len();
+                    let layout3 = _rt::alloc::Layout::from_size_align_unchecked(
+                        vec3.len() * (16 + 6 * ::core::mem::size_of::<*const u8>()),
+                        ::core::mem::size_of::<*const u8>(),
+                    );
+                    let result3 = if layout3.size() != 0 {
+                        let ptr = _rt::alloc::alloc(layout3).cast::<u8>();
+                        if ptr.is_null() {
+                            _rt::alloc::handle_alloc_error(layout3);
+                        }
+                        ptr
+                    } else {
+                        ::core::ptr::null_mut()
+                    };
+                    for (i, e) in vec3.into_iter().enumerate() {
+                        let base = result3
+                            .add(i * (16 + 6 * ::core::mem::size_of::<*const u8>()));
+                        {
+                            let Element {
+                                x: x0,
+                                y: y0,
+                                width: width0,
+                                height: height0,
+                                role: role0,
+                                label: label0,
+                                value: value0,
+                                checked: checked0,
+                                enabled: enabled0,
+                            } = e;
+                            *base.add(0).cast::<f32>() = _rt::as_f32(x0);
+                            *base.add(4).cast::<f32>() = _rt::as_f32(y0);
+                            *base.add(8).cast::<f32>() = _rt::as_f32(width0);
+                            *base.add(12).cast::<f32>() = _rt::as_f32(height0);
+                            *base.add(16).cast::<u8>() = (role0.clone() as i32) as u8;
+                            let vec1 = label0;
+                            let ptr1 = vec1.as_ptr().cast::<u8>();
+                            let len1 = vec1.len();
+                            *base
+                                .add(16 + 2 * ::core::mem::size_of::<*const u8>())
+                                .cast::<usize>() = len1;
+                            *base
+                                .add(16 + 1 * ::core::mem::size_of::<*const u8>())
+                                .cast::<*mut u8>() = ptr1.cast_mut();
+                            let vec2 = value0;
+                            let ptr2 = vec2.as_ptr().cast::<u8>();
+                            let len2 = vec2.len();
+                            *base
+                                .add(16 + 4 * ::core::mem::size_of::<*const u8>())
+                                .cast::<usize>() = len2;
+                            *base
+                                .add(16 + 3 * ::core::mem::size_of::<*const u8>())
+                                .cast::<*mut u8>() = ptr2.cast_mut();
+                            match checked0 {
+                                Some(e) => {
+                                    *base
+                                        .add(16 + 5 * ::core::mem::size_of::<*const u8>())
+                                        .cast::<u8>() = (1i32) as u8;
+                                    *base
+                                        .add(17 + 5 * ::core::mem::size_of::<*const u8>())
+                                        .cast::<u8>() = (match e {
+                                        true => 1,
+                                        false => 0,
+                                    }) as u8;
+                                }
+                                None => {
+                                    *base
+                                        .add(16 + 5 * ::core::mem::size_of::<*const u8>())
+                                        .cast::<u8>() = (0i32) as u8;
+                                }
+                            };
+                            *base
+                                .add(18 + 5 * ::core::mem::size_of::<*const u8>())
+                                .cast::<u8>() = (match enabled0 {
+                                true => 1,
+                                false => 0,
+                            }) as u8;
+                        }
+                    }
+                    let ptr4 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:ui/accessibility@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "describe"]
+                        fn wit_import5(_: i64, _: *mut u8, _: usize, _: *mut u8);
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import5(
+                        _: i64,
+                        _: *mut u8,
+                        _: usize,
+                        _: *mut u8,
+                    ) {
+                        unreachable!()
+                    }
+                    unsafe { wit_import5(_rt::as_i64(&window), result3, len3, ptr4) };
+                    let l6 = i32::from(*ptr4.add(0).cast::<u8>());
+                    let result15 = match l6 {
+                        0 => {
+                            let e = ();
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l7 = i32::from(
+                                    *ptr4.add(::core::mem::size_of::<*const u8>()).cast::<u8>(),
+                                );
+                                use super::super::super::krate::ui::types::UiError as V14;
+                                let v14 = match l7 {
+                                    0 => V14::PermissionDenied,
+                                    1 => V14::InvalidWindow,
+                                    2 => V14::InvalidWidget,
+                                    3 => {
+                                        let e14 = {
+                                            let l8 = *ptr4
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l9 = *ptr4
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len10 = l9;
+                                            let bytes10 = _rt::Vec::from_raw_parts(
+                                                l8.cast(),
+                                                len10,
+                                                len10,
+                                            );
+                                            _rt::string_lift(bytes10)
+                                        };
+                                        V14::Unsupported(e14)
+                                    }
+                                    n => {
+                                        debug_assert_eq!(n, 4, "invalid enum discriminant");
+                                        let e14 = {
+                                            let l11 = *ptr4
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l12 = *ptr4
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len13 = l12;
+                                            let bytes13 = _rt::Vec::from_raw_parts(
+                                                l11.cast(),
+                                                len13,
+                                                len13,
+                                            );
+                                            _rt::string_lift(bytes13)
+                                        };
+                                        V14::Platform(e14)
+                                    }
+                                };
+                                v14
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    };
+                    if layout3.size() != 0 {
+                        _rt::alloc::dealloc(result3.cast(), layout3);
+                    }
+                    result15
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Whether a screen reader is on right now, so an app can skip work that
+            /// only matters to one (it must still describe its screen either way).
+            pub fn screen_reader_on() -> bool {
+                unsafe {
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:ui/accessibility@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "screen-reader-on"]
+                        fn wit_import0() -> i32;
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import0() -> i32 {
+                        unreachable!()
+                    }
+                    let ret = unsafe { wit_import0() };
+                    _rt::bool_lift(ret as u8)
+                }
+            }
+        }
     }
 }
 #[rustfmt::skip]
@@ -28265,9 +28580,9 @@ pub(crate) use __export_gui_impl as export;
 )]
 #[doc(hidden)]
 #[allow(clippy::octal_escapes)]
-pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 17719] = *b"\
-\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\xbc\x89\x01\x01A\x02\
-\x01A\xa4\x01\x01B\x04\x01m\x05\x05trace\x05debug\x04info\x04warn\x05error\x04\0\
+pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 17990] = *b"\
+\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\xcb\x8b\x01\x01A\x02\
+\x01A\xa6\x01\x01B\x04\x01m\x05\x05trace\x05debug\x04info\x04warn\x05error\x04\0\
 \x09log-level\x03\0\0\x01q\x05\x06closed\0\0\x0binterrupted\0\0\x0eunexpected-eo\
 f\0\0\x0cinvalid-utf8\0\0\x05other\x01s\0\x04\0\x08io-error\x03\0\x02\x03\0\x14k\
 rate:io/types@0.1.0\x05\0\x02\x03\0\0\x08io-error\x01B\x15\x02\x03\x02\x01\x01\x04\
@@ -28530,25 +28845,31 @@ j\0\x01\x01\x01@\x05\x02ids\x05titles\x04bodys\x0dafter-secondsw\x05daily\x7f\0\
 lable\x01\x02\x01@\x01\x06reasons\0\x01\x04\0\x05check\x01\x03\x03\0\x15krate:ui\
 /unlock@0.1.0\x05E\x01B\x04\x01r\x03\x04dark\x7f\x0dhigh-contrast\x7f\x0atext-sc\
 alev\x04\0\x04look\x03\0\0\x01@\0\0\x01\x04\0\x07current\x01\x02\x03\0\x19krate:\
-ui/appearance@0.1.0\x05F\x01B\x14\x01r\x04\x01rv\x01gv\x01bv\x01av\x04\0\x05colo\
-r\x03\0\0\x01r\x02\x01xv\x01yv\x04\0\x05point\x03\0\x02\x01r\x02\x05widthv\x06he\
-ightv\x04\0\x04size\x03\0\x04\x01r\x04\x05widthv\x06heightv\x06ascentv\x07descen\
-tv\x04\0\x0ctext-metrics\x03\0\x06\x01r\x04\x01xv\x01yv\x05widthv\x06heightv\x04\
+ui/appearance@0.1.0\x05F\x01B\x0d\x02\x03\x02\x01&\x04\0\x08ui-error\x03\0\0\x01\
+m\x08\x06button\x04link\x07heading\x04text\x05image\x06toggle\x0aadjustable\x05f\
+ield\x04\0\x04role\x03\0\x02\x01k\x7f\x01r\x09\x01xv\x01yv\x05widthv\x06heightv\x04\
+role\x03\x05labels\x05values\x07checked\x04\x07enabled\x7f\x04\0\x07element\x03\0\
+\x05\x01p\x06\x01j\0\x01\x01\x01@\x02\x06windoww\x08elements\x07\0\x08\x04\0\x08\
+describe\x01\x09\x01@\0\0\x7f\x04\0\x10screen-reader-on\x01\x0a\x03\0\x1ckrate:u\
+i/accessibility@0.1.0\x05G\x01B\x14\x01r\x04\x01rv\x01gv\x01bv\x01av\x04\0\x05co\
+lor\x03\0\0\x01r\x02\x01xv\x01yv\x04\0\x05point\x03\0\x02\x01r\x02\x05widthv\x06\
+heightv\x04\0\x04size\x03\0\x04\x01r\x04\x05widthv\x06heightv\x06ascentv\x07desc\
+entv\x04\0\x0ctext-metrics\x03\0\x06\x01r\x04\x01xv\x01yv\x05widthv\x06heightv\x04\
 \0\x04rect\x03\0\x08\x01r\x02\x06offsetv\x05color\x01\x04\0\x0dgradient-stop\x03\
 \0\x0a\x01m\x03\x04sans\x05serif\x04mono\x04\0\x0bfont-family\x03\0\x0c\x01r\x04\
 \x06weight{\x06italic\x7f\x0eletter-spacingv\x06family\x0d\x04\0\x0atext-style\x03\
 \0\x0e\x01r\x04\x08top-leftv\x09top-rightv\x0cbottom-rightv\x0bbottom-leftv\x04\0\
 \x0ccorner-radii\x03\0\x10\x01q\x04\x11permission-denied\0\0\x0einvalid-target\0\
 \0\x0bunsupported\x01s\0\x08platform\x01s\0\x04\0\x09gfx-error\x03\0\x12\x03\0\x15\
-krate:gfx/types@0.1.0\x05G\x02\x03\00\x05color\x02\x03\00\x05point\x02\x03\00\x04\
-rect\x02\x03\00\x04size\x02\x03\00\x0ctext-metrics\x02\x03\00\x09gfx-error\x02\x03\
-\00\x0dgradient-stop\x02\x03\00\x0ccorner-radii\x02\x03\00\x0atext-style\x02\x03\
-\00\x0bfont-family\x01BK\x02\x03\x02\x01H\x04\0\x05color\x03\0\0\x02\x03\x02\x01\
-I\x04\0\x05point\x03\0\x02\x02\x03\x02\x01J\x04\0\x04rect\x03\0\x04\x02\x03\x02\x01\
-K\x04\0\x04size\x03\0\x06\x02\x03\x02\x01L\x04\0\x0ctext-metrics\x03\0\x08\x02\x03\
-\x02\x01M\x04\0\x09gfx-error\x03\0\x0a\x02\x03\x02\x01N\x04\0\x0dgradient-stop\x03\
-\0\x0c\x02\x03\x02\x01O\x04\0\x0ccorner-radii\x03\0\x0e\x02\x03\x02\x01P\x04\0\x0a\
-text-style\x03\0\x10\x02\x03\x02\x01Q\x04\0\x0bfont-family\x03\0\x12\x01j\x01w\x01\
+krate:gfx/types@0.1.0\x05H\x02\x03\01\x05color\x02\x03\01\x05point\x02\x03\01\x04\
+rect\x02\x03\01\x04size\x02\x03\01\x0ctext-metrics\x02\x03\01\x09gfx-error\x02\x03\
+\01\x0dgradient-stop\x02\x03\01\x0ccorner-radii\x02\x03\01\x0atext-style\x02\x03\
+\01\x0bfont-family\x01BK\x02\x03\x02\x01I\x04\0\x05color\x03\0\0\x02\x03\x02\x01\
+J\x04\0\x05point\x03\0\x02\x02\x03\x02\x01K\x04\0\x04rect\x03\0\x04\x02\x03\x02\x01\
+L\x04\0\x04size\x03\0\x06\x02\x03\x02\x01M\x04\0\x0ctext-metrics\x03\0\x08\x02\x03\
+\x02\x01N\x04\0\x09gfx-error\x03\0\x0a\x02\x03\x02\x01O\x04\0\x0dgradient-stop\x03\
+\0\x0c\x02\x03\x02\x01P\x04\0\x0ccorner-radii\x03\0\x0e\x02\x03\x02\x01Q\x04\0\x0a\
+text-style\x03\0\x10\x02\x03\x02\x01R\x04\0\x0bfont-family\x03\0\x12\x01j\x01w\x01\
 \x0b\x01@\x02\x06windoww\x06widgetw\0\x14\x04\0\x04bind\x01\x15\x01j\x01\x07\x01\
 \x0b\x01@\x01\x06canvasw\0\x16\x04\0\x0bcanvas-size\x01\x17\x01j\0\x01\x0b\x01@\x02\
 \x06canvasw\x04size\x07\0\x18\x04\0\x0fset-design-size\x01\x19\x01@\x05\x06canva\
@@ -28577,8 +28898,8 @@ t-sizev\x03ink\x01\0\x18\x04\0\x09draw-text\x01.\x01@\x03\x06canvasw\x04texts\x0
 font-sizev\0%\x04\0\x0cmeasure-text\x01/\x01@\x05\x06canvasw\x04area\x05\x05widt\
 hy\x06heighty\x04rgba(\0\x18\x04\0\x0bdraw-pixels\x010\x01@\x07\x06canvasw\x06ce\
 nter\x03\x03dst\x07\x05anglev\x05widthy\x06heighty\x04rgba(\0\x18\x04\0\x0bdraw-\
-sprite\x011\x04\0\x07present\x01\x1b\x03\0\x18krate:gfx/canvas2d@0.1.0\x05R\x01B\
-%\x02\x03\x02\x01H\x04\0\x05color\x03\0\0\x02\x03\x02\x01M\x04\0\x09gfx-error\x03\
+sprite\x011\x04\0\x07present\x01\x1b\x03\0\x18krate:gfx/canvas2d@0.1.0\x05S\x01B\
+%\x02\x03\x02\x01I\x04\0\x05color\x03\0\0\x02\x03\x02\x01N\x04\0\x09gfx-error\x03\
 \0\x02\x01pv\x01r\x0a\x07ambientv\x08specularv\x09shininessv\x0bfog-densityv\x09\
 fog-color\x01\x0efill-direction\x04\x0afill-color\x01\x0dshadow-radiusv\x0fshado\
 w-softnessv\x08exposurev\x04\0\x08lighting\x03\0\x05\x01j\x01w\x01\x03\x01@\x02\x06\
@@ -28596,15 +28917,15 @@ enew\x08lighting\x06\0\x09\x04\0\x0cset-lighting\x01\x13\x01@\x08\x05scenew\x08v
 ertices\x04\x07normals\x04\x08tangents\x04\x03uvs\x04\x07texturew\x0enormal-text\
 urew\x04tint\x01\0\x09\x04\0\x0dnormal-mapped\x01\x14\x04\0\x05unlit\x01\x11\x01\
 @\x02\x05scenew\x07enabled\x7f\0\x09\x04\0\x0fcull-back-faces\x01\x15\x01@\x01\x05\
-scenew\0\x09\x04\0\x07present\x01\x16\x03\0\x17krate:gfx/scene3d@0.1.0\x05S\x01B\
-\x11\x02\x03\x02\x01J\x04\0\x04rect\x03\0\0\x02\x03\x02\x01O\x04\0\x0ccorner-rad\
-ii\x03\0\x02\x02\x03\x02\x01M\x04\0\x09gfx-error\x03\0\x04\x01p}\x01j\x01w\x01\x05\
+scenew\0\x09\x04\0\x07present\x01\x16\x03\0\x17krate:gfx/scene3d@0.1.0\x05T\x01B\
+\x11\x02\x03\x02\x01K\x04\0\x04rect\x03\0\0\x02\x03\x02\x01P\x04\0\x0ccorner-rad\
+ii\x03\0\x02\x02\x03\x02\x01N\x04\0\x09gfx-error\x03\0\x04\x01p}\x01j\x01w\x01\x05\
 \x01@\x04\x06canvasw\x05widthy\x06heighty\x04rgba\x06\0\x07\x04\0\x04keep\x01\x08\
 \x01j\0\x01\x05\x01@\x03\x06canvasw\x05imagew\x04area\x01\0\x09\x04\0\x04draw\x01\
 \x0a\x01@\x04\x06canvasw\x05imagew\x04area\x01\x05radii\x03\0\x09\x04\0\x0adraw-\
 round\x01\x0b\x01@\x02\x06canvasw\x05imagew\x01\0\x04\0\x06forget\x01\x0c\x03\0\x1d\
-krate:gfx/canvas-images@0.1.0\x05T\x01B\x1e\x02\x03\x02\x01J\x04\0\x04rect\x03\0\
-\0\x02\x03\x02\x01O\x04\0\x0ccorner-radii\x03\0\x02\x02\x03\x02\x01M\x04\0\x09gf\
+krate:gfx/canvas-images@0.1.0\x05U\x01B\x1e\x02\x03\x02\x01K\x04\0\x04rect\x03\0\
+\0\x02\x03\x02\x01P\x04\0\x0ccorner-radii\x03\0\x02\x02\x03\x02\x01N\x04\0\x09gf\
 x-error\x03\0\x04\x01r\x08\x0fposition-millisw\x0fduration-millisw\x05widthy\x06\
 heighty\x05ready\x7f\x07playing\x7f\x05ended\x7f\x07problems\x04\0\x0bvideo-stat\
 e\x03\0\x06\x01j\x01w\x01\x05\x01@\x01\x06sources\0\x08\x04\0\x04open\x01\x09\x01\
@@ -28615,46 +28936,46 @@ looping\x7f\0\x0a\x04\0\x0bset-looping\x01\x0d\x01@\x02\x05videow\x05muted\x7f\0
 \0\x05state\x01\x10\x01@\x03\x06canvasw\x05videow\x04area\x01\0\x0a\x04\0\x04dra\
 w\x01\x11\x01@\x04\x06canvasw\x05videow\x04area\x01\x05radii\x03\0\x0a\x04\0\x0a\
 draw-round\x01\x12\x01@\x01\x05videow\x01\0\x04\0\x05close\x01\x13\x03\0\x15krat\
-e:gfx/video@0.1.0\x05U\x01B\x06\x01m\x02\x07pcm-s16\x07float32\x04\0\x0dsample-f\
+e:gfx/video@0.1.0\x05V\x01B\x06\x01m\x02\x07pcm-s16\x07float32\x04\0\x0dsample-f\
 ormat\x03\0\0\x01r\x04\x0bsample-ratey\x08channels{\x06format\x01\x0dbuffer-fram\
 esy\x04\0\x0dstream-config\x03\0\x02\x01q\x05\x11permission-denied\0\0\x0einvali\
 d-stream\0\0\x12device-unavailable\0\0\x0bunsupported\x01s\0\x08platform\x01s\0\x04\
-\0\x0baudio-error\x03\0\x04\x03\0\x17krate:audio/types@0.1.0\x05V\x02\x03\05\x0b\
-audio-error\x02\x03\05\x0dstream-config\x01B\x15\x02\x03\x02\x01W\x04\0\x0baudio\
--error\x03\0\0\x02\x03\x02\x01X\x04\0\x0dstream-config\x03\0\x02\x01j\x01w\x01\x01\
+\0\x0baudio-error\x03\0\x04\x03\0\x17krate:audio/types@0.1.0\x05W\x02\x03\06\x0b\
+audio-error\x02\x03\06\x0dstream-config\x01B\x15\x02\x03\x02\x01X\x04\0\x0baudio\
+-error\x03\0\0\x02\x03\x02\x01Y\x04\0\x0dstream-config\x03\0\x02\x01j\x01w\x01\x01\
 \x01@\x01\x06config\x03\0\x04\x04\0\x04open\x01\x05\x01j\0\x01\x01\x01@\x01\x09s\
 tream-idw\0\x06\x04\0\x05start\x01\x07\x04\0\x04stop\x01\x07\x01p}\x01j\x01y\x01\
 \x01\x01@\x02\x09stream-idw\x05bytes\x08\0\x09\x04\0\x05write\x01\x0a\x01@\x02\x09\
 stream-idw\x05bytes\x08\0\x04\x04\0\x0aload-sound\x01\x0b\x01@\x03\x09stream-idw\
 \x05soundw\x04gainv\0\x06\x04\0\x0aplay-sound\x01\x0c\x01@\x02\x09stream-idw\x05\
 soundw\0\x06\x04\0\x0astop-sound\x01\x0d\x03\0\x1akrate:audio/playback@0.1.0\x05\
-Y\x01B\x05\x02\x03\x02\x01W\x04\0\x0baudio-error\x03\0\0\x01j\x01y\x01\x01\x01@\x01\
+Z\x01B\x05\x02\x03\x02\x01X\x04\0\x0baudio-error\x03\0\0\x01j\x01y\x01\x01\x01@\x01\
 \x09stream-idw\0\x02\x04\0\x06queued\x01\x03\x03\0\x20krate:audio/playback-queue\
-@0.1.0\x05Z\x01B\x0f\x02\x03\x02\x01W\x04\0\x0baudio-error\x03\0\0\x02\x03\x02\x01\
-X\x04\0\x0dstream-config\x03\0\x02\x01j\x01w\x01\x01\x01@\x01\x06config\x03\0\x04\
+@0.1.0\x05[\x01B\x0f\x02\x03\x02\x01X\x04\0\x0baudio-error\x03\0\0\x02\x03\x02\x01\
+Y\x04\0\x0dstream-config\x03\0\x02\x01j\x01w\x01\x01\x01@\x01\x06config\x03\0\x04\
 \x04\0\x04open\x01\x05\x01j\0\x01\x01\x01@\x01\x09stream-idw\0\x06\x04\0\x05star\
 t\x01\x07\x04\0\x04stop\x01\x07\x01p}\x01j\x01\x08\x01\x01\x01@\x02\x09stream-id\
 w\x09max-bytesy\0\x09\x04\0\x04read\x01\x0a\x03\0\x19krate:audio/capture@0.1.0\x05\
-[\x01B\x0d\x01m\x01\x05rgba8\x04\0\x0cframe-format\x03\0\0\x01r\x04\x05widthy\x06\
+\\\x01B\x0d\x01m\x01\x05rgba8\x04\0\x0cframe-format\x03\0\0\x01r\x04\x05widthy\x06\
 heighty\x03fpsy\x06format\x01\x04\0\x0dstream-config\x03\0\x02\x01r\x04\x05width\
 y\x06heighty\x03fpsy\x06format\x01\x04\0\x0aframe-info\x03\0\x04\x01r\x02\x02ids\
 \x05labels\x04\0\x0bdevice-info\x03\0\x06\x01p}\x01r\x04\x05bytes\x08\x05widthy\x06\
 heighty\x0eelapsed-millisw\x04\0\x05frame\x03\0\x09\x01q\x06\x11permission-denie\
 d\0\0\x0einvalid-stream\0\0\x12device-unavailable\0\0\x0dsystem-denied\0\0\x0bun\
 supported\x01s\0\x08platform\x01s\0\x04\0\x0ccamera-error\x03\0\x0b\x03\0\x18kra\
-te:camera/types@0.1.0\x05\\\x02\x03\09\x0ccamera-error\x02\x03\09\x0bdevice-info\
-\x02\x03\09\x05frame\x02\x03\09\x0aframe-info\x02\x03\09\x0dstream-config\x01B\x1d\
-\x02\x03\x02\x01]\x04\0\x0ccamera-error\x03\0\0\x02\x03\x02\x01^\x04\0\x0bdevice\
--info\x03\0\x02\x02\x03\x02\x01_\x04\0\x05frame\x03\0\x04\x02\x03\x02\x01`\x04\0\
-\x0aframe-info\x03\0\x06\x02\x03\x02\x01a\x04\0\x0dstream-config\x03\0\x08\x01p\x03\
-\x01j\x01\x0a\x01\x01\x01@\0\0\x0b\x04\0\x07devices\x01\x0c\x01j\x01w\x01\x01\x01\
-@\x02\x06devices\x06config\x09\0\x0d\x04\0\x04open\x01\x0e\x01j\x01\x07\x01\x01\x01\
-@\x01\x09stream-idw\0\x0f\x04\0\x04info\x01\x10\x01j\0\x01\x01\x01@\x01\x09strea\
-m-idw\0\x11\x04\0\x05start\x01\x12\x04\0\x04stop\x01\x12\x01k\x05\x01j\x01\x13\x01\
-\x01\x01@\x01\x09stream-idw\0\x14\x04\0\x04read\x01\x15\x04\0\x05close\x01\x12\x03\
-\0\x1akrate:camera/capture@0.1.0\x05b\x01B\x12\x01r\x01\x04texts\x04\0\x0atransc\
-ript\x03\0\0\x01q\x05\x0finvalid-request\x01s\0\x0fmodel-not-found\0\0\x0dmodel-\
-invalid\x01s\0\x0bunsupported\x01s\0\x09inference\x01s\0\x04\0\x0cspeech-error\x03\
+te:camera/types@0.1.0\x05]\x02\x03\0:\x0ccamera-error\x02\x03\0:\x0bdevice-info\x02\
+\x03\0:\x05frame\x02\x03\0:\x0aframe-info\x02\x03\0:\x0dstream-config\x01B\x1d\x02\
+\x03\x02\x01^\x04\0\x0ccamera-error\x03\0\0\x02\x03\x02\x01_\x04\0\x0bdevice-inf\
+o\x03\0\x02\x02\x03\x02\x01`\x04\0\x05frame\x03\0\x04\x02\x03\x02\x01a\x04\0\x0a\
+frame-info\x03\0\x06\x02\x03\x02\x01b\x04\0\x0dstream-config\x03\0\x08\x01p\x03\x01\
+j\x01\x0a\x01\x01\x01@\0\0\x0b\x04\0\x07devices\x01\x0c\x01j\x01w\x01\x01\x01@\x02\
+\x06devices\x06config\x09\0\x0d\x04\0\x04open\x01\x0e\x01j\x01\x07\x01\x01\x01@\x01\
+\x09stream-idw\0\x0f\x04\0\x04info\x01\x10\x01j\0\x01\x01\x01@\x01\x09stream-idw\
+\0\x11\x04\0\x05start\x01\x12\x04\0\x04stop\x01\x12\x01k\x05\x01j\x01\x13\x01\x01\
+\x01@\x01\x09stream-idw\0\x14\x04\0\x04read\x01\x15\x04\0\x05close\x01\x12\x03\0\
+\x1akrate:camera/capture@0.1.0\x05c\x01B\x12\x01r\x01\x04texts\x04\0\x0atranscri\
+pt\x03\0\0\x01q\x05\x0finvalid-request\x01s\0\x0fmodel-not-found\0\0\x0dmodel-in\
+valid\x01s\0\x0bunsupported\x01s\0\x09inference\x01s\0\x04\0\x0cspeech-error\x03\
 \0\x02\x01m\x05\x0finvalid-request\x0fmodel-not-found\x0dmodel-invalid\x0bunsupp\
 orted\x09inference\x04\0\x0bmatch-error\x03\0\x04\x01p}\x01ks\x01j\x01\x01\x01\x03\
 \x01@\x04\x0bmodel-assets\x0apcm-s16-le\x06\x0bsample-ratey\x08language\x07\0\x08\
@@ -28662,14 +28983,14 @@ orted\x09inference\x04\0\x0bmatch-error\x03\0\x04\x01p}\x01ks\x01j\x01\x01\x01\x
 16-le\x06\x0bsample-ratey\x08language\x07\x08expecteds\0\x0a\x04\0\x0amatch-line\
 \x01\x0b\x01k}\x01j\x01\x0c\x01\x05\x01@\x06\x0bmodel-assets\x0apcm-s16-le\x06\x0b\
 sample-ratey\x08language\x07\x08expecteds\x06finish\x7f\0\x0d\x04\0\x11match-lin\
-e-stream\x01\x0e\x03\0\x20krate:speech/transcription@0.1.0\x05c\x01B\x12\x01r\x03\
+e-stream\x01\x0e\x03\0\x20krate:speech/transcription@0.1.0\x05d\x01B\x12\x01r\x03\
 \x02ids\x04names\x08languages\x04\0\x05voice\x03\0\0\x01q\x04\x11permission-deni\
 ed\0\0\x0finvalid-request\x01s\0\x0bunsupported\x01s\0\x08platform\x01s\0\x04\0\x09\
 say-error\x03\0\x02\x01p\x01\x01j\x01\x04\x01\x03\x01@\0\0\x05\x04\0\x06voices\x01\
 \x06\x01ks\x01kv\x01j\0\x01\x03\x01@\x03\x04texts\x05voice\x07\x04rate\x08\0\x09\
 \x04\0\x03say\x01\x0a\x01@\0\0\x09\x04\0\x04stop\x01\x0b\x01j\x01\x7f\x01\x03\x01\
-@\0\0\x0c\x04\0\x08speaking\x01\x0d\x03\0\x1ckrate:speech/synthesis@0.1.0\x05d\x01\
-@\0\0z\x04\0\x03run\x01e\x04\0\x13krate:app/gui@0.2.0\x04\0\x0b\x09\x01\0\x03gui\
+@\0\0\x0c\x04\0\x08speaking\x01\x0d\x03\0\x1ckrate:speech/synthesis@0.1.0\x05e\x01\
+@\0\0z\x04\0\x03run\x01f\x04\0\x13krate:app/gui@0.2.0\x04\0\x0b\x09\x01\0\x03gui\
 \x03\0\0\0G\x09producers\x01\x0cprocessed-by\x02\x0dwit-component\x070.227.1\x10\
 wit-bindgen-rust\x060.41.0";
 #[inline(never)]

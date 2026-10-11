@@ -707,6 +707,14 @@ mod player {
         }
     }
 
+    /// The app is gone: Krate's menu, its name and grants go with it.
+    fn leave_app() {
+        krate_adapter_ios::uikit_native::set_app_chrome(false);
+        krate_adapter_ios::uikit_native::set_current_app(None);
+        krate_adapter_ios::uikit_native::set_current_name(None);
+        krate_adapter_ios::uikit_native::set_current_uses(None);
+    }
+
     /// A granted capability as the permission sheet words it (apps/krate-wall
     /// `describe`), or None for what every app has: its window, its output,
     /// the clock and randomness.
@@ -752,6 +760,12 @@ mod player {
 
     /// Ask, then run. Every open asks: the answer is never remembered.
     fn launch(app: App, data_root: &Path) {
+        // The screen the person tapped from, blurred, for the permission
+        // sheet to sit over (F-314): taken now, before anything covers it.
+        let _ = std::fs::create_dir_all(data_root.join("wall"));
+        krate_adapter_ios::uikit_native::capture_behind(
+            &data_root.join("wall").join("behind.rgba"),
+        );
         let preview_path = data_root
             .join("home-ui")
             .join("art")
@@ -795,6 +809,12 @@ mod player {
             App::Received(path) => path.to_string_lossy().into_owned(),
         };
         krate_adapter_ios::uikit_native::set_current_app(Some((manifest.app.id.clone(), opens)));
+        // Krate's menu from the permission sheet on (IC-934): the sheet and
+        // the opening cover are where a stuck app is first noticed, and Close
+        // there means "don't open it".
+        krate_adapter_ios::uikit_native::set_current_name(Some(manifest.app.name.clone()));
+        krate_adapter_ios::uikit_native::set_current_uses(None);
+        krate_adapter_ios::uikit_native::set_app_chrome(true);
 
         // The line under the app's name on the permission sheet.
         let detail = match &app {
@@ -810,11 +830,13 @@ mod player {
             },
         };
         let Some(granted) = ask_on_wall(data_root, &manifest, &detail) else {
+            leave_app();
             return;
         };
         let declared = match manifest.declared_capabilities() {
             Ok(declared) => declared,
             Err(err) => {
+                leave_app();
                 notice(data_root, "This app did not open", &format!("{err:#}"));
                 return;
             }
@@ -830,7 +852,6 @@ mod player {
             .collect();
         // For Krate's menu (IC-934): the app's name, and what it may use this
         // run in the permission sheet's own words.
-        krate_adapter_ios::uikit_native::set_current_name(Some(manifest.app.name.clone()));
         let mut uses: Vec<String> = manifest
             .capabilities
             .iter()
@@ -838,7 +859,7 @@ mod player {
             .filter_map(|request| use_in_words(&request.cap))
             .collect();
         uses.dedup();
-        krate_adapter_ios::uikit_native::set_current_uses(uses);
+        krate_adapter_ios::uikit_native::set_current_uses(Some(uses));
 
         let records = kept
             .iter()
@@ -881,7 +902,6 @@ mod player {
         // loading -- lifting on the app's first frame at the screen's real
         // size; Krate's close capsule over the app, the way back home.
         krate_adapter_ios::uikit_native::show_loading(&manifest.app.name, "Opening");
-        krate_adapter_ios::uikit_native::set_app_chrome(true);
         // A picture of the app as it really looks, for its home-screen card,
         // taken a few seconds into its own run (once per run). Asked only
         // now, past the permission sheet: asked earlier, a slow answer on the
@@ -894,6 +914,7 @@ mod player {
             run_native(&config)
         } else {
             let Some(wasm) = wasm else {
+                leave_app();
                 return;
             };
             krate_runtime::Runtime::new(&config).and_then(|runtime| {
@@ -901,10 +922,7 @@ mod player {
             })
         };
         krate_adapter_ios::uikit_native::cancel_preview();
-        krate_adapter_ios::uikit_native::set_app_chrome(false);
-        krate_adapter_ios::uikit_native::set_current_app(None);
-        krate_adapter_ios::uikit_native::set_current_name(None);
-        krate_adapter_ios::uikit_native::set_current_uses(Vec::new());
+        leave_app();
         if records {
             record_session(false);
         }

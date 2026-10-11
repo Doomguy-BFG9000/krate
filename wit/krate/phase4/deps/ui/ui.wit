@@ -745,6 +745,73 @@ interface screen {
   facts: func(window: u64) -> screen-facts;
 }
 
+/// What a screen reader says about an app that draws itself (IC-926):
+/// VoiceOver on a Mac and an iPhone, TalkBack on Android.
+///
+/// A canvas is one picture to a screen reader: without this, a person who
+/// cannot see the screen hears nothing and can do nothing. The app lists
+/// what it drew -- each button, heading, line of text, switch -- with where
+/// it is and what it says, and Krate hands that to the platform. When the
+/// person double-taps an element, the app receives an ordinary tap at its
+/// centre, so the controls it already has work unchanged. Widget apps need
+/// none of this: Krate describes their widgets itself.
+interface accessibility {
+  use types.{ui-error};
+
+  /// What kind of thing an element is; the screen reader says it after the
+  /// label ("Save, button").
+  enum role {
+    /// Something to press.
+    button,
+    /// A link to somewhere else.
+    link,
+    /// A title over a part of the screen; the person can jump between them.
+    heading,
+    /// Text to read.
+    text,
+    /// A picture; give it a label that says what it shows.
+    image,
+    /// An on/off switch or a checkbox: put its state in `checked`.
+    toggle,
+    /// A value that goes up and down (volume, a slider): put it in `value`.
+    adjustable,
+    /// A field to type into.
+    field,
+  }
+
+  /// One thing on screen.
+  record element {
+    /// Left edge in points, as drawn.
+    x: f32,
+    /// Top edge in points.
+    y: f32,
+    /// Width in points.
+    width: f32,
+    /// Height in points.
+    height: f32,
+    /// What it is.
+    role: role,
+    /// What it says ("Start timer", "Inbox", "Photo of a red bicycle").
+    label: string,
+    /// Its current value, when it has one ("24:37", "60%"); empty if not.
+    value: string,
+    /// On or off, for a toggle; none for anything else.
+    checked: option<bool>,
+    /// False for something that cannot be used right now.
+    enabled: bool,
+  }
+
+  /// Say what the window shows now, in reading order (top to bottom, then
+  /// left to right, as the person would read it). Replaces what was said
+  /// before; call it again whenever the screen changes. An empty list says
+  /// the window shows nothing to read.
+  describe: func(window: u64, elements: list<element>) -> result<_, ui-error>;
+
+  /// Whether a screen reader is on right now, so an app can skip work that
+  /// only matters to one (it must still describe its screen either way).
+  screen-reader-on: func() -> bool;
+}
+
 /// How the person asked things to look (IC-925): dark mode, more
 /// contrast, larger text.
 ///

@@ -11824,3 +11824,65 @@ fn a_widget_app_is_drawn_in_the_persons_look() {
     assert!(light > 0.8, "a light window by default: {light:.2}");
     assert!(dark < 0.3, "the same app goes dark in dark mode: {dark:.2}");
 }
+
+/// An app that draws itself tells the screen reader what it drew
+/// (krate:ui/accessibility, IC-926).
+///
+/// `look-probe.wasm` describes its page with the layout kit's `Said`: the
+/// heading, the line saying the look, and each paragraph, with the rects it
+/// drew them in. Headless, `KRATE_ACCESS_DUMP` writes what the host was
+/// told, so this reads what VoiceOver and TalkBack would.
+#[test]
+fn an_app_tells_the_screen_reader_what_it_drew() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let wasm = dir.path().join("code.wasm");
+    std::fs::write(&wasm, include_bytes!("fixtures/look-probe.wasm")).expect("probe");
+    let manifest = dir.path().join("manifest.toml");
+    std::fs::write(
+        &manifest,
+        "[app]\nid = \"dev.krate.look-probe\"\nname = \"Look\"\nversion = \"1.0.0\"\n\
+         entry = \"code.wasm\"\nworld = \"krate:app/gui@0.2.0\"\n\n\
+         [[capabilities]]\ncap = \"ui.window:create\"\nrationale = \"window\"\nrequired = true\n\n\
+         [[capabilities]]\ncap = \"io.stdout\"\nrationale = \"print\"\nrequired = true\n\n\
+         [[capabilities]]\ncap = \"io.args\"\nrationale = \"args\"\nrequired = true\n",
+    )
+    .expect("manifest");
+    let dump = dir.path().join("said.json");
+    let out = krate()
+        .arg("run")
+        .arg("--headless")
+        .arg(&wasm)
+        .arg("--manifest")
+        .arg(&manifest)
+        .arg("--auto-grant")
+        .arg("--")
+        .arg("quick")
+        .env("KRATE_ACCESS_DUMP", &dump)
+        .output()
+        .expect("run");
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let said: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(&dump).expect("the app described its screen"),
+    )
+    .expect("json");
+    let said = said.as_array().expect("a list of elements");
+    assert_eq!(
+        said.len(),
+        5,
+        "a heading, the look line and three paragraphs: {said:?}"
+    );
+    assert_eq!(said[0]["role"], "heading");
+    assert_eq!(said[0]["label"], "Look");
+    assert!(said[1]["label"]
+        .as_str()
+        .unwrap_or("")
+        .starts_with("Light mode"));
+    assert!(said
+        .iter()
+        .skip(2)
+        .all(|e| e["role"] == "text" && e["frame"][2].as_f64().unwrap_or(0.0) > 100.0));
+}

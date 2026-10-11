@@ -1469,6 +1469,8 @@ impl Runtime {
         link_gui!(ui4::unlock);
         // Phase 4 only: dark mode and text size (IC-925).
         link_gui!(ui4::appearance);
+        // Phase 4 only: a screen reader for apps that draw themselves (IC-926).
+        link_gui!(ui4::accessibility);
         // Phase 4 only: pictures a canvas keeps and draws by handle.
         link_gui!(phase4_gui_bindings::krate::gfx::canvas_images);
         link_gui!(phase4_gui_bindings::krate::gfx::video);

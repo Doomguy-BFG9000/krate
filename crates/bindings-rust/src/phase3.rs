@@ -7,8 +7,26 @@
 
 #![allow(clippy::too_many_arguments)]
 
-/// `krate:ui`: appearance, bluetooth, clipboard, dialog, events, haptics, image, launcher, location, menu, motion, notify, photos, pointer, print, reminders, screen, share, sign_in, text_entry, touch, tree, unlock, window.
+/// `krate:ui`: accessibility, appearance, bluetooth, clipboard, dialog, events, haptics, image, launcher, location, menu, motion, notify, photos, pointer, print, reminders, screen, share, sign_in, text_entry, touch, tree, unlock, window.
 pub mod ui {
+    /// `krate:ui/accessibility`.
+    pub mod accessibility {
+        pub use crate::bindings::krate::ui::accessibility::{Element, Role, UiError};
+
+        /// Say what the window shows now, in reading order (top to bottom, then
+        /// left to right, as the person would read it). Replaces what was said
+        /// before; call it again whenever the screen changes. An empty list says
+        /// the window shows nothing to read.
+        pub fn describe(window: u64, elements: &[Element]) -> Result<(), UiError> {
+            crate::bindings::krate::ui::accessibility::describe(window, elements)
+        }
+
+        /// Whether a screen reader is on right now, so an app can skip work that
+        /// only matters to one (it must still describe its screen either way).
+        pub fn screen_reader_on() -> bool {
+            crate::bindings::krate::ui::accessibility::screen_reader_on()
+        }
+    }
     /// `krate:ui/appearance`.
     pub mod appearance {
         pub use crate::bindings::krate::ui::appearance::Look;
