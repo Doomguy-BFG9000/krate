@@ -501,8 +501,10 @@ app's own; tapping it opens the app. A computer answers \
 `Err(Unavailable)` for now: keep an in-app timer there. Signing the \
 person in to a service (GitHub, Google, your own backend): never draw a \
 password field. `let (verifier, challenge) = krate::ui::sign_in::pkce();` \
-then `sign_in::start(win, &authorize_url, \"myapp\")` with the service's \
-https authorize address carrying `client_id`, `redirect_uri=myapp://signed-in`, \
+then `sign_in::start(win, &authorize_url, \"krate-signin\")` with the service's \
+https authorize address carrying `client_id`, \
+`redirect_uri=krate-signin://<your app id>/signed-in` (register that \
+address with the service: it is the one that returns on every phone), \
 a random `state`, `code_challenge` and `code_challenge_method=S256`. It opens \
 the system's sign-in sheet and answers the address the service sent the \
 person back to: check its `state`, read its `code`, then POST the code and \

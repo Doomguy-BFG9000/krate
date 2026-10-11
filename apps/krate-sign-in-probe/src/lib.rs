@@ -3,7 +3,9 @@
 //
 // The GitHub OAuth app's client id and secret are baked in at build time
 // (GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET); its callback URL is
-// `kratesignin://signed-in`. GitHub still wants the secret beside the PKCE
+// `krate-signin://dev.krate.sign-in-probe/signed-in` -- Krate's one sign-in
+// scheme, which works on every phone (an app's own scheme cannot return to
+// Krate on most Android browsers). GitHub still wants the secret beside the PKCE
 // verifier when the code is traded, so a real app would trade it on its
 // own server; this probe proves the sheet and the round trip.
 //
@@ -33,8 +35,8 @@ use krate::{
     Guest,
 };
 
-const SCHEME: &str = "kratesignin";
-const REDIRECT: &str = "kratesignin://signed-in";
+const SCHEME: &str = "krate-signin";
+const REDIRECT: &str = "krate-signin://dev.krate.sign-in-probe/signed-in";
 const CLIENT_ID: &str = match option_env!("GITHUB_CLIENT_ID") {
     Some(id) => id,
     None => "",
