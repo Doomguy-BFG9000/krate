@@ -351,6 +351,21 @@ let cards = nav.content.pad(16.0).grid(items.len(), 160.0, 200.0, 12.0);\n\
   the least for anything a person must read.\n\
 - A `Rect` is plain numbers: keep the rects you drew buttons in and hit-test \
   taps with `rect.contains(x, y)`, so the layout and the taps never drift.\n\n\
+Dark mode and large text are the person's, and check-app runs every app \
+once more on a phone in dark mode at the largest text size: a screen that \
+stays bright white there, or text that does not grow, fails it. Draw from \
+`screen.look` (or `krate::layout::Look::now()`) every frame:\n\n\
+```rust\n\
+let look = screen.look;                 // dark mode, contrast, text size\n\
+let colors = look.palette();            // background, surface, ink, muted, line, accent\n\
+canvas2d::clear(canvas, colors.background)?;\n\
+canvas2d::draw_text_styled(canvas, \"Today\", at, look.text(28.0), colors.ink, bold)?;\n\
+```\n\n\
+Size every font with `look.text(points)` (`screen.body()` already does), \
+then lay out from the sizes text really takes -- measure it -- so larger \
+text wraps or the row grows instead of being cut. Pick your own colours \
+if you like, but pick a dark set for `look.dark`; a brand colour can stay \
+the same in both.\n\n\
 A game drawn at one fixed size (a design size) is the exception: it is \
 scaled to fit and judged on the phone the way Krate turns it -- landscape \
 for a wide design -- so draw its text big enough to survive the shrink, \
@@ -471,12 +486,40 @@ closed (a timer, a habit, a meeting): with `ui.notify`, \
 are up.\", 240, false)` -- the same id replaces it, `true` repeats it \
 daily at that time, `cancel(id)` takes it back, `pending()` lists this \
 app's own; tapping it opens the app. A computer answers \
-`Err(Unavailable)` for now: keep an in-app timer there. A picture that does not change \
+`Err(Unavailable)` for now: keep an in-app timer there. Signing the \
+person in to a service (GitHub, Google, your own backend): never draw a \
+password field. `let (verifier, challenge) = krate::ui::sign_in::pkce();` \
+then `sign_in::start(win, &authorize_url, \"myapp\")` with the service's \
+https authorize address carrying `client_id`, `redirect_uri=myapp://signed-in`, \
+a random `state`, `code_challenge` and `code_challenge_method=S256`. It opens \
+the system's sign-in sheet and answers the address the service sent the \
+person back to: check its `state`, read its `code`, then POST the code and \
+`code_verifier` to the token address with `net.connect` to that host, and \
+keep the token in `store.secret`. `Err(Cancelled)` means they closed the \
+sheet: offer the button again. A computer other than a Mac answers \
+`Err(Unavailable)` for now. Something private (a vault, a diary, a \
+banking screen): show it only after `krate::ui::unlock::check(\"Unlock your \
+vault\")` answers `UnlockAnswer::Yes` -- Face ID or the passcode on an \
+iPhone, Touch ID or the password on a Mac, in the system's own sheet. \
+`No` keeps it locked; `Unavailable(why)` means this device cannot check: \
+say so rather than opening it. Keep what it guards in `store.secret`, and \
+lock again when the app goes to the background. No capability. A picture that does not change \
 between frames (a screenshot, an avatar, a sprite sheet) is kept once \
 with `krate::gfx::canvas_images::keep(canvas, w, h, &rgba)` and drawn \
 by handle with `draw`/`draw_round` each frame: `draw_pixels` sends \
 every byte every frame, which makes a scrolling list of pictures lag \
-on a phone.\n\n\
+on a phone. A video (a tutorial clip, a trailer, a recorded \
+workout): put the .mp4 in the app's `assets/` directory, then \
+`let v = krate::gfx::video::open(\"clips/intro.mp4\")?` -- or an \
+`https://` address with `net.connect` to its host -- and each frame \
+`video::draw(canvas, v, rect)`; the platform decodes it and plays its \
+sound, so never decode frames yourself. Build the controls as ordinary \
+buttons calling `play`, `pause`, `seek(v, ms)`, `set_looping`, \
+`set_muted`, and read `state(v)` each frame for `position_millis`, \
+`duration_millis`, `ready` (draw \"Loading\" until true), `ended` and \
+the picture's `width`/`height` -- fit the rect to that shape. A \
+non-empty `problem` says why it cannot play: show it. A computer other \
+than a Mac answers `Err(Platform)` for now: say so.\n\n\
 **3. Sprites.** Two ways, both real: `draw_pixels` blits a straight RGBA \
 buffer at a rect (fastest for tiles and unrotated sprites), and \
 `draw_sprite(canvas, center, dst, angle, w, h, rgba)` rotates one. For a \

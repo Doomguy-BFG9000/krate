@@ -653,7 +653,7 @@ fn store_error_to_wit(error: crate::store_host::StoreError) -> store::kv::StoreE
     }
 }
 
-fn bundled_resource_path(
+pub(crate) fn bundled_resource_path(
     root: &Path,
     requested: &str,
 ) -> Result<PathBuf, resources::assets::ResourceError> {

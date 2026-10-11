@@ -162,6 +162,16 @@ pub struct Phase3GuiHost {
     /// and the next handle. One Arc per picture, so every frame that draws
     /// it hands the adapters the same picture and they upload it once.
     kept_images: std::cell::RefCell<std::collections::BTreeMap<(u64, u64), Arc<ImagePixels>>>,
+    /// The videos this run opened (krate:gfx/video, IC-922) and the frame
+    /// each last showed, so a draw between new frames hands the adapters the
+    /// same picture and they upload it once.
+    pub(crate) videos: std::cell::RefCell<crate::video::Videos>,
+    pub(crate) video_frames: std::cell::RefCell<std::collections::BTreeMap<u64, Arc<ImagePixels>>>,
+    /// Where the app's bundled assets are, for a video named by path.
+    pub(crate) asset_root: Option<std::path::PathBuf>,
+    /// The look the platform reported last, and when (IC-925).
+    appearance_cache:
+        std::cell::Cell<Option<(std::time::Instant, krate_adapter_common::ui::Appearance)>>,
     /// The size each window was asked for, and the canvases whose apps have
     /// asked how big they are (`canvas-size`). A canvas app that never asks
     /// can only be drawing for the size it requested; where the window is
@@ -484,6 +494,10 @@ impl Phase3GuiHost {
             images: std::cell::RefCell::new(std::collections::BTreeMap::new()),
             canvases: std::cell::RefCell::new(std::collections::BTreeMap::new()),
             kept_images: std::cell::RefCell::new(std::collections::BTreeMap::new()),
+            videos: std::cell::RefCell::new(crate::video::Videos::default()),
+            video_frames: std::cell::RefCell::new(std::collections::BTreeMap::new()),
+            asset_root: None,
+            appearance_cache: std::cell::Cell::new(None),
             requested_sizes: std::cell::RefCell::new(std::collections::BTreeMap::new()),
             canvases_that_asked: std::cell::RefCell::new(std::collections::BTreeSet::new()),
             screen_windows: std::cell::RefCell::new(Vec::new()),
@@ -585,6 +599,7 @@ impl Phase3GuiHost {
     }
 
     pub fn with_asset_root(mut self, root: Option<std::path::PathBuf>) -> Self {
+        self.asset_root = root.clone();
         self.speech = LocalSpeechRuntime::default().with_asset_root(root);
         self
     }
@@ -649,6 +664,8 @@ impl Phase3GuiHost {
     /// input. Capturing mid-construction (on every tree sync) grabbed a
     /// half-built frame -- a checklist with its title but not its rows.
     fn maybe_take_screenshot(&self) {
+        // A run that ends before it ever waits still shows the person's look.
+        self.follow_widget_look();
         let Some(window) = self.windows.first().copied() else {
             return;
         };
@@ -702,6 +719,7 @@ impl Phase3GuiHost {
     /// Capture a specific window, used on close so an app that never waits for
     /// input still gets its final frame shot.
     fn maybe_take_screenshot_for(&self, window: WindowId) {
+        self.follow_widget_look();
         if self.screenshot_taken.get() || self.screenshot.is_none() {
             return;
         }
@@ -905,6 +923,93 @@ impl Phase3GuiHost {
             .map_err(|_| (false, "no such window".to_string()))?;
         self.dispatcher()
             .share(id, text.as_deref(), url.as_deref(), &files)
+            .map_err(|why| (true, why))
+    }
+
+    /// How the person asked things to look (IC-925), read at most twice a
+    /// second: an app asks every frame and the platform answers on its main
+    /// thread. Headless, `KRATE_APPEARANCE` stands in (`dark,text=1.35`).
+    pub(crate) fn appearance(&self) -> krate_adapter_common::ui::Appearance {
+        if self.headless {
+            return std::env::var("KRATE_APPEARANCE")
+                .map(|text| krate_adapter_common::ui::Appearance::parse(&text))
+                .unwrap_or_default();
+        }
+        let now = std::time::Instant::now();
+        if let Some((at, look)) = self.appearance_cache.get() {
+            if now.duration_since(at) < std::time::Duration::from_millis(500) {
+                return look;
+            }
+        }
+        let look = self.dispatcher().appearance();
+        self.appearance_cache.set(Some((now, look)));
+        look
+    }
+
+    /// Draw Krate's own widgets in the person's look (IC-925), checked at
+    /// the top of every frame: dark colours in dark mode, labels at their
+    /// text size, laid out at that size on the next layout.
+    fn follow_widget_look(&self) {
+        let look = self.appearance();
+        if look != krate_adapter_common::ui::widget_look() {
+            krate_adapter_common::ui::set_widget_look(look);
+        }
+    }
+
+    /// Whether this device can check it is the person (IC-924). Headless,
+    /// only when `KRATE_UNLOCK` stands in for one that can.
+    pub(crate) fn unlock_available(&self) -> bool {
+        if self.headless {
+            return matches!(std::env::var("KRATE_UNLOCK").as_deref(), Ok("yes" | "no"));
+        }
+        crate::unlock::available()
+    }
+
+    /// Ask the person to prove it is them (IC-924). Headless, `KRATE_UNLOCK`
+    /// stands in for them: `yes`, `no`, or anything else for a device that
+    /// cannot check.
+    pub(crate) fn unlock_check(&self, reason: &str) -> crate::unlock::Answer {
+        if let Err(why) = crate::unlock::check_reason(reason) {
+            return crate::unlock::Answer::Unavailable(why);
+        }
+        if self.headless {
+            return match std::env::var("KRATE_UNLOCK") {
+                Ok(answer) => crate::unlock::stand_in(&answer),
+                Err(_) => crate::unlock::Answer::Unavailable(
+                    "nothing is on screen to ask with".to_string(),
+                ),
+            };
+        }
+        crate::unlock::check(reason.trim())
+    }
+
+    /// Sign the person in through the system's sheet (IC-923): the address
+    /// the service sent them back to, None when they closed it; Err((true,
+    /// why)) when there is no sheet, Err((false, why)) for a bad request.
+    /// Headless, `KRATE_SIGN_IN` stands in for the person: `cancel`, or the
+    /// code the service sends back.
+    pub(crate) fn sign_in(
+        &self,
+        window: u64,
+        authorize_url: &str,
+        scheme: &str,
+    ) -> Result<Option<String>, (bool, String)> {
+        crate::sign_in::check(authorize_url, scheme).map_err(|why| (false, why))?;
+        if self.headless {
+            return match std::env::var("KRATE_SIGN_IN") {
+                Ok(answer) => crate::sign_in::stand_in(&answer, authorize_url, scheme)
+                    .map_err(|why| (true, why)),
+                Err(_) => Err((
+                    true,
+                    "no sign-in sheet when nothing is on screen".to_string(),
+                )),
+            };
+        }
+        let id = self
+            .window_id(window)
+            .map_err(|_| (false, "no such window".to_string()))?;
+        self.dispatcher()
+            .sign_in(id, authorize_url, scheme)
             .map_err(|why| (true, why))
     }
 
@@ -3565,6 +3670,23 @@ impl Phase3GuiHost {
         let Some(image) = self.kept_images.borrow().get(&(canvas, handle)).cloned() else {
             return Err(gfx::types::GfxError::InvalidTarget);
         };
+        self.draw_image(canvas, image, area, radii)
+    }
+
+    /// Whether a canvas exists.
+    pub(crate) fn canvases_contains(&self, canvas: u64) -> bool {
+        self.canvases.borrow().contains_key(&canvas)
+    }
+
+    /// Draw a picture the host holds -- a kept picture, a video's frame --
+    /// as draw-pixels (no radii) or draw-pixels-round.
+    pub(crate) fn draw_image(
+        &self,
+        canvas: u64,
+        image: Arc<ImagePixels>,
+        area: gfx::types::Rect,
+        radii: Option<gfx::types::CornerRadii>,
+    ) -> Result<(), gfx::types::GfxError> {
         let rect = (area.x, area.y, area.width, area.height);
         let radii = radii.map(|r| (r.top_left, r.top_right, r.bottom_right, r.bottom_left));
         if self.lists_enabled() || self.inspect_layout.get() {
@@ -4571,6 +4693,7 @@ impl ui::window::Host for Phase3GuiHost {
         title: String,
         size: ui::types::WindowSize,
     ) -> wasmtime::Result<Result<u64, ui::types::UiError>> {
+        self.follow_widget_look();
         let size = match WindowSize::new(size.width, size.height) {
             Ok(size) => size,
             Err(err) => return Ok(Err(ui::types::UiError::Platform(err.to_string()))),
@@ -4959,6 +5082,7 @@ impl ui::events::Host for Phase3GuiHost {
         // No screenshot here for the same reason as key_held: poll is called at
         // the top of a frame loop, before this frame is drawn. wait (widget
         // apps) and present (canvas and scene apps) are the capture points.
+        self.follow_widget_look();
         self.pump_native_windows();
         // A game never calls `wait` -- it polls at the top of every frame and
         // draws regardless. Driving only from `wait` means such an app is never
@@ -5049,6 +5173,7 @@ impl ui::events::Host for Phase3GuiHost {
     }
 
     fn wait(&mut self, timeout_millis: Option<u32>) -> wasmtime::Result<Option<ui::types::Event>> {
+        self.follow_widget_look();
         // The app has built its window and is now waiting for input: the first
         // stable, fully-drawn frame. Capture here, before any budget check
         // that might end the run.
@@ -6924,6 +7049,21 @@ impl Phase3GuiHost {
             .guard()
             .check(&UapiCall::Camera(CameraCall::Capture))
             .is_err()
+    }
+
+    /// Whether the person granted `net.connect` to the host an address
+    /// names: the judgment a fetch gets, for a video streamed from it.
+    pub(crate) fn may_reach(&self, address: &str) -> bool {
+        let Ok(endpoint) = krate_adapter_common::net::parse_url_endpoint(address) else {
+            return false;
+        };
+        self.runtime
+            .guard()
+            .check(&UapiCall::Net(crate::uapi::NetCall::Connect {
+                host: endpoint.host,
+                port: endpoint.port,
+            }))
+            .is_ok()
     }
 }
 

@@ -2234,6 +2234,8 @@ name = "krate-adapter-macos"
 version = "0.5.5"
 dependencies = [
  "arboard",
+ "block2 0.6.2",
+ "dispatch2",
  "krate-adapter-common",
  "krate-presenter-gpu",
  "libc",
@@ -2979,7 +2981,9 @@ dependencies = [
  "block2 0.6.2",
  "dispatch2",
  "objc2 0.6.4",
+ "objc2-core-foundation",
  "objc2-core-media",
+ "objc2-core-video",
  "objc2-foundation 0.3.2",
 ]
 

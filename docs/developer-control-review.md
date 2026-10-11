@@ -15,8 +15,8 @@ Developer ownership and control is the default (IC-175, IC-176). Krate enforces 
 
 ## Summary
 
-- 67 boundaries reviewed, 58 of them WIT interfaces (58 declared under wit/krate).
-- 35 compulsory, each with a justification or a recorded gap; 32 optional.
+- 71 boundaries reviewed, 62 of them WIT interfaces (62 declared under wit/krate).
+- 35 compulsory, each with a justification or a recorded gap; 36 optional.
 - 7 recorded gaps where the escape hatch does not yet exist or the boundary is narrower than a developer would want.
 
 ## Every boundary
@@ -36,6 +36,7 @@ Developer ownership and control is the default (IC-175, IC-176). Krate enforces 
 | `krate:gfx@0.1.0/canvas2d` | wit | the handoff of drawn pixels and draw operations to the host painter, which is the only way onto the screen | any rasterizer, layout engine, text shaper or scene graph the app brings; Krate's draw calls are a convenience, not a requirement | set-pixels on a canvas or an image widget: the app renders with anything and hands over the pixels | yes | os-safety |
 | `krate:gfx@0.1.0/scene3d` | wit | nothing: an optional software 3D helper | any 3D approach; the app may ignore this entirely | canvas pixels from the app's own renderer | no | -- |
 | `krate:gfx@0.1.0/types` | wit | colour, rectangle and error shapes every host lowers to | everything drawn with them | none needed: a type carries no authority | yes | portability |
+| `krate:gfx@0.1.0/video` | wit | playing a bundled or granted-host video with the platform decoder and drawing its current frame into a canvas by handle | which video, its controls and their look, where and how big to draw it, when to play, pause, seek, loop or mute | decode frames in the app and draw them with draw-pixels | no | -- |
 | `krate:io@0.1.0/args` | wit | how launch arguments reach the app | parsing and meaning of the arguments | raw strings | yes | platform |
 | `krate:io@0.1.0/log` | wit | nothing: an optional structured log the host can show | any logging scheme, or stderr | stdio | no | -- |
 | `krate:io@0.1.0/stdio` | wit | that a CLI app's standard streams are the host process's | what is written and read, in any format | raw bytes on streams | yes | platform |
@@ -59,6 +60,7 @@ Developer ownership and control is the default (IC-175, IC-176). Krate enforces 
 | `krate:store@0.1.0/sql` | wit | the same namespace rule for a database | schema, queries, whether to use SQL at all; any embedded database over fs/files under a grant | fs/files with the app's own database library | yes | os-safety |
 | `krate:time@0.1.0/clock` | wit | where the host clock is read | everything computed from it | none needed | no | -- |
 | `krate:time@0.1.0/sleep` | wit | a blocking sleep for CLI apps | scheduling, timers, event loops built on it or not | events/wait with a timeout in GUI apps | no | -- |
+| `krate:ui@0.1.0/appearance` | wit | reading whether the system is in dark mode, wants more contrast, and the person's text size | the colours for light and dark, how text grows, and how the layout makes room for it | the app's own fixed look (check-app fails one that stays bright in dark mode or keeps text small) | no | -- |
 | `krate:ui@0.1.0/bluetooth` | wit | Bluetooth LE reached only through a device the person picks in Krate's own list, then read, write, subscribe and notifications by service and characteristic UUID | which service to ask for, what to read and write, and what the values mean | none: bluetooth.connect is opt-in, and an app can never scan or reach a device the person did not pick | no | -- |
 | `krate:ui@0.1.0/clipboard` | wit | that the clipboard is the person's and reached through a grant | what is put on it | none: the clipboard is the host's | yes | recipient-permission |
 | `krate:ui@0.1.0/dialog` | wit | that a path outside the grants is chosen by the person in a system dialog, never named by the app | when to ask, what to do with the answer | none: this is how the person's authority reaches the app | yes | recipient-permission |
@@ -76,10 +78,12 @@ Developer ownership and control is the default (IC-175, IC-176). Krate enforces 
 | `krate:ui@0.1.0/reminders` | wit | reminders the system delivers with the app closed -- set by an app's own id, after a delay or daily, cancelled, listed -- each app seeing only its own, a tap opening the app | what to remind, when, and how often | notify for one shown now | no | -- |
 | `krate:ui@0.1.0/screen` | wit | how a window's screen is described: its size classes, touch or pointer, and the edges something else covers | every layout decision; the classes are information, not a layout | canvas-size and the app's own breakpoints | no | -- |
 | `krate:ui@0.1.0/share` | wit | handing a text, a link and files (name and bytes) to the system's share sheet, and hearing only sent or cancelled | what to share and when; where it goes is the person's pick | save-file and the clipboard, which already exist | no | -- |
+| `krate:ui@0.1.0/sign-in` | wit | an OAuth 2 PKCE pair and the system sign-in sheet that returns the address a service sends the person back to | which service, its client id, scopes and redirect, when to ask, how to trade the code and where to keep the token | open-url to the browser and a code the person pastes back | no | -- |
 | `krate:ui@0.1.0/text-entry` | wit | showing and hiding the system's on-screen keyboard for a window; typing arrives as ordinary text and key events | when a field wants text, and drawing the field and its caret | the raw text and key events, the same as a physical keyboard's | yes | platform |
 | `krate:ui@0.1.0/touch` | wit | every finger on a touch screen, by a stable id, in logical pixels, cleared when the window loses focus | what each finger does: a stick, a look, a button, a gesture | the raw finger positions, unfiltered | yes | platform |
 | `krate:ui@0.1.0/tree` | wit | nothing: an optional portable widget tree the hosts lower to native controls or paint | any UI approach; a canvas of the app's own pixels is equal to a tree | image and canvas widgets with the app's own rendering | no | -- |
 | `krate:ui@0.1.0/types` | wit | widget kinds, event shapes and errors every host lowers to | what the app builds from them | none needed: a type carries no authority | yes | portability |
+| `krate:ui@0.1.0/unlock` | wit | asking the system to check it is the device owner (Face ID, Touch ID, the passcode) with the app's reason, answered yes, no or unavailable | what to guard, when to ask and lock again, the reason shown, and what to do when the device cannot check | the app's own passphrase | no | -- |
 | `krate:ui@0.1.0/window` | wit | that windows come from the host and are closed by the person | how many, what size, what is drawn in them | none: a window is the host's | yes | platform |
 | `manifest.toml and the capability declaration` | format | what an app declares it needs, so the person can be told before it runs; an undeclared call is denied | everything not declared as a capability: architecture, libraries, data model | declare narrowly; optional capabilities are asked for at feature time (CP2) | yes | recipient-permission |
 | `the .krate archive` | format | one container every host opens: fixed core entries, namespaces, ceilings, a versioned profile | what the app is made of; unknown entries survive so a tool may carry its own | unknown entries are ignored by the runtime and kept by the packer | yes | portability |

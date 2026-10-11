@@ -80,9 +80,10 @@ enum Check {
     Pick,
     SavePhoto,
     Remind,
+    Write,
 }
 
-const CHECKS: [(Check, &str); 11] = [
+const CHECKS: [(Check, &str); 12] = [
     (Check::Copy, "Copy a line"),
     (Check::Paste, "Paste"),
     (Check::Record, "Record 3 s and play back"),
@@ -94,13 +95,15 @@ const CHECKS: [(Check, &str); 11] = [
     (Check::Pick, "Pick photos"),
     (Check::SavePhoto, "Save a picture to Photos"),
     (Check::Remind, "Remind me in 15 s"),
+    (Check::Write, "Speak, then see it written"),
 ];
 
 struct Page {
     rows: Vec<Rect>,
-    results: [String; 11],
-    /// A recording in progress: the stream, when it started, the bytes so far.
-    recording: Option<(u64, u64, Vec<u8>)>,
+    results: [String; 12],
+    /// A recording in progress: the stream, when it started, the bytes so
+    /// far, and which check it is for (played back, or written down).
+    recording: Option<(u64, u64, Vec<u8>, Check)>,
     camera: Option<u64>,
     picture: Option<(u64, u32, u32)>,
     /// Frames drawn in the current second, and when that second began.
@@ -151,14 +154,14 @@ fn run_check(win: u64, check: Check, page: &mut Page) {
             Ok(text) => format!("ok: \"{}\"", text.chars().take(40).collect::<String>()),
             Err(e) => format!("failed: {e:?}"),
         },
-        Check::Record => {
+        Check::Record | Check::Write => {
             let config = capture::StreamConfig { sample_rate: RATE, channels: 1, format: krate::audio::types::SampleFormat::PcmS16, buffer_frames: 1024 };
             match capture::open(config).and_then(|id| capture::start(id).map(|()| id)) {
                 Ok(id) => {
                     // From when the microphone opened, not the tap: the
                     // phone's own question can sit in between, and three
                     // seconds of it were "recorded" as nothing.
-                    page.recording = Some((id, clock::monotonic_nanos(), Vec::new()));
+                    page.recording = Some((id, clock::monotonic_nanos(), Vec::new(), check));
                     String::from("recording\u{2026} speak now")
                 }
                 Err(e) => format!("failed: {e:?}"),
@@ -299,17 +302,28 @@ fn gradient_png(w: usize, h: usize) -> Vec<u8> {
 
 /// Keep a recording going, and play it back once three seconds are in.
 fn follow_recording(page: &mut Page, now: u64) {
-    let Some((id, started, mut bytes)) = page.recording.take() else {
+    let Some((id, started, mut bytes, check)) = page.recording.take() else {
         return;
     };
     if let Ok(chunk) = capture::read(id, 64 * 1024) {
         bytes.extend_from_slice(&chunk);
     }
-    if now.saturating_sub(started) < 3_000_000_000 {
-        page.recording = Some((id, started, bytes));
+    let length = if check == Check::Write { 4_000_000_000 } else { 3_000_000_000 };
+    if now.saturating_sub(started) < length {
+        page.recording = Some((id, started, bytes, check));
         return;
     }
     let _ = capture::stop(id);
+    if check == Check::Write {
+        let slot = index(Check::Write);
+        page.results[slot] = match krate::speech::transcription::transcribe("whisper.bin", &bytes, RATE, None) {
+            Ok(t) if t.text.trim().is_empty() => String::from("ok, but no words were heard"),
+            Ok(t) => format!("ok: \"{}\"", t.text.trim().chars().take(60).collect::<String>()),
+            Err(e) => format!("failed: {e:?}"),
+        };
+        say_line(&format!("check:{} {}", CHECKS[slot].1, page.results[slot]));
+        return;
+    }
     let slot = index(Check::Record);
     if bytes.is_empty() {
         page.results[slot] = String::from("failed: the microphone sent nothing");

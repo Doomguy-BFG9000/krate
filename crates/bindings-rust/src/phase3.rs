@@ -7,8 +7,17 @@
 
 #![allow(clippy::too_many_arguments)]
 
-/// `krate:ui`: bluetooth, clipboard, dialog, events, haptics, image, launcher, location, menu, motion, notify, photos, pointer, print, reminders, screen, share, text_entry, touch, tree, window.
+/// `krate:ui`: appearance, bluetooth, clipboard, dialog, events, haptics, image, launcher, location, menu, motion, notify, photos, pointer, print, reminders, screen, share, sign_in, text_entry, touch, tree, unlock, window.
 pub mod ui {
+    /// `krate:ui/appearance`.
+    pub mod appearance {
+        pub use crate::bindings::krate::ui::appearance::Look;
+
+        /// How things should look right now.
+        pub fn current() -> Look {
+            crate::bindings::krate::ui::appearance::current()
+        }
+    }
     /// `krate:ui/bluetooth`.
     pub mod bluetooth {
         pub use crate::bindings::krate::ui::bluetooth::{BluetoothError, Device, Notification};
@@ -484,6 +493,31 @@ pub mod ui {
             crate::bindings::krate::ui::share::share(window, text, url, files)
         }
     }
+    /// `krate:ui/sign_in`.
+    pub mod sign_in {
+        pub use crate::bindings::krate::ui::sign_in::SignInError;
+
+        /// A fresh PKCE pair: the verifier the app keeps for the token request,
+        /// and its S256 challenge for the authorize address
+        /// (`code_challenge=...&code_challenge_method=S256`).
+        pub fn pkce() -> (alloc::string::String, alloc::string::String) {
+            crate::bindings::krate::ui::sign_in::pkce()
+        }
+
+        /// Open the sign-in sheet at `authorize-url` (https, carrying the app's
+        /// client id, its redirect address, a `state` and the PKCE challenge)
+        /// and wait for the service to send the person back to an address that
+        /// starts with `callback-scheme:` -- the one registered with the service
+        /// ("myapp" for `myapp://signed-in`). Returns that whole address: read
+        /// `code` from it, and check its `state` is the one you sent.
+        pub fn start(
+            window: u64,
+            authorize_url: &str,
+            callback_scheme: &str,
+        ) -> Result<alloc::string::String, SignInError> {
+            crate::bindings::krate::ui::sign_in::start(window, authorize_url, callback_scheme)
+        }
+    }
     /// `krate:ui/text_entry`.
     pub mod text_entry {
 
@@ -542,6 +576,21 @@ pub mod ui {
     pub mod types {
         pub use crate::bindings::krate::ui::types::*;
     }
+    /// `krate:ui/unlock`.
+    pub mod unlock {
+        pub use crate::bindings::krate::ui::unlock::UnlockAnswer;
+
+        /// Whether this device can check it is the person.
+        pub fn available() -> bool {
+            crate::bindings::krate::ui::unlock::available()
+        }
+
+        /// Ask, with the app's reason in the system's own sheet ("Unlock your
+        /// vault"). Waits while the person looks or types their passcode.
+        pub fn check(reason: &str) -> UnlockAnswer {
+            crate::bindings::krate::ui::unlock::check(reason)
+        }
+    }
     /// `krate:ui/window`.
     pub mod window {
         pub use crate::bindings::krate::ui::window::{UiError, WindowSize, WindowState};
@@ -593,7 +642,7 @@ pub mod ui {
     }
 }
 
-/// `krate:gfx`: canvas2d, canvas_images, scene3d.
+/// `krate:gfx`: canvas2d, canvas_images, scene3d, video.
 pub mod gfx {
     /// `krate:gfx/canvas2d`.
     pub mod canvas2d {
@@ -1216,6 +1265,71 @@ pub mod gfx {
     /// The records and errors this package's interfaces share.
     pub mod types {
         pub use crate::bindings::krate::gfx::types::*;
+    }
+    /// `krate:gfx/video`.
+    pub mod video {
+        pub use crate::bindings::krate::gfx::video::{CornerRadii, GfxError, Rect, VideoState};
+
+        /// Open a video, paused at the start. `source` is a path inside the app's
+        /// bundled assets ("clips/intro.mp4") or an `https://` address the app
+        /// was granted `net.connect` to. Loading continues after this returns:
+        /// read `state` for `ready`.
+        pub fn open(source: &str) -> Result<u64, GfxError> {
+            crate::bindings::krate::gfx::video::open(source)
+        }
+
+        /// Start or carry on playing.
+        pub fn play(video: u64) -> Result<(), GfxError> {
+            crate::bindings::krate::gfx::video::play(video)
+        }
+
+        /// Stop where it is.
+        pub fn pause(video: u64) -> Result<(), GfxError> {
+            crate::bindings::krate::gfx::video::pause(video)
+        }
+
+        /// Jump to `millis` from the start, exactly, playing or paused.
+        pub fn seek(video: u64, millis: u64) -> Result<(), GfxError> {
+            crate::bindings::krate::gfx::video::seek(video, millis)
+        }
+
+        /// Start again from the beginning on reaching the end.
+        pub fn set_looping(video: u64, looping: bool) -> Result<(), GfxError> {
+            crate::bindings::krate::gfx::video::set_looping(video, looping)
+        }
+
+        /// Silence it, or let it be heard.
+        pub fn set_muted(video: u64, muted: bool) -> Result<(), GfxError> {
+            crate::bindings::krate::gfx::video::set_muted(video, muted)
+        }
+
+        /// Where it is and what it is doing.
+        pub fn state(video: u64) -> Result<VideoState, GfxError> {
+            crate::bindings::krate::gfx::video::state(video)
+        }
+
+        /// Draw the current frame into `area` of a canvas, stretched to fill it.
+        /// Draws nothing until the first frame is ready. Call it every frame the
+        /// canvas is drawn; keep `area` to the video's shape (`width`/`height`)
+        /// to avoid stretching it.
+        pub fn draw(canvas: u64, video: u64, area: Rect) -> Result<(), GfxError> {
+            crate::bindings::krate::gfx::video::draw(canvas, video, area)
+        }
+
+        /// The same, with rounded corners.
+        pub fn draw_round(
+            canvas: u64,
+            video: u64,
+            area: Rect,
+            radii: CornerRadii,
+        ) -> Result<(), GfxError> {
+            crate::bindings::krate::gfx::video::draw_round(canvas, video, area, radii)
+        }
+
+        /// Stop it and let it go.
+        pub fn close(video: u64) {
+            crate::bindings::krate::gfx::video::close(video)
+        }
     }
 }
 

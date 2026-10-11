@@ -31,6 +31,68 @@ pub const COLOR_TEXT: u32 = 0xFF111827;
 /// without competing with a real button for attention.
 pub const COLOR_SELECTION: u32 = 0xFFBFD8FD;
 
+/// Krate's widget colours for the person's look (IC-925): the light palette
+/// above, or its dark counterpart when the system is dark. An app's own box
+/// and text colours are its own and are drawn as given.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Theme {
+    pub background: u32,
+    pub button: u32,
+    pub button_hover: u32,
+    pub button_pressed: u32,
+    pub button_label: u32,
+    pub field_fill: u32,
+    pub track: u32,
+    pub knob: u32,
+    pub field_border: u32,
+    pub field_text: u32,
+    pub text: u32,
+    pub selection: u32,
+}
+
+/// The widget colours to draw in now.
+pub fn theme() -> Theme {
+    theme_for(crate::ui::widget_look())
+}
+
+/// The widget colours for a look.
+pub fn theme_for(look: crate::ui::Appearance) -> Theme {
+    match (look.dark, look.high_contrast) {
+        (false, contrast) => Theme {
+            background: COLOR_BACKGROUND,
+            button: if contrast { 0xFF1D4ED8 } else { COLOR_BUTTON },
+            button_hover: COLOR_BUTTON_HOVER,
+            button_pressed: COLOR_BUTTON_PRESSED,
+            button_label: COLOR_BUTTON_LABEL,
+            field_fill: COLOR_FIELD_FILL,
+            track: COLOR_TRACK,
+            knob: COLOR_KNOB,
+            field_border: if contrast {
+                0xFF4B5563
+            } else {
+                COLOR_FIELD_BORDER
+            },
+            field_text: COLOR_FIELD_TEXT,
+            text: COLOR_TEXT,
+            selection: COLOR_SELECTION,
+        },
+        (true, contrast) => Theme {
+            background: 0xFF121214,
+            button: COLOR_BUTTON,
+            button_hover: COLOR_BUTTON_HOVER,
+            button_pressed: COLOR_BUTTON_PRESSED,
+            button_label: COLOR_BUTTON_LABEL,
+            field_fill: 0xFF1E1E22,
+            track: 0xFF3A3A41,
+            knob: 0xFFE5E7EB,
+            field_border: if contrast { 0xFFB0B4BC } else { 0xFF52525B },
+            field_text: 0xFFE5E7EB,
+            text: 0xFFF3F4F6,
+            selection: 0xFF1E3A5F,
+        },
+    }
+}
+
 /// Transient pointer state a backend reports so widgets can render
 /// hover and pressed feedback. Purely visual: event routing is separate.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -260,11 +322,11 @@ pub fn draw_image(
 /// Resolve the fill color for a button under the given interaction.
 pub fn button_fill_color(widget: WidgetId, interaction: PaintInteraction) -> u32 {
     if interaction.pressed == Some(widget) {
-        COLOR_BUTTON_PRESSED
+        theme().button_pressed
     } else if interaction.hovered == Some(widget) {
-        COLOR_BUTTON_HOVER
+        theme().button_hover
     } else {
-        COLOR_BUTTON
+        theme().button
     }
 }
 
@@ -437,7 +499,7 @@ pub fn paint_placements_bitmap(
     placements: &[WidgetPlacement],
     interaction: PaintInteraction,
 ) {
-    buffer.fill(COLOR_BACKGROUND);
+    buffer.fill(theme().background);
     let text_scale = (scale.round() as u32).max(1);
     for placement in placements {
         let (px, py) = (placement.x * scale, placement.y * scale);
@@ -477,13 +539,13 @@ pub fn paint_placements_bitmap(
                     height,
                     ((px + (pw - tw) / 2.0) as i32, (py + (ph - th) / 2.0) as i32),
                     text_scale,
-                    COLOR_BUTTON_LABEL,
+                    theme().button_label,
                     label,
                 );
             }
             WidgetKind::TextField => {
                 if let Some(clipped) = clip_fill((px, py, pw, ph)) {
-                    fill_rect(buffer, width, height, clipped, COLOR_FIELD_BORDER)
+                    fill_rect(buffer, width, height, clipped, theme().field_border)
                 };
                 if let Some(clipped) = clip_fill((
                     px + 1.0 * scale,
@@ -491,7 +553,7 @@ pub fn paint_placements_bitmap(
                     (pw - 2.0 * scale).max(0.0),
                     (ph - 2.0 * scale).max(0.0),
                 )) {
-                    fill_rect(buffer, width, height, clipped, COLOR_FIELD_FILL)
+                    fill_rect(buffer, width, height, clipped, theme().field_fill)
                 };
                 drawtext::draw_text(
                     buffer,
@@ -499,13 +561,13 @@ pub fn paint_placements_bitmap(
                     height,
                     ((px + 4.0 * scale) as i32, (py + (ph - th) / 2.0) as i32),
                     text_scale,
-                    COLOR_FIELD_TEXT,
+                    theme().field_text,
                     label,
                 );
             }
             WidgetKind::TextArea => {
                 if let Some(clipped) = clip_fill((px, py, pw, ph)) {
-                    fill_rect(buffer, width, height, clipped, COLOR_FIELD_BORDER)
+                    fill_rect(buffer, width, height, clipped, theme().field_border)
                 };
                 if let Some(clipped) = clip_fill((
                     px + 1.0 * scale,
@@ -513,7 +575,7 @@ pub fn paint_placements_bitmap(
                     (pw - 2.0 * scale).max(0.0),
                     (ph - 2.0 * scale).max(0.0),
                 )) {
-                    fill_rect(buffer, width, height, clipped, COLOR_FIELD_FILL)
+                    fill_rect(buffer, width, height, clipped, theme().field_fill)
                 };
                 // The bitmap font is a fixed cell, so wrapping is arithmetic
                 // rather than shaping: how many glyphs fit across the inner
@@ -548,7 +610,7 @@ pub fn paint_placements_bitmap(
                     while offset < sel_end {
                         let (cx, cy) = cell_rect(offset);
                         if let Some(clipped) = clip_fill((cx, cy, cell, th)) {
-                            fill_rect(buffer, width, height, clipped, COLOR_SELECTION)
+                            fill_rect(buffer, width, height, clipped, theme().selection)
                         };
                         offset += 1;
                     }
@@ -557,7 +619,7 @@ pub fn paint_placements_bitmap(
                     let (caret_x, caret_y) = cell_rect(cursor);
                     let caret_w = (scale).max(1.0);
                     if let Some(clipped) = clip_fill((caret_x, caret_y, caret_w, th)) {
-                        fill_rect(buffer, width, height, clipped, COLOR_FIELD_TEXT)
+                        fill_rect(buffer, width, height, clipped, theme().field_text)
                     };
                 }
 
@@ -577,7 +639,7 @@ pub fn paint_placements_bitmap(
                         height,
                         ((origin_x) as i32, line_y as i32),
                         text_scale,
-                        COLOR_FIELD_TEXT,
+                        theme().field_text,
                         line,
                     );
                     rest = remainder;
@@ -608,7 +670,7 @@ pub fn paint_placements_bitmap(
                     height,
                     (px as i32, (py + (ph - th) / 2.0) as i32),
                     text_scale,
-                    COLOR_TEXT,
+                    theme().text,
                     label,
                 );
             }
@@ -616,7 +678,7 @@ pub fn paint_placements_bitmap(
                 let box_side = ph.min(18.0 * scale);
                 let by = py + (ph - box_side) / 2.0;
                 if let Some(clipped) = clip_fill((px, by, box_side, box_side)) {
-                    fill_rect(buffer, width, height, clipped, COLOR_FIELD_BORDER)
+                    fill_rect(buffer, width, height, clipped, theme().field_border)
                 };
                 if let Some(clipped) = clip_fill((
                     px + scale,
@@ -624,7 +686,7 @@ pub fn paint_placements_bitmap(
                     (box_side - 2.0 * scale).max(0.0),
                     (box_side - 2.0 * scale).max(0.0),
                 )) {
-                    fill_rect(buffer, width, height, clipped, COLOR_FIELD_FILL)
+                    fill_rect(buffer, width, height, clipped, theme().field_fill)
                 };
                 if placement.checked == Some(true) {
                     let inset = 4.0 * scale;
@@ -634,7 +696,7 @@ pub fn paint_placements_bitmap(
                         (box_side - 2.0 * inset).max(0.0),
                         (box_side - 2.0 * inset).max(0.0),
                     )) {
-                        fill_rect(buffer, width, height, clipped, COLOR_BUTTON)
+                        fill_rect(buffer, width, height, clipped, theme().button)
                     };
                 }
                 drawtext::draw_text(
@@ -646,7 +708,7 @@ pub fn paint_placements_bitmap(
                         (py + (ph - th) / 2.0) as i32,
                     ),
                     text_scale,
-                    COLOR_TEXT,
+                    theme().text,
                     label,
                 );
             }
@@ -655,7 +717,7 @@ pub fn paint_placements_bitmap(
                 let track_h = (20.0 * scale).min(ph);
                 let ty = py + (ph - track_h) / 2.0;
                 let on = placement.checked == Some(true);
-                let track_color = if on { COLOR_BUTTON } else { COLOR_TRACK };
+                let track_color = if on { theme().button } else { theme().track };
                 if let Some(clipped) = clip_fill((px, ty, track_w, track_h)) {
                     fill_rect(buffer, width, height, clipped, track_color)
                 };
@@ -666,7 +728,7 @@ pub fn paint_placements_bitmap(
                     px + 2.0 * scale
                 };
                 if let Some(clipped) = clip_fill((knob_x, ty + 2.0 * scale, knob_side, knob_side)) {
-                    fill_rect(buffer, width, height, clipped, COLOR_KNOB)
+                    fill_rect(buffer, width, height, clipped, theme().knob)
                 };
             }
             WidgetKind::ListView | WidgetKind::TreeView => {
@@ -677,7 +739,7 @@ pub fn paint_placements_bitmap(
                     if let Some(clipped) =
                         clip_fill((sx * scale, sy * scale, sw * scale, sh * scale))
                     {
-                        fill_rect(buffer, width, height, clipped, COLOR_SELECTION)
+                        fill_rect(buffer, width, height, clipped, theme().selection)
                     };
                 }
             }
@@ -690,17 +752,17 @@ pub fn paint_placements_bitmap(
                 };
                 let gy = py + (ph - groove_h) / 2.0;
                 if let Some(clipped) = clip_fill((px, gy, pw, groove_h)) {
-                    fill_rect(buffer, width, height, clipped, COLOR_TRACK)
+                    fill_rect(buffer, width, height, clipped, theme().track)
                 };
                 if let Some(clipped) = clip_fill((px, gy, pw * fraction, groove_h)) {
-                    fill_rect(buffer, width, height, clipped, COLOR_BUTTON)
+                    fill_rect(buffer, width, height, clipped, theme().button)
                 };
                 if placement.kind == WidgetKind::Slider {
                     let thumb = (16.0 * scale).min(ph);
                     let tx = px + (pw - thumb) * fraction;
                     let ty2 = py + (ph - thumb) / 2.0;
                     if let Some(clipped) = clip_fill((tx, ty2, thumb, thumb)) {
-                        fill_rect(buffer, width, height, clipped, COLOR_FIELD_BORDER)
+                        fill_rect(buffer, width, height, clipped, theme().field_border)
                     };
                     if let Some(clipped) = clip_fill((
                         tx + scale,
@@ -708,7 +770,7 @@ pub fn paint_placements_bitmap(
                         (thumb - 2.0 * scale).max(0.0),
                         (thumb - 2.0 * scale).max(0.0),
                     )) {
-                        fill_rect(buffer, width, height, clipped, COLOR_KNOB)
+                        fill_rect(buffer, width, height, clipped, theme().knob)
                     };
                 }
             }
@@ -720,6 +782,24 @@ pub fn paint_placements_bitmap(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Krate's widgets go dark in dark mode (IC-925): a dark window behind
+    /// light text, the accent kept, and the light palette unchanged.
+    #[test]
+    fn widgets_are_drawn_dark_in_dark_mode() {
+        let light = theme_for(crate::ui::Appearance::default());
+        assert_eq!(light.background, COLOR_BACKGROUND);
+        assert_eq!(light.text, COLOR_TEXT);
+        let dark = theme_for(crate::ui::Appearance {
+            dark: true,
+            ..Default::default()
+        });
+        let luma = |c: u32| ((c >> 16) & 0xFF) + ((c >> 8) & 0xFF) + (c & 0xFF);
+        assert!(luma(dark.background) < 120, "a dark window");
+        assert!(luma(dark.text) > 600, "light text on it");
+        assert!(luma(dark.field_fill) < 150, "fields are dark too");
+        assert_eq!(dark.button, light.button, "the accent stays");
+    }
 
     fn solid(w: u32, h: u32, rgba: [u8; 4]) -> ImagePixels {
         ImagePixels::new(w, h, rgba.repeat((w * h) as usize)).expect("valid image")

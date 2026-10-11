@@ -645,6 +645,16 @@ takes this path, so any of them is a model for the wiring.
 - `scene3d::unlit: func(scene: u64, vertices: list<f32>, uvs: list<f32>, texture: u64, tint: color) -> result<_, gfx-error>`
 - `scene3d::cull-back-faces: func(scene: u64, enabled: bool) -> result<_, gfx-error>`
 - `scene3d::present: func(scene: u64) -> result<_, gfx-error>`
+- `video::open: func(source: string) -> result<u64, gfx-error>`
+- `video::play: func(video: u64) -> result<_, gfx-error>`
+- `video::pause: func(video: u64) -> result<_, gfx-error>`
+- `video::seek: func(video: u64, millis: u64) -> result<_, gfx-error>`
+- `video::set-looping: func(video: u64, looping: bool) -> result<_, gfx-error>`
+- `video::set-muted: func(video: u64, muted: bool) -> result<_, gfx-error>`
+- `video::state: func(video: u64) -> result<video-state, gfx-error>`
+- `video::draw: func(canvas: u64, video: u64, area: rect) -> result<_, gfx-error>`
+- `video::draw-round: func(canvas: u64, video: u64, area: rect, radii: corner-radii) -> result<_, gfx-error>`
+- `video::close: func(video: u64)`
 
 ## `ui`
 
@@ -676,6 +686,7 @@ takes this path, so any of them is a model for the wiring.
 - `pointer::release: func(window: u64)`
 - `pointer::captured: func(window: u64) -> bool`
 - `screen::facts: func(window: u64) -> screen-facts`
+- `appearance::current: func() -> look`
 - `haptics::available: func() -> bool`
 - `haptics::play: func(feel: feel)`
 - `haptics::impact: func(strength: f32)`
@@ -706,6 +717,10 @@ takes this path, so any of them is a model for the wiring.
 - `photos::pick: func(window: u64, limit: u32) -> result<list<chosen-file>, photos-error>`
 - `photos::save: func(window: u64, data: list<u8>) -> result<_, photos-error>`
 - `share::share: func(window: u64, text: option<string>, url: option<string>, files: list<shared-file>) -> result<bool, share-error>`
+- `sign-in::pkce: func() -> tuple<string, string>`
+- `sign-in::start: func(window: u64, authorize-url: string, callback-scheme: string) -> result<string, sign-in-error>`
+- `unlock::available: func() -> bool`
+- `unlock::check: func(reason: string) -> unlock-answer`
 - `notify::show: func(title: string, body: string) -> result<_, notify-error>`
 - `reminders::schedule: func(id: string, title: string, body: string, after-seconds: u64, daily: bool) -> result<_, notify-error>`
 - `reminders::cancel: func(id: string)`

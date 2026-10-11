@@ -383,19 +383,671 @@ mod real {
         impl KrateCloseTarget {
             #[unsafe(method(krateClose:))]
             fn krate_close(&self, _sender: &objc2_foundation::NSObject) {
-                // The cover at once, so the tap answers before the app has
-                // finished closing and Krate's home is drawn.
-                LOADING.store(true, std::sync::atomic::Ordering::Relaxed);
-                *LOADING_SINCE.lock().expect("loading lock") = Some(std::time::Instant::now());
-                if let Some(main_side) = MAIN_SIDE.0.get() {
-                    main_side.close.setHidden(true);
-                    cover_shown(main_side, "Krate", "");
-                }
-                SHARED.lock().expect("shared state lock").close_tapped = true;
-                INPUT_ARRIVED.notify_all();
+                request_close();
             }
         }
     );
+
+    /// Ask the running app to close, from Krate's own controls: the cover at
+    /// once, so the tap answers before the app has finished closing and
+    /// Krate's home is drawn. Main thread.
+    fn request_close() {
+        LOADING.store(true, std::sync::atomic::Ordering::Relaxed);
+        *LOADING_SINCE.lock().expect("loading lock") = Some(std::time::Instant::now());
+        if let Some(main_side) = MAIN_SIDE.0.get() {
+            main_side.close.setHidden(true);
+            cover_shown(main_side, "Krate", "");
+        }
+        SHARED.lock().expect("shared state lock").close_tapped = true;
+        INPUT_ARRIVED.notify_all();
+    }
+
+    // ------------------------------------------------------------------
+    // Krate's menu (IC-934): touch and hold the strip under the clock.
+    //
+    // No button over an app: an X made every app look like a mini app in
+    // Krate. The strip is the band Krate keeps apps out of; a short tap
+    // there still reaches the app, a pull from the very top edge is the
+    // phone's own (Notification Centre), and a half-second hold is nothing
+    // else's. The menu is Krate's, drawn over everything -- the opening
+    // cover too -- so it works whatever the app is doing.
+
+    define_class!(
+        // SAFETY:
+        // - NSObject has no subclassing requirements for a target-action
+        //   receiver and gesture delegate.
+        // - UIKit calls it on the main thread.
+        #[unsafe(super = objc2_foundation::NSObject)]
+        #[thread_kind = MainThreadOnly]
+        #[ivars = ()]
+        struct KrateMenuTarget;
+
+        // SAFETY: NSObjectProtocol has no additional requirements.
+        unsafe impl NSObjectProtocol for KrateMenuTarget {}
+
+        impl KrateMenuTarget {
+            #[unsafe(method(krateHold:))]
+            fn hold(&self, recognizer: &objc2::runtime::AnyObject) {
+                // SAFETY: UIGestureRecognizer's state; 1 is Began.
+                let state: isize = unsafe { msg_send![recognizer, state] };
+                if state == 1 {
+                    show_menu(self.mtm(), self);
+                }
+            }
+
+            /// UIGestureRecognizerDelegate: only a touch that starts in the
+            /// strip under the clock, only while an app runs.
+            #[unsafe(method(gestureRecognizer:shouldReceiveTouch:))]
+            fn should_receive(
+                &self,
+                _recognizer: &objc2::runtime::AnyObject,
+                touch: &objc2::runtime::AnyObject,
+            ) -> objc2::runtime::Bool {
+                if !APP_CHROME.load(std::sync::atomic::Ordering::Relaxed)
+                    || MENU.with(|m| m.borrow().is_some())
+                {
+                    return objc2::runtime::Bool::NO;
+                }
+                let Some(main_side) = MAIN_SIDE.0.get() else {
+                    return objc2::runtime::Bool::NO;
+                };
+                let host: &UIView = &main_side.view;
+                // SAFETY: the touch's location in Krate's own view.
+                let at: CGPoint = unsafe { msg_send![touch, locationInView: host] };
+                objc2::runtime::Bool::new((at.y as f32) < hold_band())
+            }
+
+            /// Let the hold be seen beside the app's own touch handling.
+            #[unsafe(method(gestureRecognizer:shouldRecognizeSimultaneouslyWithGestureRecognizer:))]
+            fn together(
+                &self,
+                _a: &objc2::runtime::AnyObject,
+                _b: &objc2::runtime::AnyObject,
+            ) -> objc2::runtime::Bool {
+                objc2::runtime::Bool::YES
+            }
+
+            #[unsafe(method(krateMenuDismiss:))]
+            fn dismiss(&self, _sender: &objc2::runtime::AnyObject) {
+                hide_menu();
+            }
+
+            #[unsafe(method(krateMenuClose:))]
+            fn menu_close(&self, _sender: &objc2::runtime::AnyObject) {
+                hide_menu();
+                request_close();
+            }
+
+            #[unsafe(method(krateMenuRestart:))]
+            fn menu_restart(&self, _sender: &objc2::runtime::AnyObject) {
+                hide_menu();
+                restart_app();
+            }
+
+            #[unsafe(method(krateMenuShare:))]
+            fn menu_share(&self, _sender: &objc2::runtime::AnyObject) {
+                hide_menu();
+                share_app();
+            }
+
+            #[unsafe(method(krateMenuUses:))]
+            fn menu_uses(&self, _sender: &objc2::runtime::AnyObject) {
+                hide_menu();
+                show_uses();
+            }
+
+            #[unsafe(method(krateMenuReport:))]
+            fn menu_report(&self, _sender: &objc2::runtime::AnyObject) {
+                hide_menu();
+                report_problem();
+            }
+        }
+    );
+
+    thread_local! {
+        /// The menu that is up: its shade and panel. Main thread.
+        static MENU: RefCell<Option<(Retained<UIView>, Retained<UIView>)>> = const { RefCell::new(None) };
+        /// The menu's target, kept for as long as the gesture lives.
+        static MENU_TARGET: RefCell<Option<Retained<KrateMenuTarget>>> = const { RefCell::new(None) };
+        /// The grab bar and the first-apps hint over a newly opened app.
+        static GRAB: RefCell<Option<(Retained<UIView>, Retained<objc2_ui_kit::UILabel>)>> = const { RefCell::new(None) };
+    }
+
+    /// What the running app was granted this run, in plain words, for "What
+    /// it can use". Set by the player.
+    static CURRENT_USES: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+    /// The player says what the running app may use this run (IC-934).
+    pub fn set_current_uses(uses: Vec<String>) {
+        *CURRENT_USES.lock().expect("uses lock") = uses;
+    }
+
+    /// The running app's name, for the menu's title.
+    static CURRENT_NAME: Mutex<Option<String>> = Mutex::new(None);
+
+    /// The player names the running app (IC-934).
+    pub fn set_current_name(name: Option<String>) {
+        *CURRENT_NAME.lock().expect("name lock") = name;
+    }
+
+    /// The band under the system's top inset that Krate keeps apps out of,
+    /// for the grab bar and the hold.
+    const MENU_BAND: f32 = 20.0;
+
+    /// The strip under the clock that holds Krate's menu: the system's top
+    /// inset and the band Krate keeps clear below it.
+    fn hold_band() -> f32 {
+        SAFE.lock().expect("safe lock").0.max(20.0) + MENU_BAND
+    }
+
+    /// Put the hold on Krate's view. Main thread, once.
+    fn install_menu_gesture(mtm: MainThreadMarker, host: &UIView) {
+        let target = KrateMenuTarget::alloc(mtm).set_ivars(());
+        // SAFETY: NSObject's init on a fresh allocation.
+        let target: Retained<KrateMenuTarget> = unsafe { msg_send![super(target), init] };
+        if let Some(protocol) = objc2::runtime::AnyProtocol::get(c"UIGestureRecognizerDelegate") {
+            // SAFETY: declaring a protocol the class implements by selector.
+            unsafe {
+                objc2::ffi::class_addProtocol(
+                    <KrateMenuTarget as objc2::ClassType>::class()
+                        as *const objc2::runtime::AnyClass
+                        as *mut objc2::runtime::AnyClass,
+                    protocol,
+                );
+            }
+        }
+        let Some(class) = objc2::runtime::AnyClass::get(c"UILongPressGestureRecognizer") else {
+            return;
+        };
+        // SAFETY: a long-press recognizer with Krate's target and delegate:
+        // half a second, a finger allowed to drift 14 points, the app's own
+        // touches never cancelled by it.
+        unsafe {
+            let made: objc2::rc::Allocated<objc2::runtime::AnyObject> = msg_send![class, alloc];
+            let hold: Retained<objc2::runtime::AnyObject> =
+                msg_send![made, initWithTarget: &*target, action: objc2::sel!(krateHold:)];
+            let _: () = msg_send![&*hold, setMinimumPressDuration: 0.5f64];
+            let _: () = msg_send![&*hold, setAllowableMovement: 14.0f64];
+            let _: () = msg_send![&*hold, setCancelsTouchesInView: false];
+            let _: () = msg_send![&*hold, setDelegate: &*target];
+            let _: () = msg_send![host, addGestureRecognizer: &*hold];
+        }
+        MENU_TARGET.with(|slot| *slot.borrow_mut() = Some(target));
+    }
+
+    /// One of UIKit's semantic colours, which follow light and dark mode.
+    fn ui_color(name: &str) -> Retained<objc2_ui_kit::UIColor> {
+        let class = <objc2_ui_kit::UIColor as objc2::ClassType>::class();
+        // SAFETY: UIColor class properties, each returning a UIColor.
+        unsafe {
+            match name {
+                "label" => msg_send![class, labelColor],
+                "secondaryLabel" => msg_send![class, secondaryLabelColor],
+                "separator" => msg_send![class, separatorColor],
+                _ => msg_send![class, systemBackgroundColor],
+            }
+        }
+    }
+
+    fn size(w: f64, h: f64) -> objc2_core_foundation::CGSize {
+        objc2_core_foundation::CGSize::new(w, h)
+    }
+
+    /// Drop Krate's menu from the top. Main thread.
+    fn show_menu(mtm: MainThreadMarker, target: &KrateMenuTarget) {
+        if MENU.with(|m| m.borrow().is_some()) {
+            return;
+        }
+        let Some(main_side) = MAIN_SIDE.0.get() else {
+            return;
+        };
+        let name = CURRENT_NAME
+            .lock()
+            .expect("name lock")
+            .clone()
+            .unwrap_or_else(|| "This app".to_string());
+        let host: &UIView = &main_side.view;
+        let bounds = host.bounds();
+        let top = SAFE.lock().expect("safe lock").0.max(20.0) as f64;
+        let rows: [(&str, &str, objc2::runtime::Sel); 5] = [
+            ("xmark.circle", "Close", objc2::sel!(krateMenuClose:)),
+            ("arrow.clockwise", "Restart", objc2::sel!(krateMenuRestart:)),
+            (
+                "square.and.arrow.up",
+                "Share this app",
+                objc2::sel!(krateMenuShare:),
+            ),
+            (
+                "checkmark.shield",
+                "What it can use",
+                objc2::sel!(krateMenuUses:),
+            ),
+            (
+                "exclamationmark.bubble",
+                "Report a problem",
+                objc2::sel!(krateMenuReport:),
+            ),
+        ];
+        let (row_h, head_h) = (50.0f64, 66.0f64);
+        let width = (bounds.size.width - 20.0).min(420.0);
+        let height = head_h + rows.len() as f64 * row_h + 8.0;
+        let x = (bounds.size.width - width) / 2.0;
+        let y = top + 4.0;
+        // SAFETY: UIKit views built and added on the main thread; selectors
+        // name methods KrateMenuTarget implements.
+        unsafe {
+            let shade = UIView::new(mtm);
+            shade.setFrame(bounds);
+            shade.setBackgroundColor(Some(&objc2_ui_kit::UIColor::colorWithWhite_alpha(0.0, 0.3)));
+            shade.setAlpha(0.0);
+            if let Some(tap_class) = objc2::runtime::AnyClass::get(c"UITapGestureRecognizer") {
+                let made: objc2::rc::Allocated<objc2::runtime::AnyObject> =
+                    msg_send![tap_class, alloc];
+                let tap: Retained<objc2::runtime::AnyObject> =
+                    msg_send![made, initWithTarget: target, action: objc2::sel!(krateMenuDismiss:)];
+                let _: () = msg_send![&*shade, addGestureRecognizer: &*tap];
+            }
+            let effect: Option<Retained<objc2::runtime::AnyObject>> =
+                objc2::runtime::AnyClass::get(c"UIBlurEffect")
+                    .and_then(|c| msg_send![c, effectWithStyle: 8isize]);
+            let panel: Retained<UIView> =
+                match (objc2::runtime::AnyClass::get(c"UIVisualEffectView"), effect) {
+                    (Some(class), Some(effect)) => {
+                        let made: objc2::rc::Allocated<objc2::runtime::AnyObject> =
+                            msg_send![class, alloc];
+                        let view: Retained<objc2::runtime::AnyObject> =
+                            msg_send![made, initWithEffect: &*effect];
+                        Retained::cast_unchecked(view)
+                    }
+                    _ => {
+                        let view = UIView::new(mtm);
+                        view.setBackgroundColor(Some(&ui_color("systemBackground")));
+                        view
+                    }
+                };
+            panel.setFrame(CGRect::new(CGPoint::new(x, y - 16.0), size(width, height)));
+            panel.layer().setCornerRadius(22.0);
+            panel.setClipsToBounds(true);
+            panel.setAlpha(0.0);
+            let content: Retained<UIView> = {
+                let maybe: Option<Retained<UIView>> = msg_send![&*panel, contentView];
+                maybe.unwrap_or_else(|| panel.clone())
+            };
+            let label = |text: &str, font: f64, weight: f64, secondary: bool| {
+                let label = objc2_ui_kit::UILabel::new(mtm);
+                label.setText(Some(&objc2_foundation::NSString::from_str(text)));
+                label.setFont(Some(&objc2_ui_kit::UIFont::systemFontOfSize_weight(
+                    font, weight,
+                )));
+                label.setTextColor(Some(&*if secondary {
+                    ui_color("secondaryLabel")
+                } else {
+                    ui_color("label")
+                }));
+                label
+            };
+            let title = label(&name, 17.0, objc2_ui_kit::UIFontWeightSemibold, false);
+            title.setFrame(CGRect::new(
+                CGPoint::new(20.0, 14.0),
+                size(width - 40.0, 22.0),
+            ));
+            content.addSubview(&title);
+            let sub = label("Krate", 13.0, objc2_ui_kit::UIFontWeightRegular, true);
+            sub.setFrame(CGRect::new(
+                CGPoint::new(20.0, 37.0),
+                size(width - 40.0, 18.0),
+            ));
+            content.addSubview(&sub);
+            let line = UIView::new(mtm);
+            line.setBackgroundColor(Some(&ui_color("separator")));
+            line.setFrame(CGRect::new(
+                CGPoint::new(16.0, head_h - 1.0),
+                size(width - 32.0, 0.5),
+            ));
+            content.addSubview(&line);
+            for (i, (symbol, text, action)) in rows.iter().enumerate() {
+                let button =
+                    objc2_ui_kit::UIButton::buttonWithType(objc2_ui_kit::UIButtonType::System, mtm);
+                button.setTitle_forState(
+                    Some(&objc2_foundation::NSString::from_str(text)),
+                    objc2_ui_kit::UIControlState::Normal,
+                );
+                button.setImage_forState(
+                    UIImage::systemImageNamed(&objc2_foundation::NSString::from_str(symbol))
+                        .as_deref(),
+                    objc2_ui_kit::UIControlState::Normal,
+                );
+                button.setTintColor(Some(&ui_color("label")));
+                if let Some(title_label) = button.titleLabel() {
+                    title_label.setFont(Some(&objc2_ui_kit::UIFont::systemFontOfSize_weight(
+                        17.0,
+                        objc2_ui_kit::UIFontWeightRegular,
+                    )));
+                }
+                let _: () = msg_send![&*button, setContentHorizontalAlignment: 1isize];
+                let _: () = msg_send![
+                    &*button,
+                    setTitleEdgeInsets: objc2_ui_kit::UIEdgeInsets { top: 0.0, left: 14.0, bottom: 0.0, right: 0.0 }
+                ];
+                let as_view: &UIView = &button;
+                as_view.setFrame(CGRect::new(
+                    CGPoint::new(20.0, head_h + 4.0 + i as f64 * row_h),
+                    size(width - 40.0, row_h),
+                ));
+                button.addTarget_action_forControlEvents(
+                    Some(target),
+                    *action,
+                    objc2_ui_kit::UIControlEvents::TouchUpInside,
+                );
+                content.addSubview(as_view);
+            }
+            host.addSubview(&shade);
+            host.addSubview(&panel);
+            let (shade_a, panel_a) = (shade.clone(), panel.clone());
+            let settle = block2::RcBlock::new(move || {
+                shade_a.setAlpha(1.0);
+                panel_a.setAlpha(1.0);
+                panel_a.setFrame(CGRect::new(CGPoint::new(x, y), size(width, height)));
+            });
+            if let Some(view_class) = objc2::runtime::AnyClass::get(c"UIView") {
+                let _: () = msg_send![
+                    view_class,
+                    animateWithDuration: 0.24f64,
+                    delay: 0.0f64,
+                    usingSpringWithDamping: 0.86f64,
+                    initialSpringVelocity: 0.0f64,
+                    options: 0usize,
+                    animations: &*settle,
+                    completion: Option::<&objc2::runtime::AnyObject>::None
+                ];
+            }
+            MENU.with(|m| *m.borrow_mut() = Some((shade, panel)));
+        }
+    }
+
+    /// Lift Krate's menu. Main thread.
+    fn hide_menu() {
+        if let Some((shade, panel)) = MENU.with(|m| m.borrow_mut().take()) {
+            shade.removeFromSuperview();
+            panel.removeFromSuperview();
+        }
+    }
+
+    /// Close the app and open it again: the player opens what was asked for
+    /// once the app has closed, as a tapped reminder does. Main thread.
+    fn restart_app() {
+        let opens = CURRENT_APP
+            .lock()
+            .expect("app lock")
+            .as_ref()
+            .map(|(_, opens)| opens.clone());
+        if let Some(opens) = opens {
+            *NOTICE_OPEN.lock().expect("notice lock") = Some(opens);
+            close_for_opened_file();
+        }
+    }
+
+    /// The share sheet with the app's own .krate, so it can be sent to
+    /// someone; the app built into Krate shares Krate's address. Main thread.
+    fn share_app() {
+        let opens = CURRENT_APP
+            .lock()
+            .expect("app lock")
+            .as_ref()
+            .map(|(_, opens)| opens.clone());
+        let (Some(controller), Some(sheet_class), Some(url_class)) = (
+            main_controller(),
+            objc2::runtime::AnyClass::get(c"UIActivityViewController"),
+            objc2::runtime::AnyClass::get(c"NSURL"),
+        ) else {
+            return;
+        };
+        // SAFETY: an NSURL item in an NSArray, a UIActivityViewController over
+        // it anchored to Krate's view, presented from Krate's controller.
+        unsafe {
+            let item: Option<Retained<objc2::runtime::AnyObject>> = match opens.as_deref() {
+                Some(path) if path.ends_with(".krate") => msg_send![
+                    url_class,
+                    fileURLWithPath: &*objc2_foundation::NSString::from_str(path)
+                ],
+                _ => msg_send![
+                    url_class,
+                    URLWithString: &*objc2_foundation::NSString::from_str("https://krate.tech")
+                ],
+            };
+            let Some(item) = item else {
+                return;
+            };
+            let items = objc2_foundation::NSArray::from_retained_slice(&[item]);
+            let made: objc2::rc::Allocated<objc2::runtime::AnyObject> =
+                msg_send![sheet_class, alloc];
+            let sheet: Option<Retained<objc2::runtime::AnyObject>> = msg_send![
+                made,
+                initWithActivityItems: &*items,
+                applicationActivities: Option::<&objc2::runtime::AnyObject>::None
+            ];
+            let Some(sheet) = sheet else {
+                return;
+            };
+            let popover: Option<Retained<objc2::runtime::AnyObject>> =
+                msg_send![&*sheet, popoverPresentationController];
+            if let (Some(popover), Some(main_side)) = (popover, MAIN_SIDE.0.get()) {
+                let host: &UIView = &main_side.view;
+                let _: () = msg_send![&*popover, setSourceView: host];
+            }
+            let _: () = msg_send![
+                &*controller,
+                presentViewController: &*sheet,
+                animated: true,
+                completion: Option::<&objc2::runtime::AnyObject>::None
+            ];
+        }
+    }
+
+    /// What the app may use this run, in plain words, with the way to
+    /// change it: Krate asks on every open, so "Ask again" opens it again.
+    fn show_uses() {
+        let name = CURRENT_NAME
+            .lock()
+            .expect("name lock")
+            .clone()
+            .unwrap_or_else(|| "This app".to_string());
+        let uses = CURRENT_USES.lock().expect("uses lock").clone();
+        let message = if uses.is_empty() {
+            "Only its own window: nothing on this phone beyond it.".to_string()
+        } else {
+            uses.iter()
+                .map(|u| format!("\u{2022} {u}"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        let (Some(controller), Some(alert_class), Some(action_class)) = (
+            main_controller(),
+            objc2::runtime::AnyClass::get(c"UIAlertController"),
+            objc2::runtime::AnyClass::get(c"UIAlertAction"),
+        ) else {
+            return;
+        };
+        // SAFETY: a UIAlertController with two UIAlertActions, presented from
+        // Krate's controller; the handler block runs on the main thread.
+        unsafe {
+            let alert: Retained<objc2::runtime::AnyObject> = msg_send![
+                alert_class,
+                alertControllerWithTitle: &*objc2_foundation::NSString::from_str(&format!("{name} can use")),
+                message: &*objc2_foundation::NSString::from_str(&message),
+                preferredStyle: 1isize
+            ];
+            let again =
+                block2::RcBlock::new(|_action: *mut objc2::runtime::AnyObject| restart_app());
+            let ask: Retained<objc2::runtime::AnyObject> = msg_send![
+                action_class,
+                actionWithTitle: &*objc2_foundation::NSString::from_str("Ask again"),
+                style: 0isize,
+                handler: &*again
+            ];
+            let done: Retained<objc2::runtime::AnyObject> = msg_send![
+                action_class,
+                actionWithTitle: &*objc2_foundation::NSString::from_str("Done"),
+                style: 1isize,
+                handler: Option::<&objc2::runtime::AnyObject>::None
+            ];
+            let _: () = msg_send![&*alert, addAction: &*ask];
+            let _: () = msg_send![&*alert, addAction: &*done];
+            let _: () = msg_send![
+                &*controller,
+                presentViewController: &*alert,
+                animated: true,
+                completion: Option::<&objc2::runtime::AnyObject>::None
+            ];
+        }
+    }
+
+    /// A mail to Krate about the running app, its name and id filled in.
+    /// Main thread.
+    fn report_problem() {
+        let name = CURRENT_NAME
+            .lock()
+            .expect("name lock")
+            .clone()
+            .unwrap_or_else(|| "an app".to_string());
+        let id = CURRENT_APP
+            .lock()
+            .expect("app lock")
+            .as_ref()
+            .map(|(id, _)| id.clone())
+            .unwrap_or_default();
+        let encode = |text: &str| -> String {
+            text.bytes()
+                .map(|b| match b {
+                    b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                        (b as char).to_string()
+                    }
+                    _ => format!("%{b:02X}"),
+                })
+                .collect()
+        };
+        let link = format!(
+            "mailto:yashraj@krate.tech?subject={}&body={}",
+            encode(&format!("A problem with {name}")),
+            encode(&format!("App: {name} ({id})\n\nWhat happened:\n"))
+        );
+        let (Some(url_class), Some(mtm)) = (
+            objc2::runtime::AnyClass::get(c"NSURL"),
+            MainThreadMarker::new(),
+        ) else {
+            return;
+        };
+        // SAFETY: +[NSURL URLWithString:], then UIApplication's
+        // openURL:options:completionHandler:, on the main thread.
+        unsafe {
+            let url: Option<Retained<objc2::runtime::AnyObject>> =
+                msg_send![url_class, URLWithString: &*objc2_foundation::NSString::from_str(&link)];
+            if let Some(url) = url {
+                let app = UIApplication::sharedApplication(mtm);
+                let options = objc2_foundation::NSDictionary::<
+                    objc2::runtime::AnyObject,
+                    objc2::runtime::AnyObject,
+                >::new();
+                let _: () = msg_send![
+                    &*app,
+                    openURL: &*url,
+                    options: &*options,
+                    completionHandler: Option::<&objc2::runtime::AnyObject>::None
+                ];
+            }
+        }
+    }
+
+    /// Show the grab bar at the top centre over a newly opened app, fading
+    /// out after two seconds, and on the first three apps a person opens a
+    /// line saying how to reach the menu. Main thread.
+    fn show_grab(mtm: MainThreadMarker) {
+        let Some(main_side) = MAIN_SIDE.0.get() else {
+            return;
+        };
+        let host: &UIView = &main_side.view;
+        let bounds = host.bounds();
+        let top = SAFE.lock().expect("safe lock").0.max(20.0) as f64;
+        // SAFETY: UIKit views made and styled on the main thread.
+        let (bar, hint) = GRAB.with(|slot| unsafe {
+            slot.borrow_mut()
+                .get_or_insert_with(|| {
+                    let bar = UIView::new(mtm);
+                    bar.setBackgroundColor(Some(&objc2_ui_kit::UIColor::colorWithWhite_alpha(
+                        0.55, 0.85,
+                    )));
+                    bar.layer().setCornerRadius(2.5);
+                    bar.setUserInteractionEnabled(false);
+                    let hint = objc2_ui_kit::UILabel::new(mtm);
+                    hint.setText(Some(&objc2_foundation::NSString::from_str(
+                        "Touch and hold the top for Krate's menu",
+                    )));
+                    hint.setFont(Some(&objc2_ui_kit::UIFont::systemFontOfSize_weight(
+                        13.0,
+                        objc2_ui_kit::UIFontWeightMedium,
+                    )));
+                    hint.setTextColor(Some(&objc2_ui_kit::UIColor::whiteColor()));
+                    hint.setTextAlignment(objc2_ui_kit::NSTextAlignment::Center);
+                    let as_view: &UIView = &hint;
+                    as_view.setBackgroundColor(Some(&objc2_ui_kit::UIColor::colorWithWhite_alpha(
+                        0.0, 0.72,
+                    )));
+                    as_view.layer().setCornerRadius(15.0);
+                    as_view.setClipsToBounds(true);
+                    as_view.setUserInteractionEnabled(false);
+                    (bar, hint)
+                })
+                .clone()
+        });
+        bar.setFrame(CGRect::new(
+            CGPoint::new(bounds.size.width / 2.0 - 18.0, top + 6.0),
+            size(36.0, 5.0),
+        ));
+        host.addSubview(&bar);
+        bar.setAlpha(1.0);
+        // SAFETY: NSUserDefaults read and written on the main thread, and
+        // UIView's class animation with a block run on it.
+        unsafe {
+            let defaults: Option<Retained<objc2::runtime::AnyObject>> =
+                objc2::runtime::AnyClass::get(c"NSUserDefaults")
+                    .and_then(|c| msg_send![c, standardUserDefaults]);
+            let key = objc2_foundation::NSString::from_str("krate.menuHints");
+            let shown: isize = defaults
+                .as_ref()
+                .map_or(3, |d| msg_send![&**d, integerForKey: &*key]);
+            let hint_view: &UIView = &hint;
+            if shown < 3 {
+                if let Some(d) = &defaults {
+                    let _: () = msg_send![&**d, setInteger: shown + 1, forKey: &*key];
+                }
+                let w = 300.0f64.min(bounds.size.width - 32.0);
+                hint_view.setFrame(CGRect::new(
+                    CGPoint::new((bounds.size.width - w) / 2.0, top + 18.0),
+                    size(w, 30.0),
+                ));
+                host.addSubview(hint_view);
+                hint_view.setAlpha(1.0);
+            } else {
+                hint_view.setAlpha(0.0);
+            }
+            let (bar_a, hint_a) = (bar.clone(), hint.clone());
+            let fade = block2::RcBlock::new(move || {
+                bar_a.setAlpha(0.0);
+                let h: &UIView = &hint_a;
+                h.setAlpha(0.0);
+            });
+            if let Some(view_class) = objc2::runtime::AnyClass::get(c"UIView") {
+                let _: () = msg_send![
+                    view_class,
+                    animateWithDuration: 0.6f64,
+                    delay: if shown < 3 { 3.5f64 } else { 2.0f64 },
+                    options: 0usize,
+                    animations: &*fade,
+                    completion: Option::<&objc2::runtime::AnyObject>::None
+                ];
+            }
+        }
+    }
 
     /// Krate's loading cover: the mark, a title, a line of status and the
     /// system spinner, over everything while an app opens or Krate gets
@@ -506,7 +1158,16 @@ mod real {
         APP_CHROME.store(visible, std::sync::atomic::Ordering::Relaxed);
         DispatchQueue::main().exec_async(move || {
             if let Some(main_side) = MAIN_SIDE.0.get() {
-                main_side.close.setHidden(!visible);
+                // Krate's menu replaces the capsule (IC-934): no button over
+                // an app; a grab bar that fades and a hold under the clock.
+                main_side.close.setHidden(true);
+                if let Some(mtm) = MainThreadMarker::new() {
+                    if visible {
+                        show_grab(mtm);
+                    } else {
+                        hide_menu();
+                    }
+                }
             }
         });
     }
@@ -1305,6 +1966,200 @@ mod real {
         answer
     }
 
+    /// The person's text size against the default (Large, 17 points), from
+    /// UIKit's content size category: Apple's own body sizes, 14 to 53.
+    pub(crate) fn text_scale_for(category: &str) -> f32 {
+        let body = match category.trim_start_matches("UICTContentSizeCategory") {
+            "XS" => 14.0,
+            "S" => 15.0,
+            "M" => 16.0,
+            "XL" => 19.0,
+            "XXL" => 21.0,
+            "XXXL" => 23.0,
+            "AccessibilityM" => 28.0,
+            "AccessibilityL" => 33.0,
+            "AccessibilityXL" => 40.0,
+            "AccessibilityXXL" => 47.0,
+            "AccessibilityXXXL" => 53.0,
+            _ => 17.0,
+        };
+        body / 17.0
+    }
+
+    /// The look the main thread read last, for the app's thread to take
+    /// without waiting.
+    static LOOK: std::sync::Mutex<Option<krate_adapter_common::ui::Appearance>> =
+        std::sync::Mutex::new(None);
+
+    /// How the person asked things to look (IC-925): dark mode, more
+    /// contrast and text size, from Krate's own view controller's traits.
+    ///
+    /// Never waits. The traits are read on the main thread, which may itself
+    /// be waiting for this app's frame; an app thread that waited for it
+    /// stalled half a second on every read, and a widget app never drew its
+    /// first frame (Timer, 2026-10-11). So this answers the last look the
+    /// main thread saw and asks it to look again.
+    pub fn appearance() -> krate_adapter_common::ui::Appearance {
+        DispatchQueue::main().exec_async(|| {
+            let look = main_controller().map(|controller| {
+                // SAFETY: the controller's UITraitCollection and three of its
+                // documented properties, on the main thread.
+                unsafe {
+                    let traits: Retained<objc2::runtime::AnyObject> =
+                        msg_send![&*controller, traitCollection];
+                    let style: isize = msg_send![&*traits, userInterfaceStyle];
+                    let contrast: isize = msg_send![&*traits, accessibilityContrast];
+                    let category: Option<Retained<objc2_foundation::NSString>> =
+                        msg_send![&*traits, preferredContentSizeCategory];
+                    krate_adapter_common::ui::Appearance {
+                        dark: style == 2,
+                        high_contrast: contrast == 1,
+                        text_scale: category.map_or(1.0, |c| text_scale_for(&c.to_string())),
+                    }
+                }
+            });
+            if let Some(look) = look {
+                *LOOK.lock().expect("look lock") = Some(look);
+            }
+        });
+        LOOK.lock().expect("look lock").unwrap_or_default()
+    }
+
+    // Signing in through the system's sheet (IC-923).
+    #[link(name = "AuthenticationServices", kind = "framework")]
+    unsafe extern "C" {}
+
+    define_class!(
+        // SAFETY:
+        // - NSObject has no subclassing requirements for a presentation
+        //   context provider.
+        // - AuthenticationServices asks it on the main thread.
+        #[unsafe(super = objc2_foundation::NSObject)]
+        #[thread_kind = MainThreadOnly]
+        struct KrateSignInAnchor;
+
+        // SAFETY: NSObjectProtocol has no additional requirements.
+        unsafe impl NSObjectProtocol for KrateSignInAnchor {}
+
+        // ASWebAuthenticationPresentationContextProviding, by selector.
+        impl KrateSignInAnchor {
+            /// The window the sheet rises over: Krate's own.
+            #[unsafe(method_id(presentationAnchorForWebAuthenticationSession:))]
+            fn anchor(&self, _session: &objc2::runtime::AnyObject) -> Option<Retained<objc2::runtime::AnyObject>> {
+                let controller = main_controller();
+                // SAFETY: the controller's view and that view's window.
+                controller.and_then(|controller| unsafe {
+                    let view: Option<Retained<objc2::runtime::AnyObject>> = msg_send![&*controller, view];
+                    view.and_then(|view| msg_send![&*view, window])
+                })
+            }
+        }
+    );
+
+    thread_local! {
+        /// The sheet that is up and its anchor, kept alive until it answers.
+        static SIGN_IN: RefCell<Option<(Retained<objc2::runtime::AnyObject>, Retained<KrateSignInAnchor>)>> =
+            const { RefCell::new(None) };
+    }
+
+    /// Open the sign-in sheet at `url` and wait for the service to send the
+    /// person back to `scheme:`; that address, or None when they closed it.
+    pub fn sign_in(url: &str, scheme: &str) -> Result<Option<String>, String> {
+        let (url, scheme) = (url.to_string(), scheme.to_string());
+        let (tx, rx) = std::sync::mpsc::channel();
+        DispatchQueue::main().exec_async(move || {
+            let Some(mtm) = MainThreadMarker::new() else {
+                let _ = tx.send(Err("not on the main thread".to_string()));
+                return;
+            };
+            let (Some(class), Some(url_class)) = (
+                objc2::runtime::AnyClass::get(c"ASWebAuthenticationSession"),
+                objc2::runtime::AnyClass::get(c"NSURL"),
+            ) else {
+                let _ = tx.send(Err("this iOS has no sign-in sheet".to_string()));
+                return;
+            };
+            if SIGN_IN.with(|up| up.borrow().is_some()) {
+                let _ = tx.send(Err("a sign-in sheet is already open".to_string()));
+                return;
+            }
+            // SAFETY: an ASWebAuthenticationSession over an NSURL with a
+            // completion block answering on the channel, given Krate's
+            // window as its anchor, started on the main thread, and kept
+            // alive in SIGN_IN until the block runs.
+            unsafe {
+                let link: Option<Retained<objc2::runtime::AnyObject>> =
+                    msg_send![url_class, URLWithString: &*objc2_foundation::NSString::from_str(&url)];
+                let Some(link) = link else {
+                    let _ = tx.send(Err("iOS could not read the sign-in address".to_string()));
+                    return;
+                };
+                let tx = std::sync::Arc::new(std::sync::Mutex::new(Some(tx)));
+                let fail = {
+                    let tx = tx.clone();
+                    move |why: &str| {
+                        if let Some(tx) = tx.lock().expect("sign-in lock").take() {
+                            let _ = tx.send(Err(why.to_string()));
+                        }
+                    }
+                };
+                let done = block2::RcBlock::new(
+                    move |back: *mut objc2::runtime::AnyObject, error: *mut objc2::runtime::AnyObject| {
+                        let answer = if let Some(back) = back.as_ref() {
+                            let text: Retained<objc2_foundation::NSString> = msg_send![back, absoluteString];
+                            Ok(Some(text.to_string()))
+                        } else if let Some(error) = error.as_ref() {
+                            // ASWebAuthenticationSessionErrorCodeCanceledLogin.
+                            let code: isize = msg_send![error, code];
+                            if code == 1 {
+                                Ok(None)
+                            } else {
+                                let why: Retained<objc2_foundation::NSString> = msg_send![error, localizedDescription];
+                                Err(why.to_string())
+                            }
+                        } else {
+                            Ok(None)
+                        };
+                        if let Some(tx) = tx.lock().expect("sign-in lock").take() {
+                            let _ = tx.send(answer);
+                        }
+                        SIGN_IN.with(|up| up.borrow_mut().take());
+                    },
+                );
+                let made: objc2::rc::Allocated<objc2::runtime::AnyObject> = msg_send![class, alloc];
+                let session: Option<Retained<objc2::runtime::AnyObject>> = msg_send![
+                    made,
+                    initWithURL: &*link,
+                    callbackURLScheme: &*objc2_foundation::NSString::from_str(&scheme),
+                    completionHandler: &*done
+                ];
+                let Some(session) = session else {
+                    fail("the sign-in sheet would not open");
+                    return;
+                };
+                let anchor = KrateSignInAnchor::alloc(mtm).set_ivars(());
+                let anchor: Retained<KrateSignInAnchor> = msg_send![super(anchor), init];
+                if let Some(protocol) = objc2::runtime::AnyProtocol::get(c"ASWebAuthenticationPresentationContextProviding") {
+                    objc2::ffi::class_addProtocol(
+                        <KrateSignInAnchor as objc2::ClassType>::class() as *const objc2::runtime::AnyClass as *mut objc2::runtime::AnyClass,
+                        protocol,
+                    );
+                }
+                let _: () = msg_send![&*session, setPresentationContextProvider: &*anchor];
+                SIGN_IN.with(|up| *up.borrow_mut() = Some((session.clone(), anchor)));
+                let started: bool = msg_send![&*session, start];
+                if !started {
+                    SIGN_IN.with(|up| up.borrow_mut().take());
+                    fail("the sign-in sheet would not open");
+                }
+            }
+        });
+        // The person may take minutes: a password manager, a two-factor
+        // code. Fifteen is the most the sheet waits.
+        rx.recv_timeout(std::time::Duration::from_secs(900))
+            .unwrap_or(Ok(None))
+    }
+
     /// Open a link that has passed the runtime's checks (IC-918): iOS hands
     /// it to Safari, Mail or the app that owns it.
     pub fn open_url(url: &str) -> Result<(), String> {
@@ -1669,6 +2524,132 @@ mod real {
         Ok(())
     }
 
+    // Speech, through the Objective-C runtime.
+    #[link(name = "Speech", kind = "framework")]
+    unsafe extern "C" {}
+
+    /// Speech to text on the phone itself (IC-918): SFSpeechRecognizer over
+    /// the app's mono 16-bit PCM, on the device when it can, asking the
+    /// person once. `language` is a BCP 47 tag ("en", "en-US"); none is
+    /// the phone's own language.
+    pub fn transcribe(pcm: &[u8], rate: u32, language: Option<&str>) -> Result<String, String> {
+        let get = |name: &std::ffi::CStr| {
+            objc2::runtime::AnyClass::get(name)
+                .ok_or_else(|| format!("no {}", name.to_string_lossy()))
+        };
+        let recognizer_class = get(c"SFSpeechRecognizer")?;
+        // Asked once; the answer is waited for.
+        let (tx, rx) = std::sync::mpsc::channel::<isize>();
+        let asked = block2::RcBlock::new(move |status: isize| {
+            let _ = tx.send(status);
+        });
+        // SAFETY: +[SFSpeechRecognizer requestAuthorization:] with a block
+        // that reports the status.
+        unsafe {
+            let _: () = msg_send![recognizer_class, requestAuthorization: &*asked];
+        }
+        match rx.recv_timeout(std::time::Duration::from_secs(120)) {
+            // Authorized.
+            Ok(3) => {}
+            Ok(_) => {
+                return Err(
+                    "speech recognition is not allowed for Krate: Settings > Krate".to_string(),
+                )
+            }
+            Err(_) => return Err("the phone did not answer".to_string()),
+        }
+        let samples: Vec<i16> = pcm
+            .chunks_exact(2)
+            .map(|b| i16::from_le_bytes([b[0], b[1]]))
+            .collect();
+        let (format_class, buffer_class, request_class, locale_class) = (
+            get(c"AVAudioFormat")?,
+            get(c"AVAudioPCMBuffer")?,
+            get(c"SFSpeechAudioBufferRecognitionRequest")?,
+            get(c"NSLocale")?,
+        );
+        let (tx, rx) = std::sync::mpsc::channel::<Result<String, String>>();
+        // SAFETY: a recognizer for the language, one PCM buffer of the
+        // app's samples (int16, mono, interleaved), a buffer request ended
+        // at once, and a task whose handler answers on the final result.
+        unsafe {
+            let recognizer: Option<Retained<objc2::runtime::AnyObject>> = match language {
+                Some(tag) => {
+                    let locale: Retained<objc2::runtime::AnyObject> = msg_send![locale_class, localeWithLocaleIdentifier: &*objc2_foundation::NSString::from_str(tag)];
+                    let made: objc2::rc::Allocated<objc2::runtime::AnyObject> =
+                        msg_send![recognizer_class, alloc];
+                    msg_send![made, initWithLocale: &*locale]
+                }
+                None => msg_send![recognizer_class, new],
+            };
+            let recognizer = recognizer.ok_or("no recognizer for that language")?;
+            let available: bool = msg_send![&*recognizer, isAvailable];
+            if !available {
+                return Err("speech recognition is not available right now".to_string());
+            }
+            let made: objc2::rc::Allocated<objc2::runtime::AnyObject> =
+                msg_send![format_class, alloc];
+            // AVAudioPCMFormatInt16 = 3.
+            let format: Option<Retained<objc2::runtime::AnyObject>> = msg_send![made, initWithCommonFormat: 3usize, sampleRate: rate as f64, channels: 1u32, interleaved: true];
+            let format = format.ok_or("that sample rate cannot be read")?;
+            let made: objc2::rc::Allocated<objc2::runtime::AnyObject> =
+                msg_send![buffer_class, alloc];
+            let buffer: Option<Retained<objc2::runtime::AnyObject>> =
+                msg_send![made, initWithPCMFormat: &*format, frameCapacity: samples.len() as u32];
+            let buffer = buffer.ok_or("the audio would not fit")?;
+            let channels: *const *mut i16 = msg_send![&*buffer, int16ChannelData];
+            if channels.is_null() || (*channels).is_null() {
+                return Err("the audio buffer has no room".to_string());
+            }
+            std::ptr::copy_nonoverlapping(samples.as_ptr(), *channels, samples.len());
+            let _: () = msg_send![&*buffer, setFrameLength: samples.len() as u32];
+            let request: Retained<objc2::runtime::AnyObject> = msg_send![request_class, new];
+            let _: () = msg_send![&*request, setShouldReportPartialResults: false];
+            let on_device: bool = msg_send![&*recognizer, supportsOnDeviceRecognition];
+            if on_device {
+                let _: () = msg_send![&*request, setRequiresOnDeviceRecognition: true];
+            }
+            let _: () = msg_send![&*request, appendAudioPCMBuffer: &*buffer];
+            let _: () = msg_send![&*request, endAudio];
+            let tx = std::sync::Mutex::new(Some(tx));
+            let heard = block2::RcBlock::new(
+                move |result: *mut objc2::runtime::AnyObject,
+                      error: *mut objc2::runtime::AnyObject| {
+                    let answer = if !result.is_null() {
+                        let done: bool = msg_send![&*result, isFinal];
+                        if !done {
+                            return;
+                        }
+                        let best: Retained<objc2::runtime::AnyObject> =
+                            msg_send![&*result, bestTranscription];
+                        let text: Retained<objc2_foundation::NSString> =
+                            msg_send![&*best, formattedString];
+                        Ok(text.to_string())
+                    } else if !error.is_null() {
+                        let why: Option<Retained<objc2_foundation::NSString>> =
+                            msg_send![&*error, localizedDescription];
+                        let why = why.map(|w| w.to_string()).unwrap_or_default();
+                        // No speech in the audio is an empty transcript, not a fault.
+                        if why.to_ascii_lowercase().contains("no speech") {
+                            Ok(String::new())
+                        } else {
+                            Err(why)
+                        }
+                    } else {
+                        return;
+                    };
+                    if let Some(tx) = tx.lock().expect("speech lock").take() {
+                        let _ = tx.send(answer);
+                    }
+                },
+            );
+            let task: Option<Retained<objc2::runtime::AnyObject>> = msg_send![&*recognizer, recognitionTaskWithRequest: &*request, resultHandler: &*heard];
+            let _keep = (task, recognizer);
+            rx.recv_timeout(std::time::Duration::from_secs(60))
+                .unwrap_or_else(|_| Err("speech recognition took too long".to_string()))
+        }
+    }
+
     /// The controller Krate's own sheets are shown from.
     pub(crate) fn main_controller() -> Option<Retained<objc2_ui_kit::UIViewController>> {
         MAIN_SIDE
@@ -1922,8 +2903,8 @@ mod real {
         let (top, right, bottom, left) = *SAFE.lock().expect("safe lock");
         let bottom = bottom.max(*KEYBOARD.lock().expect("keyboard lock"));
         if APP_CHROME.load(std::sync::atomic::Ordering::Relaxed) {
-            // The capsule's bottom edge, and a little air under it.
-            (top.max(8.0) + 6.0 + 30.0 + 6.0, right, bottom, left)
+            // The strip under the clock that holds Krate's menu (IC-934).
+            (top.max(20.0) + MENU_BAND, right, bottom, left)
         } else {
             (top, right, bottom, left)
         }
@@ -2298,6 +3279,7 @@ mod real {
                     );
                     let host: &UIView = &view;
                     host.addSubview(as_view);
+                    install_menu_gesture(mtm, host);
                 }
                 // The loading cover: light, the mark, a title, a status line
                 // and the spinner; hidden until something is loading.
@@ -2632,6 +3614,20 @@ mod real {
             }
             guest.krate = Some(krate);
             guest.placements.clear();
+            // A new app starts on the CPU path until it draws on the GPU
+            // itself. The flag used to stay set for the life of Krate, so a
+            // widget app opened after any canvas app -- Krate's own home is
+            // one -- painted nothing and the opening cover never lifted
+            // (Timer, 2026-10-11).
+            GPU_ACTIVE.store(false, std::sync::atomic::Ordering::Relaxed);
+            // The metal layer is a sublayer of the image view, so it draws
+            // OVER the CPU frame: its last GPU frame (the opening animation,
+            // the last app) hid every widget frame until it was hidden.
+            DispatchQueue::main().exec_async(|| {
+                if let Some(main_side) = MAIN_SIDE.0.get() {
+                    main_side.metal.setHidden(true);
+                }
+            });
             guest.gesture = None;
             guest.pointer_samples.clear();
             guest.wheel_samples.clear();
@@ -2677,6 +3673,17 @@ mod real {
     pub fn pump_native_events() -> Result<CollectedNativeEvents, UiAdapterError> {
         if !guest_initialized() {
             return Ok(Vec::new());
+        }
+        // The cover lifts after LOADING_MOST whether or not a frame came:
+        // the rule was only asked when one did, so an app that never drew
+        // kept it up for ever, with no way to close the app beneath it.
+        if LOADING.load(std::sync::atomic::Ordering::Relaxed)
+            && LOADING_SINCE
+                .lock()
+                .expect("loading lock")
+                .is_some_and(|since| since.elapsed() > LOADING_MOST)
+        {
+            hide_loading();
         }
         with_guest(|guest| {
             digest_touches(guest);
@@ -2983,7 +3990,8 @@ mod real {
                 .unwrap_or_else(|_| Err("gpu init panicked (unsupported device)".into()));
                 match created {
                     Ok(gpu) => {
-                        GPU_ACTIVE.store(true, std::sync::atomic::Ordering::Relaxed);
+                        // GPU_ACTIVE is set, and the metal layer shown, by
+                        // the first frame this app presents (below).
                         // The image view would cover the metal layer with
                         // its last CPU frame; hide it once the GPU owns
                         // the pixels.
@@ -3039,6 +4047,17 @@ mod real {
             match outcome {
                 Ok(()) => {
                     diag("gpu-present-done");
+                    // This app draws on the GPU: the CPU image would cover
+                    // the metal layer with a stale frame, so clear it the
+                    // first time.
+                    if !GPU_ACTIVE.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                        DispatchQueue::main().exec_async(|| {
+                            if let Some(main_side) = MAIN_SIDE.0.get() {
+                                main_side.view.setImage(None);
+                                main_side.metal.setHidden(false);
+                            }
+                        });
+                    }
                     frame_shown(WindowSize::new(list.logical_width, list.logical_height).ok());
                     true
                 }
@@ -3158,6 +4177,14 @@ mod stub {
         Err("the photo picker is on the iOS player only".to_string())
     }
 
+    pub fn sign_in(_url: &str, _scheme: &str) -> Result<Option<String>, String> {
+        Err("the sign-in sheet is on the iOS player only".to_string())
+    }
+
+    pub fn appearance() -> krate_adapter_common::ui::Appearance {
+        krate_adapter_common::ui::Appearance::default()
+    }
+
     pub fn save_photo(_data: &[u8]) -> Result<(), Option<String>> {
         Err(Some("Photos is on the iOS player only".to_string()))
     }
@@ -3167,6 +4194,14 @@ mod stub {
     }
 
     pub fn set_current_app(_app: Option<(String, String)>) {}
+
+    pub fn set_current_name(_name: Option<String>) {}
+
+    pub fn set_current_uses(_uses: Vec<String>) {}
+
+    pub fn transcribe(_pcm: &[u8], _rate: u32, _language: Option<&str>) -> Result<String, String> {
+        Err("speech recognition is on the iOS player only".to_string())
+    }
 
     pub fn take_notice_open() -> Option<String> {
         None

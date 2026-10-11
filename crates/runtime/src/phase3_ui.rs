@@ -641,6 +641,21 @@ impl<'a> Phase3UiDispatcher<'a> {
         self.adapter.share(id, text, url, files)
     }
 
+    /// How the person asked things to look (IC-925).
+    pub fn appearance(&self) -> krate_adapter_common::ui::Appearance {
+        self.adapter.appearance()
+    }
+
+    /// Open the sign-in sheet (IC-923).
+    pub fn sign_in(
+        &self,
+        id: WindowId,
+        authorize_url: &str,
+        scheme: &str,
+    ) -> Result<Option<String>, String> {
+        self.adapter.sign_in(id, authorize_url, scheme)
+    }
+
     /// The adapter, for the Bluetooth calls (IC-917), which pass through
     /// as they are.
     pub fn bluetooth(&self) -> &dyn krate_adapter_common::ui::UiAdapter {

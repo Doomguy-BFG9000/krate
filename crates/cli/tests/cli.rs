@@ -11458,3 +11458,369 @@ fn sdk_reference_lists_functions_capabilities_and_leaks() {
     let leaks = v["leaks"].as_array().unwrap();
     assert!(leaks.iter().any(|l| l["pattern"] == "std::fs"));
 }
+
+/// An app plays a video from its own assets and the platform decodes it
+/// (krate:gfx/video, IC-922).
+///
+/// `video-probe.wasm` is apps/krate-video-probe built ("Clip");
+/// `video-sample.mp4` is a 4 s, 320x180 H.264 clip with sound. Packed with
+/// the clip, a Mac plays it headless: it loads, reports its own length and
+/// size, and its clock moves while the app draws it. Packed without the
+/// clip, the app is told the file is not there instead of being shown
+/// black. Another system says it cannot play video yet.
+#[test]
+fn an_app_plays_a_video_from_its_assets() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let app = |name: &str, with_clip: bool| -> std::path::PathBuf {
+        let src = dir.path().join(name);
+        std::fs::create_dir_all(&src).expect("app dir");
+        std::fs::write(
+            src.join("code.wasm"),
+            include_bytes!("fixtures/video-probe.wasm"),
+        )
+        .expect("probe");
+        std::fs::write(
+            src.join("manifest.toml"),
+            "[app]\nid = \"dev.krate.video-probe\"\nname = \"Clip\"\nversion = \"1.0.0\"\n\
+             entry = \"code.wasm\"\nworld = \"krate:app/gui@0.2.0\"\n\n\
+             [[capabilities]]\ncap = \"ui.window:create\"\nrationale = \"window\"\nrequired = true\n\n\
+             [[capabilities]]\ncap = \"io.stdout\"\nrationale = \"print\"\nrequired = true\n\n\
+             [[capabilities]]\ncap = \"io.args\"\nrationale = \"args\"\nrequired = true\n",
+        )
+        .expect("manifest");
+        let clips = src.join("assets").join("clips");
+        std::fs::create_dir_all(&clips).expect("assets");
+        if with_clip {
+            std::fs::write(
+                clips.join("sample.mp4"),
+                include_bytes!("fixtures/video-sample.mp4"),
+            )
+            .expect("clip");
+        } else {
+            std::fs::write(clips.join("readme.txt"), "no clip here").expect("other asset");
+        }
+        let bundle = dir.path().join(format!("{name}.krate"));
+        let packed = krate()
+            .arg("pack")
+            .arg(src.join("code.wasm"))
+            .arg("--manifest")
+            .arg(src.join("manifest.toml"))
+            .arg("-o")
+            .arg(&bundle)
+            .output()
+            .expect("pack");
+        assert!(
+            packed.status.success(),
+            "{}",
+            String::from_utf8_lossy(&packed.stderr)
+        );
+        bundle
+    };
+    let run = |bundle: &std::path::Path| -> String {
+        let out = krate()
+            .arg("run")
+            .arg("--headless")
+            .arg(bundle)
+            .arg("--auto-grant")
+            .arg("--")
+            .arg("quick")
+            .output()
+            .expect("run");
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+
+    let missing = run(&app("without", false));
+    assert!(
+        missing.contains("video:problem=") && missing.contains("there is no clips/sample.mp4"),
+        "a clip the app does not carry is named, not shown black: {missing}"
+    );
+
+    let played = run(&app("with", true));
+    if cfg!(target_os = "macos") {
+        assert!(
+            played
+                .lines()
+                .any(|l| l.starts_with("video:ready=yes duration=4000 size=320x180 moved=yes")),
+            "a Mac loads the clip, knows its length and size, and plays it: {played}"
+        );
+    } else {
+        assert!(
+            played.contains("video playback is not on this system yet"),
+            "another system says it cannot play video yet: {played}"
+        );
+    }
+}
+
+/// An app signs the person in through the system's sheet and checks what
+/// comes back (krate:ui/sign-in, IC-923).
+///
+/// `sign-in-probe.wasm` is apps/krate-sign-in-probe built ("Sign In").
+/// Headless, KRATE_SIGN_IN stands in for the person: the code the service
+/// sends back reaches the app with the app's own `state`, beside a 43-
+/// character PKCE verifier; `cancel` is the person closing the sheet; with
+/// no stand-in there is no sheet and the app is told so. An http address
+/// is refused before any sheet opens.
+#[test]
+fn an_app_signs_in_through_the_system_sheet() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let wasm = dir.path().join("code.wasm");
+    std::fs::write(&wasm, include_bytes!("fixtures/sign-in-probe.wasm")).expect("probe");
+    let manifest = dir.path().join("manifest.toml");
+    std::fs::write(
+        &manifest,
+        "[app]\nid = \"dev.krate.sign-in-probe\"\nname = \"Sign In\"\nversion = \"1.0.0\"\n\
+         entry = \"code.wasm\"\nworld = \"krate:app/gui@0.2.0\"\n\n\
+         [[capabilities]]\ncap = \"ui.window:create\"\nrationale = \"window\"\nrequired = true\n\n\
+         [[capabilities]]\ncap = \"random.bytes\"\nrationale = \"state\"\nrequired = true\n\n\
+         [[capabilities]]\ncap = \"io.stdout\"\nrationale = \"print\"\nrequired = true\n\n\
+         [[capabilities]]\ncap = \"io.args\"\nrationale = \"args\"\nrequired = true\n",
+    )
+    .expect("manifest");
+    let run = |answer: Option<&str>| -> String {
+        let mut cmd = krate();
+        cmd.arg("run")
+            .arg("--headless")
+            .arg(&wasm)
+            .arg("--manifest")
+            .arg(&manifest)
+            .arg("--auto-grant")
+            .arg("--")
+            .arg("quick")
+            .env_remove("KRATE_SIGN_IN");
+        if let Some(answer) = answer {
+            cmd.env("KRATE_SIGN_IN", answer);
+        }
+        let out = cmd.output().expect("run");
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+    let signed = run(Some("c0de42"));
+    assert!(
+        signed
+            .lines()
+            .any(|l| l == "sign-in:code=c0de42 state=ok pkce=43"),
+        "the code comes back with the app's own state, beside a full verifier: {signed}"
+    );
+    assert!(
+        signed.lines().any(|l| l == "sign-in:http-refused"),
+        "an http address never reaches the sheet: {signed}"
+    );
+    let closed = run(Some("cancel"));
+    assert!(
+        closed.lines().any(|l| l == "sign-in:cancelled"),
+        "closing the sheet is a cancel, not an error: {closed}"
+    );
+    let none = run(None);
+    assert!(
+        none.contains("sign-in:problem=SignInError::Unavailable"),
+        "with nothing on screen there is no sheet, and the app is told: {none}"
+    );
+}
+
+/// A vault opens only for its owner (krate:ui/unlock, IC-924).
+///
+/// `unlock-probe.wasm` is apps/krate-unlock-probe built ("Vault").
+/// Headless, KRATE_UNLOCK stands in for the person at the system's Face ID
+/// or Touch ID sheet: a yes opens the vault and its three entries are read
+/// from the secret store; a no keeps it locked; a device that cannot check
+/// says so and keeps it locked too.
+#[test]
+fn a_vault_opens_only_for_its_owner() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let wasm = dir.path().join("code.wasm");
+    std::fs::write(&wasm, include_bytes!("fixtures/unlock-probe.wasm")).expect("probe");
+    let manifest = dir.path().join("manifest.toml");
+    std::fs::write(
+        &manifest,
+        "[app]\nid = \"dev.krate.unlock-probe\"\nname = \"Vault\"\nversion = \"1.0.0\"\n\
+         entry = \"code.wasm\"\nworld = \"krate:app/gui@0.2.0\"\n\n\
+         [[capabilities]]\ncap = \"ui.window:create\"\nrationale = \"window\"\nrequired = true\n\n\
+         [[capabilities]]\ncap = \"store.secret\"\nrationale = \"vault\"\nrequired = true\n\n\
+         [[capabilities]]\ncap = \"io.stdout\"\nrationale = \"print\"\nrequired = true\n\n\
+         [[capabilities]]\ncap = \"io.args\"\nrationale = \"args\"\nrequired = true\n",
+    )
+    .expect("manifest");
+    let home = dir.path().join("home");
+    std::fs::create_dir_all(&home).expect("home");
+    let run = |answer: &str| -> String {
+        let out = krate()
+            .arg("run")
+            .arg("--headless")
+            .arg(&wasm)
+            .arg("--manifest")
+            .arg(&manifest)
+            .arg("--auto-grant")
+            .arg("--")
+            .arg("quick")
+            .env("HOME", &home)
+            .env("KRATE_UNLOCK", answer)
+            .output()
+            .expect("run");
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+    let owner = run("yes");
+    assert!(
+        owner
+            .lines()
+            .any(|l| l == "unlock:available=yes answer=yes entries=3"),
+        "the owner opens the vault and reads its entries: {owner}"
+    );
+    let stranger = run("no");
+    assert!(
+        stranger
+            .lines()
+            .any(|l| l == "unlock:available=yes answer=no entries=hidden"),
+        "a no keeps the vault locked: {stranger}"
+    );
+    let cannot = run("none");
+    assert!(
+        cannot
+            .lines()
+            .any(|l| l == "unlock:available=no answer=unavailable entries=hidden"),
+        "a device that cannot check keeps it locked and says so: {cannot}"
+    );
+}
+
+/// The person's dark mode, contrast and text size reach an app
+/// (krate:ui/appearance, IC-925).
+///
+/// `look-probe.wasm` is apps/krate-look-probe built ("Look"). Headless,
+/// KRATE_APPEARANCE stands in for the phone's settings; without it the
+/// look is the default: light, no extra contrast, text at 1.
+#[test]
+fn the_persons_look_reaches_the_app() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let wasm = dir.path().join("code.wasm");
+    std::fs::write(&wasm, include_bytes!("fixtures/look-probe.wasm")).expect("probe");
+    let manifest = dir.path().join("manifest.toml");
+    std::fs::write(
+        &manifest,
+        "[app]\nid = \"dev.krate.look-probe\"\nname = \"Look\"\nversion = \"1.0.0\"\n\
+         entry = \"code.wasm\"\nworld = \"krate:app/gui@0.2.0\"\n\n\
+         [[capabilities]]\ncap = \"ui.window:create\"\nrationale = \"window\"\nrequired = true\n\n\
+         [[capabilities]]\ncap = \"io.stdout\"\nrationale = \"print\"\nrequired = true\n\n\
+         [[capabilities]]\ncap = \"io.args\"\nrationale = \"args\"\nrequired = true\n",
+    )
+    .expect("manifest");
+    let run = |look: Option<&str>| -> String {
+        let mut cmd = krate();
+        cmd.arg("run")
+            .arg("--headless")
+            .arg(&wasm)
+            .arg("--manifest")
+            .arg(&manifest)
+            .arg("--auto-grant")
+            .arg("--")
+            .arg("quick")
+            .env_remove("KRATE_APPEARANCE");
+        if let Some(look) = look {
+            cmd.env("KRATE_APPEARANCE", look);
+        }
+        let out = cmd.output().expect("run");
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+    let plain = run(None);
+    assert!(
+        plain
+            .lines()
+            .any(|l| l == "look:dark=no contrast=no text=1.00"),
+        "{plain}"
+    );
+    let dark = run(Some("dark,contrast,text=1.35"));
+    assert!(
+        dark.lines()
+            .any(|l| l == "look:dark=yes contrast=yes text=1.35"),
+        "dark mode, contrast and text size reach the app whole: {dark}"
+    );
+}
+
+/// Krate draws a widget app's own widgets in the person's look (IC-925):
+/// in dark mode the window, fields and text go dark without the app doing
+/// anything, and at a larger text size its labels take more room.
+///
+/// `timer-widgets.wasm` is apps/krate-timer built: a title, a time, a
+/// progress bar and three buttons, with no colours of its own.
+#[test]
+fn a_widget_app_is_drawn_in_the_persons_look() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let wasm = dir.path().join("code.wasm");
+    std::fs::write(&wasm, include_bytes!("fixtures/timer-widgets.wasm")).expect("timer");
+    let manifest = dir.path().join("manifest.toml");
+    std::fs::copy(
+        concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../apps/krate-timer/manifest.toml"
+        ),
+        &manifest,
+    )
+    .expect("manifest");
+    let text = std::fs::read_to_string(&manifest).expect("read manifest");
+    let entry = text
+        .lines()
+        .find(|l| l.starts_with("entry"))
+        .expect("entry line")
+        .to_string();
+    std::fs::write(&manifest, text.replace(&entry, "entry = \"code.wasm\"")).expect("manifest");
+    let shoot = |look: &str| -> f64 {
+        let png = dir
+            .path()
+            .join(format!("{}.png", look.replace([',', '='], "-")));
+        let out = krate()
+            .arg("run")
+            .arg(&wasm)
+            .arg("--manifest")
+            .arg(&manifest)
+            .arg("--auto-grant")
+            .arg("--shoot")
+            .arg(&png)
+            .arg("--shoot-scale")
+            .arg("1")
+            .arg("--")
+            .arg("quick")
+            .env("KRATE_SCREEN", "390x844")
+            .env("KRATE_APPEARANCE", look)
+            .output()
+            .expect("run");
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let decoder = png::Decoder::new(std::io::BufReader::new(
+            std::fs::File::open(&png).expect("shot"),
+        ));
+        let mut reader = decoder.read_info().expect("png");
+        let mut buf = vec![0; reader.output_buffer_size().expect("size")];
+        let info = reader.next_frame(&mut buf).expect("frame");
+        let channels = info.color_type.samples();
+        let px = &buf[..info.buffer_size()];
+        let sum: f64 = px
+            .chunks_exact(channels)
+            .map(|p| (p[0] as f64 + p[1] as f64 + p[2] as f64) / (3.0 * 255.0))
+            .sum();
+        sum / (px.len() / channels) as f64
+    };
+    let light = shoot("light");
+    let dark = shoot("dark,text=1.35");
+    assert!(light > 0.8, "a light window by default: {light:.2}");
+    assert!(dark < 0.3, "the same app goes dark in dark mode: {dark:.2}");
+}

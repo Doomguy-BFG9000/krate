@@ -20,8 +20,6 @@ use vello_cpu::{Glyph, Pixmap, RenderContext, Resources};
 
 use crate::painter::{
     button_fill_color, button_interaction_wash, intersect_rects, PaintInteraction,
-    COLOR_BACKGROUND, COLOR_BUTTON, COLOR_BUTTON_LABEL, COLOR_FIELD_BORDER, COLOR_FIELD_FILL,
-    COLOR_FIELD_TEXT, COLOR_KNOB, COLOR_SELECTION, COLOR_TEXT, COLOR_TRACK,
 };
 use crate::ui::{kind_is_selectable, ImagePixels, WidgetKind, WidgetPlacement};
 
@@ -266,7 +264,11 @@ impl TextEngine {
             .layout_cx
             .ranged_builder(&mut self.font_cx, text, scale, true);
         builder.push_default(GenericFamily::SansSerif);
-        builder.push_default(StyleProperty::FontSize(size));
+        // The person's text size (IC-925): a label that names its size grows
+        // with it too, as every label does on a phone.
+        builder.push_default(StyleProperty::FontSize(
+            size * crate::ui::widget_look().text_scale,
+        ));
         if bold {
             builder.push_default(StyleProperty::FontWeight(parley::FontWeight::BOLD));
         }
@@ -285,7 +287,9 @@ impl TextEngine {
             .layout_cx
             .ranged_builder(&mut self.font_cx, text, scale, true);
         builder.push_default(GenericFamily::SansSerif);
-        builder.push_default(StyleProperty::FontSize(LABEL_FONT_SIZE));
+        builder.push_default(StyleProperty::FontSize(
+            LABEL_FONT_SIZE * crate::ui::widget_look().text_scale,
+        ));
         let mut layout = builder.build(text);
         layout.break_all_lines(max_width);
         layout.align(Alignment::Start, AlignmentOptions::default());
@@ -1180,7 +1184,7 @@ pub fn try_paint_placements(
         let mut resources = Resources::new();
         fill(
             &mut ctx,
-            COLOR_BACKGROUND,
+            crate::painter::theme().background,
             0.0,
             0.0,
             width as f32,
@@ -1241,7 +1245,7 @@ pub fn try_paint_placements(
                                 (sx * scale, sy * scale, sw * scale, sh * scale),
                                 clip,
                             ) {
-                                fill(&mut ctx, COLOR_SELECTION, ix, iy, iw, ih);
+                                fill(&mut ctx, crate::painter::theme().selection, ix, iy, iw, ih);
                             }
                         }
                         continue;
@@ -1249,11 +1253,13 @@ pub fn try_paint_placements(
                     if let Some((ix, iy, iw, ih)) = intersect_rects((px, py, pw, ph), clip) {
                         let color = match placement.kind {
                             WidgetKind::Button => button_fill_color(placement.widget, interaction),
-                            WidgetKind::TextField | WidgetKind::TextArea => COLOR_FIELD_FILL,
-                            WidgetKind::Switch | WidgetKind::Slider | WidgetKind::Progress => {
-                                COLOR_TRACK
+                            WidgetKind::TextField | WidgetKind::TextArea => {
+                                crate::painter::theme().field_fill
                             }
-                            _ => COLOR_BACKGROUND,
+                            WidgetKind::Switch | WidgetKind::Slider | WidgetKind::Progress => {
+                                crate::painter::theme().track
+                            }
+                            _ => crate::painter::theme().background,
                         };
                         fill(&mut ctx, color, ix, iy, iw, ih);
                     }
@@ -1318,34 +1324,50 @@ pub fn try_paint_placements(
                     // its own fill picks its own ink too (via `text`), and
                     // gets the ordinary label colour if it does not.
                     let ink = if own_background {
-                        COLOR_TEXT
+                        crate::painter::theme().text
                     } else {
-                        COLOR_BUTTON_LABEL
+                        crate::painter::theme().button_label
                     };
                     (ink, None)
                 }
                 WidgetKind::TextField => {
-                    fill_rounded(&mut ctx, COLOR_FIELD_BORDER, px, py, pw, ph, 4.0 * scale);
                     fill_rounded(
                         &mut ctx,
-                        COLOR_FIELD_FILL,
+                        crate::painter::theme().field_border,
+                        px,
+                        py,
+                        pw,
+                        ph,
+                        4.0 * scale,
+                    );
+                    fill_rounded(
+                        &mut ctx,
+                        crate::painter::theme().field_fill,
                         px + scale,
                         py + scale,
                         (pw - 2.0 * scale).max(0.0),
                         (ph - 2.0 * scale).max(0.0),
                         3.0 * scale,
                     );
-                    (COLOR_FIELD_TEXT, Some(4.0 * scale))
+                    (crate::painter::theme().field_text, Some(4.0 * scale))
                 }
                 WidgetKind::TextArea => {
                     // Same chrome as a field, but the text wraps to the inner
                     // width and starts at the top rather than sitting on one
                     // centered line. Handled here rather than falling through
                     // to the shared label path, which centers a single line.
-                    fill_rounded(&mut ctx, COLOR_FIELD_BORDER, px, py, pw, ph, 4.0 * scale);
                     fill_rounded(
                         &mut ctx,
-                        COLOR_FIELD_FILL,
+                        crate::painter::theme().field_border,
+                        px,
+                        py,
+                        pw,
+                        ph,
+                        4.0 * scale,
+                    );
+                    fill_rounded(
+                        &mut ctx,
+                        crate::painter::theme().field_fill,
                         px + scale,
                         py + scale,
                         (pw - 2.0 * scale).max(0.0),
@@ -1374,7 +1396,7 @@ pub fn try_paint_placements(
                             let x1 = px + inset + engine.prefix_width(label, sel_end, scale);
                             fill(
                                 &mut ctx,
-                                COLOR_SELECTION,
+                                crate::painter::theme().selection,
                                 x0,
                                 line_top,
                                 (x1 - x0).max(1.0),
@@ -1385,7 +1407,7 @@ pub fn try_paint_placements(
                         let caret_x = px + inset + engine.prefix_width(label, cursor, scale);
                         fill(
                             &mut ctx,
-                            COLOR_FIELD_TEXT,
+                            crate::painter::theme().field_text,
                             caret_x,
                             line_top,
                             scale.max(1.0),
@@ -1399,14 +1421,14 @@ pub fn try_paint_placements(
                             &mut ctx,
                             &mut resources,
                             &layout,
-                            COLOR_FIELD_TEXT,
+                            crate::painter::theme().field_text,
                             px + inset,
                             py + inset,
                         );
                     }
                     continue;
                 }
-                WidgetKind::Text => (COLOR_TEXT, Some(0.0)),
+                WidgetKind::Text => (crate::painter::theme().text, Some(0.0)),
                 WidgetKind::ListView | WidgetKind::TreeView => {
                     // Rows paint themselves as child Text placements; the
                     // container contributes only the selection wash, and
@@ -1414,7 +1436,7 @@ pub fn try_paint_placements(
                     if let Some((sx, sy, sw, sh)) = placement.selection {
                         fill_rounded(
                             &mut ctx,
-                            COLOR_SELECTION,
+                            crate::painter::theme().selection,
                             sx * scale,
                             sy * scale,
                             sw * scale,
@@ -1422,14 +1444,14 @@ pub fn try_paint_placements(
                             3.0 * scale,
                         );
                     }
-                    (COLOR_TEXT, None)
+                    (crate::painter::theme().text, None)
                 }
                 WidgetKind::Checkbox => {
                     let side = (ph.min(18.0 * scale)).max(0.0);
                     let by = py + (ph - side) / 2.0;
                     fill_rounded(
                         &mut ctx,
-                        COLOR_FIELD_BORDER,
+                        crate::painter::theme().field_border,
                         px,
                         by,
                         side,
@@ -1438,7 +1460,7 @@ pub fn try_paint_placements(
                     );
                     fill_rounded(
                         &mut ctx,
-                        COLOR_FIELD_FILL,
+                        crate::painter::theme().field_fill,
                         px + scale,
                         by + scale,
                         (side - 2.0 * scale).max(0.0),
@@ -1449,7 +1471,7 @@ pub fn try_paint_placements(
                         let inset = 3.5 * scale;
                         fill_rounded(
                             &mut ctx,
-                            COLOR_BUTTON,
+                            crate::painter::theme().button,
                             px + inset,
                             by + inset,
                             (side - 2.0 * inset).max(0.0),
@@ -1464,7 +1486,7 @@ pub fn try_paint_placements(
                             &mut ctx,
                             &mut resources,
                             &layout,
-                            COLOR_TEXT,
+                            crate::painter::theme().text,
                             px + side + 8.0 * scale,
                             py + (ph - th) / 2.0,
                         );
@@ -1475,10 +1497,22 @@ pub fn try_paint_placements(
                     let side = (ph.min(18.0 * scale)).max(0.0);
                     let r = side / 2.0;
                     let (cx, cy) = (px + r, py + ph / 2.0);
-                    fill_circle(&mut ctx, COLOR_FIELD_BORDER, cx, cy, r);
-                    fill_circle(&mut ctx, COLOR_FIELD_FILL, cx, cy, (r - scale).max(0.0));
+                    fill_circle(&mut ctx, crate::painter::theme().field_border, cx, cy, r);
+                    fill_circle(
+                        &mut ctx,
+                        crate::painter::theme().field_fill,
+                        cx,
+                        cy,
+                        (r - scale).max(0.0),
+                    );
                     if placement.checked == Some(true) {
-                        fill_circle(&mut ctx, COLOR_BUTTON, cx, cy, (r - 4.0 * scale).max(0.0));
+                        fill_circle(
+                            &mut ctx,
+                            crate::painter::theme().button,
+                            cx,
+                            cy,
+                            (r - 4.0 * scale).max(0.0),
+                        );
                     }
                     if !label.is_empty() {
                         let layout = engine.layout_label(label, scale);
@@ -1487,7 +1521,7 @@ pub fn try_paint_placements(
                             &mut ctx,
                             &mut resources,
                             &layout,
-                            COLOR_TEXT,
+                            crate::painter::theme().text,
                             px + side + 8.0 * scale,
                             py + (ph - th) / 2.0,
                         );
@@ -1499,7 +1533,11 @@ pub fn try_paint_placements(
                     let track_h = (20.0 * scale).min(ph);
                     let ty = py + (ph - track_h) / 2.0;
                     let on = placement.checked == Some(true);
-                    let track_color = if on { COLOR_BUTTON } else { COLOR_TRACK };
+                    let track_color = if on {
+                        crate::painter::theme().button
+                    } else {
+                        crate::painter::theme().track
+                    };
                     fill_rounded(
                         &mut ctx,
                         track_color,
@@ -1515,7 +1553,13 @@ pub fn try_paint_placements(
                     } else {
                         px + r + 2.0 * scale
                     };
-                    fill_circle(&mut ctx, COLOR_KNOB, cx, ty + track_h / 2.0, r);
+                    fill_circle(
+                        &mut ctx,
+                        crate::painter::theme().knob,
+                        cx,
+                        ty + track_h / 2.0,
+                        r,
+                    );
                     continue;
                 }
                 WidgetKind::Slider | WidgetKind::Progress => {
@@ -1526,11 +1570,19 @@ pub fn try_paint_placements(
                         6.0 * scale
                     };
                     let gy = py + (ph - groove_h) / 2.0;
-                    fill_rounded(&mut ctx, COLOR_TRACK, px, gy, pw, groove_h, groove_h / 2.0);
+                    fill_rounded(
+                        &mut ctx,
+                        crate::painter::theme().track,
+                        px,
+                        gy,
+                        pw,
+                        groove_h,
+                        groove_h / 2.0,
+                    );
                     if fraction > 0.0 {
                         fill_rounded(
                             &mut ctx,
-                            COLOR_BUTTON,
+                            crate::painter::theme().button,
                             px,
                             gy,
                             pw * fraction,
@@ -1541,10 +1593,16 @@ pub fn try_paint_placements(
                     if placement.kind == WidgetKind::Slider {
                         let r = (8.0 * scale).min(ph / 2.0);
                         let cx = px + r + (pw - 2.0 * r) * fraction;
-                        fill_circle(&mut ctx, COLOR_FIELD_BORDER, cx, py + ph / 2.0, r);
                         fill_circle(
                             &mut ctx,
-                            COLOR_KNOB,
+                            crate::painter::theme().field_border,
+                            cx,
+                            py + ph / 2.0,
+                            r,
+                        );
+                        fill_circle(
+                            &mut ctx,
+                            crate::painter::theme().knob,
                             cx,
                             py + ph / 2.0,
                             (r - scale).max(0.0),
@@ -1559,7 +1617,7 @@ pub fn try_paint_placements(
                     // post-pixmap blit. A canvas with no pixels yet draws
                     // nothing rather than a stray panel.
                     if placement.kind == WidgetKind::Image || placement.pixels.is_some() {
-                        fill(&mut ctx, COLOR_FIELD_FILL, px, py, pw, ph);
+                        fill(&mut ctx, crate::painter::theme().field_fill, px, py, pw, ph);
                     }
                     if let Some(image) = placement.pixels.as_deref() {
                         blits.push(ImageBlit {
@@ -2135,7 +2193,10 @@ mod tests {
         let uncovered = (4..24u32)
             .flat_map(|y| (4..184u32).map(move |x| (x, y)))
             .filter(|(x, y)| buffer[(y * w + x) as usize] & 0x00FF_FFFF != 0x005A_5A5A)
-            .filter(|(x, y)| buffer[(y * w + x) as usize] & 0x00FF_FFFF != COLOR_TEXT & 0x00FF_FFFF)
+            .filter(|(x, y)| {
+                buffer[(y * w + x) as usize] & 0x00FF_FFFF
+                    != crate::painter::COLOR_TEXT & 0x00FF_FFFF
+            })
             .count();
         assert!(
             uncovered < 400,
@@ -2145,7 +2206,7 @@ mod tests {
         );
         let text_pixels = buffer
             .iter()
-            .filter(|v| **v & 0x00FF_FFFF == COLOR_TEXT & 0x00FF_FFFF)
+            .filter(|v| **v & 0x00FF_FFFF == crate::painter::COLOR_TEXT & 0x00FF_FFFF)
             .count();
         assert!(
             text_pixels > 0,

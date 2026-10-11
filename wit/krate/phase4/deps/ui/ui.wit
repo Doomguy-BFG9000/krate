@@ -745,6 +745,32 @@ interface screen {
   facts: func(window: u64) -> screen-facts;
 }
 
+/// How the person asked things to look (IC-925): dark mode, more
+/// contrast, larger text.
+///
+/// Read it every frame -- it is cheap, and the person can change it in
+/// Settings while the app is open -- and draw from it: dark colours when
+/// `dark`, every text size times `text-scale`. The layout kit's `Look` does
+/// both. An app that stays bright white in a dark room, or keeps its text
+/// small for someone who asked for it large, fails check-app.
+interface appearance {
+  /// The person's choices, now.
+  record look {
+    /// The system is in dark mode.
+    dark: bool,
+    /// The person asked for more contrast: stronger borders, no faint grey
+    /// text.
+    high-contrast: bool,
+    /// How much larger (or smaller) the person wants text than the
+    /// default: 1.0 by default, up to about 3 on a phone at the largest
+    /// accessibility size. Multiply every font size by it.
+    text-scale: f32,
+  }
+
+  /// How things should look right now.
+  current: func() -> look;
+}
+
 /// The phone tapping back under the finger: a button pressed, a picker's
 /// tick, a game's hit (IC-917).
 ///
@@ -1172,6 +1198,71 @@ interface share {
   /// Open the share sheet with any of a text, a link and files. True when
   /// the person sent it somewhere, false when they cancelled.
   share: func(window: u64, text: option<string>, url: option<string>, files: list<shared-file>) -> result<bool, share-error>;
+}
+
+/// Signing the person in to a service the app talks to (IC-923): GitHub,
+/// Google, the developer's own backend.
+///
+/// OAuth 2 with PKCE, through the platform's own sign-in sheet
+/// (ASWebAuthenticationSession on a Mac and an iPhone). The person types
+/// their password into the service's real page in the system browser,
+/// never into the app; the app only learns the address the service sends
+/// them back to, which carries the one-time code. It then trades that code
+/// for a token with an ordinary fetch to the service's token address
+/// (`net.connect` to that host), sending the PKCE verifier, and keeps the
+/// token in `store.secret`.
+interface sign-in {
+  /// Why there is no code.
+  variant sign-in-error {
+    /// The person closed the sheet.
+    cancelled,
+    /// This device has no sign-in sheet (computers other than a Mac, for
+    /// now), or it would not open.
+    unavailable(string),
+    /// The address is not https, or the callback scheme is not one an app
+    /// may use.
+    invalid(string),
+  }
+
+  /// A fresh PKCE pair: the verifier the app keeps for the token request,
+  /// and its S256 challenge for the authorize address
+  /// (`code_challenge=...&code_challenge_method=S256`).
+  pkce: func() -> tuple<string, string>;
+
+  /// Open the sign-in sheet at `authorize-url` (https, carrying the app's
+  /// client id, its redirect address, a `state` and the PKCE challenge)
+  /// and wait for the service to send the person back to an address that
+  /// starts with `callback-scheme:` -- the one registered with the service
+  /// ("myapp" for `myapp://signed-in`). Returns that whole address: read
+  /// `code` from it, and check its `state` is the one you sent.
+  start: func(window: u64, authorize-url: string, callback-scheme: string) -> result<string, sign-in-error>;
+}
+
+/// Asking the person to prove it is them before the app shows something
+/// private (IC-924): Face ID or the passcode on an iPhone, Touch ID or the
+/// password on a Mac.
+///
+/// The check is the system's own; the app never sees a face, a finger or a
+/// passcode, only whether the person passed. Use it in front of what
+/// `store.secret` keeps: unlock the vault, then read it.
+interface unlock {
+  /// How the check went.
+  variant unlock-answer {
+    /// It is them.
+    yes,
+    /// They cancelled or failed it: keep it locked.
+    no,
+    /// This device cannot check (no passcode set, no biometrics, a
+    /// computer without them), and why. Offer the app's own way or say so.
+    unavailable(string),
+  }
+
+  /// Whether this device can check it is the person.
+  available: func() -> bool;
+
+  /// Ask, with the app's reason in the system's own sheet ("Unlock your
+  /// vault"). Waits while the person looks or types their passcode.
+  check: func(reason: string) -> unlock-answer;
 }
 
 /// Desktop notifications.

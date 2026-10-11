@@ -1801,6 +1801,77 @@ mod motion_tests {
     }
 }
 
+/// How the person asked things to look (IC-925).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Appearance {
+    /// The system is in dark mode.
+    pub dark: bool,
+    /// The person asked for more contrast.
+    pub high_contrast: bool,
+    /// The person's text size against the default: 1.0 by default.
+    pub text_scale: f32,
+}
+
+impl Default for Appearance {
+    fn default() -> Self {
+        Self {
+            dark: false,
+            high_contrast: false,
+            text_scale: 1.0,
+        }
+    }
+}
+
+/// The look Krate's own widgets are drawn in, for every window of this
+/// process: set by the runtime each frame from the person's settings, read
+/// by layout (text sizes) and the painters (colours and text sizes).
+static LOOK_DARK: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static LOOK_CONTRAST: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static LOOK_TEXT_SCALE: std::sync::atomic::AtomicU32 =
+    std::sync::atomic::AtomicU32::new(0x3F80_0000);
+
+/// Draw Krate's widgets in this look from now on (IC-925).
+pub fn set_widget_look(look: Appearance) {
+    use std::sync::atomic::Ordering::Relaxed;
+    LOOK_DARK.store(look.dark, Relaxed);
+    LOOK_CONTRAST.store(look.high_contrast, Relaxed);
+    LOOK_TEXT_SCALE.store(look.text_scale.clamp(0.5, 4.0).to_bits(), Relaxed);
+}
+
+/// The look Krate's widgets are drawn in.
+pub fn widget_look() -> Appearance {
+    use std::sync::atomic::Ordering::Relaxed;
+    Appearance {
+        dark: LOOK_DARK.load(Relaxed),
+        high_contrast: LOOK_CONTRAST.load(Relaxed),
+        text_scale: f32::from_bits(LOOK_TEXT_SCALE.load(Relaxed)),
+    }
+}
+
+impl Appearance {
+    /// Read `KRATE_APPEARANCE` as a stand-in for the person's settings:
+    /// comma-separated `dark`, `contrast` and `text=1.35`, in any order.
+    pub fn parse(text: &str) -> Self {
+        let mut look = Self::default();
+        for part in text.split(',').map(str::trim) {
+            match part {
+                "dark" => look.dark = true,
+                "light" => look.dark = false,
+                "contrast" => look.high_contrast = true,
+                _ => {
+                    if let Some(scale) = part
+                        .strip_prefix("text=")
+                        .and_then(|v| v.parse::<f32>().ok())
+                    {
+                        look.text_scale = scale.clamp(0.5, 4.0);
+                    }
+                }
+            }
+        }
+        look
+    }
+}
+
 /// What a phone's tap back means (IC-917): the platform plays its own feel
 /// for each.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -2051,6 +2122,24 @@ pub trait UiAdapter: WindowAdapter {
         _files: &[(String, Vec<u8>)],
     ) -> Result<bool, String> {
         Err("this device has no share sheet yet".to_string())
+    }
+
+    /// How the person asked things to look: dark mode, contrast, text size
+    /// (IC-925).
+    fn appearance(&self) -> Appearance {
+        Appearance::default()
+    }
+
+    /// Open the platform's sign-in sheet at `authorize_url` and wait for the
+    /// service to send the person back to an address starting `scheme:`;
+    /// that address, or None when they closed the sheet (IC-923).
+    fn sign_in(
+        &self,
+        _window: WindowId,
+        _authorize_url: &str,
+        _scheme: &str,
+    ) -> Result<Option<String>, String> {
+        Err("this device has no sign-in sheet yet".to_string())
     }
 
     /// Whether this device has Bluetooth (IC-917).
