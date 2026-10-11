@@ -2350,6 +2350,51 @@ pub fn open_with_limits(bundle_path: &Path, limits: Limits) -> Result<OpenBundle
     with_limits(limits, || open_file(bundle_path))
 }
 
+/// The manifest of a bundle on disk, without unpacking anything else.
+///
+/// For naming and finding an app -- its dock name, whether an installed copy
+/// already exists -- never for running it: nothing here judges the code, the
+/// signature or the assets, and a caller that runs the app opens it with
+/// [`open`], which does. Opening a whole game to read its name cost three
+/// seconds an unpack, and a double-click unpacked it three times (K-1075).
+pub fn read_manifest(bundle_path: &Path) -> Result<Manifest> {
+    with_limits(LOCAL_LIMITS, || {
+        let size = fs::metadata(bundle_path)
+            .map_err(|err| io_err(bundle_path, err))?
+            .len();
+        if size > lim().bundle_bytes {
+            return Err(BundleError::TooLarge {
+                size,
+                limit: lim().bundle_bytes,
+            });
+        }
+        let file = File::open(bundle_path).map_err(|err| io_err(bundle_path, err))?;
+        let mut archive = ZipArchive::new(file)?;
+        let mut entry = match archive.by_name(MANIFEST_ENTRY) {
+            Ok(entry) => entry,
+            Err(zip::result::ZipError::FileNotFound) => {
+                return Err(BundleError::MissingEntry(MANIFEST_ENTRY));
+            }
+            Err(err) => return Err(err.into()),
+        };
+        // A manifest is a page of TOML. The cap is the same as open's, read
+        // through a limited reader because a header can lie about a size.
+        let mut text = String::new();
+        entry
+            .by_ref()
+            .take(lim().entry_bytes + 1)
+            .read_to_string(&mut text)
+            .map_err(|err| io_err(bundle_path, err))?;
+        if text.len() as u64 > lim().entry_bytes {
+            return Err(BundleError::EntryTooLarge {
+                entry: MANIFEST_ENTRY.to_string(),
+                limit: lim().entry_bytes,
+            });
+        }
+        Manifest::parse(&text).map_err(|err| BundleError::Manifest(err.to_string()))
+    })
+}
+
 fn open_file(bundle_path: &Path) -> Result<OpenBundle> {
     let size = fs::metadata(bundle_path)
         .map_err(|err| io_err(bundle_path, err))?
@@ -8232,6 +8277,54 @@ required = true
             MINIMAL_COMPONENT
         );
         assert!(opened.assets_path().is_none());
+    }
+
+    #[test]
+    fn reading_a_bundles_manifest_unpacks_nothing() {
+        let dir = TempDir::new().expect("tempdir");
+        let manifest = write_temp(dir.path(), "manifest.toml", MANIFEST.as_bytes());
+        let component = write_temp(dir.path(), "code.wasm", MINIMAL_COMPONENT);
+        let assets = dir.path().join("assets");
+        fs::create_dir_all(&assets).expect("assets");
+        fs::write(assets.join("big.bin"), vec![7u8; 1 << 20]).expect("asset");
+        let bundle = dir.path().join("demo.krate");
+        pack_with_assets(&manifest, &component, Some(&assets), &bundle).expect("pack");
+
+        let root = dir.path().join("extract-here");
+        fs::create_dir(&root).expect("root");
+        EXTRACT_ROOT.with(|r| *r.borrow_mut() = Some(root.clone()));
+        let read = read_manifest(&bundle);
+        let unpacked = fs::read_dir(&root).expect("read root").count();
+        let opened = open(&bundle);
+        let unpacked_by_open = fs::read_dir(&root).expect("read root").count();
+        EXTRACT_ROOT.with(|r| *r.borrow_mut() = None);
+
+        let read = read.expect("read the manifest");
+        let opened = opened.expect("open");
+        assert_eq!(read.app.id, opened.manifest().app.id);
+        assert_eq!(read.app.name, opened.manifest().app.name);
+        assert_eq!(unpacked, 0, "reading the manifest must unpack nothing");
+        // The fixture really does unpack when opened, so the zero above is
+        // the reader's doing and not an extract root nobody uses.
+        assert_eq!(unpacked_by_open, 1, "open unpacks into the extract root");
+
+        // Not a bundle, and a bundle with no manifest, are refused.
+        let junk = write_temp(dir.path(), "junk.krate", b"not a zip");
+        assert!(read_manifest(&junk).is_err());
+        let mut buf = Vec::new();
+        {
+            let mut writer = zip::ZipWriter::new(io::Cursor::new(&mut buf));
+            writer
+                .start_file(COMPONENT_ENTRY, SimpleFileOptions::default())
+                .expect("start");
+            writer.write_all(MINIMAL_COMPONENT).expect("write");
+            writer.finish().expect("finish");
+        }
+        let bare = write_temp(dir.path(), "bare.krate", &buf);
+        assert!(matches!(
+            read_manifest(&bare),
+            Err(BundleError::MissingEntry(MANIFEST_ENTRY))
+        ));
     }
 
     #[test]

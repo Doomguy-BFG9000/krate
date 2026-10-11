@@ -15574,9 +15574,11 @@ fn validate_app_args(app_args: &[String]) -> Result<()> {
 /// stale wrapper left behind by a deleted app is simply not matched.
 #[cfg(target_os = "macos")]
 fn installed_app_for(bundle_path: &Path) -> Option<PathBuf> {
-    let manifest = krate_bundle::open(bundle_path).ok()?;
-    let name = manifest.manifest().app.name.trim().to_string();
-    let id = manifest.manifest().app.id.clone();
+    // Naming and finding only, so the manifest alone (K-1075): the copy
+    // that runs is opened, and judged, by whoever runs it.
+    let manifest = krate_bundle::read_manifest(bundle_path).ok()?;
+    let name = manifest.app.name.trim().to_string();
+    let id = manifest.app.id.clone();
     if name.is_empty() {
         return None;
     }
@@ -15591,8 +15593,8 @@ fn installed_app_for(bundle_path: &Path) -> Option<PathBuf> {
         if !payload.is_file() {
             continue;
         }
-        let matches = krate_bundle::open(&payload)
-            .map(|installed| installed.manifest().app.id == id)
+        let matches = krate_bundle::read_manifest(&payload)
+            .map(|installed| installed.app.id == id)
             .unwrap_or(false);
         if matches {
             return Some(candidate);
@@ -17377,8 +17379,10 @@ fn open_app(direct: Option<PathBuf>) -> Result<u8> {
     // running under the engine's name rather than not running.
     if let Some(file) = &direct {
         if std::env::var_os("KRATE_AS").is_none() {
-            if let Ok(bundle) = krate_bundle::open(file) {
-                let name = bundle.manifest().app.name.trim().to_string();
+            // The name only: unpacking a whole bundle to read it cost a
+            // large app seconds per launch (K-1075).
+            if let Ok(manifest) = krate_bundle::read_manifest(file) {
+                let name = manifest.app.name.trim().to_string();
                 let exe = std::env::current_exe().ok();
                 if !name.is_empty()
                     && exe
