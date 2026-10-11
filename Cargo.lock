@@ -2308,6 +2308,7 @@ dependencies = [
  "krate-port",
  "krate-presenter-gpu",
  "krate-runtime",
+ "krate-wasi-fold",
  "libc",
  "png 0.18.1",
  "rfd",

@@ -16,6 +16,11 @@ krate = { path = "../../crates/bindings-rust", features = ["std"] }
 krate-c-runtime = { path = "../../crates/c-runtime" }
 wit-bindgen-rt = { version = "0.44.0", features = ["bitflags"] }
 
+# Built threaded by Krate's own build path (krate check-app, Studio):
+# wasm32-wasip1-threads over a shared memory (IC-938).
+[package.metadata.krate]
+threads = true
+
 [profile.release]
 panic = "abort"
 opt-level = 3

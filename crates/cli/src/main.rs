@@ -13742,7 +13742,107 @@ fn find_built_component(app_dir: &Path) -> Result<PathBuf> {
     anyhow::bail!("no wasm produced in {}", release.display())
 }
 
+/// Whether an app asks to be built with threads (IC-938):
+/// `[package.metadata.krate] threads = true` in its Cargo.toml.
+fn app_wants_threads(app_dir: &Path) -> bool {
+    let Ok(text) = fs::read_to_string(app_dir.join("Cargo.toml")) else {
+        return false;
+    };
+    let Ok(doc) = text.parse::<toml::Table>() else {
+        return false;
+    };
+    doc.get("package")
+        .and_then(|p| p.get("metadata"))
+        .and_then(|m| m.get("krate"))
+        .and_then(|k| k.get("threads"))
+        .and_then(|t| t.as_bool())
+        .unwrap_or(false)
+}
+
+/// Build a threaded app (IC-929, IC-938): a core module for
+/// wasm32-wasip1-threads over a shared memory, std's leftover WASI imports
+/// folded into krate-c-runtime's answers. The app pins its toolchain
+/// (`rust-toolchain.toml`); the threads target must be installed for it.
+/// Returns the folded module, beside the build.
+fn build_threaded(app_dir: &Path) -> std::result::Result<PathBuf, String> {
+    let _lock = build_leaf_lock(app_dir);
+    let mut rustflags = String::from(
+        "--cfg krate_threads -C link-arg=--export=wasi_thread_start \
+         -C link-arg=--export=__wasi_init_tp -C link-arg=--max-memory=3758096384",
+    );
+    for name in ["random_get", "args_get", "args_sizes_get"] {
+        rustflags.push_str(&format!(
+            " -C link-arg=--export=__imported_wasi_snapshot_preview1_{name}"
+        ));
+    }
+    let mut command = ProcessCommand::new("cargo");
+    command
+        .args(["build", "--release", "--target", "wasm32-wasip1-threads"])
+        .current_dir(app_dir)
+        .env("RUSTFLAGS", rustflags)
+        .env_remove("CARGO_TARGET_DIR");
+    if let Some(home) = home_dir() {
+        let shims = home.join(".cargo").join("bin");
+        let current = std::env::var_os("PATH").unwrap_or_default();
+        if let Ok(path) =
+            std::env::join_paths(std::iter::once(shims).chain(std::env::split_paths(&current)))
+        {
+            command.env("PATH", path);
+        }
+    }
+    let output = command
+        .output()
+        .map_err(|e| format!("could not run cargo for a threaded build: {e}"))?;
+    if !output.status.success() {
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let hint = if text.contains("wasm32-wasip1-threads") && text.contains("target") {
+            "\n\nThe threads target looks missing: `rustup target add wasm32-wasip1-threads` \
+             for the toolchain the app pins."
+        } else {
+            ""
+        };
+        return Err(format!("the threaded build failed:\n{}{hint}", text.trim()));
+    }
+    let name = app_crate_name(app_dir).ok_or("the app's Cargo.toml names no package")?;
+    let release = app_dir.join("target/wasm32-wasip1-threads/release");
+    let built = release.join(format!("{name}.wasm"));
+    let bytes =
+        fs::read(&built).map_err(|e| format!("the build produced no {}: {e}", built.display()))?;
+    let (folded, _) = krate_wasi_fold::fold(&bytes)?;
+    // The folded module goes where the manifest's entry says the app is, so
+    // what runs is what was declared; without a manifest, beside the build.
+    let declared = fs::read_to_string(app_dir.join("manifest.toml"))
+        .ok()
+        .and_then(|text| text.parse::<toml::Table>().ok())
+        .and_then(|doc| {
+            doc.get("app")
+                .and_then(|a| a.get("entry"))
+                .and_then(|e| e.as_str())
+                .map(str::to_string)
+        })
+        .filter(|entry| {
+            let path = Path::new(entry);
+            path.is_relative()
+                && path
+                    .components()
+                    .all(|c| matches!(c, std::path::Component::Normal(_)))
+        });
+    let out = match declared {
+        Some(entry) => app_dir.join(entry),
+        None => release.join(format!("{name}.krate.wasm")),
+    };
+    fs::write(&out, folded).map_err(|e| format!("write {}: {e}", out.display()))?;
+    Ok(out)
+}
+
 fn build_component(app_dir: &Path) -> Result<PathBuf> {
+    if app_wants_threads(app_dir) {
+        return build_threaded(app_dir).map_err(|why| anyhow::anyhow!(why));
+    }
     // Held through the copy home at the end, not just the compile: the
     // window after cargo-component exits and before find_built_component
     // has copied the artifact is where another build of this leaf spoils
@@ -13821,6 +13921,9 @@ fn panic_site_hints(candidate: &Path) -> String {
 }
 
 fn build_component_captured(app_dir: &Path) -> std::result::Result<PathBuf, String> {
+    if app_wants_threads(app_dir) {
+        return build_threaded(app_dir);
+    }
     let _lock = build_leaf_lock(app_dir);
     let mut command = component_build_command(app_dir);
     let output = command.output().map_err(|error| {
