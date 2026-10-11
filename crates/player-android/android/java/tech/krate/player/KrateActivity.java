@@ -680,6 +680,32 @@ public class KrateActivity extends NativeActivity {
                 .show();
     }
 
+    // Video (krate:gfx/video, IC-922).
+
+    public long krateVideoOpen(String source) {
+        return Video.open(source);
+    }
+
+    public String krateVideoControl(long id, int kind, long value) {
+        return Video.control(id, kind, value);
+    }
+
+    public long[] krateVideoState(long id) {
+        return Video.state(id);
+    }
+
+    public String krateVideoProblem(long id) {
+        return Video.problem(id);
+    }
+
+    public byte[] krateVideoFrame(long id, int[] size) {
+        return Video.frame(id, size);
+    }
+
+    public void krateVideoClose(long id) {
+        Video.close(id);
+    }
+
     // Krate's menu (IC-934).
 
     /** The app now running, for the menu; a null name when none is. */

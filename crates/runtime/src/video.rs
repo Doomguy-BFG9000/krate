@@ -9,7 +9,7 @@
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
-#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+#[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "android")))]
 use krate_adapter_common::ui::ImagePixels;
 
 /// What to play.
@@ -47,31 +47,35 @@ pub(crate) struct State {
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub(crate) use crate::video_apple::{close, control, frame, open, state};
 
-#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+// MediaPlayer into an ImageReader, through the Android player (IC-922).
+#[cfg(target_os = "android")]
+pub(crate) use crate::video_android::{close, control, frame, open, state};
+
+#[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "android")))]
 const UNSUPPORTED: &str = "video playback is not on this system yet";
 
-#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+#[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "android")))]
 pub(crate) fn open(_source: Source) -> Result<u64, String> {
     Err(UNSUPPORTED.to_string())
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+#[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "android")))]
 pub(crate) fn control(_video: u64, _control: Control) -> Result<(), String> {
     Err(UNSUPPORTED.to_string())
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+#[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "android")))]
 pub(crate) fn state(_video: u64) -> Result<State, String> {
     Err(UNSUPPORTED.to_string())
 }
 
 /// The frame to show now, or `None` when the one shown last is still right.
-#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+#[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "android")))]
 pub(crate) fn frame(_video: u64) -> Result<Option<ImagePixels>, String> {
     Err(UNSUPPORTED.to_string())
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+#[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "android")))]
 pub(crate) fn close(_video: u64) {}
 
 /// The videos one run opened. A run controls only its own, and every one it

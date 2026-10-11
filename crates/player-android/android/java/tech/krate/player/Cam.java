@@ -221,7 +221,7 @@ final class Cam {
     }
 
     /** Tight I420: the Y plane, then U, then V, each without row padding. */
-    private static byte[] pack(Image image) {
+    static byte[] pack(Image image) {
         int w = image.getWidth();
         int h = image.getHeight();
         int cw = (w + 1) / 2;

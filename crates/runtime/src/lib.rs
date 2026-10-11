@@ -49,6 +49,8 @@ mod canvas_raster;
 mod sign_in;
 mod unlock;
 mod video;
+#[cfg(target_os = "android")]
+mod video_android;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 mod video_apple;
 pub use krate_adapter_common::canvas_list;

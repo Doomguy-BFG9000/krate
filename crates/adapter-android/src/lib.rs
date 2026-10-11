@@ -46,6 +46,7 @@ pub mod phone;
 mod photos;
 pub mod reminders;
 mod share;
+pub mod video;
 
 #[derive(Debug, Default)]
 pub struct AndroidUiAdapter {
