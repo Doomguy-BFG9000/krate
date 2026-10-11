@@ -11132,6 +11132,66 @@ fn a_threaded_app_runs_its_threads_and_rayon_pool_on_real_cores() {
     );
 }
 
+/// A controller reaches a gilrs program (IC-936): `gamepad-probe.wasm` is
+/// apps/krate-gamepad-probe built, gilrs' event loop over gilrs-core's Krate
+/// backend. A driven headless run plugs in the stand-in pad, holds south and
+/// pushes the left stick, and gilrs reports each as its own events.
+#[test]
+fn a_gilrs_program_sees_a_stand_in_controller() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let wasm = dir.path().join("app.wasm");
+    std::fs::write(&wasm, include_bytes!("fixtures/gamepad-probe.wasm")).expect("probe");
+    let manifest = dir.path().join("manifest.toml");
+    std::fs::write(
+        &manifest,
+        "[app]\nid = \"com.acme.pad\"\nname = \"pad\"\nversion = \"1.0.0\"\n\
+         entry = \"app.wasm\"\nworld = \"krate:app/gui@0.2.0\"\n\n\
+         [[capabilities]]\ncap = \"ui.window:create\"\nrationale = \"window\"\nrequired = true\n\n\
+         [[capabilities]]\ncap = \"io.stdout\"\nrationale = \"print\"\nrequired = true\n\n\
+         [[capabilities]]\ncap = \"random.bytes\"\nrationale = \"seed\"\nrequired = true\n",
+    )
+    .expect("manifest");
+    let task = dir.path().join("task.toml");
+    std::fs::write(
+        &task,
+        "name = \"press south and push the stick\"\n\n[[step]]\nwait_ms = 300\n\n\
+         [[step]]\npad = \"south 300\"\n\n[[step]]\nstick = \"left-y 0.5 300\"\n\n\
+         [[step]]\nexpect_no_text = \"a crash dialog\"\n",
+    )
+    .expect("task");
+    let out = krate()
+        .env("KRATE_HEADLESS_SECS", "40")
+        .arg("run")
+        .arg(&wasm)
+        .arg("--manifest")
+        .arg(&manifest)
+        .arg("--auto-grant")
+        .arg("--headless")
+        .arg("--usability-report")
+        .arg(dir.path().join("report.json"))
+        .arg("--task")
+        .arg(&task)
+        .arg("--")
+        .arg("25")
+        .output()
+        .expect("run");
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    for want in [
+        "gilrs: started; 0 pad(s) known",
+        "Connected",
+        "ButtonPressed(South",
+        "ButtonReleased(South",
+        "AxisChanged(LeftStickY, 0.4",
+        "AxisChanged(LeftStickY, 0.0",
+    ] {
+        assert!(
+            stdout.contains(want),
+            "{want:?} missing from: {stdout}{stderr}"
+        );
+    }
+}
+
 /// Raw sockets inside a Krate app (IC-935): `sockets-probe.wasm` is
 /// apps/krate-sockets-probe built. Its TCP, UDP, lookup and tokio jobs reach
 /// echo servers this test runs, under a `net.connect` grant; without the

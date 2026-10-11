@@ -1,0 +1,26 @@
+[package]
+name = "krate-gamepad-probe"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "gilrs' event loop (its `ev` example) inside a Krate app, over krate:ui's gamepad calls (IC-936)."
+
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+gilrs = "0.11"
+krate = { path = "../../crates/bindings-rust", features = ["gui", "std"] }
+krate-c-runtime = { path = "../../crates/c-runtime" }
+wit-bindgen-rt = { version = "0.44.0", features = ["bitflags"] }
+
+[patch.crates-io]
+# crates/gilrs-krate/make-gilrs.py's copy: gilrs-core with its Krate backend.
+gilrs-core = { path = "../../../../../../krate-bevy/patches/gilrs-core-0.6.8" }
+
+[profile.release]
+panic = "abort"
+opt-level = "s"
+debug = false

@@ -138,6 +138,19 @@ pub struct TaskStep {
     /// in a game, scrolling with an arrow key. Released when the time is up.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hold: Option<String>,
+    /// Hold a gamepad button for a while, "button milliseconds" ("south
+    /// 500"), on a stand-in controller the run plugs in (IC-936).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pad: Option<String>,
+    /// Hold a stick or trigger at a position for a while, "axis value
+    /// milliseconds" ("left-y 1.0 2000"), on the stand-in controller.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stick: Option<String>,
+    /// Move a held pointer by "dx dy milliseconds" ("400 0 1000" turns a
+    /// camera right): raw motion, as a person's mouse gives a game that holds
+    /// the pointer (IC-937).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub look: Option<String>,
     /// Write the window as it is now to this PNG: the evidence of a step
     /// that only a picture shows (a game character that walked). Looks, does
     /// not act.
@@ -167,6 +180,9 @@ impl TaskStep {
             self.click.is_some(),
             self.click_at.is_some(),
             self.hold.is_some(),
+            self.pad.is_some(),
+            self.stick.is_some(),
+            self.look.is_some(),
             self.shoot.is_some(),
             self.key.is_some(),
             self.type_text.is_some(),
@@ -183,6 +199,15 @@ impl TaskStep {
         if let Some(Err(why)) = self.held_key() {
             return Err(why);
         }
+        if let Some(Err(why)) = self.pad_press() {
+            return Err(why);
+        }
+        if let Some(Err(why)) = self.stick_tilt() {
+            return Err(why);
+        }
+        if let Some(Err(why)) = self.look_motion() {
+            return Err(why);
+        }
         if let Some(path) = &self.shoot {
             if !path.to_lowercase().ends_with(".png") {
                 return Err(format!("shoot {path:?} must name a .png file"));
@@ -190,7 +215,7 @@ impl TaskStep {
         }
         match set {
             1 => Ok(()),
-            0 => Err("a step must do one thing: click, click_at, hold, key, type, wait_ms, shoot, expect_text or expect_no_text".to_string()),
+            0 => Err("a step must do one thing: click, click_at, hold, pad, stick, look, key, type, wait_ms, shoot, expect_text or expect_no_text".to_string()),
             _ => Err(format!("a step does one thing, this one does {set}: {}", self.describe())),
         }
     }
@@ -207,6 +232,15 @@ impl TaskStep {
         }
         if let Some(p) = &self.shoot {
             return format!("shoot {p:?}");
+        }
+        if let Some(p) = &self.pad {
+            return format!("pad {p:?}");
+        }
+        if let Some(s) = &self.stick {
+            return format!("stick {s:?}");
+        }
+        if let Some(l) = &self.look {
+            return format!("look {l:?}");
         }
         if let Some(k) = &self.key {
             return format!("key {k:?}");
@@ -265,6 +299,71 @@ impl TaskStep {
         )
     }
 
+    /// The pad button a `pad` step holds and for how long, or why it cannot.
+    pub fn pad_press(&self) -> Option<Result<(String, std::time::Duration), String>> {
+        let text = self.pad.as_ref()?;
+        let mut parts = text.split_whitespace();
+        Some(match (parts.next(), parts.next().map(str::parse::<u64>), parts.next()) {
+            (Some(b), Some(Ok(ms)), None)
+                if crate::gamepad::Gamepads::is_known_button(b) && ms > 0 && ms <= 600_000 =>
+            {
+                Ok((b.to_string(), std::time::Duration::from_millis(ms)))
+            }
+            _ => Err(format!(
+                "pad {text:?} is not \"button milliseconds\" with a krate:ui gamepad button (south, east, west, north, l1, r1, l2, r2, start, select, dpad-up, dpad-down, dpad-left, dpad-right)"
+            )),
+        })
+    }
+
+    /// The axis a `stick` step holds, where, and for how long.
+    pub fn stick_tilt(&self) -> Option<Result<(String, f32, std::time::Duration), String>> {
+        let text = self.stick.as_ref()?;
+        let mut parts = text.split_whitespace();
+        Some(
+            match (
+                parts.next(),
+                parts.next().map(str::parse::<f32>),
+                parts.next().map(str::parse::<u64>),
+                parts.next(),
+            ) {
+                (Some(a), Some(Ok(v)), Some(Ok(ms)), None)
+                    if crate::gamepad::Gamepads::is_known_axis(a)
+                        && (-1.0..=1.0).contains(&v)
+                        && ms > 0
+                        && ms <= 600_000 =>
+                {
+                    Ok((a.to_string(), v, std::time::Duration::from_millis(ms)))
+                }
+                _ => Err(format!(
+                    "stick {text:?} is not \"axis value milliseconds\" with an axis (left-x, left-y, right-x, right-y, l2, r2) and a value from -1 to 1"
+                )),
+            },
+        )
+    }
+
+    /// The motion a `look` step gives and over how long.
+    pub fn look_motion(&self) -> Option<Result<(f32, f32, std::time::Duration), String>> {
+        let text = self.look.as_ref()?;
+        let mut parts = text.split_whitespace();
+        Some(
+            match (
+                parts.next().map(str::parse::<f32>),
+                parts.next().map(str::parse::<f32>),
+                parts.next().map(str::parse::<u64>),
+                parts.next(),
+            ) {
+                (Some(Ok(dx)), Some(Ok(dy)), Some(Ok(ms)), None)
+                    if dx.is_finite() && dy.is_finite() && ms > 0 && ms <= 600_000 =>
+                {
+                    Ok((dx, dy, std::time::Duration::from_millis(ms)))
+                }
+                _ => Err(format!(
+                    "look {text:?} is not \"dx dy milliseconds\" (\"400 0 1000\")"
+                )),
+            },
+        )
+    }
+
     /// Whether the step changes the app (and so needs a settle after it)
     /// or only looks.
     pub fn is_action(&self) -> bool {
@@ -282,6 +381,12 @@ impl Task {
                 if let Some(ms) = s.wait_ms {
                     std::time::Duration::from_millis(ms)
                 } else if let Some(Ok((_, held))) = s.held_key() {
+                    held.max(settle)
+                } else if let Some(Ok((_, held))) = s.pad_press() {
+                    held.max(settle)
+                } else if let Some(Ok((_, _, held))) = s.stick_tilt() {
+                    held.max(settle)
+                } else if let Some(Ok((_, _, held))) = s.look_motion() {
                     held.max(settle)
                 } else if s.is_action() {
                     settle

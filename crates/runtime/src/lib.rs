@@ -50,6 +50,8 @@ mod canvas_raster;
     not(any(target_os = "ios", target_arch = "wasm32"))
 ))]
 mod core_app;
+#[cfg(target_os = "macos")]
+mod gamepad_macos;
 pub use krate_adapter_common::canvas_list;
 pub mod chosen_files;
 pub mod dead_space;

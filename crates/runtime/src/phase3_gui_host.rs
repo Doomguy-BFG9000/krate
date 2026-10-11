@@ -86,6 +86,10 @@ fn headless_secs_asked() -> Option<std::time::Duration> {
 /// full seconds of frames to do it in.
 const HEADLESS_CLOSE_GRACE: std::time::Duration = std::time::Duration::from_secs(2);
 
+/// A headless window's pointer: whether the app holds it, and the raw motion
+/// not yet taken.
+type HeldPointer = (bool, (f32, f32));
+
 /// Host state for the Phase 3 `gui` world imports.
 pub struct Phase3GuiHost {
     runtime: Phase3UiRuntime,
@@ -109,6 +113,10 @@ pub struct Phase3GuiHost {
     /// closes the window", so with no such window the loop has nothing to end
     /// it and the app spins out its whole wait budget. See [`idle_waits`].
     headless: bool,
+    /// Windows a driven headless run holds the pointer in, and the raw motion
+    /// waiting to be taken (IC-937): the run's `look` step moves it, so a
+    /// script can turn a game's camera with no screen at all.
+    headless_pointer: std::cell::RefCell<std::collections::BTreeMap<u64, HeldPointer>>,
     /// Consecutive `wait` calls that timed out with no event, used only when
     /// [`headless`] is set. Once this passes [`HEADLESS_IDLE_WAIT_LIMIT`] the
     /// host synthesises a close request so the guest exits the way it would if
@@ -309,6 +317,8 @@ struct UsabilityDriver {
     /// action was dispatched, so the app gets a settle before the next.
     task_index: usize,
     task_dispatched_at: Option<std::time::Instant>,
+    /// How much of a `look` step's motion has been delivered so far.
+    look_given: (f32, f32),
     /// The control the pointer step pressed, so the keyboard step can pick a
     /// different one: pressing the same list row twice selects what is
     /// already selected and changes nothing, which read as a keyboard
@@ -465,6 +475,7 @@ impl Phase3GuiHost {
             // looped forever, invisible and silent, which is exactly what a
             // person saw on their first `krate run`.
             headless: headless_backend,
+            headless_pointer: Default::default(),
             idle_waits: std::cell::Cell::new(0),
             last_present: std::cell::Cell::new(None),
             publish_times: std::cell::RefCell::new(Vec::new()),
@@ -582,6 +593,7 @@ impl Phase3GuiHost {
             press_delivered_at: None,
             task_index: 0,
             task_dispatched_at: None,
+            look_given: (0.0, 0.0),
             clicked_widget: None,
             idle_churn: None,
         });
@@ -1485,15 +1497,42 @@ impl Phase3GuiHost {
         // step, the same grace the click and keyboard steps get.
         if let Some(at) = dispatched_at {
             let held = step.held_key().and_then(Result::ok);
+            let look = step.look_motion().and_then(Result::ok);
+            let pad = step.pad_press().and_then(Result::ok);
+            let stick = step.stick_tilt().and_then(Result::ok);
             let needed = step
                 .wait_ms
                 .map(std::time::Duration::from_millis)
                 .or(held.as_ref().map(|(_, ms)| *ms))
+                .or(pad.as_ref().map(|(_, ms)| *ms))
+                .or(stick.as_ref().map(|(_, _, ms)| *ms))
+                .or(look.as_ref().map(|(_, _, ms)| *ms))
                 .unwrap_or(PRESS_SETTLE);
             let since = at.elapsed();
+            // A look moves the held pointer evenly over its time.
+            if let Some((dx, dy, ms)) = look {
+                let frac = (since.as_secs_f32() / ms.as_secs_f32()).min(1.0);
+                let given = self
+                    .usability
+                    .as_ref()
+                    .map(|d| d.look_given)
+                    .unwrap_or_default();
+                let (tx, ty) = (dx * frac, dy * frac);
+                self.headless_look(tx - given.0, ty - given.1);
+                if let Some(driver) = self.usability.as_mut() {
+                    driver.look_given = (tx, ty);
+                }
+            }
             let ready = (since >= needed && from_wait) || since >= needed.max(PRESS_GIVE_UP);
             if !ready {
                 return;
+            }
+            // A held pad button or stick is let go when its time is up.
+            if let Some((button, _)) = pad {
+                self.gamepads.borrow_mut().stand_in_press(&button, false);
+            }
+            if let Some((axis, _, _)) = stick {
+                self.gamepads.borrow_mut().stand_in_tilt(&axis, 0.0);
             }
             // A held key is let go when its time is up, before the next step.
             if let Some((key, _)) = held {
@@ -1594,7 +1633,20 @@ impl Phase3GuiHost {
             }
             return;
         }
-        if step.wait_ms.is_some() {
+        // The stand-in controller (IC-936): held now, let go when settled.
+        let pad = step.pad_press().and_then(Result::ok);
+        let stick = step.stick_tilt().and_then(Result::ok);
+        let look = step.look_motion().and_then(Result::ok);
+        if step.wait_ms.is_some() || pad.is_some() || stick.is_some() || look.is_some() {
+            if let Some(driver) = self.usability.as_mut() {
+                driver.look_given = (0.0, 0.0);
+            }
+            if let Some((button, _)) = &pad {
+                self.gamepads.borrow_mut().stand_in_press(button, true);
+            }
+            if let Some((axis, value, _)) = &stick {
+                self.gamepads.borrow_mut().stand_in_tilt(axis, *value);
+            }
             if let Some(driver) = self.usability.as_mut() {
                 driver.task_dispatched_at = Some(std::time::Instant::now());
             }
@@ -3261,6 +3313,13 @@ impl Phase3GuiHost {
     }
 
     pub(crate) fn pointer_take_motion(&self, window: u64) -> (f32, f32) {
+        if self.scripted_pointer() {
+            let mut pointers = self.headless_pointer.borrow_mut();
+            return pointers
+                .get_mut(&window)
+                .map(|(_, motion)| std::mem::take(motion))
+                .unwrap_or((0.0, 0.0));
+        }
         self.pump_for_query();
         match self.window_id(window) {
             Ok(id) => self.dispatcher().take_pointer_motion(id),
@@ -3274,9 +3333,51 @@ impl Phase3GuiHost {
         capture: bool,
     ) -> Result<(), ui::types::UiError> {
         let id = self.window_id(window)?;
+        // Headless there is no screen to hold a cursor on. A driven run has a
+        // script to supply raw motion, so there holding is a real promise; a
+        // plain headless run has nothing to move it and still refuses, rather
+        // than claim to hold a pointer that does not exist.
+        if self.scripted_pointer() {
+            let _ = id;
+            let mut pointers = self.headless_pointer.borrow_mut();
+            let entry = pointers.entry(window).or_insert((false, (0.0, 0.0)));
+            entry.0 = capture;
+            if !capture {
+                entry.1 = (0.0, 0.0);
+            }
+            return Ok(());
+        }
         self.dispatcher()
             .set_pointer_capture(id, capture)
             .map_err(dispatch_error_to_ui_error)
+    }
+
+    /// Whether the app holds the pointer in a window.
+    pub(crate) fn pointer_captured(&self, window: u64) -> bool {
+        if self.scripted_pointer() {
+            return self
+                .headless_pointer
+                .borrow()
+                .get(&window)
+                .is_some_and(|(held, _)| *held);
+        }
+        self.pointer_state(window).captured
+    }
+
+    /// Headless and driven: the script is the mouse (IC-937).
+    fn scripted_pointer(&self) -> bool {
+        self.headless && self.usability.is_some()
+    }
+
+    /// Give a held pointer raw motion (a `look` step). A pointer the app does
+    /// not hold moves nothing, as a free cursor would not turn a camera.
+    fn headless_look(&self, dx: f32, dy: f32) {
+        for (held, motion) in self.headless_pointer.borrow_mut().values_mut() {
+            if *held {
+                motion.0 += dx;
+                motion.1 += dy;
+            }
+        }
     }
 }
 
@@ -6994,6 +7095,9 @@ mod tests {
             "click" => s.click = Some(value.to_string()),
             "click_at" => s.click_at = Some(value.to_string()),
             "hold" => s.hold = Some(value.to_string()),
+            "pad" => s.pad = Some(value.to_string()),
+            "stick" => s.stick = Some(value.to_string()),
+            "look" => s.look = Some(value.to_string()),
             "shoot" => s.shoot = Some(value.to_string()),
             "key" => s.key = Some(value.to_string()),
             "type" => s.type_text = Some(value.to_string()),
@@ -7203,6 +7307,109 @@ mod tests {
             steps: vec![step("hold", "w"), step("expect_text", "x")],
         };
         assert!(bad.validate().unwrap_err().contains("key milliseconds"));
+    }
+
+    /// IC-937: a driven headless run holds the pointer when the app asks, and
+    /// a `look` step gives it raw motion over the step's time. (A plain
+    /// headless run still refuses: an_app_asks_about_the_mouse_and_a_headless_capture_is_refused.)
+    #[test]
+    fn a_task_turns_a_held_pointer_in_a_headless_run() {
+        let task = crate::usability::Task {
+            name: "look around".to_string(),
+            steps: vec![
+                step("look", "120 -60 400"),
+                step("expect_no_text", "a crash dialog"),
+            ],
+        };
+        let mut host = host_with_labelled_button("Play", task_plan(task));
+        let window = host.windows.first().expect("a window").get();
+        // Not held: a look moves nothing.
+        assert!(!host.pointer_captured(window));
+        host.pointer_capture(window, true)
+            .expect("a headless run can hold the pointer");
+        assert!(host.pointer_captured(window));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        let (mut dx, mut dy, mut takes) = (0.0f32, 0.0f32, 0);
+        let report = loop {
+            let _ = ui::events::Host::wait(&mut host, Some(20));
+            let (x, y) = host.pointer_take_motion(window);
+            if x != 0.0 || y != 0.0 {
+                takes += 1;
+            }
+            dx += x;
+            dy += y;
+            let report = host.usability_report().expect("a plan");
+            if report.task.is_some() || std::time::Instant::now() > deadline {
+                break report;
+            }
+        };
+        assert_eq!(
+            report.task,
+            Some(crate::usability::Observation::Held),
+            "{report:?}"
+        );
+        assert!(
+            (dx - 120.0).abs() < 0.01 && (dy + 60.0).abs() < 0.01,
+            "{dx},{dy}"
+        );
+        assert!(
+            takes > 1,
+            "the motion came over several frames, not one jump"
+        );
+        host.pointer_capture(window, false).unwrap();
+        assert!(!host.pointer_captured(window));
+    }
+
+    /// IC-936: a driven run plugs in a stand-in controller, holds its button
+    /// and stick for their times, and lets go.
+    #[test]
+    fn a_task_holds_a_stand_in_gamepad_button_and_stick() {
+        let task = crate::usability::Task {
+            name: "jump and run".to_string(),
+            steps: vec![
+                step("pad", "south 400"),
+                step("stick", "left-y 0.75 400"),
+                step("expect_no_text", "a crash dialog"),
+            ],
+        };
+        let mut host = host_with_labelled_button("Play", task_plan(task));
+        assert!(
+            !host.gamepads.borrow_mut().connected(),
+            "no pad before the script"
+        );
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        let (mut saw_south, mut saw_stick) = (false, false);
+        let report = loop {
+            let _ = ui::events::Host::wait(&mut host, Some(20));
+            saw_south |= ui::events::Host::gamepad_held(&mut host, "south".into()).unwrap();
+            let y = ui::events::Host::gamepad_axis(&mut host, "left-y".into()).unwrap();
+            saw_stick |= (y - 0.75).abs() < 1e-6;
+            let report = host.usability_report().expect("a plan");
+            if report.task.is_some() || std::time::Instant::now() > deadline {
+                break report;
+            }
+        };
+        assert_eq!(
+            report.task,
+            Some(crate::usability::Observation::Held),
+            "{report:?}"
+        );
+        assert!(saw_south, "south was held");
+        assert!(saw_stick, "the stick was pushed to 0.75");
+        assert!(ui::events::Host::gamepad_connected(&mut host).unwrap());
+        assert!(
+            !ui::events::Host::gamepad_held(&mut host, "south".into()).unwrap(),
+            "let go"
+        );
+        assert_eq!(
+            ui::events::Host::gamepad_axis(&mut host, "left-y".into()).unwrap(),
+            0.0
+        );
+        let bad = crate::usability::Task {
+            name: "triangle".to_string(),
+            steps: vec![step("pad", "triangle 100"), step("expect_text", "x")],
+        };
+        assert!(bad.validate().unwrap_err().contains("gamepad button"));
     }
 
     /// A row of a list answers Enter the way it answers a press: the pointer
