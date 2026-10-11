@@ -11132,6 +11132,57 @@ fn a_threaded_app_runs_its_threads_and_rayon_pool_on_real_cores() {
     );
 }
 
+/// A threaded app packs into a .krate, passes the door, and runs from it
+/// (IC-938): the same threads probe, through `krate pack` and `krate run
+/// app.krate` -- the path a double-click takes.
+#[test]
+fn a_threaded_app_packs_into_a_krate_and_runs_from_it() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let wasm = dir.path().join("app.wasm");
+    std::fs::write(&wasm, include_bytes!("fixtures/threads-probe.wasm")).expect("probe");
+    let manifest = dir.path().join("manifest.toml");
+    std::fs::write(
+        &manifest,
+        "[app]\nid = \"com.acme.threads\"\nname = \"threads\"\nversion = \"1.0.0\"\n\
+         entry = \"app.wasm\"\nworld = \"krate:app/cli@0.1.0\"\n\n\
+         [[capabilities]]\ncap = \"io.stdout\"\nrationale = \"print\"\nrequired = true\n\n\
+         [[capabilities]]\ncap = \"random.bytes\"\nrationale = \"seed\"\nrequired = true\n",
+    )
+    .expect("manifest");
+    let bundle = dir.path().join("threads.krate");
+    let packed = krate()
+        .arg("pack")
+        .arg(&wasm)
+        .arg("--manifest")
+        .arg(&manifest)
+        .arg("-o")
+        .arg(&bundle)
+        .output()
+        .expect("pack");
+    assert!(
+        packed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&packed.stderr)
+    );
+    let out = krate()
+        .arg("run")
+        .arg(&bundle)
+        .arg("--auto-grant")
+        .output()
+        .expect("run");
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert!(
+        out.status.success(),
+        "{stdout}{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(stdout.contains("same answer: true"), "{stdout}");
+    assert!(
+        stdout.contains("4 scoped threads counted 400000"),
+        "{stdout}"
+    );
+}
+
 /// A controller reaches a gilrs program (IC-936): `gamepad-probe.wasm` is
 /// apps/krate-gamepad-probe built, gilrs' event loop over gilrs-core's Krate
 /// backend. A driven headless run plugs in the stand-in pad, holds south and

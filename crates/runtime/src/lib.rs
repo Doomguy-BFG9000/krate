@@ -890,6 +890,16 @@ impl Runtime {
             let _ = world;
             return self.run_threaded(bytes, config, output);
         }
+        // A phone or a browser tab cannot run a threaded app yet (IC-938):
+        // say so in words, rather than fail it as a broken component.
+        #[cfg(any(target_os = "ios", target_arch = "wasm32"))]
+        if imports_a_shared_memory(bytes) {
+            return Err(RuntimeError::Instantiate(
+                "this app runs on several threads, which Krate runs on a computer \
+                 (macOS, Windows, Linux) but not yet on a phone or in a browser"
+                    .to_string(),
+            ));
+        }
         let engine_started = std::time::Instant::now();
         let compile_started = std::time::Instant::now();
         let component = self.load_component(bytes)?;
@@ -3584,6 +3594,23 @@ fn file_stat_from_metadata(metadata: std::fs::Metadata) -> FileStat {
         modified_millis,
         is_dir: metadata.is_dir(),
     }
+}
+
+/// A threaded app's mark (IC-929): a core module importing a shared memory.
+#[cfg(any(target_os = "ios", target_arch = "wasm32"))]
+fn imports_a_shared_memory(bytes: &[u8]) -> bool {
+    if wasmparser::Parser::is_component(bytes) || !wasmparser::Parser::is_core_wasm(bytes) {
+        return false;
+    }
+    wasmparser::Parser::new(0)
+        .parse_all(bytes)
+        .any(|p| match p {
+            Ok(wasmparser::Payload::ImportSection(s)) => s
+                .into_imports()
+                .flatten()
+                .any(|i| matches!(i.ty, wasmparser::TypeRef::Memory(m) if m.shared)),
+            _ => false,
+        })
 }
 
 #[cfg(feature = "phase2-bindings")]

@@ -452,6 +452,13 @@ fn looks_like_krate(bytes: &[u8]) -> Result<(), String> {
     // getting exit 2 later (the K-272 shape, server-side).
     let component = std::fs::read(opened.component_path())
         .map_err(|err| format!("could not read the component back: {err}"))?;
+    // A threaded app (IC-938) is a core module the one validator judges by
+    // the same rules; any other core module is still refused.
+    if krate_bundle::imports::is_threaded_module(&component) {
+        return krate_bundle::imports::validate_component(&component, None)
+            .map(|_| ())
+            .map_err(|defect| format!("code.wasm is not a Krate app: {defect}"));
+    }
     if !krate_bundle::imports::is_component(&component) {
         return Err("code.wasm is a core WebAssembly module, not a component. \
              Build it with `cargo component build` rather than `cargo build`."
