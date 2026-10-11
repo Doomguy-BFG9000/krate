@@ -1682,6 +1682,20 @@ fn finish_gui_run(
     }
 }
 
+/// The person's second unanswered close (K-121). A desktop app is its own
+/// process, so the process ends. On a phone the process is Krate's player,
+/// and ending it threw the person out of Krate to the home screen, so there
+/// only the app ends, as Krate's own Close does (K-1074).
+pub(crate) fn end_unanswered_close() -> wasmtime::Error {
+    #[cfg(not(any(target_os = "ios", target_os = "android")))]
+    std::process::exit(0);
+    #[cfg(any(target_os = "ios", target_os = "android"))]
+    {
+        krate_adapter_common::ui::end_running_app();
+        wasmtime::Error::msg(ENDED_BY_KRATE)
+    }
+}
+
 /// What a run ended by Krate's own Close traps with (IC-934).
 pub(crate) const ENDED_BY_KRATE: &str = "ended by Krate: the app did not answer Close";
 

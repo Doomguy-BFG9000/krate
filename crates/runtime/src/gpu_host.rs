@@ -2462,7 +2462,7 @@ impl g::Host for Phase3GuiHost {
         // A GPU game loop lives in present the way a canvas one does; the
         // second unanswered close click ends the app here too (K-121).
         if self.close_ignored_by_guest() {
-            std::process::exit(0);
+            return Err(crate::end_unanswered_close());
         }
         // KRATE_GPU_UNPACED=1 measures what a frame costs rather than what the
         // display allows: present stops waiting for the 60 Hz budget.
