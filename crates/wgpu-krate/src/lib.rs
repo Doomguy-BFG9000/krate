@@ -136,13 +136,24 @@ impl Drop for Owned {
     }
 }
 
-type Callback = Box<dyn FnOnce() + Send>;
+/// A callback wgpu handed over, kept until the next poll or submit.
+///
+/// wgpu types its callbacks `Send` only where it thinks they can be: on a
+/// wasm target with atomics (a threaded Krate app, IC-929) it drops the bound,
+/// because its browser backend's callbacks hold JavaScript objects that stay
+/// on one thread. Nothing of the kind exists here: a callback holds the
+/// program's own Rust values, and krate:gpu answers on any of the app's
+/// threads. So the queue holds them as `Send` in every build.
+struct Callback(Box<dyn FnOnce()>);
+
+// SAFETY: see above -- only the program's values, no thread-bound handles.
+unsafe impl Send for Callback {}
 
 /// Callbacks waiting for the next poll or submit.
 static PENDING: Mutex<Vec<Callback>> = Mutex::new(Vec::new());
 
-fn defer(callback: Callback) {
-    PENDING.lock().unwrap().push(callback);
+fn defer(callback: impl FnOnce() + 'static) {
+    PENDING.lock().unwrap().push(Callback(Box::new(callback)));
 }
 
 /// A map the host has started and not yet finished.
@@ -151,6 +162,9 @@ struct PendingMap {
     mapped: Arc<Mutex<Option<Mapping>>>,
     callback: BufferMapCallback,
 }
+
+// SAFETY: as `Callback`: the map callback holds only the program's values.
+unsafe impl Send for PendingMap {}
 
 static PENDING_MAPS: Mutex<Vec<PendingMap>> = Mutex::new(Vec::new());
 
@@ -181,7 +195,7 @@ fn run_pending() {
         if batch.is_empty() {
             return;
         }
-        for callback in batch {
+        for Callback(callback) in batch {
             callback();
         }
     }
@@ -1016,6 +1030,20 @@ fn message(
     }
 }
 
+/// WGSL as the host's naga (wgpu 29) reads it.
+///
+/// wgpu 28 renamed push constants to immediates, and WGSL's address space
+/// with them: a wgpu 27 program (Veloren), and naga 27 writing out its GLSL,
+/// say `var<push_constant>`, which the host refuses as an unknown address
+/// space. The data and layout are the same, so the name is all that changes.
+fn host_wgsl(code: Cow<'_, str>) -> Cow<'_, str> {
+    if cfg!(feature = "wgpu-27") && code.contains("<push_constant>") {
+        Cow::Owned(code.replace("<push_constant>", "<immediate>"))
+    } else {
+        code
+    }
+}
+
 /// A naga module (what Bevy composes its shaders into, and what a GLSL or
 /// SPIR-V shader parses into) as WGSL source.
 fn naga_to_wgsl(module: &naga::Module) -> Result<String, String> {
@@ -1205,6 +1233,7 @@ impl DeviceInterface for KDevice {
             }
             _ => Err("only WGSL, a naga module, GLSL (feature glsl) or SPIR-V (feature spirv) reaches krate:gpu".to_string()),
         };
+        let code = code.map(host_wgsl);
         let code = match code {
             Ok(code) => code,
             Err(why) => {
@@ -2962,6 +2991,9 @@ pub fn run_callbacks() {
     run_pending();
 }
 
+// With atomics (a threaded app) wgpu itself drops Send from the error
+// handlers a device keeps, so the check holds only without them.
+#[cfg(not(target_feature = "atomics"))]
 #[allow(dead_code)]
 fn _assert_send_sync() {
     fn check<T: Send + Sync>() {}

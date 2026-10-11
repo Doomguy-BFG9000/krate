@@ -573,6 +573,9 @@ const FEATURE_NAMES: &[(Features, &str)] = &[
     (Features::FLOAT32_FILTERABLE, "float32-filterable"),
     (Features::DUAL_SOURCE_BLENDING, "dual-source-blending"),
     (Features::CLIP_DISTANCES, "clip-distances"),
+    (Features::PUSH_CONSTANTS, "immediates"),
+    (Features::SHADER_PRIMITIVE_INDEX, "primitive-index"),
+    (Features::SHADER_PRIMITIVE_INDEX, "shader-primitive-index"),
 ];
 
 /// Every feature in a set, by its WebGPU (or "wgpu-") name.
@@ -777,7 +780,7 @@ pub const LIMITS: &[LimitAccess] = &[
         |l, v| l.max_subgroup_size = v.min(u32::MAX as u64) as u32,
     ),
     (
-        "max-push-constant-size",
+        "max-immediate-size",
         |l| l.max_push_constant_size as u64,
         |l, v| l.max_push_constant_size = v.min(u32::MAX as u64) as u32,
     ),

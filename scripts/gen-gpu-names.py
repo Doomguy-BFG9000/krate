@@ -39,6 +39,14 @@ def part(WGT, name):
     return open(path if os.path.exists(path) else os.path.join(WGT, "lib.rs")).read()
 
 
+# wgpu 28 renamed push constants to immediates (and the primitive index
+# feature): an older version's flag or limit goes by the name the host knows,
+# so a wgpu 27 program asking for push constants is given immediates, which
+# are the same thing.
+OLDER_FEATURE = {"IMMEDIATES": "PUSH_CONSTANTS", "PRIMITIVE_INDEX": "SHADER_PRIMITIVE_INDEX"}
+NEWER_LIMIT = {"max_push_constant_size": "max_immediate_size"}
+
+
 def generate(WGT, alias, root):
     out = []
     w = out.append
@@ -187,9 +195,11 @@ def generate(WGT, alias, root):
         own = part(WGT, "features.rs")
         rows = []
         for strs, flag in named:
-            if re.search(r"^\s*const %s\b" % flag, own, re.M):
+            # The flag under this version's own name: wgpu 28 renamed a few.
+            older = OLDER_FEATURE.get(flag, flag)
+            if re.search(r"^\s*const %s\b" % older, own, re.M):
                 for n in re.findall(r'"([^"]+)"', strs):
-                    rows.append((flag, n))
+                    rows.append((older, n))
         w("/// Each feature's WebGPU (or \"wgpu-\") names; the first is what it is called.")
         w("const FEATURE_NAMES: &[(Features, &str)] = &[")
         for flag, n in rows:
@@ -219,7 +229,7 @@ def generate(WGT, alias, root):
     w("/// as a u64 whatever its width; a u32 limit saturates.")
     w("pub const LIMITS: &[LimitAccess] = &[")
     for f, t in fields:
-        n = f.replace("_", "-")
+        n = (f if root else NEWER_LIMIT.get(f, f)).replace("_", "-")
         conv = "v" if t == "u64" else "v.min(u32::MAX as u64) as u32"
         getter = f"l.{f}" if t == "u64" else f"l.{f} as u64"
         w(f"    (\"{n}\", |l| {getter}, |l, v| l.{f} = {conv}),")
