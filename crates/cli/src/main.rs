@@ -6081,16 +6081,25 @@ fn pack_bundle(
             removed as f64 / 1_000_000.0
         );
     }
-    // Bigger than the hub takes: it is a large local app (IC-942).
+    // Bigger than the publish door takes: a large local app (IC-942), which
+    // reaches Krate Cloud through the big-file path up to its ceiling (IC-945).
     let asset_files = assets.as_deref().map(count_files).unwrap_or(0);
     if size > krate_bundle::HUB_LIMITS.bundle_bytes
         || asset_files > krate_bundle::HUB_LIMITS.asset_count
     {
-        println!(
-            "this app is larger than the hub accepts ({asset_files} assets): it opens from the \
-             file on a desktop -- `krate run`, a double-click -- not through the hub, a link or \
-             a phone"
-        );
+        if size <= krate_bundle::HUB_BIG_LIMITS.bundle_bytes {
+            println!(
+                "a large app ({asset_files} assets): it opens from the file on a desktop -- \
+                 `krate run`, a double-click -- and `krate publish` sends it to Krate Cloud \
+                 through the big-file path. It does not open on a phone"
+            );
+        } else {
+            println!(
+                "this app is larger than Krate Cloud takes ({asset_files} assets): it opens \
+                 from the file on a desktop -- `krate run`, a double-click -- not through \
+                 Krate Cloud, a link or a phone"
+            );
+        }
     }
     if source.is_some() {
         println!("included the app's source, so it can be changed later");
@@ -8194,7 +8203,13 @@ fn publish_big(
     }
 
     // The parts not yet sent, each tried three times.
-    let total_mb = bytes.len() / 1_000_000;
+    let size_of = |n: usize| {
+        if n >= 1_000_000 {
+            format!("{} MB", n / 1_000_000)
+        } else {
+            format!("{} KB", n.div_ceil(1000))
+        }
+    };
     for n in 1..=parts {
         if state["etags"][n.to_string()].is_string() {
             continue;
@@ -8232,7 +8247,7 @@ fn publish_big(
                 "part {n} of {parts} did not go; publish again to send the rest"
             )));
         }
-        println!("  sent {} of {total_mb} MB", end / 1_000_000);
+        println!("  sent {} of {}", size_of(end), size_of(bytes.len()));
     }
 
     // Finish, then wait for the hub's judgement.

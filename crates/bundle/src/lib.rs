@@ -951,8 +951,9 @@ pub enum BundleError {
     EntryMismatch { declared: String },
     #[error("bundle is {size} bytes, larger than the {limit} byte limit here{}",
         if *size <= LOCAL_LIMITS.bundle_bytes && *limit < LOCAL_LIMITS.bundle_bytes {
-            ". An app this large opens from a file on a desktop (Krate's large local tier), \
-             not through the hub, a link or a phone"
+            ". An app this large opens from a file on a desktop (Krate's large local tier); \
+             up to 1 GiB, `krate publish` sends it to Krate Cloud through the big-file path. \
+             It does not open on a phone"
         } else { "" })]
     TooLarge { size: u64, limit: u64 },
     /// `limit` is the ceiling that was actually applied: an asset is held to

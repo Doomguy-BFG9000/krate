@@ -2843,7 +2843,7 @@ async function smtpSend(connect, msg) {
 }
 
 // For scripts/send-welcome-test.mjs: the exact note, sent by hand.
-export { welcomeText, sendWelcome, WELCOME_FROM, WELCOME_REPLY_TO, WELCOME_SUBJECT };
+export { welcomeText, sendWelcome };
 
 /// Send the welcomes that are due: each at most once (the account records
 /// that it was welcomed before the due mark is dropped), twenty a run.
@@ -3879,7 +3879,12 @@ async function bigVerdict(request, env, id) {
   if (String(verdict.sha256 || "") !== record.sha256) {
     return refuse("the bytes that arrived are not the ones the upload declared");
   }
-  if (!verdict.ok) return refuse(`not a valid ${record.kind === "bundle" ? ".krate bundle" : record.kind + " file"}: ${verdict.problem || "refused"}`);
+  if (!verdict.ok) {
+    // A bundle's problem is the validator's own sentence, which already
+    // says what was wrong; a source or notices file is named.
+    const problem = verdict.problem || "refused";
+    return refuse(record.kind === "bundle" ? problem : `not a valid ${record.kind} file: ${problem}`);
+  }
 
   const base = (env.PUBLIC_BASE || "").replace(/\/$/, "");
   if (record.kind === "bundle") {
