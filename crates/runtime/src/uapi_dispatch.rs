@@ -188,6 +188,12 @@ pub enum AdapterError {
     InvalidPath,
     #[error("resource was not found")]
     NotFound,
+    /// What was to be made is already there: a folder that exists, a file
+    /// opened to be created new. Its own kind, so `create_dir_all` and the
+    /// like hear EEXIST and carry on, rather than an I/O error that stops
+    /// them (Veloren could not save its settings).
+    #[error("already exists")]
+    AlreadyExists,
     #[error("permission was denied by the host")]
     PermissionDenied,
     #[error("host I/O error: {0}")]
@@ -490,11 +496,16 @@ impl<'a> UapiDispatcher<'a> {
         self.adapter.fs().seek_end(handle).map_err(Into::into)
     }
 
+    /// A file's size and kind, through a handle the app holds. Any open mode
+    /// will do -- POSIX `fstat` works on a file opened only for writing, and
+    /// std's `fs::copy` asks exactly that of the file it is creating, so a
+    /// read-only rule made every copy fail (Veloren's world map) -- but the
+    /// grant for that mode is still checked.
     pub fn fs_stat_handle(
         &self,
         handle: &FileHandle,
     ) -> std::result::Result<FileStat, FsDispatchError> {
-        self.check_file_handle(handle, FileAccess::Read)?;
+        self.check_file_handle(handle, FileAccess::AnyOpenMode)?;
         self.adapter.fs().stat_handle(handle).map_err(Into::into)
     }
 
@@ -1508,6 +1519,26 @@ mod tests {
 
         assert!(matches!(err, FsDispatchError::PermissionDenied));
         assert_eq!(adapter.calls.borrow().fs_stat_handle, 0);
+    }
+
+    #[test]
+    fn a_file_opened_to_write_can_be_stat_by_its_handle() {
+        let adapter = RecordingAdapter::default();
+        let policy =
+            SessionPolicy::from_cli_grants(&["fs.write:./out/**".to_string()]).expect("policy");
+        let guard = UapiGuard::new(policy);
+        let dispatcher = UapiDispatcher::new(&guard, &adapter);
+        let handle = FileHandle::opened_file(47, "./out/map.bin", OpenMode::Write);
+        dispatcher
+            .fs_stat_handle(&handle)
+            .expect("fstat of a file being written, under its write grant");
+        assert_eq!(adapter.calls.borrow().fs_stat_handle, 1);
+        // Without the grant for that mode it is still refused.
+        let other = FileHandle::opened_file(48, "./elsewhere/map.bin", OpenMode::Write);
+        assert!(matches!(
+            dispatcher.fs_stat_handle(&other),
+            Err(FsDispatchError::PermissionDenied)
+        ));
     }
 
     #[test]

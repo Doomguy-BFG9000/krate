@@ -3590,7 +3590,7 @@ fn map_io_error(err: std::io::Error) -> AdapterError {
     match err.kind() {
         std::io::ErrorKind::NotFound => AdapterError::NotFound,
         std::io::ErrorKind::PermissionDenied => AdapterError::PermissionDenied,
-        std::io::ErrorKind::AlreadyExists => AdapterError::Io("already exists".to_string()),
+        std::io::ErrorKind::AlreadyExists => AdapterError::AlreadyExists,
         std::io::ErrorKind::InvalidInput => AdapterError::InvalidPath,
         _ => AdapterError::Io(err.to_string()),
     }
