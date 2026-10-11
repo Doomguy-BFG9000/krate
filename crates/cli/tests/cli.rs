@@ -7184,6 +7184,192 @@ fn a_grant_the_manifest_never_declared_is_refused_on_the_command_line() {
     assert_eq!(String::from_utf8_lossy(&fine.stdout).trim(), "held=10");
 }
 
+/// An installed app's own files live outside its `.app` and survive
+/// installing it again (IC-943, K-1076).
+///
+/// The app is opened the way a double-click opens it: its own executable,
+/// no arguments. It writes probe-dir/hello.txt. Before IC-943 that landed in
+/// `Contents/Resources`, inside the signed bundle: `codesign -v` failed, and
+/// the next install swapped in a fresh `.app` and the file was gone. A file
+/// an older Krate left in the bundle is moved out on the next open.
+///
+/// The consent window must never appear in a test, so the grants are
+/// remembered the way a person's "Open" would remember them, and a plain
+/// `krate run` (which refuses instead of asking) proves they cover the app
+/// before the double-click path is tried.
+#[cfg(target_os = "macos")]
+#[test]
+fn an_installed_apps_files_live_outside_it_and_survive_reinstall() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let prefix = tempfile::tempdir().expect("prefix");
+    let home = tempfile::tempdir().expect("home");
+    let wasm = dir.path().join("code.wasm");
+    std::fs::write(&wasm, include_bytes!("fixtures/cxx-probe.wasm")).expect("probe");
+    let required = [
+        "io.stdout",
+        "io.args",
+        "fs.read:./probe-dir/**",
+        "fs.write:./probe-dir/**",
+        "fs.list:./probe-dir/**",
+    ];
+    let mut manifest_text = "[app]\nid = \"com.acme.keeps-files\"\nname = \"keeps-files\"\n\
+         version = \"1.0.0\"\nentry = \"code.wasm\"\nworld = \"krate:app/gui@0.2.0\"\n"
+        .to_string();
+    for cap in required {
+        manifest_text.push_str(&format!(
+            "\n[[capabilities]]\ncap = \"{cap}\"\nrationale = \"probe\"\nrequired = true\n"
+        ));
+    }
+    let manifest = dir.path().join("manifest.toml");
+    std::fs::write(&manifest, manifest_text).expect("manifest");
+    let bundle = dir.path().join("keeps-files.krate");
+    assert!(krate()
+        .arg("pack")
+        .arg(&wasm)
+        .arg("--manifest")
+        .arg(&manifest)
+        .arg("-o")
+        .arg(&bundle)
+        .status()
+        .expect("pack")
+        .success());
+
+    // What one "Open" in the consent window remembers, for this machine's
+    // own unsigned app (IC-737).
+    let keys = home.path().join(".krate/keys");
+    std::fs::create_dir_all(&keys).expect("keys");
+    std::fs::write(keys.join("isolate-development"), "").expect("isolate");
+    let developer = "0123456789abcdef0123456789abcdef";
+    std::fs::write(keys.join("development-id"), developer).expect("id");
+    let principal = format!("com.acme.keeps-files+{}", &developer[..16]);
+    let grants = home.path().join(".krate/grants");
+    std::fs::create_dir_all(&grants).expect("grants");
+    std::fs::write(
+        grants.join(format!("{principal}.json")),
+        format!(
+            "{{\"schema\":\"krate.grants.v1\",\"principal\":\"{principal}\",\"granted\":[{}]}}",
+            required
+                .iter()
+                .map(|cap| format!("\"{cap}\""))
+                .collect::<Vec<_>>()
+                .join(",")
+        ),
+    )
+    .expect("grants file");
+
+    let install = || {
+        let out = krate()
+            .arg("install")
+            .arg(&bundle)
+            .arg("--prefix")
+            .arg(prefix.path())
+            .env("HOME", home.path())
+            .output()
+            .expect("install");
+        assert!(
+            out.status.success(),
+            "install: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        std::fs::read_dir(prefix.path())
+            .expect("prefix")
+            .flatten()
+            .map(|e| e.path())
+            .find(|p| p.extension().is_some_and(|x| x == "app"))
+            .expect("an installed .app")
+    };
+    let app = install();
+    let payload = app.join("Contents/Resources/app.krate");
+
+    // The guard: a run that cannot ask must find every permission remembered.
+    let check = krate()
+        .current_dir(dir.path())
+        .arg("run")
+        .arg("--headless")
+        .arg(&payload)
+        .env("HOME", home.path())
+        .stdin(Stdio::null())
+        .output()
+        .expect("run");
+    assert!(
+        String::from_utf8_lossy(&check.stdout).contains("probe: ok"),
+        "the remembered grants must cover the app before a double-click is tried: {}",
+        String::from_utf8_lossy(&check.stderr)
+    );
+
+    // A file an older Krate let the app write inside its bundle.
+    let old = app.join("Contents/Resources/probe-dir");
+    std::fs::create_dir_all(&old).expect("old dir");
+    std::fs::write(old.join("from-before.txt"), "kept").expect("old file");
+
+    let double_click = |app: &std::path::Path| {
+        let exe = std::fs::read_dir(app.join("Contents/MacOS"))
+            .expect("MacOS")
+            .flatten()
+            .map(|e| e.path())
+            .next()
+            .expect("an executable");
+        let out = Command::new(exe)
+            .env("HOME", home.path())
+            .env("KRATE_TEST_WATCHDOG_SECS", "120")
+            .env("KRATE_QUIET_WINDOW", "1")
+            .stdin(Stdio::null())
+            .output()
+            .expect("open the installed app");
+        let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+        assert!(
+            stdout.contains("probe: ok"),
+            "the installed app must run from a double-click: {stdout}{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    };
+    double_click(&app);
+
+    let data = home
+        .path()
+        .join("Library/Application Support/Krate/apps/com.acme.keeps-files");
+    assert!(
+        data.join("probe-dir/hello.txt").is_file(),
+        "the app's file is in its data folder"
+    );
+    assert_eq!(
+        std::fs::read_to_string(data.join("probe-dir/from-before.txt"))
+            .ok()
+            .as_deref(),
+        Some("kept"),
+        "what an older Krate left in the bundle is moved out"
+    );
+    let resources: Vec<String> = std::fs::read_dir(app.join("Contents/Resources"))
+        .expect("resources")
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().to_string())
+        .collect();
+    assert!(
+        !resources.iter().any(|n| n == "probe-dir"),
+        "nothing the app wrote is left inside the bundle: {resources:?}"
+    );
+    let sealed = Command::new("/usr/bin/codesign")
+        .arg("-v")
+        .arg(&app)
+        .output()
+        .expect("codesign");
+    assert!(
+        sealed.status.success(),
+        "the installed app still verifies after it ran: {}",
+        String::from_utf8_lossy(&sealed.stderr)
+    );
+
+    // A newer install replaces the .app; the files stay.
+    let app = install();
+    assert!(
+        data.join("probe-dir/hello.txt").is_file(),
+        "reinstall kept the file"
+    );
+    assert!(data.join("probe-dir/from-before.txt").is_file());
+    double_click(&app);
+    assert!(data.join("probe-dir/hello.txt").is_file());
+}
+
 /// Uninstalling removes the app and keeps what the person wrote in it,
 /// unless they ask otherwise (IC-278, IC-396).
 ///

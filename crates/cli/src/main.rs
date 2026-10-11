@@ -17483,10 +17483,7 @@ fn open_app(direct: Option<PathBuf>) -> Result<u8> {
         }
     }
 
-    let sandbox_root = target
-        .parent()
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| PathBuf::from("."));
+    let sandbox_root = opened_app_sandbox_root(target);
 
     // Several documents opened at once: the first runs in this process, the
     // rest each get their own.
@@ -17530,7 +17527,102 @@ fn open_app(direct: Option<PathBuf>) -> Result<u8> {
     })
 }
 
-/// Run one opened document in its own process, mirroring what open_app does
+/// Where an opened app's own files live.
+///
+/// A loose `.krate` keeps the folder it sits in, as it always has. An
+/// installed app's payload sits inside its signed `.app`, and writing there
+/// broke the signature and lost everything on the next install, which swaps
+/// in a fresh `.app` (K-1076). Its files live in a folder of their own
+/// instead, keyed by the app's id so a newer version finds them (IC-943).
+#[cfg(target_os = "macos")]
+fn opened_app_sandbox_root(target: &Path) -> PathBuf {
+    let beside = target
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."));
+    let Some(resources) = installed_payload_resources(target) else {
+        return beside;
+    };
+    let (Some(home), Ok(manifest)) = (home_dir(), krate_bundle::read_manifest(target)) else {
+        return beside;
+    };
+    let data = installed_app_data_dir(&home, &manifest.app.id);
+    if let Err(err) = fs::create_dir_all(&data) {
+        eprintln!(
+            "krate: could not make {} ({err}); this app's files stay beside it",
+            data.display()
+        );
+        return beside;
+    }
+    move_app_files_out_of_the_bundle(resources, &data);
+    data
+}
+
+/// The folder an installed app's own files live in (IC-943).
+#[cfg(target_os = "macos")]
+fn installed_app_data_dir(home: &Path, app_id: &str) -> PathBuf {
+    home.join("Library")
+        .join("Application Support")
+        .join("Krate")
+        .join("apps")
+        .join(sanitize_storage_name(app_id))
+}
+
+/// `<App>.app/Contents/Resources` when `target` is an installed payload,
+/// `<App>.app/Contents/Resources/app.krate`.
+#[cfg(target_os = "macos")]
+fn installed_payload_resources(target: &Path) -> Option<&Path> {
+    let resources = target.parent()?;
+    let contents = resources.parent()?;
+    let app = contents.parent()?;
+    let shaped = target.file_name()? == "app.krate"
+        && resources.file_name()? == "Resources"
+        && contents.file_name()? == "Contents"
+        && app.extension()? == "app";
+    shaped.then_some(resources)
+}
+
+/// What `krate install` itself puts in `Contents/Resources`. Everything
+/// else there was written by the app under an older Krate.
+#[cfg(target_os = "macos")]
+const INSTALLED_BUNDLE_FILES: &[&str] = &["app.krate", "engine.fingerprint", "AppIcon.icns"];
+
+/// Move what an older Krate let an installed app write inside its own
+/// bundle out to its data folder, so the next install cannot delete it.
+///
+/// Never overwrites: a name already in the data folder is newer than
+/// anything an older Krate left in the bundle, so that copy stays where it
+/// is and is said out loud.
+#[cfg(target_os = "macos")]
+fn move_app_files_out_of_the_bundle(resources: &Path, data: &Path) {
+    let Ok(entries) = fs::read_dir(resources) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        if INSTALLED_BUNDLE_FILES.iter().any(|kept| name == *kept) {
+            continue;
+        }
+        let destination = data.join(&name);
+        if destination.symlink_metadata().is_ok() {
+            eprintln!(
+                "krate: left {} inside the app: {} already exists",
+                entry.path().display(),
+                destination.display()
+            );
+            continue;
+        }
+        if let Err(err) = fs::rename(entry.path(), &destination) {
+            eprintln!(
+                "krate: could not move {} to {} ({err})",
+                entry.path().display(),
+                destination.display()
+            );
+        }
+    }
+}
+
+/// Run one opened document in its own process, mirroring what open_app does/// Run one opened document in its own process, mirroring what open_app does
 /// for the first document. Fire-and-forget: the child owns its own consent
 /// window and lifetime.
 #[cfg(target_os = "macos")]
