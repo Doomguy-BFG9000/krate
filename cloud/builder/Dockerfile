@@ -109,15 +109,14 @@ RUN set -eux; \
 # has neither and fails with "'stdio.h' file not found". The same wasi-sdk
 # release `krate setup wasi-sdk` pins, verified before it is unpacked.
 #
-# WASI_SDK_SHA256 has no default on purpose: the digest is recorded once,
-# by scripts/wasi-sdk-checksums.py, and passed with
-# `--build-arg WASI_SDK_SHA256=...`. An image built without it stops here
-# rather than trusting a download.
+# The digest is the one crates/cli/src/wasi_sdk.rs pins for x86_64 Linux,
+# printed by scripts/wasi-sdk-checksums.py and matching GitHub's own for the
+# asset; a unit test there fails if the two drift. Moving to another release
+# means a new version, tag and digest together.
 ARG WASI_SDK_VERSION=34.0
 ARG WASI_SDK_TAG=wasi-sdk-34
-ARG WASI_SDK_SHA256
+ARG WASI_SDK_SHA256=b761e3a0721dbae9c09a0059e5fdb2bf917d1b4a8a7b430fb3b5aafb0984b2c4
 RUN set -eux; \
-    test -n "${WASI_SDK_SHA256}" || { echo "set --build-arg WASI_SDK_SHA256 (scripts/wasi-sdk-checksums.py)"; exit 1; }; \
     file="wasi-sdk-${WASI_SDK_VERSION}-x86_64-linux.tar.gz"; \
     cd /tmp; \
     curl -fsSL -O "https://github.com/WebAssembly/wasi-sdk/releases/download/${WASI_SDK_TAG}/${file}"; \
