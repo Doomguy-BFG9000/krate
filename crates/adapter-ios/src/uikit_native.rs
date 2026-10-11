@@ -192,6 +192,29 @@ mod real {
         /// When the finger landed, and whether its press has gone out yet.
         began: std::time::Instant,
         pressed: bool,
+        /// It began on something that drags -- a slider, or what the app
+        /// described as adjustable (a scrubber, a volume) -- so moving it
+        /// moves that, never scrolls (K-1059).
+        drags: bool,
+    }
+
+    /// Whether a finger landing at (x, y) is on something that drags: a
+    /// slider Krate draws, or an element the app described to the screen
+    /// reader as adjustable.
+    fn drags_at(placements: &[krate_adapter_common::ui::WidgetPlacement], x: f32, y: f32) -> bool {
+        let inside =
+            |px: f32, py: f32, w: f32, h: f32| x >= px && x < px + w && y >= py && y < py + h;
+        placements.iter().any(|p| {
+            p.kind == krate_adapter_common::ui::WidgetKind::Slider
+                && inside(p.x, p.y, p.width, p.height)
+        }) || ACCESS_DESCRIBED
+            .lock()
+            .expect("access lock")
+            .iter()
+            .any(|e| {
+                e.role == krate_adapter_common::ui::AccessRole::Adjustable
+                    && inside(e.x, e.y - 8.0, e.width, e.height + 16.0)
+            })
     }
 
     /// How long a finger rests before its press goes out, unless it starts
@@ -3680,14 +3703,26 @@ mod real {
             match touch.phase {
                 UITouchPhase::Began => {
                     if guest.gesture.is_none() {
+                        let drags = drags_at(&guest.placements, touch.x, touch.y);
                         guest.gesture = Some(TouchGesture {
                             finger: touch.finger,
                             start: (touch.x, touch.y),
                             last: (touch.x, touch.y),
                             scrolling: false,
                             began: std::time::Instant::now(),
-                            pressed: false,
+                            pressed: drags,
+                            drags,
                         });
+                        // Something that drags is pressed at once, so the
+                        // first movement already moves it.
+                        if drags {
+                            guest.pointer_samples.push(RawPointerSample {
+                                window: krate,
+                                x: touch.x,
+                                y: touch.y,
+                                pressed: true,
+                            });
+                        }
                         guest.hovered = krate_adapter_common::painter::topmost_interactive_at(
                             &guest.placements,
                             touch.x,
@@ -3702,6 +3737,18 @@ mod real {
                         .is_some_and(|g| g.finger == touch.finger);
                     if same {
                         let gesture = guest.gesture.as_mut().expect("gesture checked");
+                        if gesture.drags {
+                            // The finger moves what it is on: the press
+                            // follows it, held, until it lifts.
+                            gesture.last = (touch.x, touch.y);
+                            guest.pointer_samples.push(RawPointerSample {
+                                window: krate,
+                                x: touch.x,
+                                y: touch.y,
+                                pressed: true,
+                            });
+                            continue;
+                        }
                         if !gesture.scrolling {
                             let sx = touch.x - gesture.start.0;
                             let sy = touch.y - gesture.start.1;

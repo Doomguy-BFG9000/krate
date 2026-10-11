@@ -373,7 +373,10 @@ then `said.heading(r, \"Inbox\")`, `said.button(r, \"New message\")`, \
 `said.text(r, &line)`, `said.toggle(r, \"Sound\", on)`, `said.image(r, \"A \
 red bicycle\")`, and `said.send(win)` after `present`. A double-tap on an \
 element reaches you as an ordinary tap at its centre, so your controls \
-work unchanged. check-app fails a canvas app that draws text and \
+work unchanged. A slider or a scrubber you draw: describe it with \
+`said.adjustable(rect, \"Volume\", \"60%\")` -- on a phone a finger that \
+moves is a scroll, except on something described as adjustable, where it \
+drags it. check-app fails a canvas app that draws text and \
 describes none of it. Widget apps need nothing: Krate describes widgets.\n\n\
 A game drawn at one fixed size (a design size) is the exception: it is \
 scaled to fit and judged on the phone the way Krate turns it -- landscape \

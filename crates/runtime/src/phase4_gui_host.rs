@@ -450,7 +450,8 @@ impl crate::phase4_gui_bindings::krate::gfx::video::Host for Phase3GuiHost {
         if !self.videos.borrow().owns(video) {
             return Ok(Err(gfx3::types::GfxError::InvalidTarget));
         }
-        Ok(crate::video::state(video)
+        Ok(self
+            .video_state_now(video)
             .map(
                 |state| crate::phase4_gui_bindings::krate::gfx::video::VideoState {
                     position_millis: state.position_millis,
@@ -503,7 +504,26 @@ impl Phase3GuiHost {
         if !self.videos.borrow().owns(video) {
             return Err(gfx3::types::GfxError::InvalidTarget);
         }
+        // What was read before the change is no longer true.
+        self.video_states.borrow_mut().remove(&video);
         crate::video::control(video, control).map_err(gfx3::types::GfxError::Platform)
+    }
+
+    /// A video's state, read from the platform at most once a frame: an
+    /// app asks on every finger movement, and each ask waits for the
+    /// phone's main thread, so a scrubber fell behind the finger.
+    fn video_state_now(&self, video: u64) -> Result<crate::video::State, String> {
+        const FRAME: std::time::Duration = std::time::Duration::from_millis(16);
+        if let Some((at, state)) = self.video_states.borrow().get(&video) {
+            if at.elapsed() < FRAME {
+                return Ok(state.clone());
+            }
+        }
+        let state = crate::video::state(video)?;
+        self.video_states
+            .borrow_mut()
+            .insert(video, (std::time::Instant::now(), state.clone()));
+        Ok(state)
     }
 
     /// Draw a video's newest frame, or the one it showed last when no newer

@@ -167,6 +167,10 @@ pub struct Phase3GuiHost {
     /// same picture and they upload it once.
     pub(crate) videos: std::cell::RefCell<crate::video::Videos>,
     pub(crate) video_frames: std::cell::RefCell<std::collections::BTreeMap<u64, Arc<ImagePixels>>>,
+    /// Each video's state as last read, and when (read at most once a frame).
+    pub(crate) video_states: std::cell::RefCell<
+        std::collections::BTreeMap<u64, (std::time::Instant, crate::video::State)>,
+    >,
     /// Where the app's bundled assets are, for a video named by path.
     pub(crate) asset_root: Option<std::path::PathBuf>,
     /// What each window last told the screen reader (IC-926), for
@@ -501,6 +505,7 @@ impl Phase3GuiHost {
             kept_images: std::cell::RefCell::new(std::collections::BTreeMap::new()),
             videos: std::cell::RefCell::new(crate::video::Videos::default()),
             video_frames: std::cell::RefCell::new(std::collections::BTreeMap::new()),
+            video_states: std::cell::RefCell::new(std::collections::BTreeMap::new()),
             asset_root: None,
             appearance_cache: std::cell::Cell::new(None),
             described: std::cell::RefCell::new(std::collections::BTreeMap::new()),
