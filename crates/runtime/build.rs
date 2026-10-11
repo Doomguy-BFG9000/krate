@@ -29,6 +29,28 @@ fn main() {
     let wit = manifest.join("../../wit/krate/phase4");
     println!("cargo:rerun-if-changed={}", wit.display());
     println!("cargo:rerun-if-changed=build.rs");
+    // The interfaces Phase 3 has: any other gui interface is Phase 4's own
+    // and lives in the Phase 4 bindings (see `home`).
+    let phase3 = manifest.join("../../wit/krate/phase3");
+    println!("cargo:rerun-if-changed={}", phase3.display());
+    let mut old = Resolve::default();
+    let (old_pkg, _) = old.push_dir(&phase3).expect("the Phase 3 WIT parses");
+    let old_world = old
+        .select_world(&[old_pkg], Some("gui"))
+        .expect("the Phase 3 gui world");
+    let names: HashSet<String> = old.worlds[old_world]
+        .imports
+        .values()
+        .filter_map(|item| match item {
+            WorldItem::Interface { id, .. } => {
+                let i = &old.interfaces[*id];
+                let pkg = &old.packages[i.package?].name;
+                Some(format!("{}/{}", pkg.name, i.name.as_ref()?))
+            }
+            _ => None,
+        })
+        .collect();
+    PHASE3_INTERFACES.set(names).expect("set once");
     let mut resolve = Resolve::default();
     let (pkg, _) = resolve.push_dir(&wit).expect("the Phase 4 WIT parses");
     let world = resolve
@@ -85,8 +107,13 @@ struct Gen<'a> {
     fam: &'static str,
 }
 
+/// The gui interfaces the Phase 3 world imports, as `pkg/interface`.
+static PHASE3_INTERFACES: std::sync::OnceLock<HashSet<String>> = std::sync::OnceLock::new();
+
 /// Which bindgen module an interface's Rust lives in, and which host serves it
-/// -- the same choices `Runtime::phase4_gui_linker` makes.
+/// -- the same choices `Runtime::phase4_gui_linker` makes: the Phase 4
+/// bindings for an interface Phase 4 changed (listed) or added (anything
+/// Phase 3 does not import, so a new Phase 4 interface needs no entry here).
 fn home(iface: &str) -> (&'static str, &'static str) {
     const PHASE4: &[&str] = &[
         "ui/types",
@@ -111,7 +138,11 @@ fn home(iface: &str) -> (&'static str, &'static str) {
     );
     if phase2 {
         ("crate::phase2_bindings", "phase2")
-    } else if PHASE4.contains(&iface) {
+    } else if PHASE4.contains(&iface)
+        || PHASE3_INTERFACES
+            .get()
+            .is_some_and(|phase3| !phase3.contains(iface))
+    {
         ("crate::phase4_gui_bindings", "phase3_gui")
     } else {
         ("crate::phase3_gui_bindings", "phase3_gui")
