@@ -6020,6 +6020,14 @@ fn pack_bundle(
         .as_deref()
         .and_then(|_| sdk::ensure_materialized().ok())
         .filter(|path| path.is_dir());
+    // Pack leaves the component's debugging info out (K-1080); say how much.
+    let debug_left_out = if std::env::var_os("KRATE_KEEP_DEBUG").is_some() {
+        None
+    } else {
+        fs::read(file).ok().and_then(|bytes| {
+            krate_bundle::strip_debug_info(&bytes).map(|kept| bytes.len() - kept.len())
+        })
+    };
     let size = krate_bundle::pack_with_extensions(
         pack_manifest,
         file,
@@ -6035,6 +6043,13 @@ fn pack_bundle(
         let _ = fs::remove_file(&rewritten);
     }
     println!("wrote {} ({size} bytes)", output.display());
+    if let Some(removed) = debug_left_out {
+        println!(
+            "left out {:.1} MB of debugging info nobody running the app reads \
+             (KRATE_KEEP_DEBUG=1 keeps it)",
+            removed as f64 / 1_000_000.0
+        );
+    }
     // Bigger than the hub takes: it is a large local app (IC-942).
     let asset_files = assets.as_deref().map(count_files).unwrap_or(0);
     if size > krate_bundle::HUB_LIMITS.bundle_bytes

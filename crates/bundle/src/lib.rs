@@ -1406,6 +1406,83 @@ pub fn pack_with_lineage(
     )
 }
 
+/// `bytes` without its DWARF (custom sections named `.debug_*`), in a core
+/// module and in every module and component nested in a component; None
+/// when there is none to remove or the bytes are not wasm (K-1080). Every
+/// other section is copied as it is, so the `name` section a trace reads
+/// stays. Sections are walked by the binary format's own framing (an id
+/// byte, a LEB128 size, the contents), so nothing is decoded or re-encoded.
+pub fn strip_debug_info(bytes: &[u8]) -> Option<Vec<u8>> {
+    fn leb(bytes: &[u8], at: &mut usize) -> Option<usize> {
+        let mut value: u64 = 0;
+        let mut shift = 0;
+        loop {
+            let byte = *bytes.get(*at)?;
+            *at += 1;
+            value |= u64::from(byte & 0x7f) << shift;
+            if byte & 0x80 == 0 {
+                return usize::try_from(value).ok();
+            }
+            shift += 7;
+            if shift > 35 {
+                return None;
+            }
+        }
+    }
+    fn put_leb(out: &mut Vec<u8>, mut value: usize) {
+        loop {
+            let byte = (value & 0x7f) as u8;
+            value >>= 7;
+            if value == 0 {
+                out.push(byte);
+                return;
+            }
+            out.push(byte | 0x80);
+        }
+    }
+    fn walk(bytes: &[u8], removed: &mut usize) -> Option<Vec<u8>> {
+        if bytes.len() < 8 || bytes[..4] != *b"\0asm" {
+            return None;
+        }
+        // A component's header carries layer 1 (bytes 6-7); a core module's, 0.
+        let component = bytes[6..8] == [1, 0];
+        let mut out = Vec::with_capacity(bytes.len());
+        out.extend_from_slice(&bytes[..8]);
+        let mut at = 8;
+        while at < bytes.len() {
+            let id = bytes[at];
+            at += 1;
+            let size = leb(bytes, &mut at)?;
+            let content = bytes.get(at..at.checked_add(size)?)?;
+            at += size;
+            if id == 0 {
+                let mut name_at = 0;
+                let name_len = leb(content, &mut name_at)?;
+                let name = content.get(name_at..name_at.checked_add(name_len)?)?;
+                if name.starts_with(b".debug_") {
+                    *removed += size;
+                    continue;
+                }
+            }
+            // A core module (1) or a component (4) nested in a component.
+            if component && (id == 1 || id == 4) {
+                let inner = walk(content, removed)?;
+                out.push(id);
+                put_leb(&mut out, inner.len());
+                out.extend_from_slice(&inner);
+                continue;
+            }
+            out.push(id);
+            put_leb(&mut out, size);
+            out.extend_from_slice(content);
+        }
+        Some(out)
+    }
+    let mut removed = 0;
+    let out = walk(bytes, &mut removed)?;
+    (removed > 0).then_some(out)
+}
+
 /// Pack a bundle carrying developer extensions: each source directory
 /// becomes `ext/<owner>/<name>/...`, declared in `extensions.json` with
 /// its size and digest (IC-714, test 1476). See [`EXTENSION_PREFIX`].
@@ -1443,6 +1520,15 @@ pub fn pack_with_extensions(
     }
 
     let component = fs::read(component_path).map_err(|err| io_err(component_path, err))?;
+    // Debugging info is not the app (K-1080): a Veloren build shipped 194 MB
+    // of DWARF in a 234 MB code.wasm, 27 MB of a 378 MB bundle once
+    // compressed, which nobody running the game ever reads.
+    // KRATE_KEEP_DEBUG=1 keeps it for whoever is tracing a crash.
+    let component = if std::env::var_os("KRATE_KEEP_DEBUG").is_some() {
+        component
+    } else {
+        strip_debug_info(&component).unwrap_or(component)
+    };
 
     // A bundle must contain a component, not merely some bytes (IC-210).
     //
@@ -7347,6 +7433,80 @@ required = true
     /// from a file on this machine, and every door a stranger can reach --
     /// the hub's publish door, its in-memory judge, a reader -- still
     /// refuses it, with the refusal naming the hub's limit.
+    /// Debugging info leaves at pack time; everything else stays (K-1080).
+    #[test]
+    fn debug_info_is_stripped_and_nothing_else() {
+        fn custom(name: &str, payload: &[u8]) -> Vec<u8> {
+            let mut content = vec![name.len() as u8];
+            content.extend_from_slice(name.as_bytes());
+            content.extend_from_slice(payload);
+            let mut out = vec![0u8];
+            let mut size = content.len();
+            loop {
+                let byte = (size & 0x7f) as u8;
+                size >>= 7;
+                if size == 0 {
+                    out.push(byte);
+                    break;
+                }
+                out.push(byte | 0x80);
+            }
+            out.extend_from_slice(&content);
+            out
+        }
+        // A core module: code, a name section, and 300 bytes of DWARF.
+        let mut module =
+            wat::parse_str(r#"(module $app (func $run (export "run") (result i32) i32.const 7))"#)
+                .expect("module");
+        assert!(
+            super::strip_debug_info(&module).is_none(),
+            "nothing to remove is None"
+        );
+        module.extend(custom(".debug_info", &[0xAB; 200]));
+        module.extend(custom(".debug_str", &[0xCD; 100]));
+        let stripped = super::strip_debug_info(&module).expect("DWARF to remove");
+        assert!(stripped.len() + 300 <= module.len(), "the DWARF is gone");
+        wasmparser::Validator::new()
+            .validate_all(&stripped)
+            .expect("still a valid module");
+        let mut names: Vec<String> = Vec::new();
+        for payload in wasmparser::Parser::new(0).parse_all(&stripped) {
+            if let Ok(wasmparser::Payload::CustomSection(c)) = payload {
+                names.push(c.name().to_string());
+            }
+        }
+        assert!(names.iter().all(|n| !n.starts_with(".debug_")), "{names:?}");
+        assert!(
+            names.iter().any(|n| n == "name"),
+            "the name section a trace reads stays: {names:?}"
+        );
+
+        // The same module nested in a component: its DWARF goes too, and the
+        // component still validates.
+        let inner = module.clone();
+        let mut component = b"\0asm\x0d\x00\x01\x00".to_vec();
+        component.push(1);
+        let mut size = inner.len();
+        loop {
+            let byte = (size & 0x7f) as u8;
+            size >>= 7;
+            if size == 0 {
+                component.push(byte);
+                break;
+            }
+            component.push(byte | 0x80);
+        }
+        component.extend_from_slice(&inner);
+        let stripped = super::strip_debug_info(&component).expect("nested DWARF to remove");
+        assert!(stripped.len() + 300 <= component.len());
+        let mut features = wasmparser::WasmFeatures::default();
+        features.insert(wasmparser::WasmFeatures::COMPONENT_MODEL);
+        wasmparser::Validator::new_with_features(features)
+            .validate_all(&stripped)
+            .expect("still a valid component");
+        assert!(super::strip_debug_info(b"not wasm at all").is_none());
+    }
+
     #[test]
     fn a_bundle_too_big_for_the_hub_opens_locally_and_nowhere_else() {
         let n = MAX_ENTRY_COUNT + 1;
