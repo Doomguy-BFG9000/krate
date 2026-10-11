@@ -1116,7 +1116,7 @@ checksum = "ad5208a115eaba24916f7456929832e310a81518c641f93fee4f89aa93aa3675"
 dependencies = [
  "cfg-if",
  "libc",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1196,7 +1196,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2311,6 +2311,7 @@ dependencies = [
  "krate-port",
  "krate-presenter-gpu",
  "krate-runtime",
+ "krate-wasi-fold",
  "libc",
  "png 0.18.1",
  "rfd",
@@ -2324,6 +2325,14 @@ dependencies = [
  "windows-sys 0.59.0",
  "winresource",
  "zip 2.4.2",
+]
+
+[[package]]
+name = "krate-gpu-names"
+version = "0.5.5"
+dependencies = [
+ "wgpu-types 27.0.1",
+ "wgpu-types 29.0.4",
 ]
 
 [[package]]
@@ -2443,15 +2452,18 @@ dependencies = [
  "criterion",
  "dispatch2",
  "gilrs",
+ "heck",
  "krate-adapter-android",
  "krate-adapter-common",
  "krate-adapter-ios",
  "krate-adapter-linux",
  "krate-adapter-macos",
  "krate-adapter-windows",
+ "krate-gpu-names",
  "krate-layout",
  "krate-manifest",
  "krate-policy",
+ "krate-presenter-gpu",
  "krate-scene3d-gpu",
  "libc",
  "miniz_oxide",
@@ -2461,7 +2473,9 @@ dependencies = [
  "objc2-core-media",
  "objc2-core-video",
  "objc2-foundation 0.3.2",
+ "parking_lot",
  "png 0.18.1",
+ "pollster",
  "rfd",
  "ring",
  "rusqlite",
@@ -2473,6 +2487,7 @@ dependencies = [
  "tracing",
  "tungstenite",
  "ureq",
+ "wasmparser 0.244.0",
  "wasmtime",
  "wat",
  "whisper-rs",
@@ -2516,6 +2531,16 @@ dependencies = [
  "getrandom 0.2.17",
  "krate-bundle",
  "serde_json",
+]
+
+[[package]]
+name = "krate-wasi-fold"
+version = "0.5.5"
+dependencies = [
+ "wasm-encoder 0.244.0",
+ "wasmparser 0.244.0",
+ "wasmprinter",
+ "wat",
 ]
 
 [[package]]
@@ -2854,7 +2879,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4051,7 +4076,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4415,7 +4440,7 @@ dependencies = [
  "getrandom 0.4.2",
  "once_cell",
  "rustix 1.1.4",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -5467,7 +5492,7 @@ dependencies = [
  "web-sys",
  "wgpu-core",
  "wgpu-hal",
- "wgpu-types",
+ "wgpu-types 29.0.4",
 ]
 
 [[package]]
@@ -5500,7 +5525,7 @@ dependencies = [
  "wgpu-core-deps-windows-linux-android",
  "wgpu-hal",
  "wgpu-naga-bridge",
- "wgpu-types",
+ "wgpu-types 29.0.4",
 ]
 
 [[package]]
@@ -5578,7 +5603,7 @@ dependencies = [
  "wayland-sys",
  "web-sys",
  "wgpu-naga-bridge",
- "wgpu-types",
+ "wgpu-types 29.0.4",
  "windows",
  "windows-core",
  "windows-result",
@@ -5591,7 +5616,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "95226013f547544b223281cd16a4fb549aa9dcb562adbda0faae4c73ffbbc161"
 dependencies = [
  "naga",
- "wgpu-types",
+ "wgpu-types 29.0.4",
+]
+
+[[package]]
+name = "wgpu-types"
+version = "27.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "afdcf84c395990db737f2dd91628706cb31e86d72e53482320d368e52b5da5eb"
+dependencies = [
+ "bitflags 2.11.1",
+ "bytemuck",
+ "log",
 ]
 
 [[package]]
@@ -5664,7 +5700,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

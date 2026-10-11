@@ -1,0 +1,34 @@
+[package]
+name = "krate-threads-probe"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "A Krate app that runs a rayon pool and a std::thread, timed against one thread (IC-929)."
+
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+rayon = "1"
+parking_lot = "0.12"
+krate = { path = "../../crates/bindings-rust", features = ["std"] }
+krate-c-runtime = { path = "../../crates/c-runtime" }
+wit-bindgen-rt = { version = "0.44.0", features = ["bitflags"] }
+
+# Built threaded by Krate's own build path (krate check-app, Studio):
+# wasm32-wasip1-threads over a shared memory (IC-938).
+[package.metadata.krate]
+threads = true
+
+[profile.release]
+panic = "abort"
+opt-level = 3
+debug = false
+
+[patch.crates-io]
+# Made from the repo root by `python3 crates/parking-lot-krate/make-parking-lot.py patches`.
+# crates/parking-lot-krate/make-parking-lot.py's copy: threads park through
+# std::thread::park on wasm (IC-939).
+parking_lot_core = { path = "../../patches/parking_lot_core-0.9.12" }

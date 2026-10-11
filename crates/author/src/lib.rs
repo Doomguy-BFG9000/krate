@@ -1139,6 +1139,7 @@ world = "gui"
 "krate:random" = {{ path = "{sdk_prefix}/wit/krate/phase4/deps/random" }}
 "krate:ui" = {{ path = "{sdk_prefix}/wit/krate/phase4/deps/ui" }}
 "krate:gfx" = {{ path = "{sdk_prefix}/wit/krate/phase4/deps/gfx" }}
+"krate:gpu" = {{ path = "{sdk_prefix}/wit/krate/phase4/deps/gpu" }}
 "krate:audio" = {{ path = "{sdk_prefix}/wit/krate/phase4/deps/audio" }}
 "krate:camera" = {{ path = "{sdk_prefix}/wit/krate/phase4/deps/camera" }}
 "krate:speech" = {{ path = "{sdk_prefix}/wit/krate/phase4/deps/speech" }}

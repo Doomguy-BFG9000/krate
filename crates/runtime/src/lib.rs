@@ -33,6 +33,8 @@ pub mod uapi;
 pub mod uapi_dispatch;
 
 mod async_fetch;
+#[cfg(not(target_arch = "wasm32"))]
+mod async_sockets;
 mod async_ws;
 mod audio_capture;
 mod audio_playback;
@@ -43,6 +45,14 @@ mod camera_macos;
 #[cfg(any(target_os = "windows", target_os = "linux"))]
 mod camera_nokhwa;
 mod canvas_raster;
+/// Threaded apps (IC-929).
+#[cfg(all(
+    feature = "phase2-bindings",
+    not(any(target_os = "ios", target_arch = "wasm32"))
+))]
+mod core_app;
+#[cfg(target_os = "macos")]
+mod gamepad_macos;
 mod sign_in;
 mod unlock;
 mod video;
@@ -433,6 +443,28 @@ fn component_error(err: &(dyn std::error::Error + 'static)) -> String {
     message.lines().next().unwrap_or("unreadable").to_string()
 }
 
+/// Where compiled apps are kept: `KRATE_CACHE_DIR`, else the platform's
+/// cache folder, under `compiled`. `KRATE_NO_COMPILE_CACHE=1` turns it off
+/// (measuring a cold start).
+#[cfg(not(any(target_os = "ios", target_arch = "wasm32")))]
+fn compile_cache_dir() -> Option<PathBuf> {
+    if std::env::var_os("KRATE_NO_COMPILE_CACHE").is_some() {
+        return None;
+    }
+    let root = if let Some(root) = std::env::var_os("KRATE_CACHE_DIR") {
+        PathBuf::from(root)
+    } else if cfg!(target_os = "windows") {
+        PathBuf::from(std::env::var_os("LOCALAPPDATA")?)
+            .join("Krate")
+            .join("cache")
+    } else {
+        PathBuf::from(std::env::var_os("HOME")?)
+            .join(".cache")
+            .join("krate")
+    };
+    Some(root.join("compiled"))
+}
+
 pub struct Runtime {
     engine: Engine,
 }
@@ -538,6 +570,40 @@ impl Runtime {
         // check-app stage at the speed they were.
         if config.phase3_ui_mode.can_open_a_window() {
             wt_config.epoch_interruption(true);
+        }
+
+        // KRATE_PERFMAP=1 writes /tmp/perf-<pid>.map, naming each compiled
+        // wasm function's address range: a native sampler's addresses in an
+        // app's code then read as the app's own function names.
+        #[cfg(not(any(target_os = "ios", target_arch = "wasm32")))]
+        if std::env::var_os("KRATE_PERFMAP").is_some() {
+            wt_config.profiler(wasmtime::ProfilingStrategy::PerfMap);
+        }
+
+        // Threaded apps (IC-929): a core module may import a shared memory
+        // and use atomics. Nothing changes for a component.
+        #[cfg(not(any(target_os = "ios", target_arch = "wasm32")))]
+        {
+            wt_config.wasm_threads(true);
+            wt_config.shared_memory(true);
+        }
+
+        // Compiled code is kept on disk, keyed by the component's bytes and
+        // these exact engine settings, so an app compiles once rather than on
+        // every run. Measured on an M4 with a 38 MB Bevy app (the Bistro
+        // scene): 4.9 s from launch to the app's first line without it,
+        // 0.35 s with it. wasmtime checks the key and the artifact; a cache
+        // it cannot open is a cache miss, never a refusal.
+        #[cfg(not(any(target_os = "ios", target_arch = "wasm32")))]
+        if let Some(dir) = compile_cache_dir() {
+            let mut cache = wasmtime::CacheConfig::new();
+            cache.with_directory(dir);
+            match wasmtime::Cache::new(cache) {
+                Ok(cache) => {
+                    wt_config.cache(Some(cache));
+                }
+                Err(error) => tracing::debug!(%error, "no compile cache this run"),
+            }
         }
 
         Ok(wt_config)
@@ -823,6 +889,26 @@ impl Runtime {
         // One number cannot be optimised. This prints the two the runtime
         // owns, so the next person starts from a measurement.
         let timed = std::env::var_os("KRATE_STAGE_TIMES").is_some();
+        // A threaded app is a core module over a shared memory, linked by
+        // Krate itself (IC-929).
+        #[cfg(all(
+            feature = "phase2-bindings",
+            not(any(target_os = "ios", target_arch = "wasm32"))
+        ))]
+        if core_app::is_threaded_module(bytes) {
+            let _ = world;
+            return self.run_threaded(bytes, config, output);
+        }
+        // A phone or a browser tab cannot run a threaded app yet (IC-938):
+        // say so in words, rather than fail it as a broken component.
+        #[cfg(any(target_os = "ios", target_arch = "wasm32"))]
+        if imports_a_shared_memory(bytes) {
+            return Err(RuntimeError::Instantiate(
+                "this app runs on several threads, which Krate runs on a computer \
+                 (macOS, Windows, Linux) but not yet on a phone or in a browser"
+                    .to_string(),
+            ));
+        }
         let engine_started = std::time::Instant::now();
         let compile_started = std::time::Instant::now();
         let component = self.load_component(bytes)?;
@@ -1330,6 +1416,7 @@ impl Runtime {
         link_phase2!(net::types);
         link_phase2!(net::http_client);
         link_phase2!(net::ws);
+        link_phase2!(net::sockets);
         link_phase2!(time::clock);
         link_phase2!(time::sleep);
         link_phase2!(locale::info);
@@ -1417,6 +1504,7 @@ impl Runtime {
         link_phase2!(net::types);
         link_phase2!(net::http_client);
         link_phase2!(net::ws);
+        link_phase2!(net::sockets);
         link_phase2!(time::clock);
         link_phase2!(time::sleep);
         link_phase2!(locale::info);
@@ -1473,6 +1561,9 @@ impl Runtime {
         // Phase 4 only: pictures a canvas keeps and draws by handle.
         link_gui!(phase4_gui_bindings::krate::gfx::canvas_images);
         link_gui!(phase4_gui_bindings::krate::gfx::video);
+        // Phase 4 only: the GPU as WebGPU shapes it (IC-540, IC-916).
+        link_gui!(phase4_gui_bindings::krate::gpu::types);
+        link_gui!(phase4_gui_bindings::krate::gpu::gpu);
 
         link_gui!(ui::window);
         link_gui!(ui::image);
@@ -1504,6 +1595,18 @@ impl Runtime {
         store: &mut Store<HostState>,
         outcome: std::result::Result<i32, wasmtime::Error>,
     ) -> Result<RunOutcome> {
+        finish_gui_run(store.data_mut(), outcome)
+    }
+}
+
+/// The end of a GUI run, for a component's store or a threaded app's shared
+/// host alike.
+#[cfg(feature = "phase2-bindings")]
+fn finish_gui_run(
+    state: &mut HostState,
+    outcome: std::result::Result<i32, wasmtime::Error>,
+) -> Result<RunOutcome> {
+    {
         // Write the usability report before anything else can return, so a run
         // that trapped or ran out of fuel still reports what it saw. An app
         // that dies halfway is exactly the kind this stage exists to describe,
@@ -1514,7 +1617,7 @@ impl Runtime {
                 EPOCH_PUMPS.load(std::sync::atomic::Ordering::Relaxed)
             );
         }
-        if let Some(gui) = store.data().phase3_gui.as_ref() {
+        if let Some(gui) = state.phase3_gui.as_ref() {
             if let (Some(report), Some(path)) =
                 (gui.usability_report(), gui.usability_report_path())
             {
@@ -1525,7 +1628,7 @@ impl Runtime {
         }
         // After the report, which reads the windows; before the process
         // winds down, which must not be what drops them (K-881).
-        if let Some(gui) = store.data_mut().phase3_gui.as_mut() {
+        if let Some(gui) = state.phase3_gui.as_mut() {
             gui.close_open_windows();
         }
 
@@ -1590,6 +1693,17 @@ struct HostState {
 }
 
 impl HostState {
+    /// The main thread's turn at a threaded app's host: what workers left for
+    /// the window (IC-929).
+    // Threaded apps only, which iOS and the web do not run.
+    #[cfg_attr(any(target_os = "ios", target_arch = "wasm32"), allow(dead_code))]
+    pub(crate) fn main_turn(&self) {
+        #[cfg(feature = "phase2-bindings")]
+        if let Some(gui) = self.phase3_gui.as_ref() {
+            gui.main_turn();
+        }
+    }
+
     fn new(config: &Config, output: OutputMode) -> Result<Self> {
         let memory_bytes = usize::try_from(config.memory_bytes)
             .map_err(|_| RuntimeError::EngineInit("memory limit is too large".to_string()))?;
@@ -3527,6 +3641,23 @@ fn file_stat_from_metadata(metadata: std::fs::Metadata) -> FileStat {
     }
 }
 
+/// A threaded app's mark (IC-929): a core module importing a shared memory.
+#[cfg(any(target_os = "ios", target_arch = "wasm32"))]
+fn imports_a_shared_memory(bytes: &[u8]) -> bool {
+    if wasmparser::Parser::is_component(bytes) || !wasmparser::Parser::is_core_wasm(bytes) {
+        return false;
+    }
+    wasmparser::Parser::new(0)
+        .parse_all(bytes)
+        .any(|p| match p {
+            Ok(wasmparser::Payload::ImportSection(s)) => s
+                .into_imports()
+                .flatten()
+                .any(|i| matches!(i.ty, wasmparser::TypeRef::Memory(m) if m.shared)),
+            _ => false,
+        })
+}
+
 #[cfg(feature = "phase2-bindings")]
 fn map_io_error(err: std::io::Error) -> AdapterError {
     #[cfg(unix)]
@@ -3537,7 +3668,7 @@ fn map_io_error(err: std::io::Error) -> AdapterError {
     match err.kind() {
         std::io::ErrorKind::NotFound => AdapterError::NotFound,
         std::io::ErrorKind::PermissionDenied => AdapterError::PermissionDenied,
-        std::io::ErrorKind::AlreadyExists => AdapterError::Io("already exists".to_string()),
+        std::io::ErrorKind::AlreadyExists => AdapterError::AlreadyExists,
         std::io::ErrorKind::InvalidInput => AdapterError::InvalidPath,
         _ => AdapterError::Io(err.to_string()),
     }

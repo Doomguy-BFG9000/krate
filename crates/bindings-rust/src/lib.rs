@@ -113,7 +113,7 @@ pub mod bindings;
 #[cfg(feature = "gui")]
 mod phase3;
 #[cfg(feature = "gui")]
-pub use phase3::{audio, camera, gfx, speech, ui};
+pub use phase3::{audio, camera, gfx, gpu, speech, ui};
 
 pub use bindings::Guest;
 
@@ -1214,6 +1214,39 @@ pub mod net {
         pub fn close(handle: u64) {
             crate::bindings::krate::net::ws::close(handle)
         }
+    }
+
+    /// TCP and UDP for a protocol of the app's own (IC-935): a game's
+    /// server, QUIC, a chat protocol.
+    ///
+    /// Judged exactly as a fetch is: a connection to `host:port`, and every
+    /// datagram sent to one, needs a `net.connect` grant for it, checked
+    /// before any socket exists. An address `lookup` returned stands for the
+    /// name looked up, so a grant for the name covers it. A UDP socket hears
+    /// only addresses it has sent to.
+    ///
+    /// Nothing here blocks: a connection reports `pending` until it is up,
+    /// a read `pending` until bytes arrive, and an app keeps drawing between
+    /// asks. Most programs want std-like types on top of this; the
+    /// `net-krate` crate has them (and tokio and quinn adapters).
+    ///
+    /// ```ignore
+    /// let h = net::sockets::tcp_connect("play.example.com", 14004)?;
+    /// net::sockets::tcp_write(h, b"hello")?;           // sent once connected
+    /// loop {
+    ///     match net::sockets::tcp_read(h, 4096) {
+    ///         ReadResult::Data(bytes) => handle(bytes),
+    ///         ReadResult::Pending => {}                 // draw a frame
+    ///         ReadResult::Closed | ReadResult::Failed(_) => break,
+    ///     }
+    /// }
+    /// ```
+    pub mod sockets {
+        pub use crate::bindings::krate::net::sockets::{
+            close, lookup, poll_lookup, tcp_connect, tcp_read, tcp_status, tcp_write, udp_bind,
+            udp_local_port, udp_receive, udp_send, ConnectStatus, Datagram, LookupStatus,
+            ReadResult,
+        };
     }
 
     /// Send a lower-level HTTP or HTTPS request record.

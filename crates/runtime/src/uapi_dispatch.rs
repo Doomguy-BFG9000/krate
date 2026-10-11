@@ -188,6 +188,12 @@ pub enum AdapterError {
     InvalidPath,
     #[error("resource was not found")]
     NotFound,
+    /// What was to be made is already there: a folder that exists, a file
+    /// opened to be created new. Its own kind, so `create_dir_all` and the
+    /// like hear EEXIST and carry on, rather than an I/O error that stops
+    /// them (Veloren could not save its settings).
+    #[error("already exists")]
+    AlreadyExists,
     #[error("permission was denied by the host")]
     PermissionDenied,
     #[error("host I/O error: {0}")]
@@ -490,11 +496,16 @@ impl<'a> UapiDispatcher<'a> {
         self.adapter.fs().seek_end(handle).map_err(Into::into)
     }
 
+    /// A file's size and kind, through a handle the app holds. Any open mode
+    /// will do -- POSIX `fstat` works on a file opened only for writing, and
+    /// std's `fs::copy` asks exactly that of the file it is creating, so a
+    /// read-only rule made every copy fail (Veloren's world map) -- but the
+    /// grant for that mode is still checked.
     pub fn fs_stat_handle(
         &self,
         handle: &FileHandle,
     ) -> std::result::Result<FileStat, FsDispatchError> {
-        self.check_file_handle(handle, FileAccess::Read)?;
+        self.check_file_handle(handle, FileAccess::AnyOpenMode)?;
         self.adapter.fs().stat_handle(handle).map_err(Into::into)
     }
 
@@ -656,6 +667,60 @@ impl<'a> UapiDispatcher<'a> {
         Ok(())
     }
 
+    /// The permission half of a socket (IC-935): a TCP connection to, or a
+    /// datagram sent to, `host:port`. The same `net.connect` judgment a fetch
+    /// gets. `names` are the names an address stands for, from the app's own
+    /// lookups: a grant for any of them covers the address, and only those.
+    pub fn check_socket(
+        &self,
+        host: &str,
+        port: u16,
+        names: &[String],
+    ) -> std::result::Result<(), NetDispatchError> {
+        if host.is_empty() || port == 0 {
+            return Err(NetDispatchError::InvalidUrl);
+        }
+        let judge = |host: &str| {
+            self.guard.check(&UapiCall::Net(NetCall::Connect {
+                host: host.to_string(),
+                port,
+            }))
+        };
+        let first = judge(host);
+        if first.is_ok() || names.iter().any(|name| judge(name).is_ok()) {
+            return Ok(());
+        }
+        first.map(|_| ()).map_err(map_net_policy)
+    }
+
+    /// The permission half of a lookup: some `net.connect` grant names this
+    /// host, on any port. Asking where a host is says no more than the app's
+    /// grants already allow it to reach.
+    pub fn check_lookup(&self, host: &str) -> std::result::Result<(), NetDispatchError> {
+        if host.is_empty() {
+            return Err(NetDispatchError::InvalidUrl);
+        }
+        let ports: Vec<u16> = self
+            .guard
+            .policy()
+            .grants()
+            .iter()
+            .filter_map(|grant| {
+                let text = grant.to_string();
+                let resource = text.strip_prefix("net.connect:")?;
+                let (_, port) = resource.rsplit_once(':')?;
+                Some(port.parse::<u16>().unwrap_or(443))
+            })
+            .collect();
+        if ports
+            .iter()
+            .any(|port| self.check_socket(host, *port, &[]).is_ok())
+        {
+            return Ok(());
+        }
+        Err(NetDispatchError::PermissionDenied)
+    }
+
     pub fn now_millis(&self) -> DispatchResult<u64> {
         self.check(&UapiCall::Time(TimeCall::Clock))?;
         self.adapter.time().now_millis().map_err(Into::into)
@@ -664,6 +729,12 @@ impl<'a> UapiDispatcher<'a> {
     pub fn monotonic_nanos(&self) -> DispatchResult<u64> {
         self.check(&UapiCall::Time(TimeCall::Monotonic))?;
         self.adapter.time().monotonic_nanos().map_err(Into::into)
+    }
+
+    /// Judge a sleep without sleeping: a threaded app sleeps after it has
+    /// let go of the host (IC-940).
+    pub fn check_sleep(&self) -> DispatchResult<()> {
+        self.check(&UapiCall::Time(TimeCall::Sleep))
     }
 
     pub fn sleep_millis(&self, millis: u32) -> DispatchResult<()> {
@@ -1508,6 +1579,60 @@ mod tests {
 
         assert!(matches!(err, FsDispatchError::PermissionDenied));
         assert_eq!(adapter.calls.borrow().fs_stat_handle, 0);
+    }
+
+    /// IC-935: a socket is judged as a fetch is, and an address stands only
+    /// for the names the app's own lookups resolved to it.
+    #[test]
+    fn a_socket_is_judged_by_its_host_and_port_and_an_address_by_its_names() {
+        let adapter = RecordingAdapter::default();
+        let policy =
+            SessionPolicy::from_cli_grants(&["net.connect:play.example.com:14004".to_string()])
+                .expect("policy");
+        let guard = UapiGuard::new(policy);
+        let dispatcher = UapiDispatcher::new(&guard, &adapter);
+        let named = ["play.example.com".to_string()];
+        assert!(dispatcher
+            .check_socket("play.example.com", 14004, &[])
+            .is_ok());
+        assert!(matches!(
+            dispatcher.check_socket("10.0.0.5", 14004, &[]),
+            Err(NetDispatchError::PermissionDenied)
+        ));
+        assert!(dispatcher.check_socket("10.0.0.5", 14004, &named).is_ok());
+        assert!(matches!(
+            dispatcher.check_socket("10.0.0.5", 14005, &named),
+            Err(NetDispatchError::PermissionDenied)
+        ));
+        assert!(matches!(
+            dispatcher.check_socket("other.example.com", 14004, &[]),
+            Err(NetDispatchError::PermissionDenied)
+        ));
+        assert!(dispatcher.check_lookup("play.example.com").is_ok());
+        assert!(matches!(
+            dispatcher.check_lookup("other.example.com"),
+            Err(NetDispatchError::PermissionDenied)
+        ));
+    }
+
+    #[test]
+    fn a_file_opened_to_write_can_be_stat_by_its_handle() {
+        let adapter = RecordingAdapter::default();
+        let policy =
+            SessionPolicy::from_cli_grants(&["fs.write:./out/**".to_string()]).expect("policy");
+        let guard = UapiGuard::new(policy);
+        let dispatcher = UapiDispatcher::new(&guard, &adapter);
+        let handle = FileHandle::opened_file(47, "./out/map.bin", OpenMode::Write);
+        dispatcher
+            .fs_stat_handle(&handle)
+            .expect("fstat of a file being written, under its write grant");
+        assert_eq!(adapter.calls.borrow().fs_stat_handle, 1);
+        // Without the grant for that mode it is still refused.
+        let other = FileHandle::opened_file(48, "./elsewhere/map.bin", OpenMode::Write);
+        assert!(matches!(
+            dispatcher.fs_stat_handle(&other),
+            Err(FsDispatchError::PermissionDenied)
+        ));
     }
 
     #[test]

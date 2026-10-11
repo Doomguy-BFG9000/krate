@@ -71,7 +71,18 @@ wasmtime.workspace = true
 wasmtime = { version = "46.0.3", default-features = false, features = ["component-model", "runtime", "pulley", "gc", "gc-drc", "std", "custom-virtual-memory"] }
 
 [dependencies]
+# Telling a threaded app (a core module over a shared memory) from a
+# component, before either is compiled (IC-929).
+wasmparser.workspace = true
+# A fair lock for the one host state a threaded app's threads share.
+parking_lot = "0.12"
 krate-scene3d-gpu = { path = "../scene3d-gpu" }
+# krate:gpu (IC-540): the app's GPU objects are wgpu objects, on the same
+# wgpu (through vello) and the same instance as the presenter and the 3D
+# scene, so the versions can never drift apart.
+krate-presenter-gpu = { path = "../presenter-gpu" }
+krate-gpu-names = { path = "../gpu-names" }
+pollster = "0.4"
 sha2 = "0.10.9"
 # Real AEAD and a real KDF for the secret store, replacing a hand-rolled
 # SHA-256 keystream and homemade MAC (IC-249). ring is audited, maintained,
@@ -150,6 +161,12 @@ windows-sys = { version = "0.61", features = [
 # not, and nokhwa wraps both their native APIs behind one interface, so one
 # file closes both gaps instead of two bodies of unsafe code.
 nokhwa = { version = "0.10", default-features = false, features = ["input-msmf"] }
+
+[build-dependencies]
+# build.rs generates the canonical-ABI glue threaded apps are linked with
+# (IC-929) from the Phase 4 WIT, so it cannot drift from it.
+wit-parser.workspace = true
+heck = "0.5.0"
 
 [dev-dependencies]
 tempfile = "3.27.0"

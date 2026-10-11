@@ -520,6 +520,8 @@ pub struct PixelPresenter {
     /// Whether `device` is the process-wide shared one, so a texture from
     /// elsewhere on it can be presented without a CPU round trip (K-405).
     on_shared_device: bool,
+    /// Texture presents so far, for KRATE_PRESENT_PROBE.
+    probes: u32,
 }
 
 impl PixelPresenter {
@@ -543,6 +545,76 @@ impl PixelPresenter {
         }
         .map_err(|e| format!("surface: {e}"))?;
         Self::with_surface(instance, surface)
+    }
+
+    /// Attach to a native AppKit view, presenting on an app's own device
+    /// (IC-940): the surface is made from the instance the app's adapter came
+    /// from and configured with the app's device, so the app's frames are
+    /// blitted to the window without leaving the GPU.
+    ///
+    /// Refused when the app's adapter cannot present to this view; the
+    /// caller then reads frames back as before. The device's error handler
+    /// stays the app's: a presenter does not take it over.
+    ///
+    /// # Safety
+    /// As [`Self::new_from_ns_view`].
+    #[cfg(target_os = "macos")]
+    pub unsafe fn new_for_app_frame(
+        ns_view: *mut std::ffi::c_void,
+        frame: &crate::shared::app_frames::AppFrame,
+    ) -> Result<Self, String> {
+        use wgpu::rwh;
+        let view = std::ptr::NonNull::new(ns_view).ok_or("null NSView")?;
+        let surface = unsafe {
+            frame
+                .instance
+                .create_surface_unsafe(wgpu::SurfaceTargetUnsafe::RawHandle {
+                    raw_display_handle: Some(rwh::RawDisplayHandle::AppKit(
+                        rwh::AppKitDisplayHandle::new(),
+                    )),
+                    raw_window_handle: rwh::RawWindowHandle::AppKit(rwh::AppKitWindowHandle::new(
+                        view,
+                    )),
+                })
+        }
+        .map_err(|e| format!("surface: {e}"))?;
+        if !frame.adapter.is_surface_supported(&surface) {
+            return Err("the app's GPU cannot present to this window".to_string());
+        }
+        let caps = surface.get_capabilities(&frame.adapter);
+        let surface_format = caps
+            .formats
+            .iter()
+            .copied()
+            .find(|f| {
+                matches!(
+                    f,
+                    wgpu::TextureFormat::Rgba8Unorm | wgpu::TextureFormat::Bgra8Unorm
+                )
+            })
+            .or_else(|| caps.formats.first().copied())
+            .ok_or_else(|| "surface offers no formats".to_string())?;
+        let blitter = wgpu::util::TextureBlitter::new(&frame.device, surface_format);
+        Ok(Self {
+            surface,
+            device: frame.device.clone(),
+            queue: frame.queue.clone(),
+            blitter,
+            surface_format,
+            configured: (0, 0),
+            upload: None,
+            stats: FrameStats::new(),
+            device_failed: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            on_shared_device: false,
+            probes: 0,
+        })
+    }
+
+    /// Whether this presenter is on `device`, so it may present that
+    /// device's textures. A texture from another device is a validation
+    /// failure, which under panic=abort ends the process.
+    pub fn is_on_device(&self, device: &wgpu::Device) -> bool {
+        &self.device == device
     }
 
     // Platform-neutral by design -- its only constructor today is the macOS
@@ -643,6 +715,7 @@ impl PixelPresenter {
             stats: FrameStats::new(),
             device_failed,
             on_shared_device,
+            probes: 0,
         })
     }
 
@@ -837,11 +910,89 @@ impl PixelPresenter {
         self.blitter.copy(&self.device, &mut encoder, &src, &dst);
         self.queue.submit([encoder.finish()]);
         frame.present();
+        self.probe(&src, width, height);
         if self.device_failed.load(std::sync::atomic::Ordering::SeqCst) {
             return Err("GPU device reported an error".to_string());
         }
         self.stats.record(started, None);
         Ok(())
+    }
+
+    /// KRATE_PRESENT_PROBE=FILE: once, on the 120th texture present
+    /// (KRATE_PRESENT_PROBE_AT=N for another), run
+    /// the same blit into an offscreen texture of the window's format and
+    /// write it to FILE as a `width height format` line and the raw bytes --
+    /// the picture the window got, for a run whose window nobody can see.
+    fn probe(&mut self, src: &wgpu::TextureView, width: u32, height: u32) {
+        let Some(path) = std::env::var_os("KRATE_PRESENT_PROBE") else {
+            return;
+        };
+        self.probes += 1;
+        let at = std::env::var("KRATE_PRESENT_PROBE_AT")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(120);
+        if self.probes != at {
+            return;
+        }
+        let target = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("krate present probe"),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: self.surface_format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let padded = (width * 4).next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
+        let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("krate present probe"),
+            size: padded as u64 * height as u64,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        let view = target.create_view(&wgpu::TextureViewDescriptor::default());
+        self.blitter.copy(&self.device, &mut encoder, src, &view);
+        encoder.copy_texture_to_buffer(
+            target.as_image_copy(),
+            wgpu::TexelCopyBufferInfo {
+                buffer: &buffer,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(padded),
+                    rows_per_image: Some(height),
+                },
+            },
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+        );
+        self.queue.submit([encoder.finish()]);
+        buffer.slice(..).map_async(wgpu::MapMode::Read, |_| {});
+        let _ = self.device.poll(wgpu::PollType::Wait {
+            submission_index: None,
+            timeout: Some(std::time::Duration::from_secs(5)),
+        });
+        let mut out = format!("{width} {height} {:?}\n", self.surface_format).into_bytes();
+        {
+            let mapped = buffer.slice(..).get_mapped_range();
+            for y in 0..height as usize {
+                let start = y * padded as usize;
+                out.extend_from_slice(&mapped[start..start + width as usize * 4]);
+            }
+        }
+        buffer.unmap();
+        let _ = std::fs::write(path, out);
     }
 
     /// Whether this presenter is on the process-wide shared device, and so

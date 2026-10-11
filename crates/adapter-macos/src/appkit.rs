@@ -1915,6 +1915,9 @@ mod platform {
                         if placement.pixels().is_some()
                             || krate_presenter_gpu::shared::scene_frames::has(
                                 placement.widget().get(),
+                            )
+                            || krate_presenter_gpu::shared::app_frames::has(
+                                placement.widget().get(),
                             ) =>
                     {
                         // A drawn canvas presents on a vsynced Metal surface
@@ -1928,8 +1931,65 @@ mod platform {
                         // stays as the fallback for machines without Metal.
                         let pixels = placement.pixels();
                         let mut gpu_view: Option<Retained<NSView>> = None;
-                        let gpu_pair = reuse_canvas_gpu(&mut reusable, placement.widget())
+                        // A krate:gpu app's frame (IC-940): presented on the
+                        // app's own device, straight from its texture.
+                        let drawn =
+                            krate_presenter_gpu::shared::app_frames::take(placement.widget().get())
+                                .filter(|_| !canvas_gpu_dead());
+                        if let Some(drawn) = drawn {
+                            let pair = reuse_canvas_gpu(&mut reusable, placement.widget())
+                                .filter(|(_, presenter)| presenter.is_on_device(&drawn.device))
+                                .or_else(|| {
+                                    let view = NSView::new(mtm);
+                                    view.setWantsLayer(true);
+                                    view.setFrame(frame);
+                                    let ptr = Retained::as_ptr(&view) as *mut AnyObject
+                                        as *mut std::ffi::c_void;
+                                    // SAFETY: as for the canvas presenter
+                                    // below: the view outlives the presenter
+                                    // and lowering runs on the main thread.
+                                    match unsafe {
+                                        krate_presenter_gpu::PixelPresenter::new_for_app_frame(
+                                            ptr, &drawn,
+                                        )
+                                    } {
+                                        Ok(presenter) => Some((view, presenter)),
+                                        Err(why) => {
+                                            eprintln!(
+                                                "krate: the app's GPU frames cannot go straight to the window ({why}); reading them back"
+                                            );
+                                            krate_presenter_gpu::shared::app_frames::retire();
+                                            None
+                                        }
+                                    }
+                                });
+                            if let Some((view, mut presenter)) = pair {
+                                view.setFrame(frame);
+                                let (w, h) =
+                                    (drawn.texture.width().max(1), drawn.texture.height().max(1));
+                                match presenter.present_texture(&drawn.texture, w, h) {
+                                    Ok(()) => {
+                                        canvas_gpu.insert(placement.widget(), presenter);
+                                        gpu_view = Some(view);
+                                    }
+                                    Err(why) => {
+                                        eprintln!(
+                                            "krate: presenting the app's GPU frame failed ({why}); reading frames back"
+                                        );
+                                        krate_presenter_gpu::shared::app_frames::retire();
+                                    }
+                                }
+                            }
+                        }
+                        let gpu_pair = if gpu_view.is_some() {
+                            None
+                        } else {
+                            reuse_canvas_gpu(&mut reusable, placement.widget())
+                        }
                             .or_else(|| {
+                                if gpu_view.is_some() {
+                                    return None;
+                                }
                                 if canvas_gpu_dead() {
                                     return None;
                                 }
@@ -2241,7 +2301,22 @@ mod platform {
             // doing, every few minutes, all day.
             if std::env::var_os("KRATE_QUIET_WINDOW").is_some() {
                 window.window.setAlphaValue(0.0);
-                window.window.orderBack(None);
+                // KRATE_QUIET_WINDOW=front: in front but transparent and
+                // click-through, for measuring. A window behind the others is
+                // covered, and macOS slows a covered window's process (its
+                // sleeps ran ~50% long on this Mac), so a frame rate measured
+                // there is not the one a person sees.
+                if std::env::var("KRATE_QUIET_WINDOW").as_deref() == Ok("front") {
+                    // A UI-element app (no Dock icon, never frontmost): with
+                    // no activation policy at all the process counts as
+                    // background, and its sleeps run long.
+                    app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
+                    window.window.setIgnoresMouseEvents(true);
+                    window.window.setLevel(3); // NSFloatingWindowLevel
+                    window.window.orderFrontRegardless();
+                } else {
+                    window.window.orderBack(None);
+                }
                 record_window_scale(window.id, window.window.backingScaleFactor() as f32);
                 return WindowAdapter::show_window(adapter, window.id);
             }

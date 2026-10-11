@@ -316,7 +316,7 @@ impl ui4::pointer::Host for Phase3GuiHost {
     }
 
     fn captured(&mut self, window: u64) -> wasmtime::Result<bool> {
-        Ok(self.pointer_state(window).captured)
+        Ok(self.pointer_captured(window))
     }
 }
 

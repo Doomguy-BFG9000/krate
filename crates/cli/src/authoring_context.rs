@@ -949,6 +949,16 @@ arrives once; `message(text|binary)` are the server's messages in order; \
 `closed`/`failed` retire the handle. `ws::send(handle, message)` queues \
 and returns. Reconnect on `failed` with a short backoff, and keep \
 rendering the last known state meanwhile, exactly like rule 5.\n\n\
+7. **A protocol of your own is still the same grant.** For a game server, \
+QUIC, or any TCP or UDP protocol, `krate:net/sockets` connects \
+(`tcp-connect`), sends datagrams (`udp-send`) and looks names up \
+(`lookup`), each judged against `net.connect:<host>:<port>` before a \
+socket exists. Nothing blocks: ask `tcp-status`, `tcp-read` and \
+`udp-receive` from the loop. `std::net` cannot open sockets in an app; in \
+Rust use the `net-krate` crate's `TcpStream`, `UdpSocket` and \
+`lookup_host`, which have std's shape (and tokio and quinn adapters). A \
+UDP socket hears only addresses it sent to, and an app cannot listen for \
+incoming connections yet.\n\n\
 # 2d. Sharing data between people: the shared store\n\n\
 For \"my wife and I see the same list\", \"a meal plan the family edits\", \
 \"share this with my roommate\" -- declare `store.shared` and use \
@@ -1406,6 +1416,21 @@ An app with no image files can still generate a texture in code: fill an RGBA \
 buffer with a checker, a noise pattern, or stripes, and upload that. A tiled \
 procedural texture on the ground and the walls is the single biggest \
 improvement available to a 3D scene, and it costs no assets.\n\n\
+## Your own GPU renderer: krate:gpu\n\n\
+`scene3d` and `canvas2d` cover almost every app; reach for `krate::gpu` only \
+when the app IS a renderer -- an engine, shaders, a compute pass. It is \
+WebGPU's object model with host handles: `request_adapter`, \
+`request_device`, buffers, textures, bind groups, WGSL shader modules, render \
+and compute pipelines; a pass is recorded as one list of commands \
+(`encode_render_pass(encoder, desc, &commands)`). Every call returns its own \
+error. Shaders are WGSL only and are validated before the driver sees them: \
+`create_shader_module` returns `Err(ShaderError)` with the message, line and \
+column -- print it, fix the line. To show frames, put a `canvas` widget in \
+the tree, `create_surface(window, canvas_id)`, configure it to \
+`surface_pixel_size` (again when a frame comes back `suboptimal`), then per \
+frame `current_texture`, draw into a view of it, `submit`, `present`. \
+`present` paces to the display. `apps/krate-gpu-probe` is the reference: a \
+lit cube with a depth buffer, and every check the interface promises.\n\n\
 ## Files the person hands the app\n\n\
 Two more doors exist beside `open_file`, and both use the same grant model: \
 the person's own action IS the permission, the app gets a name and a token, \

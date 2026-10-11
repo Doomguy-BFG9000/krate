@@ -1,5 +1,8 @@
 # Rust / Cargo
 /target/
+# Registry crates with Krate backends, made by crates/*/make-*.py (the
+# probes under apps/ patch them in from here).
+/patches/
 target/
 debug/
 

@@ -1,0 +1,25 @@
+[package]
+name = "net-krate"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/incyashraj/krate"
+description = "std-like TCP and UDP for Krate apps over krate:net/sockets, with tokio and quinn adapters: a networked program keeps its protocol code."
+
+# Its own workspace: a guest crate, built for wasm32 inside apps, never by the
+# repository's host workspace.
+[workspace]
+
+[dependencies]
+krate = { path = "../bindings-rust", features = ["std"] }
+# tokio's AsyncRead/AsyncWrite for the TCP stream, and its timers for quinn.
+tokio = { version = "1.44", default-features = false, features = ["io-util", "time"], optional = true }
+# QUIC over krate:net's UDP: quinn's runtime and socket traits.
+quinn = { version = "0.11", default-features = false, optional = true }
+
+[features]
+default = []
+tokio = ["dep:tokio"]
+quinn = ["tokio", "dep:quinn"]
+# Print every datagram QUIC sends and receives, and the ticker's work.
+trace = []

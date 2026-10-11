@@ -13,6 +13,7 @@ world gui {
   import krate:fs/watch@0.1.0;
   import krate:net/http-client@0.1.0;
   import krate:net/ws@0.1.0;
+  import krate:net/sockets@0.1.0;
   import krate:time/clock@0.1.0;
   import krate:time/sleep@0.1.0;
   import krate:locale/info@0.1.0;
@@ -54,6 +55,7 @@ world gui {
 
   import krate:gfx/canvas2d@0.1.0;
   import krate:gfx/scene3d@0.1.0;
+  import krate:gpu/gpu@0.1.0;
   import krate:gfx/canvas-images@0.1.0;
   import krate:gfx/video@0.1.0;
 

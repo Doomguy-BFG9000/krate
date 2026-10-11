@@ -35,6 +35,7 @@ mod style;
 mod trace;
 mod tui;
 mod usage;
+mod wasi_sdk;
 #[cfg(windows)]
 mod winproc;
 
@@ -359,6 +360,21 @@ enum Command {
     Version,
     /// Check the local development environment.
     Doctor,
+    /// Fetch a toolchain app builds use into Krate's own folder. `wasi-sdk`
+    /// is the C compiler for apps whose crates compile C (SQLite, ring,
+    /// zstd): the pinned release for this machine, checksum-verified.
+    Setup {
+        /// What to set up: `wasi-sdk`.
+        #[arg(value_name = "TOOL")]
+        what: String,
+        /// Install from this local copy of the release archive instead of
+        /// downloading it.
+        #[arg(long, value_name = "ARCHIVE")]
+        from: Option<PathBuf>,
+        /// The SHA-256 the archive must have, instead of Krate's pinned one.
+        #[arg(long, value_name = "HEX")]
+        sha256: Option<String>,
+    },
     /// Your Krate account: who is signed in, sign in, sign out. Sign-in is
     /// GitHub's device flow -- a code, a browser page, and the wait ends the
     /// moment you approve it there.
@@ -2183,6 +2199,7 @@ fn run() -> Result<u8> {
             Ok(0)
         }
         Command::Doctor => doctor(),
+        Command::Setup { what, from, sha256 } => setup(&what, from.as_deref(), sha256.as_deref()),
         Command::Account { action, json } => account_command(action, json),
         Command::Ai { json } => ai_status(json),
         Command::ApiKey { action, vendor } => api_key_command(&action, vendor.as_deref()),
@@ -13383,6 +13400,11 @@ fn component_build_command(app_dir: &Path) -> ProcessCommand {
     };
     let mut command = ProcessCommand::new(&program);
     command.arg("build").arg("--release").current_dir(app_dir);
+    // C the app's crates compile (SQLite, ring, zstd) builds with wasi-sdk
+    // rather than the host's cc, which has no WASI libc (K-1072).
+    if let Some(sdk) = wasi_sdk::find() {
+        wasi_sdk::apply(&mut command, &sdk, "wasm32-wasip1");
+    }
     // Make rustup's toolchain win over a Homebrew rust for the child build.
     // cargo-component resolves `cargo` and `rustc` from PATH, and on a
     // machine with both installs Homebrew's can come first -- a rustc with
@@ -13742,7 +13764,114 @@ fn find_built_component(app_dir: &Path) -> Result<PathBuf> {
     anyhow::bail!("no wasm produced in {}", release.display())
 }
 
+/// Whether an app asks to be built with threads (IC-938):
+/// `[package.metadata.krate] threads = true` in its Cargo.toml.
+fn app_wants_threads(app_dir: &Path) -> bool {
+    let Ok(text) = fs::read_to_string(app_dir.join("Cargo.toml")) else {
+        return false;
+    };
+    let Ok(doc) = text.parse::<toml::Table>() else {
+        return false;
+    };
+    doc.get("package")
+        .and_then(|p| p.get("metadata"))
+        .and_then(|m| m.get("krate"))
+        .and_then(|k| k.get("threads"))
+        .and_then(|t| t.as_bool())
+        .unwrap_or(false)
+}
+
+/// Build a threaded app (IC-929, IC-938): a core module for
+/// wasm32-wasip1-threads over a shared memory, std's leftover WASI imports
+/// folded into krate-c-runtime's answers. The app pins its toolchain
+/// (`rust-toolchain.toml`); the threads target must be installed for it.
+/// Returns the folded module, beside the build.
+fn build_threaded(app_dir: &Path) -> std::result::Result<PathBuf, String> {
+    let _lock = build_leaf_lock(app_dir);
+    let mut rustflags = String::from(
+        "--cfg krate_threads -C link-arg=--export=wasi_thread_start \
+         -C link-arg=--export=__wasi_init_tp -C link-arg=--max-memory=3758096384",
+    );
+    for name in ["random_get", "args_get", "args_sizes_get"] {
+        rustflags.push_str(&format!(
+            " -C link-arg=--export=__imported_wasi_snapshot_preview1_{name}"
+        ));
+    }
+    let mut command = ProcessCommand::new("cargo");
+    command
+        .args(["build", "--release", "--target", "wasm32-wasip1-threads"])
+        .current_dir(app_dir)
+        .env("RUSTFLAGS", rustflags)
+        .env_remove("CARGO_TARGET_DIR");
+    // C the app's crates compile (SQLite, ring) builds with wasi-sdk (K-1072).
+    if let Some(sdk) = wasi_sdk::find() {
+        wasi_sdk::apply(&mut command, &sdk, "wasm32-wasip1-threads");
+    }
+    if let Some(home) = home_dir() {
+        let shims = home.join(".cargo").join("bin");
+        let current = std::env::var_os("PATH").unwrap_or_default();
+        if let Ok(path) =
+            std::env::join_paths(std::iter::once(shims).chain(std::env::split_paths(&current)))
+        {
+            command.env("PATH", path);
+        }
+    }
+    let output = command
+        .output()
+        .map_err(|e| format!("could not run cargo for a threaded build: {e}"))?;
+    if !output.status.success() {
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        if let Some(missing) = wasi_sdk::explain_c_failure(&text) {
+            return Err(format!("{}\n\n{missing}", text.trim()));
+        }
+        let hint = if text.contains("wasm32-wasip1-threads") && text.contains("target") {
+            "\n\nThe threads target looks missing: `rustup target add wasm32-wasip1-threads` \
+             for the toolchain the app pins."
+        } else {
+            ""
+        };
+        return Err(format!("the threaded build failed:\n{}{hint}", text.trim()));
+    }
+    let name = app_crate_name(app_dir).ok_or("the app's Cargo.toml names no package")?;
+    let release = app_dir.join("target/wasm32-wasip1-threads/release");
+    let built = release.join(format!("{name}.wasm"));
+    let bytes =
+        fs::read(&built).map_err(|e| format!("the build produced no {}: {e}", built.display()))?;
+    let (folded, _) = krate_wasi_fold::fold(&bytes)?;
+    // The folded module goes where the manifest's entry says the app is, so
+    // what runs is what was declared; without a manifest, beside the build.
+    let declared = fs::read_to_string(app_dir.join("manifest.toml"))
+        .ok()
+        .and_then(|text| text.parse::<toml::Table>().ok())
+        .and_then(|doc| {
+            doc.get("app")
+                .and_then(|a| a.get("entry"))
+                .and_then(|e| e.as_str())
+                .map(str::to_string)
+        })
+        .filter(|entry| {
+            let path = Path::new(entry);
+            path.is_relative()
+                && path
+                    .components()
+                    .all(|c| matches!(c, std::path::Component::Normal(_)))
+        });
+    let out = match declared {
+        Some(entry) => app_dir.join(entry),
+        None => release.join(format!("{name}.krate.wasm")),
+    };
+    fs::write(&out, folded).map_err(|e| format!("write {}: {e}", out.display()))?;
+    Ok(out)
+}
+
 fn build_component(app_dir: &Path) -> Result<PathBuf> {
+    if app_wants_threads(app_dir) {
+        return build_threaded(app_dir).map_err(|why| anyhow::anyhow!(why));
+    }
     // Held through the copy home at the end, not just the compile: the
     // window after cargo-component exits and before find_built_component
     // has copied the artifact is where another build of this leaf spoils
@@ -13766,6 +13895,9 @@ fn build_component(app_dir: &Path) -> Result<PathBuf> {
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         );
+        if let Some(missing) = wasi_sdk::explain_c_failure(&text) {
+            anyhow::bail!("{missing}");
+        }
         if text.contains("wasm32-wasip1") {
             anyhow::bail!(
                 "cargo-component build failed: the `wasm32-wasip1` target looks missing. \
@@ -13821,6 +13953,9 @@ fn panic_site_hints(candidate: &Path) -> String {
 }
 
 fn build_component_captured(app_dir: &Path) -> std::result::Result<PathBuf, String> {
+    if app_wants_threads(app_dir) {
+        return build_threaded(app_dir);
+    }
     let _lock = build_leaf_lock(app_dir);
     let mut command = component_build_command(app_dir);
     let output = command.output().map_err(|error| {
@@ -18332,6 +18467,29 @@ fn print_version() {
     println!("commit    {}", env!("KRATE_GIT_SHA"));
 }
 
+/// `krate setup wasi-sdk` (IC-941).
+fn setup(what: &str, from: Option<&Path>, sha256: Option<&str>) -> Result<u8> {
+    if what != "wasi-sdk" {
+        anyhow::bail!("Krate can set up `wasi-sdk`; `{what}` is not one it knows");
+    }
+    if from.is_none() {
+        if let Some(sdk) = wasi_sdk::find() {
+            println!(
+                "wasi-sdk is already here: {} (app builds compile C with it)",
+                sdk.root.display()
+            );
+            return Ok(0);
+        }
+    }
+    let sdk = wasi_sdk::install(from, sha256)?;
+    println!(
+        "wasi-sdk {} installed at {}; app builds now compile C with it",
+        wasi_sdk::VERSION,
+        sdk.root.display()
+    );
+    Ok(0)
+}
+
 fn doctor() -> Result<u8> {
     println!("Krate doctor");
     println!("--------------");
@@ -18349,6 +18507,9 @@ fn doctor() -> Result<u8> {
     print_jco_status();
     println!();
     print_rust_toolchain_status();
+    println!();
+    println!("C for apps");
+    println!("{}", wasi_sdk::doctor_line());
     println!();
     // Show the state dir, and say whether it exists. It is created lazily on
     // first use (the key-value store, the machine key), so on a fresh install
@@ -18491,9 +18652,35 @@ fn print_rust_toolchain_status() {
     }
 }
 
-/// The minimum Rust the workspace builds with, from Cargo.toml's
-/// rust-version. Compiled in so doctor cannot drift from the real bound.
-const MIN_RUST: (u32, u32) = (1, 91);
+/// The minimum Rust apps build with: the workspace's `rust-version`, which
+/// the SDK crate every app depends on inherits. Read from Cargo at compile
+/// time (this crate inherits it too), so it cannot drift from the bound the
+/// way a copied number did -- 1.91 here while builds needed 1.94 (K-1073).
+const MIN_RUST: (u32, u32) = major_minor(env!("CARGO_PKG_RUST_VERSION"));
+
+/// "1.94" or "1.94.1" as (1, 94), at compile time.
+const fn major_minor(version: &str) -> (u32, u32) {
+    let bytes = version.as_bytes();
+    let (mut major, mut minor, mut part, mut i) = (0u32, 0u32, 0, 0);
+    while i < bytes.len() {
+        let b = bytes[i];
+        if b == b'.' {
+            part += 1;
+            if part > 1 {
+                break;
+            }
+        } else if b.is_ascii_digit() {
+            let digit = (b - b'0') as u32;
+            if part == 0 {
+                major = major * 10 + digit;
+            } else {
+                minor = minor * 10 + digit;
+            }
+        }
+        i += 1;
+    }
+    (major, minor)
+}
 
 /// Print the toolchain's version beside its path, and `rustup update` when it
 /// is older than the workspace needs.
@@ -18812,6 +18999,11 @@ fn starter_cargo_toml(skeleton_cargo: &str, starter_lib: &str) -> String {
 }
 
 fn build_fix(detail: &str) -> String {
+    // The app's crates compile C and there is no WASI C compiler: nothing in
+    // the app to fix (K-1072).
+    if let Some(missing) = wasi_sdk::explain_c_failure(detail) {
+        return missing;
+    }
     let generic = "Fix the compiler errors above. The build uses rustup's toolchain and the \
                    wasm32-wasip1 target; run `krate doctor` if the target or toolchain looks \
                    wrong.";
@@ -24137,6 +24329,43 @@ again: {} -> {}",
         assert!(silent_author_failure(Some(126)).contains("permission"));
         assert!(silent_author_failure(Some(3)).contains("error 3"));
         assert!(silent_author_failure(None).contains("stopped before"));
+    }
+
+    /// Doctor's minimum is the one the SDK apps build against (K-1073): the
+    /// workspace's rust-version, which the SDK crate inherits. A copied
+    /// number said 1.91 while every app build needed 1.94.
+    #[test]
+    fn doctors_minimum_rust_is_the_sdks() {
+        let workspace = include_str!("../../../Cargo.toml")
+            .parse::<toml::Table>()
+            .expect("the workspace Cargo.toml");
+        let declared = workspace["workspace"]["package"]["rust-version"]
+            .as_str()
+            .expect("a workspace rust-version");
+        assert_eq!(
+            super::MIN_RUST,
+            super::major_minor(declared),
+            "doctor says {:?}",
+            super::MIN_RUST
+        );
+        let sdk = include_str!("../../bindings-rust/Cargo.toml")
+            .parse::<toml::Table>()
+            .expect("the SDK's Cargo.toml");
+        let sdk_rust = &sdk["package"]["rust-version"];
+        let sdk_min = match sdk_rust.as_str() {
+            Some(own) => super::major_minor(own),
+            None => {
+                assert_eq!(
+                    sdk_rust["workspace"].as_bool(),
+                    Some(true),
+                    "the SDK states its rust-version or inherits the workspace's"
+                );
+                super::major_minor(declared)
+            }
+        };
+        assert_eq!(super::MIN_RUST, sdk_min, "doctor and the SDK disagree");
+        assert_eq!(super::major_minor("1.94.1"), (1, 94));
+        assert_eq!(super::major_minor("2.0"), (2, 0));
     }
 
     /// Doctor must compare versions, not admire paths (K-080): 1.85 on a

@@ -17,6 +17,7 @@ The current world imports these interfaces:
 - `krate:net/types@0.1.0`
 - `krate:net/http-client@0.1.0`
 - `krate:net/ws@0.1.0`
+- `krate:net/sockets@0.1.0`
 - `krate:time/clock@0.1.0`
 - `krate:time/sleep@0.1.0`
 - `krate:locale/types@0.1.0`
@@ -676,6 +677,127 @@ krate::io::stdio::println(&body)?;
 > already been retired.
 
 - `cancel(handle: u64)`
+
+
+## `krate:net/sockets@0.1.0`
+
+### Capability Notes
+
+Accepted capability strings for this module, generated from the runtime manifest table:
+
+- `net.connect:<host>:<port>` - manifest or session grant
+
+### Functions
+
+> Start looking a name up. Allowed when some `net.connect` grant names
+> this host, on any port. Returns at once; ask `poll-lookup`.
+
+- `lookup(host: string) -> result<u64, net-error>`
+> How a lookup is doing. A terminal answer retires the handle.
+
+- `poll-lookup(handle: u64) -> lookup-status`
+> Start a TCP connection to a host (a name or an IP) and port. The grant
+> is checked here, before anything dials. Returns a handle at once.
+
+- `tcp-connect(host: string, port: u16) -> result<u64, net-error>`
+> How a connection is doing.
+
+- `tcp-status(handle: u64) -> connect-status`
+> Queue bytes to send. Returns how many were taken, which is fewer than
+> given (even 0) when the connection's queue is full: send the rest later.
+> Bytes written while still connecting are sent once connected.
+
+- `tcp-write(handle: u64, bytes: list<u8>) -> result<u32, net-error>`
+> Take up to `max-bytes` of what has arrived. Never blocks.
+
+- `tcp-read(handle: u64, max-bytes: u32) -> read-result`
+> Open a UDP socket on a port the host picks. Sending is what the grants
+> judge, so binding needs none. `ipv6` asks for an IPv6 socket.
+
+- `udp-bind(ipv6: bool) -> result<u64, net-error>`
+> The local port a UDP socket was given.
+
+- `udp-local-port(handle: u64) -> result<u16, net-error>`
+> Send one datagram to a host (a name or an IP) and port, judged against
+> the grants like a connection. Datagrams are best effort: a full send
+> queue drops this one and says so.
+
+- `udp-send(handle: u64, host: string, port: u16, data: list<u8>) -> result<_, net-error>`
+> The next datagram that arrived from an address this socket has sent
+> to, or none. Never blocks.
+
+- `udp-receive(handle: u64) -> option<datagram>`
+> Close a TCP connection or UDP socket. Safe on a handle already closed.
+
+- `close(handle: u64)`
+
+### Types
+
+#### `lookup-status` variant
+
+> What became of a lookup started with `lookup`.
+
+> Still asking.
+
+- `pending`
+> The addresses the name stands for, IPv4 and IPv6, as text.
+
+- `ready`: `list<string>`
+> The name could not be resolved. Retires the handle.
+
+- `failed`: `net-error`
+> Never issued, or already answered.
+
+- `unknown-handle`
+
+#### `connect-status` variant
+
+> What became of a TCP connection started with `tcp-connect`.
+
+> Still dialling.
+
+- `pending`
+> Connected, to this address ("ip:port").
+
+- `connected`: `string`
+> It could not connect, or the connection broke. The handle stays until
+> `close`.
+
+- `failed`: `net-error`
+> Never issued, or already closed.
+
+- `unknown-handle`
+
+#### `read-result` variant
+
+> What `tcp-read` found.
+
+> Bytes that arrived, in order. Never empty.
+
+- `data`: `list<u8>`
+> Nothing new; the connection is open. Ask again later.
+
+- `pending`
+> The other end finished sending; nothing more will arrive.
+
+- `closed`
+> The connection broke, with the reason.
+
+- `failed`: `net-error`
+
+#### `datagram` record
+
+> One datagram that arrived on a UDP socket.
+
+> The sender's address, as an IP.
+
+- `host`: `string`
+> The sender's port.
+
+- `port`: `u16`
+> The payload.
+
+- `data`: `list<u8>`
 
 
 ## `krate:net/types@0.1.0`

@@ -15,9 +15,9 @@ Developer ownership and control is the default (IC-175, IC-176). Krate enforces 
 
 ## Summary
 
-- 73 boundaries reviewed, 64 of them WIT interfaces (64 declared under wit/krate).
-- 35 compulsory, each with a justification or a recorded gap; 38 optional.
-- 7 recorded gaps where the escape hatch does not yet exist or the boundary is narrower than a developer would want.
+- 76 boundaries reviewed, 67 of them WIT interfaces (67 declared under wit/krate).
+- 37 compulsory, each with a justification or a recorded gap; 39 optional.
+- 6 recorded gaps where the escape hatch does not yet exist or the boundary is narrower than a developer would want.
 
 ## Every boundary
 
@@ -37,6 +37,8 @@ Developer ownership and control is the default (IC-175, IC-176). Krate enforces 
 | `krate:gfx@0.1.0/scene3d` | wit | nothing: an optional software 3D helper | any 3D approach; the app may ignore this entirely | canvas pixels from the app's own renderer | no | -- |
 | `krate:gfx@0.1.0/types` | wit | colour, rectangle and error shapes every host lowers to | everything drawn with them | none needed: a type carries no authority | yes | portability |
 | `krate:gfx@0.1.0/video` | wit | playing a bundled or granted-host video with the platform decoder and drawing its current frame into a canvas by handle | which video, its controls and their look, where and how big to draw it, when to play, pause, seek, loop or mute | decode frames in the app and draw them with draw-pixels | no | -- |
+| `krate:gpu@0.1.0/gpu` | wit | WebGPU's object model over host handles: shaders are WGSL validated by the host before any driver sees them, every call returns its own error, and a surface presents into a canvas widget | any renderer or engine: its own buffers, textures, pipelines, WGSL shaders, render and compute passes, frame pacing and post-processing | canvas pixels from the app's own software renderer | no | -- |
+| `krate:gpu@0.1.0/types` | wit | WebGPU's descriptor, command and error shapes, with formats, features and limits by their WebGPU names | every resource, shader, pipeline and pass the app makes from them | none needed: a type carries no authority | yes | portability |
 | `krate:io@0.1.0/args` | wit | how launch arguments reach the app | parsing and meaning of the arguments | raw strings | yes | platform |
 | `krate:io@0.1.0/log` | wit | nothing: an optional structured log the host can show | any logging scheme, or stderr | stdio | no | -- |
 | `krate:io@0.1.0/stdio` | wit | that a CLI app's standard streams are the host process's | what is written and read, in any format | raw bytes on streams | yes | platform |
@@ -46,8 +48,9 @@ Developer ownership and control is the default (IC-175, IC-176). Krate enforces 
 | `krate:locale@0.1.0/info` | wit | how the person's locale and timezone are read from the host | whether to honour them | ignore the host and let the person choose in the app | no | -- |
 | `krate:locale@0.1.0/types` | wit | locale and formatting type shapes | what is done with them | none needed: a type carries no authority | yes | portability |
 | `krate:net@0.1.0/http-client` | wit | the network boundary: a request reaches only a host the person granted, and the host and port are checked before anything dials | which servers, which APIs, which protocols over HTTP, how redirects and retries are handled (the client follows nothing on its own) | the request and response are raw bytes and headers; any protocol over HTTP is the app's | yes | recipient-permission |
+| `krate:net@0.1.0/sockets` | wit | the same net.connect boundary at the lowest level: every TCP connection and every UDP datagram's destination is judged against the person's grants before any socket exists; an address stands only for the names the app's own lookups resolved to it; a UDP socket hears only addresses it sent to | the protocol, the framing, the client library (std-like types, tokio and quinn adapters in net-krate; QUIC runs over it) | raw bytes and datagrams | yes | recipient-permission |
 | `krate:net@0.1.0/types` | wit | request, response and error shapes every host lowers to | what is sent and how it is interpreted | none needed: a type carries no authority | yes | portability |
-| `krate:net@0.1.0/ws` | wit | the same boundary for a live connection: a net.connect grant to that host and port, checked at open | the protocol over the socket, the framing, the server | raw message frames | yes | recipient-permission |
+| `krate:net@0.1.0/ws` | wit | the same boundary for a live connection: a net.connect grant to that host and port, checked at open | the protocol over the socket, the framing, the server | raw message frames; krate:net/sockets for a transport of the app's own | yes | recipient-permission |
 | `krate:phase1@0.0.1/host` | wit | the first-generation host world, kept for the bundles that use it | none new: this world is superseded and not for new apps | the Phase 2 and Phase 3 worlds | no | -- |
 | `krate:random@0.1.0/bytes` | wit | where operating-system randomness comes from | any PRNG or crate over it (rand, uuid, getrandom route here) | seed the app's own generator from it, or use none | no | -- |
 | `krate:resources@0.1.0/assets` | wit | that the app's own bundled files are readable with no grant, because they are the app's | what is bundled and in what format | embed bytes in the component itself | no | -- |
@@ -101,9 +104,8 @@ Developer ownership and control is the default (IC-175, IC-176). Krate enforces 
 
 Where a developer's choice is narrower than the principle says it should be. Each is a row above with a gap recorded; none is a rule Krate defends.
 
-- `krate:gfx@0.1.0/canvas2d`: no portable GPU primitive exists, so a developer's own GPU renderer cannot run (IC-176: custom renderer over portable GPU primitives); scene3d is software
-- `krate:net@0.1.0/http-client`: no lower-level socket primitive exists, so a developer-chosen HTTP, gRPC or GraphQL client library cannot run on Krate today (IC-175: developer-selected client over a low-level network primitive)
-- `krate:net@0.1.0/ws`: as for http-client: no raw TCP or UDP primitive, so a developer's own transport cannot run
+- `krate:gfx@0.1.0/canvas2d`: a developer's own GPU renderer goes through krate:gpu, which presents by copying each frame into the canvas through the CPU until the presenter shares its device (K-407); scene3d is software
+- `krate:net@0.1.0/sockets`: listening for incoming connections is not offered yet, so an app cannot host a server (IC-935)
 - `krate:speech@0.1.0/transcription`: the recogniser reads one model family; another engine means the app ships its own
 - `krate:ui@0.1.0/clipboard`: wired on Linux only today; other hosts answer unsupported
 - `krate:ui@0.1.0/menu`: set-items answers unsupported on every host (IC-745)

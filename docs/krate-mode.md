@@ -191,6 +191,7 @@ world = "gui"
 "krate:random" = { path = "PREFIX/wit/krate/phase4/deps/random" }
 "krate:ui" = { path = "PREFIX/wit/krate/phase4/deps/ui" }
 "krate:gfx" = { path = "PREFIX/wit/krate/phase4/deps/gfx" }
+"krate:gpu" = { path = "PREFIX/wit/krate/phase4/deps/gpu" }
 "krate:audio" = { path = "PREFIX/wit/krate/phase4/deps/audio" }
 "krate:speech" = { path = "PREFIX/wit/krate/phase4/deps/speech" }
 
@@ -817,6 +818,17 @@ The same modules earlier sections describe in prose, but as the exact interfaces
 - `ws::send: func(handle: u64, message: ws-message) -> result<_, net-error>`
 - `ws::poll: func(handle: u64) -> ws-event`
 - `ws::close: func(handle: u64)`
+- `sockets::lookup: func(host: string) -> result<u64, net-error>`
+- `sockets::poll-lookup: func(handle: u64) -> lookup-status`
+- `sockets::tcp-connect: func(host: string, port: u16) -> result<u64, net-error>`
+- `sockets::tcp-status: func(handle: u64) -> connect-status`
+- `sockets::tcp-write: func(handle: u64, bytes: list<u8>) -> result<u32, net-error>`
+- `sockets::tcp-read: func(handle: u64, max-bytes: u32) -> read-result`
+- `sockets::udp-bind: func(ipv6: bool) -> result<u64, net-error>`
+- `sockets::udp-local-port: func(handle: u64) -> result<u16, net-error>`
+- `sockets::udp-send: func(handle: u64, host: string, port: u16, data: list<u8>) -> result<_, net-error>`
+- `sockets::udp-receive: func(handle: u64) -> option<datagram>`
+- `sockets::close: func(handle: u64)`
 
 ## `random`
 

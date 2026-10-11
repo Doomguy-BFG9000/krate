@@ -140,6 +140,9 @@ pub struct ComponentReport {
     /// SHA-256 of the WIT tree the rules came from; empty in a build with
     /// no WIT tree, where the world and existence checks cannot run.
     pub wit_digest: &'static str,
+    /// A threaded app (IC-929, IC-938): a core module over a shared memory,
+    /// linked by Krate itself, rather than a component.
+    pub threaded: bool,
 }
 
 /// Why the validator refused a component. Each carries what a person needs
@@ -162,6 +165,9 @@ pub enum ComponentDefect {
     /// Exports beyond `run`: the world declares one, and a component that
     /// offers more was built against something else.
     ExtraExports(Vec<String>),
+    /// A threaded app without `wasi_thread_start`: its threads would have
+    /// nowhere to begin.
+    MissingThreadStart,
 }
 
 impl std::fmt::Display for ComponentDefect {
@@ -200,6 +206,12 @@ impl std::fmt::Display for ComponentDefect {
                 "it exports more than `run`, which no Krate world declares: {}",
                 list.join(", ")
             ),
+            Self::MissingThreadStart => write!(
+                f,
+                "it is a threaded app (a module over a shared memory) that exports no \
+                 `wasi_thread_start`, so its threads would have nowhere to begin. Link it \
+                 with `--export=wasi_thread_start`."
+            ),
         }
     }
 }
@@ -217,6 +229,9 @@ pub fn validate_component(
     bytes: &[u8],
     world: Option<&str>,
 ) -> Result<ComponentReport, ComponentDefect> {
+    if !is_component(bytes) && is_threaded_module(bytes) {
+        return validate_threaded(bytes, world);
+    }
     if !is_component(bytes) {
         let detail = if bytes.get(..4) == Some(&[0x00, 0x61, 0x73, 0x6d]) {
             "it is a core WebAssembly module, not a component. Build it with \
@@ -253,6 +268,36 @@ pub fn validate_component(
         }
     }
 
+    let checked_world = check_world(&imports, world)?;
+
+    if !exports.contains(RUN_EXPORT) {
+        return Err(ComponentDefect::MissingRunExport);
+    }
+    let extra: Vec<String> = exports
+        .iter()
+        .filter(|export| export.as_str() != RUN_EXPORT)
+        .cloned()
+        .collect();
+    if !extra.is_empty() {
+        return Err(ComponentDefect::ExtraExports(extra));
+    }
+
+    Ok(ComponentReport {
+        imports,
+        exports,
+        world: checked_world.map(|(name, _)| name.to_string()),
+        validator: VALIDATOR_VERSION,
+        wit_digest: WIT_DIGEST,
+        threaded: false,
+    })
+}
+
+/// The world check, shared by components and threaded apps. Returns the
+/// world checked against, when the manifest named one this runtime hosts.
+fn check_world(
+    imports: &BTreeSet<String>,
+    world: Option<&str>,
+) -> Result<Option<(&'static str, &'static [&'static str])>, ComponentDefect> {
     // The world check. An interface is provided by a world when the world
     // lists it, or when it belongs to a package the world lists something
     // from: every real app imports krate:io/types, which no world names
@@ -283,25 +328,109 @@ pub fn validate_component(
             });
         }
     }
+    Ok(checked_world)
+}
 
-    if !exports.contains(RUN_EXPORT) {
+/// What a threaded app may import beyond Krate's interfaces: the thread
+/// start Krate links itself, the processor count and exit, and its memory.
+pub const THREAD_IMPORTS: &[(&str, &str)] = &[
+    ("wasi", "thread-spawn"),
+    ("krate:thread", "available-parallelism"),
+    ("krate:thread", "exit"),
+    ("env", "memory"),
+];
+
+/// The export a threaded app's spawned threads begin at.
+pub const THREAD_START_EXPORT: &str = "wasi_thread_start";
+
+/// Whether these bytes are a threaded app (IC-929): a core module that
+/// imports a shared memory, which a component cannot carry.
+pub fn is_threaded_module(bytes: &[u8]) -> bool {
+    if is_component(bytes) || bytes.get(..4) != Some(&[0x00, 0x61, 0x73, 0x6d]) {
+        return false;
+    }
+    for payload in Parser::new(0).parse_all(bytes) {
+        let Ok(payload) = payload else {
+            return false;
+        };
+        if let Payload::ImportSection(section) = payload {
+            for import in section.into_imports().flatten() {
+                if let wasmparser::TypeRef::Memory(m) = import.ty {
+                    if m.shared {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+    false
+}
+
+/// The same rules for a threaded app (IC-938): every import a Krate
+/// interface the world provides, or one of [`THREAD_IMPORTS`]; an entry
+/// (`run`, or `_start` for an unmodified program) and a thread start.
+fn validate_threaded(
+    bytes: &[u8],
+    world: Option<&str>,
+) -> Result<ComponentReport, ComponentDefect> {
+    let malformed = |e: wasmparser::BinaryReaderError| ComponentDefect::Malformed {
+        detail: first_line(&e.to_string()),
+    };
+    let mut imports = BTreeSet::new();
+    let mut foreign = BTreeSet::new();
+    let mut exports = BTreeSet::new();
+    for payload in Parser::new(0).parse_all(bytes) {
+        match payload.map_err(malformed)? {
+            Payload::ImportSection(section) => {
+                for import in section.into_imports() {
+                    let import = import.map_err(malformed)?;
+                    if THREAD_IMPORTS.contains(&(import.module, import.name)) {
+                        continue;
+                    }
+                    if import.module.starts_with("krate:") && import.module.contains('/') {
+                        imports.insert(import.module.to_string());
+                    } else {
+                        foreign.insert(format!("{}::{}", import.module, import.name));
+                    }
+                }
+            }
+            Payload::ExportSection(section) => {
+                for export in section {
+                    exports.insert(export.map_err(malformed)?.name.to_string());
+                }
+            }
+            _ => {}
+        }
+    }
+    if !foreign.is_empty() {
+        return Err(ComponentDefect::NonKrateImports(
+            foreign.into_iter().collect(),
+        ));
+    }
+    if !KNOWN_KRATE_INTERFACES.is_empty() {
+        let unknown: Vec<String> = imports
+            .iter()
+            .filter(|i| !KNOWN_KRATE_INTERFACES.contains(&i.as_str()))
+            .cloned()
+            .collect();
+        if !unknown.is_empty() {
+            return Err(ComponentDefect::UnknownKrateImports(unknown));
+        }
+    }
+    let checked_world = check_world(&imports, world)?;
+    if !exports.contains(RUN_EXPORT) && !exports.contains("_start") {
         return Err(ComponentDefect::MissingRunExport);
     }
-    let extra: Vec<String> = exports
-        .iter()
-        .filter(|export| export.as_str() != RUN_EXPORT)
-        .cloned()
-        .collect();
-    if !extra.is_empty() {
-        return Err(ComponentDefect::ExtraExports(extra));
+    if !exports.contains(THREAD_START_EXPORT) {
+        return Err(ComponentDefect::MissingThreadStart);
     }
-
     Ok(ComponentReport {
         imports,
         exports,
         world: checked_world.map(|(name, _)| name.to_string()),
         validator: VALIDATOR_VERSION,
         wit_digest: WIT_DIGEST,
+        threaded: true,
     })
 }
 
@@ -327,6 +456,80 @@ fn first_line(detail: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A threaded app as a core module: `imports` and `exports` are WAT.
+    fn threaded(imports: &str, exports: &str) -> Vec<u8> {
+        wat::parse_str(format!(
+            "(module (import \"env\" \"memory\" (memory 1 2 shared)) {imports} \
+             (func $f) {exports})"
+        ))
+        .expect("wat")
+    }
+
+    /// IC-938: the one validator judges a threaded app by a component's rules.
+    #[test]
+    fn a_threaded_app_passes_the_door_by_the_same_rules() {
+        let good = threaded(
+            "(import \"krate:io/stdio@0.1.0\" \"stdout\" (func (result i32))) \
+             (import \"wasi\" \"thread-spawn\" (func (param i32) (result i32))) \
+             (import \"krate:thread\" \"exit\" (func (param i32)))",
+            "(export \"_start\" (func $f)) (export \"wasi_thread_start\" (func $f))",
+        );
+        assert!(is_threaded_module(&good));
+        let report = validate_component(&good, Some("krate:app/cli@0.1.0")).expect("passes");
+        assert!(report.threaded);
+        assert!(report.imports.contains("krate:io/stdio@0.1.0"));
+        assert_eq!(report.world.as_deref(), Some("krate:app/cli@0.1.0"));
+
+        // WASI reached for directly: the operating system, refused.
+        let wasi = threaded(
+            "(import \"wasi_snapshot_preview1\" \"fd_write\" (func (param i32 i32 i32 i32) (result i32)))",
+            "(export \"run\" (func $f)) (export \"wasi_thread_start\" (func $f))",
+        );
+        assert!(matches!(
+            validate_component(&wasi, None),
+            Err(ComponentDefect::NonKrateImports(list)) if list[0].starts_with("wasi_snapshot_preview1")
+        ));
+        // An invented Krate interface: refused as for a component.
+        let invented = threaded(
+            "(import \"krate:anything/not-real@9.0.0\" \"go\" (func))",
+            "(export \"run\" (func $f)) (export \"wasi_thread_start\" (func $f))",
+        );
+        if !KNOWN_KRATE_INTERFACES.is_empty() {
+            assert!(matches!(
+                validate_component(&invented, None),
+                Err(ComponentDefect::UnknownKrateImports(_))
+            ));
+        }
+        // A gui interface in a cli app: outside its world.
+        let outside = threaded(
+            "(import \"krate:ui/window@0.1.0\" \"show\" (func (param i64)))",
+            "(export \"run\" (func $f)) (export \"wasi_thread_start\" (func $f))",
+        );
+        assert!(matches!(
+            validate_component(&outside, Some("krate:app/cli@0.1.0")),
+            Err(ComponentDefect::OutsideWorld { .. })
+        ));
+        // No entry, and no thread start.
+        let no_entry = threaded("", "(export \"wasi_thread_start\" (func $f))");
+        assert_eq!(
+            validate_component(&no_entry, None),
+            Err(ComponentDefect::MissingRunExport)
+        );
+        let no_start = threaded("", "(export \"run\" (func $f))");
+        assert_eq!(
+            validate_component(&no_start, None),
+            Err(ComponentDefect::MissingThreadStart)
+        );
+        // A plain module (no shared memory) is still not an app.
+        let plain =
+            wat::parse_str("(module (memory 1) (func $f) (export \"run\" (func $f)))").unwrap();
+        assert!(!is_threaded_module(&plain));
+        assert!(matches!(
+            validate_component(&plain, None),
+            Err(ComponentDefect::NotAComponent { .. })
+        ));
+    }
 
     #[test]
     fn krate_imports_are_recognized() {

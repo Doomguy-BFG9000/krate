@@ -61,6 +61,14 @@ pub struct Phase2Host<'a> {
     /// that made it, the same way a chosen-file token cannot.
     async_fetches: crate::async_fetch::AsyncFetches,
     async_ws: crate::async_ws::AsyncWs,
+    /// TCP connections, UDP sockets and lookups (`krate:net/sockets`).
+    #[cfg(not(target_arch = "wasm32"))]
+    async_sockets: crate::async_sockets::AsyncSockets,
+    /// A threaded app (IC-940): a sleep is judged here and slept after the
+    /// host is let go, so one thread's sleep never holds the others out.
+    // Threaded apps only, which iOS and the web do not run.
+    #[cfg_attr(any(target_os = "ios", target_arch = "wasm32"), allow(dead_code))]
+    pub(crate) sleep_outside_host: bool,
 }
 
 impl<'a> Phase2Host<'a> {
@@ -88,7 +96,10 @@ impl<'a> Phase2Host<'a> {
             watches: Default::default(),
             async_fetches: crate::async_fetch::AsyncFetches::new(),
             async_ws: crate::async_ws::AsyncWs::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            async_sockets: crate::async_sockets::AsyncSockets::new(),
             default_http_timeout_millis,
+            sleep_outside_host: false,
         }
     }
 
@@ -1199,6 +1210,204 @@ impl net::ws::Host for Phase2Host<'_> {
     }
 }
 
+/// Raw sockets (IC-935). Every connect and every datagram's destination is
+/// judged against `net.connect` here, on the calling thread, before the
+/// socket table is reached.
+#[cfg(not(target_arch = "wasm32"))]
+impl net::sockets::Host for Phase2Host<'_> {
+    fn lookup(&mut self, host: String) -> wasmtime::Result<Result<u64, net::types::NetError>> {
+        if let Err(err) = self.dispatcher().check_lookup(&host) {
+            return Ok(Err(bridge::net_error_to_wit(err)));
+        }
+        Ok(self
+            .async_sockets
+            .lookup(host)
+            .map_err(net::types::NetError::Other))
+    }
+
+    fn poll_lookup(&mut self, handle: u64) -> wasmtime::Result<net::sockets::LookupStatus> {
+        use crate::async_sockets::LookupStatus as S;
+        Ok(match self.async_sockets.lookup_status(handle) {
+            S::Pending => net::sockets::LookupStatus::Pending,
+            S::Ready(ips) => net::sockets::LookupStatus::Ready(ips),
+            S::Failed(why) => {
+                net::sockets::LookupStatus::Failed(net::types::NetError::DnsFailure(why))
+            }
+            S::UnknownHandle => net::sockets::LookupStatus::UnknownHandle,
+        })
+    }
+
+    fn tcp_connect(
+        &mut self,
+        host: String,
+        port: u16,
+    ) -> wasmtime::Result<Result<u64, net::types::NetError>> {
+        let names = self.async_sockets.names_for(&host);
+        if let Err(err) = self.dispatcher().check_socket(&host, port, &names) {
+            return Ok(Err(bridge::net_error_to_wit(err)));
+        }
+        Ok(self
+            .async_sockets
+            .tcp_connect(host, port)
+            .map_err(net::types::NetError::Other))
+    }
+
+    fn tcp_status(&mut self, handle: u64) -> wasmtime::Result<net::sockets::ConnectStatus> {
+        use crate::async_sockets::ConnectStatus as S;
+        Ok(match self.async_sockets.tcp_status(handle) {
+            S::Pending => net::sockets::ConnectStatus::Pending,
+            S::Connected(peer) => net::sockets::ConnectStatus::Connected(peer),
+            S::Failed(why) => {
+                net::sockets::ConnectStatus::Failed(net::types::NetError::ConnectFailure(why))
+            }
+            S::UnknownHandle => net::sockets::ConnectStatus::UnknownHandle,
+        })
+    }
+
+    fn tcp_write(
+        &mut self,
+        handle: u64,
+        bytes: Vec<u8>,
+    ) -> wasmtime::Result<Result<u32, net::types::NetError>> {
+        Ok(self
+            .async_sockets
+            .tcp_write(handle, &bytes)
+            .map_err(net::types::NetError::ConnectFailure))
+    }
+
+    fn tcp_read(
+        &mut self,
+        handle: u64,
+        max_bytes: u32,
+    ) -> wasmtime::Result<net::sockets::ReadResult> {
+        use crate::async_sockets::ReadResult as R;
+        Ok(match self.async_sockets.tcp_read(handle, max_bytes) {
+            R::Data(data) => net::sockets::ReadResult::Data(data),
+            R::Pending => net::sockets::ReadResult::Pending,
+            R::Closed => net::sockets::ReadResult::Closed,
+            R::Failed(why) => {
+                net::sockets::ReadResult::Failed(net::types::NetError::ConnectFailure(why))
+            }
+        })
+    }
+
+    fn udp_bind(&mut self, ipv6: bool) -> wasmtime::Result<Result<u64, net::types::NetError>> {
+        Ok(self
+            .async_sockets
+            .udp_bind(ipv6)
+            .map_err(net::types::NetError::Other))
+    }
+
+    fn udp_local_port(
+        &mut self,
+        handle: u64,
+    ) -> wasmtime::Result<Result<u16, net::types::NetError>> {
+        Ok(self
+            .async_sockets
+            .udp_local_port(handle)
+            .map_err(net::types::NetError::Other))
+    }
+
+    fn udp_send(
+        &mut self,
+        handle: u64,
+        host: String,
+        port: u16,
+        data: Vec<u8>,
+    ) -> wasmtime::Result<Result<(), net::types::NetError>> {
+        let names = self.async_sockets.names_for(&host);
+        if let Err(err) = self.dispatcher().check_socket(&host, port, &names) {
+            return Ok(Err(bridge::net_error_to_wit(err)));
+        }
+        Ok(self
+            .async_sockets
+            .udp_send(handle, &host, port, &data)
+            .map_err(net::types::NetError::Other))
+    }
+
+    fn udp_receive(&mut self, handle: u64) -> wasmtime::Result<Option<net::sockets::Datagram>> {
+        Ok(self
+            .async_sockets
+            .udp_receive(handle)
+            .map(|d| net::sockets::Datagram {
+                host: d.host,
+                port: d.port,
+                data: d.data,
+            }))
+    }
+
+    fn close(&mut self, handle: u64) -> wasmtime::Result<()> {
+        self.async_sockets.close(handle);
+        Ok(())
+    }
+}
+
+/// A browser tab has no raw sockets; every call says so.
+#[cfg(target_arch = "wasm32")]
+impl net::sockets::Host for Phase2Host<'_> {
+    fn lookup(&mut self, _host: String) -> wasmtime::Result<Result<u64, net::types::NetError>> {
+        Ok(Err(no_sockets_here()))
+    }
+    fn poll_lookup(&mut self, _handle: u64) -> wasmtime::Result<net::sockets::LookupStatus> {
+        Ok(net::sockets::LookupStatus::UnknownHandle)
+    }
+    fn tcp_connect(
+        &mut self,
+        _host: String,
+        _port: u16,
+    ) -> wasmtime::Result<Result<u64, net::types::NetError>> {
+        Ok(Err(no_sockets_here()))
+    }
+    fn tcp_status(&mut self, _handle: u64) -> wasmtime::Result<net::sockets::ConnectStatus> {
+        Ok(net::sockets::ConnectStatus::UnknownHandle)
+    }
+    fn tcp_write(
+        &mut self,
+        _handle: u64,
+        _bytes: Vec<u8>,
+    ) -> wasmtime::Result<Result<u32, net::types::NetError>> {
+        Ok(Err(no_sockets_here()))
+    }
+    fn tcp_read(
+        &mut self,
+        _handle: u64,
+        _max_bytes: u32,
+    ) -> wasmtime::Result<net::sockets::ReadResult> {
+        Ok(net::sockets::ReadResult::Failed(no_sockets_here()))
+    }
+    fn udp_bind(&mut self, _ipv6: bool) -> wasmtime::Result<Result<u64, net::types::NetError>> {
+        Ok(Err(no_sockets_here()))
+    }
+    fn udp_local_port(
+        &mut self,
+        _handle: u64,
+    ) -> wasmtime::Result<Result<u16, net::types::NetError>> {
+        Ok(Err(no_sockets_here()))
+    }
+    fn udp_send(
+        &mut self,
+        _handle: u64,
+        _host: String,
+        _port: u16,
+        _data: Vec<u8>,
+    ) -> wasmtime::Result<Result<(), net::types::NetError>> {
+        Ok(Err(no_sockets_here()))
+    }
+    fn udp_receive(&mut self, _handle: u64) -> wasmtime::Result<Option<net::sockets::Datagram>> {
+        Ok(None)
+    }
+    fn close(&mut self, _handle: u64) -> wasmtime::Result<()> {
+        Ok(())
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn no_sockets_here() -> net::types::NetError {
+    net::types::NetError::Other(
+        "raw sockets need the app on your computer, which a browser preview cannot do".to_string(),
+    )
+}
+
 impl time::clock::Host for Phase2Host<'_> {
     fn now_millis(&mut self) -> wasmtime::Result<u64> {
         self.dispatcher()
@@ -1215,6 +1424,16 @@ impl time::clock::Host for Phase2Host<'_> {
 
 impl time::sleep::Host for Phase2Host<'_> {
     fn sleep_millis(&mut self, millis: u32) -> wasmtime::Result<()> {
+        #[cfg(not(any(target_os = "ios", target_arch = "wasm32")))]
+        if self.sleep_outside_host {
+            self.dispatcher()
+                .check_sleep()
+                .map_err(bridge::dispatch_error_to_trap)?;
+            crate::core_app::sleep_after(
+                std::time::Instant::now() + std::time::Duration::from_millis(millis.into()),
+            );
+            return Ok(());
+        }
         self.dispatcher()
             .sleep_millis(millis)
             .map_err(bridge::dispatch_error_to_trap)

@@ -27,11 +27,19 @@ pub fn file_stat_to_wit(stat: dispatch::FileStat) -> fs::types::FileStat {
 }
 
 pub fn fs_error_to_wit(err: dispatch::FsDispatchError) -> fs::types::FsError {
-    match err {
+    let out = match err {
         dispatch::FsDispatchError::PermissionDenied => fs::types::FsError::PermissionDenied,
         dispatch::FsDispatchError::Policy(message) => fs::types::FsError::Io(message),
         dispatch::FsDispatchError::Adapter(err) => fs_adapter_error_to_wit(err),
+    };
+    // An app built on std (through krate-c-runtime) sees only "I/O error":
+    // POSIX has no room for the reason. KRATE_FS_TRACE=1 prints it.
+    if let fs::types::FsError::Io(message) = &out {
+        if std::env::var_os("KRATE_FS_TRACE").is_some() {
+            eprintln!("krate: file system: {message}");
+        }
     }
+    out
 }
 
 pub fn http_method_from_wit(method: net::types::HttpMethod) -> dispatch::HttpMethod {
@@ -141,6 +149,7 @@ fn fs_adapter_error_to_wit(err: dispatch::AdapterError) -> fs::types::FsError {
         dispatch::AdapterError::InvalidPath => fs::types::FsError::InvalidPath,
         dispatch::AdapterError::NotFound => fs::types::FsError::NotFound,
         dispatch::AdapterError::PermissionDenied => fs::types::FsError::PermissionDenied,
+        dispatch::AdapterError::AlreadyExists => fs::types::FsError::AlreadyExists,
         dispatch::AdapterError::Io(message)
         | dispatch::AdapterError::Network(message)
         | dispatch::AdapterError::Protocol(message) => fs::types::FsError::Io(message),
@@ -165,6 +174,7 @@ fn net_adapter_error_to_wit(err: dispatch::AdapterError) -> net::types::NetError
         dispatch::AdapterError::Timeout => net::types::NetError::Timeout,
         dispatch::AdapterError::Protocol(message) => net::types::NetError::Protocol(message),
         dispatch::AdapterError::Io(message) => net::types::NetError::Other(message),
+        dispatch::AdapterError::AlreadyExists => net::types::NetError::Other(err.to_string()),
         dispatch::AdapterError::BodyTooLarge => net::types::NetError::BodyTooLarge,
         dispatch::AdapterError::Unsupported => net::types::NetError::Other(
             "operation is not supported by this host adapter yet".to_string(),
@@ -179,6 +189,7 @@ fn io_adapter_error_to_wit(err: dispatch::AdapterError) -> io::types::IoError {
             io::types::IoError::Other("permission denied".to_string())
         }
         dispatch::AdapterError::InvalidPath
+        | dispatch::AdapterError::AlreadyExists
         | dispatch::AdapterError::Unsupported
         | dispatch::AdapterError::Network(_)
         | dispatch::AdapterError::Timeout

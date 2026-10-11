@@ -33,6 +33,11 @@ use crate::{
     uapi::{AudioCall, CameraCall, UapiCall, UapiGuard, UiCall},
 };
 
+// krate:gpu lives beside the host it extends, as a child module so it can
+// present through the same private paths a scene3d frame takes.
+#[path = "gpu_host.rs"]
+mod gpu_host;
+
 /// How long `events.wait` sleeps between polls.
 const WAIT_POLL_INTERVAL_MILLIS: u64 = 10;
 
@@ -57,6 +62,22 @@ const HEADLESS_IDLE_WAIT_LIMIT: u32 = 8;
 /// enough that a person who runs an app by mistake gets their prompt back.
 const HEADLESS_RUN_BUDGET: std::time::Duration = std::time::Duration::from_secs(5);
 
+/// The headless budget for this run: [`HEADLESS_RUN_BUDGET`], or
+/// `KRATE_HEADLESS_SECS` when set. The knob is for measuring an app whose
+/// start-up alone outlasts five seconds (a GPU engine loading a large scene)
+/// without a window; like `KRATE_GPU_UNPACED`, nothing a person runs sets it.
+fn headless_run_budget() -> std::time::Duration {
+    headless_secs_asked().unwrap_or(HEADLESS_RUN_BUDGET)
+}
+
+fn headless_secs_asked() -> Option<std::time::Duration> {
+    std::env::var("KRATE_HEADLESS_SECS")
+        .ok()
+        .and_then(|v| v.trim().parse::<f64>().ok())
+        .filter(|secs| secs.is_finite() && *secs > 0.0)
+        .map(std::time::Duration::from_secs_f64)
+}
+
 /// How long a headless app has to leave after being told the window closed,
 /// before the runtime ends the process for it.
 ///
@@ -64,6 +85,10 @@ const HEADLESS_RUN_BUDGET: std::time::Duration = std::time::Duration::from_secs(
 /// that is genuinely in progress. An app that saves on the way out has two
 /// full seconds of frames to do it in.
 const HEADLESS_CLOSE_GRACE: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// A headless window's pointer: whether the app holds it, and the raw motion
+/// not yet taken.
+type HeldPointer = (bool, (f32, f32));
 
 /// Host state for the Phase 3 `gui` world imports.
 pub struct Phase3GuiHost {
@@ -88,6 +113,10 @@ pub struct Phase3GuiHost {
     /// closes the window", so with no such window the loop has nothing to end
     /// it and the app spins out its whole wait budget. See [`idle_waits`].
     headless: bool,
+    /// Windows a driven headless run holds the pointer in, and the raw motion
+    /// waiting to be taken (IC-937): the run's `look` step moves it, so a
+    /// script can turn a game's camera with no screen at all.
+    headless_pointer: std::cell::RefCell<std::collections::BTreeMap<u64, HeldPointer>>,
     /// Consecutive `wait` calls that timed out with no event, used only when
     /// [`headless`] is set. Once this passes [`HEADLESS_IDLE_WAIT_LIMIT`] the
     /// host synthesises a close request so the guest exits the way it would if
@@ -239,6 +268,9 @@ pub struct Phase3GuiHost {
     /// Bound 3D scenes, sharing the canvas id space so a scene and a canvas
     /// can never collide on one number.
     scenes: std::cell::RefCell<std::collections::BTreeMap<u64, (WindowId, WidgetId, SceneBackend)>>,
+    /// The app's GPU objects (krate:gpu): devices, buffers, textures,
+    /// pipelines and surfaces, by the handle the app was given.
+    gpu: std::cell::RefCell<gpu_host::GpuState>,
     /// The next canvas or scene id to hand out; never reused within a run.
     next_canvas_id: std::cell::Cell<u64>,
     /// Per-canvas display lists, recorded only when the adapter renders
@@ -288,10 +320,69 @@ pub struct Phase3GuiHost {
     /// Set when a frame was presented, so the next draw op starts a fresh
     /// recording rather than appending to the frame just measured.
     frame_ended: std::cell::Cell<bool>,
+    /// The screen as the app's other threads see it (IC-929): the thread that
+    /// made this host owns the window (AppKit keeps it in that thread's
+    /// state), so a frame another thread presents waits here for it.
+    pub(crate) screen: WorkerScreen,
     /// The usability script, when this run is a driven one. `None` on every
     /// ordinary run, which is what keeps this whole mechanism off the path a
     /// person's app takes.
     usability: Option<UsabilityDriver>,
+}
+
+/// Wait until `due`. Sleep short, then close the gap by yielding: every OS
+/// rounds a sleep UP to its timer granularity, and on Windows that is ~15.6
+/// ms, so asking for the exact remainder overshoots by a whole frame.
+pub(crate) fn sleep_until(due: std::time::Instant) {
+    const SPIN_MARGIN: std::time::Duration = std::time::Duration::from_micros(1_200);
+    let remainder = due.saturating_duration_since(std::time::Instant::now());
+    if remainder > SPIN_MARGIN {
+        std::thread::sleep(remainder - SPIN_MARGIN);
+    }
+    while std::time::Instant::now() < due {
+        std::thread::yield_now();
+    }
+}
+
+/// What a threaded app's worker threads know of the screen (IC-929).
+///
+/// A window lives in the state of the thread that made it -- AppKit's on a
+/// Mac -- so a worker cannot lower a frame to it or ask its pixel density.
+/// Bevy's multi-threaded executor presents from whichever thread runs its
+/// render system; the frame is kept here and the main thread lowers it the
+/// next time it takes the host, and a worker reads the density the main
+/// thread last saw.
+pub(crate) struct WorkerScreen {
+    main: std::thread::ThreadId,
+    /// Windows a worker presented to, not yet lowered, and whether a
+    /// `--shoot` picture may be taken of them.
+    pub(crate) unsynced: std::cell::RefCell<Vec<(WindowId, bool)>>,
+    /// Each window's pixel density, as the main thread last saw it.
+    scales: std::cell::RefCell<std::collections::HashMap<WindowId, f32>>,
+    /// Whether a worker has touched the screen at all: until one does the
+    /// main thread's turn costs nothing.
+    pub(crate) used: std::cell::Cell<bool>,
+    /// A threaded app: a GPU present's frame pacing waits after the host is
+    /// let go (`core_app::paced`), not while holding it.
+    // Threaded apps only, which iOS and the web do not run.
+    #[cfg_attr(any(target_os = "ios", target_arch = "wasm32"), allow(dead_code))]
+    pub(crate) pace_outside: std::cell::Cell<bool>,
+}
+
+impl WorkerScreen {
+    fn new() -> Self {
+        Self {
+            main: std::thread::current().id(),
+            unsynced: Default::default(),
+            scales: Default::default(),
+            used: std::cell::Cell::new(false),
+            pace_outside: std::cell::Cell::new(false),
+        }
+    }
+
+    pub(crate) fn on_main(&self) -> bool {
+        std::thread::current().id() == self.main
+    }
 }
 
 /// The scripted half of a driven run: which step is next, and what each one saw.
@@ -336,6 +427,8 @@ struct UsabilityDriver {
     /// action was dispatched, so the app gets a settle before the next.
     task_index: usize,
     task_dispatched_at: Option<std::time::Instant>,
+    /// How much of a `look` step's motion has been delivered so far.
+    look_given: (f32, f32),
     /// The control the pointer step pressed, so the keyboard step can pick a
     /// different one: pressing the same list row twice selects what is
     /// already selected and changes nothing, which read as a keyboard
@@ -492,6 +585,7 @@ impl Phase3GuiHost {
             // looped forever, invisible and silent, which is exactly what a
             // person saw on their first `krate run`.
             headless: headless_backend,
+            headless_pointer: Default::default(),
             idle_waits: std::cell::Cell::new(0),
             last_present: std::cell::Cell::new(None),
             publish_times: std::cell::RefCell::new(Vec::new()),
@@ -563,6 +657,7 @@ impl Phase3GuiHost {
             gamepads: std::cell::RefCell::new(crate::gamepad::Gamepads::new()),
             held_keys: std::cell::RefCell::new(std::collections::BTreeSet::new()),
             scenes: std::cell::RefCell::new(std::collections::BTreeMap::new()),
+            gpu: Default::default(),
             next_canvas_id: std::cell::Cell::new(1),
             canvas_lists: Default::default(),
             lists_enabled: std::cell::Cell::new(None),
@@ -584,6 +679,7 @@ impl Phase3GuiHost {
             inspected_ops: std::cell::RefCell::new(Vec::new()),
             inspected_canvas_size: std::cell::Cell::new(None),
             frame_ended: std::cell::Cell::new(false),
+            screen: WorkerScreen::new(),
             usability: None,
         })
     }
@@ -655,6 +751,7 @@ impl Phase3GuiHost {
             press_delivered_at: None,
             task_index: 0,
             task_dispatched_at: None,
+            look_given: (0.0, 0.0),
             clicked_widget: None,
             idle_churn: None,
         });
@@ -682,6 +779,40 @@ impl Phase3GuiHost {
     /// tree is fully built: an app constructs its whole window, then waits for
     /// input. Capturing mid-construction (on every tree sync) grabbed a
     /// half-built frame -- a checklist with its title but not its rows.
+    /// The main thread's turn at the host, in a threaded app (IC-929): lower
+    /// the frames workers presented since, and note each window's density
+    /// for them. Free until a worker first touches the screen.
+    // Threaded apps only, which iOS and the web do not run.
+    #[cfg_attr(any(target_os = "ios", target_arch = "wasm32"), allow(dead_code))]
+    pub(crate) fn main_turn(&self) {
+        if !self.screen.used.get() || !self.screen.on_main() {
+            return;
+        }
+        let presented = std::mem::take(&mut *self.screen.unsynced.borrow_mut());
+        for (window, worth_shooting) in presented {
+            if let Err(error) = self.sync_native_widgets(window) {
+                tracing::debug!(?error, "a frame a worker presented could not be lowered");
+            } else if worth_shooting {
+                self.maybe_take_screenshot();
+            }
+        }
+        for window in self.windows.iter().copied() {
+            let scale = self.dispatcher().window_scale(window);
+            self.screen.scales.borrow_mut().insert(window, scale);
+        }
+    }
+
+    /// A worker presented to `window`: its own thread lowers the frame on
+    /// its next turn (WorkerScreen).
+    pub(crate) fn hand_frame_to_main(&self, window: WindowId, worth_shooting: bool) {
+        self.screen.used.set(true);
+        let mut unsynced = self.screen.unsynced.borrow_mut();
+        match unsynced.iter_mut().find(|(w, _)| *w == window) {
+            Some(entry) => entry.1 |= worth_shooting,
+            None => unsynced.push((window, worth_shooting)),
+        }
+    }
+
     fn maybe_take_screenshot(&self) {
         // A run that ends before it ever waits still shows the person's look.
         self.follow_widget_look();
@@ -2270,14 +2401,54 @@ impl Phase3GuiHost {
         // An action is settling: give the app its frame before the next
         // step, the same grace the click and keyboard steps get.
         if let Some(at) = dispatched_at {
+            let held = step.held_key().and_then(Result::ok);
+            let look = step.look_motion().and_then(Result::ok);
+            let pad = step.pad_press().and_then(Result::ok);
+            let stick = step.stick_tilt().and_then(Result::ok);
             let needed = step
                 .wait_ms
                 .map(std::time::Duration::from_millis)
+                .or(held.as_ref().map(|(_, ms)| *ms))
+                .or(pad.as_ref().map(|(_, ms)| *ms))
+                .or(stick.as_ref().map(|(_, _, ms)| *ms))
+                .or(look.as_ref().map(|(_, _, ms)| *ms))
                 .unwrap_or(PRESS_SETTLE);
             let since = at.elapsed();
+            // A look moves the held pointer evenly over its time.
+            if let Some((dx, dy, ms)) = look {
+                let frac = (since.as_secs_f32() / ms.as_secs_f32()).min(1.0);
+                let given = self
+                    .usability
+                    .as_ref()
+                    .map(|d| d.look_given)
+                    .unwrap_or_default();
+                let (tx, ty) = (dx * frac, dy * frac);
+                self.headless_look(tx - given.0, ty - given.1);
+                if let Some(driver) = self.usability.as_mut() {
+                    driver.look_given = (tx, ty);
+                }
+            }
             let ready = (since >= needed && from_wait) || since >= needed.max(PRESS_GIVE_UP);
             if !ready {
                 return;
+            }
+            // A held pad button or stick is let go when its time is up.
+            if let Some((button, _)) = pad {
+                self.gamepads.borrow_mut().stand_in_press(&button, false);
+            }
+            if let Some((axis, _, _)) = stick {
+                self.gamepads.borrow_mut().stand_in_tilt(&axis, 0.0);
+            }
+            // A held key is let go when its time is up, before the next step.
+            if let Some((key, _)) = held {
+                let _ = self
+                    .dispatcher()
+                    .route_key_event(crate::phase3_ui::KeyRouteRequest {
+                        window,
+                        key,
+                        pressed: false,
+                        modifiers: Default::default(),
+                    });
             }
             if let Some(driver) = self.usability.as_mut() {
                 driver.task_index += 1;
@@ -2351,7 +2522,36 @@ impl Phase3GuiHost {
             }
             return;
         }
-        if step.wait_ms.is_some() {
+        if let Some(path) = &step.shoot {
+            let scale = self.screenshot.as_ref().map(|(_, s)| *s).unwrap_or(1.0);
+            match self.render_window_png(window, scale, std::path::Path::new(path)) {
+                Ok(()) => {
+                    if trace {
+                        eprintln!("krate-check: task {name:?} step {number}: shot {path}");
+                    }
+                    if let Some(driver) = self.usability.as_mut() {
+                        driver.task_index += 1;
+                        driver.report.task_steps_done = number;
+                    }
+                }
+                Err(error) => broke(self, format!("could not write {path:?}: {error}")),
+            }
+            return;
+        }
+        // The stand-in controller (IC-936): held now, let go when settled.
+        let pad = step.pad_press().and_then(Result::ok);
+        let stick = step.stick_tilt().and_then(Result::ok);
+        let look = step.look_motion().and_then(Result::ok);
+        if step.wait_ms.is_some() || pad.is_some() || stick.is_some() || look.is_some() {
+            if let Some(driver) = self.usability.as_mut() {
+                driver.look_given = (0.0, 0.0);
+            }
+            if let Some((button, _)) = &pad {
+                self.gamepads.borrow_mut().stand_in_press(button, true);
+            }
+            if let Some((axis, value, _)) = &stick {
+                self.gamepads.borrow_mut().stand_in_tilt(axis, *value);
+            }
             if let Some(driver) = self.usability.as_mut() {
                 driver.task_dispatched_at = Some(std::time::Instant::now());
             }
@@ -2409,6 +2609,41 @@ impl Phase3GuiHost {
                     })
                     .is_ok()
             })
+        } else if let Some(Ok((fx, fy))) = step.click_point() {
+            let Ok(Some(record)) = dispatcher.window(window) else {
+                return;
+            };
+            let (w, h) = (record.size.width as f32, record.size.height as f32);
+            let Ok(viewport) = LayoutViewport::new(w, h) else {
+                return;
+            };
+            let (x, y) = (fx * w, fy * h);
+            if trace {
+                eprintln!("krate-check: task {name:?} step {number}: pressing the window at {x:.1},{y:.1}");
+            }
+            [true, false].iter().all(|&pressed| {
+                dispatcher
+                    .route_pointer_event(crate::phase3_ui::PointerRouteRequest {
+                        window,
+                        viewport,
+                        x,
+                        y,
+                        button: Some(krate_adapter_common::ui::PointerButton::Primary),
+                        pressed,
+                        modifiers: Default::default(),
+                    })
+                    .is_ok()
+            })
+        } else if let Some(Ok((key, _))) = step.held_key() {
+            // Pressed now; released when the step has settled (above).
+            dispatcher
+                .route_key_event(crate::phase3_ui::KeyRouteRequest {
+                    window,
+                    key,
+                    pressed: true,
+                    modifiers: Default::default(),
+                })
+                .is_ok()
         } else if let Some(key) = &step.key {
             [true, false].iter().all(|&pressed| {
                 dispatcher
@@ -2510,10 +2745,22 @@ impl Phase3GuiHost {
         // watch records the window as held first. After that, this two-strike
         // close is the backstop for an app whose loop ignores the driver's own
         // CloseRequested.
-        let budget = if self.usability.is_some() {
-            crate::usability::STAY_OPEN_WATCH + std::time::Duration::from_secs(5)
+        //
+        // A task runs before the watch, so its own scripted time (its waits
+        // and held keys, plus the settle every action gets) is added: a game
+        // that takes twenty seconds to reach its menu was closed mid-task.
+        let budget = if let Some(driver) = self.usability.as_ref() {
+            let scripted = driver
+                .plan
+                .task
+                .as_ref()
+                .map(|task| task.scripted_time(PRESS_GIVE_UP))
+                .unwrap_or_default();
+            let driven =
+                crate::usability::STAY_OPEN_WATCH + std::time::Duration::from_secs(5) + scripted;
+            driven.max(headless_secs_asked().unwrap_or_default())
         } else {
-            HEADLESS_RUN_BUDGET
+            headless_run_budget()
         };
         if now.duration_since(started) < budget {
             return None;
@@ -3349,22 +3596,25 @@ impl Phase3GuiHost {
             self.last_present.set(Some(std::time::Instant::now()));
             return;
         }
-        if let Some(previous) = self.last_present.get() {
-            let elapsed = previous.elapsed();
-            if elapsed < FRAME_BUDGET {
-                // Sleep short, then close the gap by yielding: every OS rounds
-                // a sleep UP to its timer granularity, and on Windows that is
-                // ~15.6 ms, so asking for the exact remainder overshoots by a
-                // whole frame.
-                const SPIN_MARGIN: std::time::Duration = std::time::Duration::from_micros(1_200);
-                let remainder = FRAME_BUDGET - elapsed;
-                if remainder > SPIN_MARGIN {
-                    std::thread::sleep(remainder - SPIN_MARGIN);
-                }
-                while previous.elapsed() < FRAME_BUDGET {
-                    std::thread::yield_now();
-                }
+        let due = self
+            .last_present
+            .get()
+            .map(|previous| previous + FRAME_BUDGET)
+            .filter(|due| *due > std::time::Instant::now());
+        // A threaded app's host is one lock its threads take in turn: waiting
+        // here would hold every other thread out of the host for the rest of
+        // the frame. The wait happens after the call lets go of it instead.
+        #[cfg(not(any(target_os = "ios", target_arch = "wasm32")))]
+        if self.screen.pace_outside.get() {
+            if let Some(due) = due {
+                crate::core_app::pace_until(due);
             }
+            self.last_present
+                .set(Some(due.unwrap_or_else(std::time::Instant::now)));
+            return;
+        }
+        if let Some(due) = due {
+            sleep_until(due);
         }
         self.last_present.set(Some(std::time::Instant::now()));
     }
@@ -3436,10 +3686,25 @@ impl Phase3GuiHost {
 
     /// Density needed by both the display and an optional screenshot consumer.
     fn canvas_backing_scale(&self, window: WindowId) -> f32 {
+        // A worker thread reads the density the main thread last saw: only
+        // the window's own thread can ask it (WorkerScreen).
+        let native = if self.screen.on_main() {
+            let scale = self.dispatcher().window_scale(window);
+            self.screen.scales.borrow_mut().insert(window, scale);
+            scale
+        } else {
+            self.screen.used.set(true);
+            self.screen
+                .scales
+                .borrow()
+                .get(&window)
+                .copied()
+                .unwrap_or(1.0)
+        };
         // A headless adapter has no display and reports 1x. Raster at the
         // requested capture density as well, otherwise --shoot-scale 2 only
         // enlarges a 1x canvas image. Native runs without a shot are unchanged.
-        self.dispatcher().window_scale(window).max(
+        native.max(
             self.screenshot
                 .as_ref()
                 .map(|(_, scale)| *scale)
@@ -4467,6 +4732,13 @@ impl Phase3GuiHost {
     }
 
     pub(crate) fn pointer_take_motion(&self, window: u64) -> (f32, f32) {
+        if self.scripted_pointer() {
+            let mut pointers = self.headless_pointer.borrow_mut();
+            return pointers
+                .get_mut(&window)
+                .map(|(_, motion)| std::mem::take(motion))
+                .unwrap_or((0.0, 0.0));
+        }
         self.pump_for_query();
         match self.window_id(window) {
             Ok(id) => self.dispatcher().take_pointer_motion(id),
@@ -4480,9 +4752,51 @@ impl Phase3GuiHost {
         capture: bool,
     ) -> Result<(), ui::types::UiError> {
         let id = self.window_id(window)?;
+        // Headless there is no screen to hold a cursor on. A driven run has a
+        // script to supply raw motion, so there holding is a real promise; a
+        // plain headless run has nothing to move it and still refuses, rather
+        // than claim to hold a pointer that does not exist.
+        if self.scripted_pointer() {
+            let _ = id;
+            let mut pointers = self.headless_pointer.borrow_mut();
+            let entry = pointers.entry(window).or_insert((false, (0.0, 0.0)));
+            entry.0 = capture;
+            if !capture {
+                entry.1 = (0.0, 0.0);
+            }
+            return Ok(());
+        }
         self.dispatcher()
             .set_pointer_capture(id, capture)
             .map_err(dispatch_error_to_ui_error)
+    }
+
+    /// Whether the app holds the pointer in a window.
+    pub(crate) fn pointer_captured(&self, window: u64) -> bool {
+        if self.scripted_pointer() {
+            return self
+                .headless_pointer
+                .borrow()
+                .get(&window)
+                .is_some_and(|(held, _)| *held);
+        }
+        self.pointer_state(window).captured
+    }
+
+    /// Headless and driven: the script is the mouse (IC-937).
+    fn scripted_pointer(&self) -> bool {
+        self.headless && self.usability.is_some()
+    }
+
+    /// Give a held pointer raw motion (a `look` step). A pointer the app does
+    /// not hold moves nothing, as a free cursor would not turn a camera.
+    fn headless_look(&self, dx: f32, dy: f32) {
+        for (held, motion) in self.headless_pointer.borrow_mut().values_mut() {
+            if *held {
+                motion.0 += dx;
+                motion.1 += dy;
+            }
+        }
     }
 }
 
@@ -8156,6 +8470,67 @@ mod tests {
     /// pointer and ignored Enter, because the runtime delivered a raw key
     /// and nothing else. The app receives the key first, then a press and a
     /// release aimed at the button, exactly as a pointer would deliver them.
+    /// A threaded app's worker presents (IC-929): the frame waits for the
+    /// window's own thread, which lowers it on its next turn; a worker asks
+    /// nothing of the window itself and reads the density the main thread saw.
+    #[test]
+    fn a_frame_a_worker_presents_is_lowered_on_the_main_threads_turn() {
+        let mut host = headless_host();
+        ui::window::Host::create(
+            &mut host,
+            "app".to_string(),
+            ui::types::WindowSize {
+                width: 200,
+                height: 100,
+            },
+        )
+        .expect("create call")
+        .expect("a window");
+        let window = *host.windows.first().expect("window id");
+        // Nothing has come from a worker: the main thread's turn is free.
+        host.main_turn();
+        assert!(!host.screen.used.get());
+
+        struct Across<'a>(&'a Phase3GuiHost);
+        // SAFETY: the test thread waits for the worker; the two never touch
+        // the host at once, as core_app's host lock guarantees in a real run.
+        unsafe impl Send for Across<'_> {}
+        unsafe impl Sync for Across<'_> {}
+        impl<'a> Across<'a> {
+            fn host(&self) -> &'a Phase3GuiHost {
+                self.0
+            }
+        }
+        host.screen.scales.borrow_mut().insert(window, 2.0);
+        let across = Across(&host);
+        let worker_scale = std::thread::scope(|s| {
+            s.spawn(|| {
+                let host = across.host();
+                assert!(!host.screen.on_main());
+                host.hand_frame_to_main(window, true);
+                host.hand_frame_to_main(window, false);
+                // A worker's turn lowers nothing: only the window's thread can.
+                host.main_turn();
+                host.canvas_backing_scale(window)
+            })
+            .join()
+            .expect("worker")
+        });
+        assert_eq!(worker_scale, 2.0, "the density the main thread last saw");
+        assert_eq!(
+            *host.screen.unsynced.borrow(),
+            vec![(window, true)],
+            "one frame waits for the window, still worth a shot"
+        );
+        host.main_turn();
+        assert!(host.screen.unsynced.borrow().is_empty());
+        assert_eq!(
+            host.screen.scales.borrow().get(&window).copied(),
+            Some(host.dispatcher().window_scale(window)),
+            "the main thread's turn noted the window's own density"
+        );
+    }
+
     #[test]
     fn enter_on_a_focused_button_arrives_as_a_press_and_a_release() {
         let mut host = headless_host();
@@ -8256,6 +8631,12 @@ mod tests {
         let mut s = crate::usability::TaskStep::default();
         match field {
             "click" => s.click = Some(value.to_string()),
+            "click_at" => s.click_at = Some(value.to_string()),
+            "hold" => s.hold = Some(value.to_string()),
+            "pad" => s.pad = Some(value.to_string()),
+            "stick" => s.stick = Some(value.to_string()),
+            "look" => s.look = Some(value.to_string()),
+            "shoot" => s.shoot = Some(value.to_string()),
             "key" => s.key = Some(value.to_string()),
             "type" => s.type_text = Some(value.to_string()),
             "expect_text" => s.expect_text = Some(value.to_string()),
@@ -8378,6 +8759,195 @@ mod tests {
             "{report:?}"
         );
         assert_eq!(report.task_steps_done, 3);
+    }
+
+    /// An app that draws its own interface (a game) is driven by point and
+    /// by held key: `click_at` presses the window where it is told, and
+    /// `hold` keeps a key down for its time before letting it go.
+    #[test]
+    fn a_task_presses_a_point_and_holds_a_key_for_its_time() {
+        let shot = std::env::temp_dir().join(format!("krate-task-shot-{}.png", std::process::id()));
+        let _ = std::fs::remove_file(&shot);
+        let task = crate::usability::Task {
+            name: "walk".to_string(),
+            steps: vec![
+                step("click_at", "0.25,0.5"),
+                step("hold", "w 600"),
+                step("shoot", shot.to_str().unwrap()),
+                step("expect_no_text", "a crash dialog"),
+            ],
+        };
+        let mut host = host_with_labelled_button("Play", task_plan(task));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        let mut presses = Vec::new();
+        let mut keys = Vec::new();
+        let report = loop {
+            match ui::events::Host::wait(&mut host, Some(50)).expect("wait call") {
+                Some(ui::types::Event::Pointer(p)) => presses.push((p.pressed, p.x, p.y)),
+                Some(ui::types::Event::Key(k)) => {
+                    keys.push((k.key.clone(), k.pressed, std::time::Instant::now()))
+                }
+                _ => {}
+            }
+            let report = host.usability_report().expect("a plan");
+            if report.task.is_some() || std::time::Instant::now() > deadline {
+                break report;
+            }
+        };
+        assert_eq!(
+            report.task,
+            Some(crate::usability::Observation::Held),
+            "{report:?}"
+        );
+        assert_eq!(report.task_steps_done, 4);
+        let png = std::fs::read(&shot).expect("the shoot step wrote its picture");
+        assert!(png.starts_with(b"\x89PNG"), "a PNG");
+        let _ = std::fs::remove_file(&shot);
+        let pressed: Vec<bool> = presses.iter().map(|p| p.0).collect();
+        assert_eq!(pressed, vec![true, false], "one press, then its release");
+        // The window is 300 wide (host_with_labelled_button): a quarter in.
+        assert!(
+            (presses[0].1 - 75.0).abs() < 1.0,
+            "pressed at the point asked: {presses:?}"
+        );
+        assert_eq!(
+            keys.iter().map(|k| (k.0.as_str(), k.1)).collect::<Vec<_>>(),
+            vec![("w", true), ("w", false)],
+            "the key goes down, then up"
+        );
+        let held = keys[1].2.duration_since(keys[0].2);
+        assert!(
+            held >= std::time::Duration::from_millis(550),
+            "the key stays down for its time: {held:?}"
+        );
+        // The run's deadline grows by the script's own time: a wait, a held
+        // key (at least a settle), a settle per press, nothing for a look.
+        let long = crate::usability::Task {
+            name: "reach the menu".to_string(),
+            steps: vec![
+                step("wait_ms", "20000"),
+                step("click_at", "0.5,0.5"),
+                step("hold", "w 3000"),
+                step("expect_no_text", "x"),
+            ],
+        };
+        assert_eq!(
+            long.scripted_time(std::time::Duration::from_millis(1500)),
+            std::time::Duration::from_millis(24_500)
+        );
+        let bad = crate::usability::Task {
+            name: "nowhere".to_string(),
+            steps: vec![step("click_at", "1.5,0"), step("expect_text", "x")],
+        };
+        assert!(bad.validate().unwrap_err().contains("between 0 and 1"));
+        let bad = crate::usability::Task {
+            name: "forever".to_string(),
+            steps: vec![step("hold", "w"), step("expect_text", "x")],
+        };
+        assert!(bad.validate().unwrap_err().contains("key milliseconds"));
+    }
+
+    /// IC-937: a driven headless run holds the pointer when the app asks, and
+    /// a `look` step gives it raw motion over the step's time. (A plain
+    /// headless run still refuses: an_app_asks_about_the_mouse_and_a_headless_capture_is_refused.)
+    #[test]
+    fn a_task_turns_a_held_pointer_in_a_headless_run() {
+        let task = crate::usability::Task {
+            name: "look around".to_string(),
+            steps: vec![
+                step("look", "120 -60 400"),
+                step("expect_no_text", "a crash dialog"),
+            ],
+        };
+        let mut host = host_with_labelled_button("Play", task_plan(task));
+        let window = host.windows.first().expect("a window").get();
+        // Not held: a look moves nothing.
+        assert!(!host.pointer_captured(window));
+        host.pointer_capture(window, true)
+            .expect("a headless run can hold the pointer");
+        assert!(host.pointer_captured(window));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        let (mut dx, mut dy, mut takes) = (0.0f32, 0.0f32, 0);
+        let report = loop {
+            let _ = ui::events::Host::wait(&mut host, Some(20));
+            let (x, y) = host.pointer_take_motion(window);
+            if x != 0.0 || y != 0.0 {
+                takes += 1;
+            }
+            dx += x;
+            dy += y;
+            let report = host.usability_report().expect("a plan");
+            if report.task.is_some() || std::time::Instant::now() > deadline {
+                break report;
+            }
+        };
+        assert_eq!(
+            report.task,
+            Some(crate::usability::Observation::Held),
+            "{report:?}"
+        );
+        assert!(
+            (dx - 120.0).abs() < 0.01 && (dy + 60.0).abs() < 0.01,
+            "{dx},{dy}"
+        );
+        assert!(
+            takes > 1,
+            "the motion came over several frames, not one jump"
+        );
+        host.pointer_capture(window, false).unwrap();
+        assert!(!host.pointer_captured(window));
+    }
+
+    /// IC-936: a driven run plugs in a stand-in controller, holds its button
+    /// and stick for their times, and lets go.
+    #[test]
+    fn a_task_holds_a_stand_in_gamepad_button_and_stick() {
+        let task = crate::usability::Task {
+            name: "jump and run".to_string(),
+            steps: vec![
+                step("pad", "south 400"),
+                step("stick", "left-y 0.75 400"),
+                step("expect_no_text", "a crash dialog"),
+            ],
+        };
+        let mut host = host_with_labelled_button("Play", task_plan(task));
+        assert!(
+            !host.gamepads.borrow_mut().connected(),
+            "no pad before the script"
+        );
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        let (mut saw_south, mut saw_stick) = (false, false);
+        let report = loop {
+            let _ = ui::events::Host::wait(&mut host, Some(20));
+            saw_south |= ui::events::Host::gamepad_held(&mut host, "south".into()).unwrap();
+            let y = ui::events::Host::gamepad_axis(&mut host, "left-y".into()).unwrap();
+            saw_stick |= (y - 0.75).abs() < 1e-6;
+            let report = host.usability_report().expect("a plan");
+            if report.task.is_some() || std::time::Instant::now() > deadline {
+                break report;
+            }
+        };
+        assert_eq!(
+            report.task,
+            Some(crate::usability::Observation::Held),
+            "{report:?}"
+        );
+        assert!(saw_south, "south was held");
+        assert!(saw_stick, "the stick was pushed to 0.75");
+        assert!(ui::events::Host::gamepad_connected(&mut host).unwrap());
+        assert!(
+            !ui::events::Host::gamepad_held(&mut host, "south".into()).unwrap(),
+            "let go"
+        );
+        assert_eq!(
+            ui::events::Host::gamepad_axis(&mut host, "left-y".into()).unwrap(),
+            0.0
+        );
+        let bad = crate::usability::Task {
+            name: "triangle".to_string(),
+            steps: vec![step("pad", "triangle 100"), step("expect_text", "x")],
+        };
+        assert!(bad.validate().unwrap_err().contains("gamepad button"));
     }
 
     /// A row of a list answers Enter the way it answers a press: the pointer

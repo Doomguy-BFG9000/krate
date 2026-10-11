@@ -68,6 +68,18 @@ pub struct Gamepads {
     axes: BTreeMap<String, f32>,
     /// Whether the last poll saw a connected pad.
     connected: bool,
+    /// A stand-in pad a driven run presses (task steps `pad` and `stick`,
+    /// IC-936): connected while it exists, and it wins over a real one, so a
+    /// headless check sees exactly the controller its script holds.
+    stand_in: Option<StandIn>,
+}
+
+/// The stand-in controller's buttons and sticks.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Debug, Default)]
+pub struct StandIn {
+    held: BTreeMap<String, bool>,
+    axes: BTreeMap<String, f32>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -151,7 +163,20 @@ impl Gamepads {
             held: BTreeMap::new(),
             axes: BTreeMap::new(),
             connected: false,
+            stand_in: None,
         }
+    }
+
+    /// Press or let go of a button on the stand-in pad (plugging it in).
+    pub fn stand_in_press(&mut self, button: &str, down: bool) {
+        let pad = self.stand_in.get_or_insert_with(StandIn::default);
+        pad.held.insert(button.to_string(), down);
+    }
+
+    /// Move a stick or trigger on the stand-in pad (plugging it in).
+    pub fn stand_in_tilt(&mut self, axis: &str, value: f32) {
+        let pad = self.stand_in.get_or_insert_with(StandIn::default);
+        pad.axes.insert(axis.to_string(), value);
     }
 
     /// Take whatever the input system has queued and refresh the cached state.
@@ -160,6 +185,21 @@ impl Gamepads {
     /// queue be drained for state to advance, so a guest that never asks about
     /// gamepads costs nothing, and one that asks every frame gets fresh values.
     fn poll(&mut self) {
+        if let Some(pad) = &self.stand_in {
+            self.connected = true;
+            self.held = pad.held.clone();
+            self.axes = pad.axes.clone();
+            return;
+        }
+        // The Mac's own controllers first (the Game Controller framework):
+        // it sees the pads IOKit HID, and so gilrs, misses.
+        #[cfg(target_os = "macos")]
+        if let Some((held, axes)) = crate::gamepad_macos::read() {
+            self.connected = true;
+            self.held = held;
+            self.axes = axes;
+            return;
+        }
         let Some(backend) = self.backend.as_mut() else {
             return;
         };

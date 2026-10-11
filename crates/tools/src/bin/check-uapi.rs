@@ -19,6 +19,7 @@ const EXPECTED_IMPORTS: &[&str] = &[
     "krate:locale/types@0.1.0",
     "krate:net/http-client@0.1.0",
     "krate:net/ws@0.1.0",
+    "krate:net/sockets@0.1.0",
     "krate:net/types@0.1.0",
     "krate:resources/assets@0.1.0",
     "krate:random/bytes@0.1.0",

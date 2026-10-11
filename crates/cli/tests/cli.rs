@@ -11556,6 +11556,244 @@ fn an_app_plays_a_video_from_its_assets() {
     }
 }
 
+/// An app reaches the GPU through the binary a person runs (krate:gpu,
+/// IC-540, IC-916).
+///
+/// `gpu-probe.wasm` asks for a device and runs one check per line: a WGSL
+/// shader with a type error is refused by validation with the line it is on
+/// and never reaches the driver (the shader door, F-311); a triangle is drawn
+/// and its pixel read back; a compute pass doubles four numbers; a handle that
+/// was never given out and an impossible buffer are refused with the app still
+/// running; a device lost on purpose says so on the next call and a fresh one
+/// works. A machine with no GPU at all says so and the test stands down -- it
+/// is the only case where these lines do not appear.
+#[test]
+fn an_app_draws_and_computes_on_the_gpu_and_a_bad_shader_is_refused() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let wasm = dir.path().join("code.wasm");
+    std::fs::write(&wasm, include_bytes!("fixtures/gpu-probe.wasm")).expect("probe");
+    let manifest = dir.path().join("manifest.toml");
+    std::fs::write(
+        &manifest,
+        "[app]\nid = \"com.acme.gpu-probe\"\nname = \"gpu-probe\"\nversion = \"1.0.0\"\n\
+         entry = \"code.wasm\"\nworld = \"krate:app/gui@0.2.0\"\n\n\
+         [[capabilities]]\ncap = \"ui.window:create\"\nrationale = \"window\"\nrequired = true\n\n\
+         [[capabilities]]\ncap = \"io.stdout\"\nrationale = \"print\"\nrequired = true\n\n\
+         [[capabilities]]\ncap = \"io.args\"\nrationale = \"args\"\nrequired = true\n",
+    )
+    .expect("manifest");
+    let out = krate()
+        .arg("run")
+        .arg("--headless")
+        .arg(&wasm)
+        .arg("--manifest")
+        .arg(&manifest)
+        .arg("--auto-grant")
+        .arg("--")
+        .arg("check")
+        .output()
+        .expect("run");
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    if stdout.starts_with("adapter=Unsupported") {
+        eprintln!("skipping: this machine has no GPU: {stdout}");
+        return;
+    }
+    let line = |key: &str| -> String {
+        stdout
+            .lines()
+            .find(|l| l.starts_with(key))
+            .unwrap_or_else(|| panic!("no {key} line in: {stdout}{stderr}"))
+            .to_string()
+    };
+    let shader = line("shader=");
+    assert!(
+        shader.starts_with("shader=refused line=4 column=9 "),
+        "the broken shader's type error is on line 4: {shader}"
+    );
+    assert!(
+        shader.contains("expected to be `vec3<f32>`, but got `f32`"),
+        "the refusal says what is wrong: {shader}"
+    );
+    assert_eq!(line("pixel="), "pixel=255,0,0,255", "the triangle is red");
+    assert_eq!(
+        line("compute="),
+        "compute=2,4,6,8",
+        "the compute pass doubled"
+    );
+    assert_eq!(
+        line("invalid-handle="),
+        "invalid-handle=refused oversized-buffer=refused"
+    );
+    assert_eq!(line("lost="), "lost=yes recovered=yes");
+    assert!(out.status.success(), "{stdout}{stderr}");
+}
+
+/// A threaded app (IC-929) through the binary a person runs: a core module
+/// over a shared memory, built for wasm32-wasip1-threads, whose `std::thread`,
+/// scoped threads and rayon pool are real OS threads sharing its memory, and
+/// whose processor count comes from the host.
+#[test]
+fn a_threaded_app_runs_its_threads_and_rayon_pool_on_real_cores() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let wasm = dir.path().join("app.wasm");
+    std::fs::write(&wasm, include_bytes!("fixtures/threads-probe.wasm")).expect("probe");
+    let manifest = dir.path().join("manifest.toml");
+    std::fs::write(
+        &manifest,
+        "[app]\nid = \"com.acme.threads\"\nname = \"threads\"\nversion = \"1.0.0\"\n\
+         entry = \"app.wasm\"\nworld = \"krate:app/cli@0.1.0\"\n\n\
+         [[capabilities]]\ncap = \"io.stdout\"\nrationale = \"print\"\nrequired = true\n",
+    )
+    .expect("manifest");
+    let out = krate()
+        .arg("run")
+        .arg(&wasm)
+        .arg("--manifest")
+        .arg(&manifest)
+        .arg("--auto-grant")
+        .output()
+        .expect("run");
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(out.status.success(), "{stdout}{stderr}");
+    let cores = std::thread::available_parallelism().map_or(1, |n| n.get());
+    assert!(
+        stdout.contains(&format!("available_parallelism: Ok({cores})")),
+        "the app is told this machine's {cores} cores: {stdout}"
+    );
+    assert!(
+        stdout.contains("std::thread ThreadId(2) returned"),
+        "a std::thread ran and was joined: {stdout}"
+    );
+    assert!(
+        stdout.contains("4 scoped threads counted 400000"),
+        "four scoped threads shared one counter: {stdout}"
+    );
+    assert!(
+        stdout.contains("parking_lot: 8 threads took their turns (8) and counted 400000"),
+        "parking_lot's Mutex and Condvar parked and woke eight threads through \
+         make-parking-lot.py's std parker (IC-939): {stdout}"
+    );
+    assert!(
+        stdout.contains(&format!("rayon on {cores} threads"))
+            && stdout.contains("same answer: true"),
+        "rayon sized its pool from the cores and agreed with one thread: {stdout}"
+    );
+}
+
+/// A threaded app packs into a .krate, passes the door, and runs from it
+/// (IC-938): the same threads probe, through `krate pack` and `krate run
+/// app.krate` -- the path a double-click takes.
+#[test]
+fn a_threaded_app_packs_into_a_krate_and_runs_from_it() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let wasm = dir.path().join("app.wasm");
+    std::fs::write(&wasm, include_bytes!("fixtures/threads-probe.wasm")).expect("probe");
+    let manifest = dir.path().join("manifest.toml");
+    std::fs::write(
+        &manifest,
+        "[app]\nid = \"com.acme.threads\"\nname = \"threads\"\nversion = \"1.0.0\"\n\
+         entry = \"app.wasm\"\nworld = \"krate:app/cli@0.1.0\"\n\n\
+         [[capabilities]]\ncap = \"io.stdout\"\nrationale = \"print\"\nrequired = true\n\n\
+         [[capabilities]]\ncap = \"random.bytes\"\nrationale = \"seed\"\nrequired = true\n",
+    )
+    .expect("manifest");
+    let bundle = dir.path().join("threads.krate");
+    let packed = krate()
+        .arg("pack")
+        .arg(&wasm)
+        .arg("--manifest")
+        .arg(&manifest)
+        .arg("-o")
+        .arg(&bundle)
+        .output()
+        .expect("pack");
+    assert!(
+        packed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&packed.stderr)
+    );
+    let out = krate()
+        .arg("run")
+        .arg(&bundle)
+        .arg("--auto-grant")
+        .output()
+        .expect("run");
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert!(
+        out.status.success(),
+        "{stdout}{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(stdout.contains("same answer: true"), "{stdout}");
+    assert!(
+        stdout.contains("4 scoped threads counted 400000")
+            && stdout.contains("parking_lot: 8 threads took their turns (8)"),
+        "{stdout}"
+    );
+}
+
+/// A controller reaches a gilrs program (IC-936): `gamepad-probe.wasm` is
+/// apps/krate-gamepad-probe built, gilrs' event loop over gilrs-core's Krate
+/// backend. A driven headless run plugs in the stand-in pad, holds south and
+/// pushes the left stick, and gilrs reports each as its own events.
+#[test]
+fn a_gilrs_program_sees_a_stand_in_controller() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let wasm = dir.path().join("app.wasm");
+    std::fs::write(&wasm, include_bytes!("fixtures/gamepad-probe.wasm")).expect("probe");
+    let manifest = dir.path().join("manifest.toml");
+    std::fs::write(
+        &manifest,
+        "[app]\nid = \"com.acme.pad\"\nname = \"pad\"\nversion = \"1.0.0\"\n\
+         entry = \"app.wasm\"\nworld = \"krate:app/gui@0.2.0\"\n\n\
+         [[capabilities]]\ncap = \"ui.window:create\"\nrationale = \"window\"\nrequired = true\n\n\
+         [[capabilities]]\ncap = \"io.stdout\"\nrationale = \"print\"\nrequired = true\n\n\
+         [[capabilities]]\ncap = \"random.bytes\"\nrationale = \"seed\"\nrequired = true\n",
+    )
+    .expect("manifest");
+    let task = dir.path().join("task.toml");
+    std::fs::write(
+        &task,
+        "name = \"press south and push the stick\"\n\n[[step]]\nwait_ms = 300\n\n\
+         [[step]]\npad = \"south 300\"\n\n[[step]]\nstick = \"left-y 0.5 300\"\n\n\
+         [[step]]\nexpect_no_text = \"a crash dialog\"\n",
+    )
+    .expect("task");
+    let out = krate()
+        .env("KRATE_HEADLESS_SECS", "40")
+        .arg("run")
+        .arg(&wasm)
+        .arg("--manifest")
+        .arg(&manifest)
+        .arg("--auto-grant")
+        .arg("--headless")
+        .arg("--usability-report")
+        .arg(dir.path().join("report.json"))
+        .arg("--task")
+        .arg(&task)
+        .arg("--")
+        .arg("25")
+        .output()
+        .expect("run");
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    for want in [
+        "gilrs: started; 0 pad(s) known",
+        "Connected",
+        "ButtonPressed(South",
+        "ButtonReleased(South",
+        "AxisChanged(LeftStickY, 0.4",
+        "AxisChanged(LeftStickY, 0.0",
+    ] {
+        assert!(
+            stdout.contains(want),
+            "{want:?} missing from: {stdout}{stderr}"
+        );
+    }
+}
+
 /// An app signs the person in through the system's sheet and checks what
 /// comes back (krate:ui/sign-in, IC-923).
 ///
@@ -11943,5 +12181,472 @@ fn a_web_page_inside_an_app_goes_only_where_the_app_may() {
     assert!(
         said.lines().any(|l| l == "web:open-http=refused"),
         "plain http never: {said}"
+    );
+}
+
+/// A tokio task woken from another thread runs promptly in a threaded app
+/// (K-1069). On WASI tokio cannot wake its I/O driver from another thread, so
+/// with `enable_all` and one worker such a task waited for the driver's next
+/// timer: 28.6 s in this probe, which is how Veloren's QUIC connection
+/// stalled. krate-c-runtime now caps an event loop's wait at 1 ms.
+#[test]
+fn a_tokio_task_woken_from_another_thread_runs_within_milliseconds() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let wasm = dir.path().join("app.wasm");
+    std::fs::write(&wasm, include_bytes!("fixtures/sockets-probe.wasm")).expect("probe");
+    let manifest = dir.path().join("manifest.toml");
+    std::fs::write(
+        &manifest,
+        "[app]\nid = \"com.acme.sockets\"\nname = \"sockets\"\nversion = \"1.0.0\"\n\
+         entry = \"app.wasm\"\nworld = \"krate:app/cli@0.1.0\"\n\n\
+         [[capabilities]]\ncap = \"io.stdout\"\nrationale = \"print\"\nrequired = true\n\n\
+         [[capabilities]]\ncap = \"random.bytes\"\nrationale = \"seed\"\nrequired = true\n",
+    )
+    .expect("manifest");
+    let out = krate()
+        .arg("run")
+        .arg(&wasm)
+        .arg("--manifest")
+        .arg(&manifest)
+        .arg("--auto-grant")
+        .arg("--")
+        .arg("wake")
+        .output()
+        .expect("run");
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let ms: f64 = stdout
+        .split("waited at most ")
+        .nth(1)
+        .and_then(|rest| rest.split(' ').next())
+        .and_then(|n| n.parse().ok())
+        .unwrap_or_else(|| {
+            panic!(
+                "no wait reported: {stdout}{}",
+                String::from_utf8_lossy(&out.stderr)
+            )
+        });
+    assert!(
+        ms < 250.0,
+        "a woken task waited {ms} ms for tokio's driver: {stdout}"
+    );
+}
+
+/// Raw sockets inside a Krate app (IC-935): `sockets-probe.wasm` is
+/// apps/krate-sockets-probe built. Its TCP, UDP, lookup and tokio jobs reach
+/// echo servers this test runs, under a `net.connect` grant; without the
+/// grant every one is refused before a socket exists.
+#[test]
+fn an_app_reaches_tcp_and_udp_servers_it_was_granted_and_no_others() {
+    use std::io::{Read, Write};
+    let tcp = std::net::TcpListener::bind("127.0.0.1:0").expect("tcp");
+    let tcp_port = tcp.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        for stream in tcp.incoming().flatten() {
+            let mut s = stream;
+            let mut buf = [0u8; 11];
+            if s.read_exact(&mut buf).is_ok() {
+                let _ = s.write_all(&buf);
+            }
+        }
+    });
+    let udp = std::net::UdpSocket::bind("127.0.0.1:0").expect("udp");
+    let udp_port = udp.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        let mut buf = [0u8; 64];
+        while let Ok((n, from)) = udp.recv_from(&mut buf) {
+            let mut out = b"pong:".to_vec();
+            out.extend_from_slice(&buf[..n]);
+            let _ = udp.send_to(&out, from);
+        }
+    });
+    let dir = tempfile::tempdir().expect("tempdir");
+    let wasm = dir.path().join("app.wasm");
+    std::fs::write(&wasm, include_bytes!("fixtures/sockets-probe.wasm")).expect("probe");
+    let manifest = |grant: &str| {
+        let path = dir.path().join("manifest.toml");
+        std::fs::write(
+            &path,
+            format!(
+                "[app]\nid = \"com.acme.sockets\"\nname = \"sockets\"\nversion = \"1.0.0\"\n\
+                 entry = \"app.wasm\"\nworld = \"krate:app/cli@0.1.0\"\n\n\
+                 [[capabilities]]\ncap = \"io.stdout\"\nrationale = \"print\"\nrequired = true\n\n\
+                 [[capabilities]]\ncap = \"random.bytes\"\nrationale = \"seed\"\nrequired = true\n\n\
+                 [[capabilities]]\ncap = \"{grant}\"\nrationale = \"the echo servers\"\nrequired = true\n"
+            ),
+        )
+        .expect("manifest");
+        path
+    };
+    let run = |manifest: &std::path::Path, job: &[String]| {
+        let out = krate()
+            .arg("run")
+            .arg(&wasm)
+            .arg("--manifest")
+            .arg(manifest)
+            .arg("--auto-grant")
+            .arg("--")
+            .args(job)
+            .output()
+            .expect("run");
+        format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        )
+    };
+    let job = |words: &str| words.split(' ').map(String::from).collect::<Vec<_>>();
+    let granted = manifest("net.connect:localhost:*");
+    let out = run(&granted, &job("lookup localhost"));
+    assert!(out.contains("127.0.0.1"), "{out}");
+    let out = run(&granted, &job(&format!("tcp localhost {tcp_port}")));
+    assert!(out.contains("got back \"hello krate\""), "{out}");
+    let out = run(&granted, &job(&format!("udp localhost {udp_port}")));
+    assert!(out.contains("got \"pong:ping\""), "{out}");
+    let out = run(&granted, &job(&format!("tokio localhost {tcp_port}")));
+    assert!(out.contains("got back \"hello krate\""), "{out}");
+
+    // A grant for another host covers none of it: refused, no socket made.
+    let other = manifest("net.connect:play.example.com:*");
+    for words in [
+        "lookup localhost".to_string(),
+        format!("tcp localhost {tcp_port}"),
+        format!("udp localhost {udp_port}"),
+        format!("tcp 127.0.0.1 {tcp_port}"),
+    ] {
+        let out = run(&other, &job(&words));
+        assert!(
+            out.contains("refused or failed: permission denied"),
+            "{words}: {out}"
+        );
+    }
+}
+
+/// A tokio multi-thread runtime inside a Krate app (IC-929): tasks spread over
+/// worker threads, a channel between tasks, a timer and spawn_blocking.
+#[test]
+fn a_tokio_multi_thread_runtime_runs_inside_an_app() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let wasm = dir.path().join("app.wasm");
+    std::fs::write(&wasm, include_bytes!("fixtures/tokio-probe.wasm")).expect("probe");
+    let manifest = dir.path().join("manifest.toml");
+    std::fs::write(
+        &manifest,
+        "[app]\nid = \"com.acme.tokio\"\nname = \"tokio\"\nversion = \"1.0.0\"\n\
+         entry = \"app.wasm\"\nworld = \"krate:app/cli@0.1.0\"\n\n\
+         [[capabilities]]\ncap = \"io.stdout\"\nrationale = \"print\"\nrequired = true\n\n\
+         [[capabilities]]\ncap = \"random.bytes\"\nrationale = \"seed\"\nrequired = true\n",
+    )
+    .expect("manifest");
+    let out = krate()
+        .arg("run")
+        .arg(&wasm)
+        .arg("--manifest")
+        .arg(&manifest)
+        .arg("--auto-grant")
+        .output()
+        .expect("run");
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(out.status.success(), "{stdout}{stderr}");
+    let workers: usize = stdout
+        .split(" worker threads")
+        .next()
+        .and_then(|s| s.rsplit(' ').next())
+        .and_then(|n| n.parse().ok())
+        .unwrap_or_else(|| panic!("no worker count in: {stdout}{stderr}"));
+    let cores = std::thread::available_parallelism().map_or(1, |n| n.get());
+    assert!(
+        workers > 1 || cores == 1,
+        "tasks ran on more than one worker: {stdout}"
+    );
+    assert!(stdout.contains("same answer: true"), "{stdout}");
+    assert!(stdout.contains("channel got [0, 1, 2, 3, 4]"), "{stdout}");
+    let timer: u64 = stdout
+        .split("a 100 ms timer took ")
+        .nth(1)
+        .and_then(|s| s.split(' ').next())
+        .and_then(|n| n.parse().ok())
+        .unwrap_or_else(|| panic!("no timer line in: {stdout}"));
+    assert!(
+        (100..2000).contains(&timer),
+        "the timer waited its time: {timer} ms"
+    );
+}
+
+/// winit's own `control_flow` example, its source unchanged, runs as a Krate
+/// app (IC-930): built with winit patched by crates/winit-krate/make-winit.py
+/// for wasm32-wasip1-threads, it starts at `_start` like any program. Keys
+/// pressed by the usability driver arrive as winit `KeyboardInput` with
+/// physical keys; "3" switches it to Poll mode, "r" turns on redraw requests,
+/// and Escape ends the event loop and the app with exit code 0.
+#[test]
+fn an_unmodified_winit_example_runs_and_hears_its_keys() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let wasm = dir.path().join("app.wasm");
+    std::fs::write(&wasm, include_bytes!("fixtures/winit-control-flow.wasm")).expect("example");
+    let manifest = dir.path().join("manifest.toml");
+    std::fs::write(
+        &manifest,
+        "[app]\nid = \"com.acme.winit\"\nname = \"winit\"\nversion = \"1.0.0\"\n\
+         entry = \"app.wasm\"\nworld = \"krate:app/gui@0.2.0\"\n\n\
+         [[capabilities]]\ncap = \"ui.window:create\"\nrationale = \"window\"\nrequired = true\n\n\
+         [[capabilities]]\ncap = \"io.stdout\"\nrationale = \"print\"\nrequired = true\n\n\
+         [[capabilities]]\ncap = \"random.bytes\"\nrationale = \"seed\"\nrequired = true\n",
+    )
+    .expect("manifest");
+    let task = dir.path().join("task.toml");
+    std::fs::write(
+        &task,
+        "name = \"switch modes and close\"\n\n[[step]]\nwait_ms = 400\n\n[[step]]\nkey = \"3\"\n\n\
+         [[step]]\nwait_ms = 300\n\n[[step]]\nkey = \"r\"\n\n[[step]]\nwait_ms = 300\n\n\
+         [[step]]\nkey = \"Escape\"\n\n[[step]]\nwait_ms = 300\n\n\
+         [[step]]\nexpect_no_text = \"a crash dialog\"\n",
+    )
+    .expect("task");
+    let out = krate()
+        .arg("run")
+        .arg(&wasm)
+        .arg("--manifest")
+        .arg(&manifest)
+        .arg("--auto-grant")
+        .arg("--usability-report")
+        .arg(dir.path().join("report.json"))
+        .arg("--task")
+        .arg(&task)
+        .output()
+        .expect("run");
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(out.status.success(), "{stdout}{stderr}");
+    for want in [
+        "Resized(PhysicalSize",
+        "physical_key: Code(Digit3), logical_key: Character(\"3\")",
+        "mode: Poll",
+        "physical_key: Code(KeyR)",
+        "request_redraw: true",
+        "RedrawRequested",
+        "physical_key: Code(Escape), logical_key: Named(Escape)",
+    ] {
+        assert!(stdout.contains(want), "no {want:?} in: {stdout}{stderr}");
+    }
+}
+
+/// A from-scratch app whose crate compiles C (IC-941, K-1072): `cbits`'s
+/// build script compiles `answer.c` with cc-rs, which includes <string.h>,
+/// as SQLite and ring do. The app prints what the C returns.
+fn c_app(dir: &std::path::Path) {
+    let sdk = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../bindings-rust");
+    let crt = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../c-runtime");
+    let write = |path: &str, text: &str| {
+        let path = dir.join(path);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+    };
+    write(
+        "Cargo.toml",
+        &format!(
+            "[package]\nname = \"c-answer\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n\
+             [workspace]\n\n[lib]\ncrate-type = [\"cdylib\"]\n\n[dependencies]\n\
+             cbits = {{ path = \"cbits\" }}\n\
+             krate = {{ path = {sdk:?}, features = [\"std\"] }}\n\
+             krate-c-runtime = {{ path = {crt:?} }}\n\
+             wit-bindgen-rt = {{ version = \"0.44.0\", features = [\"bitflags\"] }}\n\n\
+             [profile.release]\npanic = \"abort\"\n"
+        ),
+    );
+    write(
+        "src/lib.rs",
+        "struct App;\nimpl krate::Guest for App {\n    fn run() -> i32 {\n        \
+         krate_c_runtime::start();\n        println!(\"the C says {}\", cbits::answer());\n        \
+         krate_c_runtime::finish();\n        0\n    }\n}\nkrate::export!(App);\n",
+    );
+    write(
+        "manifest.toml",
+        "[app]\nid = \"dev.krate.c-answer\"\nname = \"C answer\"\nversion = \"0.1.0\"\n\
+         entry = \"target/wasm32-wasip1/release/c_answer.wasm\"\nworld = \"krate:app/cli@0.1.0\"\n\n\
+         [[capabilities]]\ncap = \"io.stdout\"\nrationale = \"print\"\nrequired = true\n",
+    );
+    write(
+        "cbits/Cargo.toml",
+        "[package]\nname = \"cbits\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n\
+         [build-dependencies]\ncc = \"1\"\n",
+    );
+    write(
+        "cbits/build.rs",
+        "fn main() { cc::Build::new().file(\"answer.c\").compile(\"answer\"); }\n",
+    );
+    write(
+        "cbits/answer.c",
+        "#include <string.h>\nint krate_answer(void) { return (int)strlen(\"forty-two chars of C, compiled for WASI!!\"); }\n",
+    );
+    write(
+        "cbits/src/lib.rs",
+        "extern \"C\" { fn krate_answer() -> i32; }\n\
+         pub fn answer() -> i32 { unsafe { krate_answer() } }\n",
+    );
+}
+
+/// With no WASI C compiler anywhere Krate looks, an app whose crates compile
+/// C fails its build with the crate named and the one step that fixes it --
+/// not "fix the compiler errors above" about code its author never wrote
+/// (K-1072).
+#[test]
+fn an_app_whose_crate_compiles_c_says_how_to_get_a_compiler_when_there_is_none() {
+    if !has_cargo_component() {
+        eprintln!("skipping: cargo-component is not installed");
+        return;
+    }
+    let dir = tempfile::tempdir().expect("tempdir");
+    c_app(dir.path());
+    let empty = tempfile::tempdir().expect("no toolchains");
+    let out = krate()
+        .arg("check-app")
+        .arg(dir.path())
+        .args(["--no-run", "--json"])
+        .env("KRATE_TOOLCHAINS_DIR", empty.path())
+        .env_remove("WASI_SDK_PATH")
+        .env_remove("WASI_SDK")
+        .env_remove("CC_wasm32_wasip1")
+        .env_remove("CFLAGS_wasm32_wasip1")
+        .output()
+        .expect("check-app");
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let report: serde_json::Value =
+        serde_json::from_str(stdout.trim()).unwrap_or_else(|_| panic!("one JSON object: {stdout}"));
+    assert_eq!(report["stage"], "build", "{report}");
+    let fix = report["fix"].as_str().unwrap_or_default();
+    assert!(
+        fix.starts_with("cbits v0.1.0") && fix.contains("compiles C"),
+        "the fix names the crate that compiles C: {fix}"
+    );
+    assert!(
+        fix.contains("krate setup wasi-sdk") && fix.contains("WASI_SDK_PATH"),
+        "the fix is the step that gets a compiler: {fix}"
+    );
+}
+
+/// With a wasi-sdk found (WASI_SDK_PATH, Krate's folder or PATH), the same
+/// app builds and its C runs inside Krate. Stands down on a machine with no
+/// wasi-sdk, as the GPU tests do on one with no GPU.
+#[test]
+fn an_app_whose_crate_compiles_c_builds_and_runs_with_wasi_sdk() {
+    if !has_cargo_component() {
+        eprintln!("skipping: cargo-component is not installed");
+        return;
+    }
+    let doctor = krate().arg("doctor").output().expect("doctor");
+    let said = String::from_utf8_lossy(&doctor.stdout).into_owned();
+    if !said.contains("wasi-sdk        found") {
+        eprintln!("skipping: no wasi-sdk on this machine: {said}");
+        return;
+    }
+    let dir = tempfile::tempdir().expect("tempdir");
+    c_app(dir.path());
+    let out = krate()
+        .arg("check-app")
+        .arg(dir.path())
+        .output()
+        .expect("check-app");
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        out.status.success() && text.contains("run passed"),
+        "{text}"
+    );
+    let wasm = dir
+        .path()
+        .join("target/wasm32-wasip1/release/c_answer.wasm");
+    let ran = krate()
+        .arg("run")
+        .arg(&wasm)
+        .arg("--manifest")
+        .arg(dir.path().join("manifest.toml"))
+        .arg("--auto-grant")
+        .output()
+        .expect("run");
+    let stdout = String::from_utf8_lossy(&ran.stdout).into_owned();
+    assert!(
+        stdout.contains("the C says 41"),
+        "strlen ran inside Krate: {stdout}{}",
+        String::from_utf8_lossy(&ran.stderr)
+    );
+}
+
+/// `krate setup wasi-sdk` installs a release archive into Krate's folder only
+/// when it has the SHA-256 it must have, and a build then finds it. Proved
+/// with a stand-in archive of the release's shape, so no test downloads one.
+#[test]
+fn setup_installs_a_verified_wasi_sdk_into_krates_folder_and_refuses_a_bad_one() {
+    use sha2::Digest;
+    let work = tempfile::tempdir().expect("tempdir");
+    let toolchains = work.path().join("toolchains");
+    let stem = {
+        let arch = match std::env::consts::ARCH {
+            "aarch64" => "arm64",
+            other => other,
+        };
+        format!("wasi-sdk-34.0-{arch}-{}", std::env::consts::OS)
+    };
+    let release = work.path().join("release").join(&stem);
+    std::fs::create_dir_all(release.join("bin")).unwrap();
+    std::fs::create_dir_all(release.join("share/wasi-sysroot/include")).unwrap();
+    let clang = if cfg!(windows) { "clang.exe" } else { "clang" };
+    std::fs::write(release.join("bin").join(clang), "stand-in").unwrap();
+    let archive = work.path().join(format!("{stem}.tar.gz"));
+    let packed = Command::new("tar")
+        .arg("-czf")
+        .arg(&archive)
+        .arg("-C")
+        .arg(work.path().join("release"))
+        .arg(&stem)
+        .status()
+        .expect("tar");
+    assert!(packed.success());
+    let digest = format!(
+        "{:x}",
+        sha2::Sha256::digest(std::fs::read(&archive).unwrap())
+    );
+    let setup = |sha: &str| {
+        krate()
+            .args(["setup", "wasi-sdk", "--from"])
+            .arg(&archive)
+            .args(["--sha256", sha])
+            .env("KRATE_TOOLCHAINS_DIR", &toolchains)
+            .output()
+            .expect("setup")
+    };
+
+    // A digest that does not match: refused, nothing installed.
+    let bad = setup(&"0".repeat(64));
+    assert!(!bad.status.success());
+    let said = String::from_utf8_lossy(&bad.stderr).into_owned();
+    assert!(said.contains("failed its checksum"), "{said}");
+    assert!(!toolchains.join(&stem).exists(), "nothing was installed");
+
+    // The right one: installed where builds look.
+    let good = setup(&digest);
+    assert!(
+        good.status.success(),
+        "{}",
+        String::from_utf8_lossy(&good.stderr)
+    );
+    assert!(toolchains.join(&stem).join("bin").join(clang).is_file());
+    let doctor = krate()
+        .arg("doctor")
+        .env("KRATE_TOOLCHAINS_DIR", &toolchains)
+        .env_remove("WASI_SDK_PATH")
+        .env_remove("WASI_SDK")
+        .output()
+        .expect("doctor");
+    let line = String::from_utf8_lossy(&doctor.stdout).into_owned();
+    assert!(
+        line.contains(&format!(
+            "wasi-sdk        found ({}",
+            toolchains.join(&stem).display()
+        )),
+        "a build now finds it: {line}"
     );
 }

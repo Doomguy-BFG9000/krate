@@ -1,0 +1,21 @@
+[app]
+id = "dev.krate.gamepad-probe"
+name = "Gamepad probe"
+version = "0.1.0"
+entry = "app.wasm"
+world = "krate:app/gui@0.2.0"
+
+[[capabilities]]
+cap = "ui.window:create"
+rationale = "A window to read the controller in"
+required = true
+
+[[capabilities]]
+cap = "io.stdout"
+rationale = "Print every controller event"
+required = true
+
+[[capabilities]]
+cap = "random.bytes"
+rationale = "Rust's HashMap seeds its keys"
+required = true

@@ -1,0 +1,16 @@
+[app]
+id = "dev.krate.tokio-probe"
+name = "Tokio probe"
+version = "0.1.0"
+entry = "app.wasm"
+world = "krate:app/cli@0.1.0"
+
+[[capabilities]]
+cap = "io.stdout"
+rationale = "Print the timings"
+required = true
+
+[[capabilities]]
+cap = "random.bytes"
+rationale = "tokio seeds its scheduler"
+required = true
