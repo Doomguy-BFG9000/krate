@@ -47,6 +47,7 @@ pub mod phone;
 mod photos;
 pub mod reminders;
 mod share;
+mod sign_in;
 pub mod unlock;
 pub mod video;
 
@@ -696,6 +697,18 @@ impl UiAdapter for AndroidWinitPrototypeUiAdapter {
         files: &[(String, Vec<u8>)],
     ) -> Result<bool, String> {
         share::share(text, url, files)
+    }
+
+    /// The service's sign-in page in the browser, and the address it sent
+    /// the person back to (IC-923).
+    #[cfg(target_os = "android")]
+    fn sign_in(
+        &self,
+        _window: WindowId,
+        authorize_url: &str,
+        scheme: &str,
+    ) -> Result<Option<String>, String> {
+        sign_in::sign_in(authorize_url, scheme)
     }
 
     /// Dark mode, more contrast and text size, as the person set them

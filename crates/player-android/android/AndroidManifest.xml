@@ -62,6 +62,10 @@
     <intent>
       <action android:name="android.intent.action.TTS_SERVICE" />
     </intent>
+    <!-- Which browser offers Custom Tabs and Chrome's Auth Tab. -->
+    <intent>
+      <action android:name="android.support.customtabs.action.CustomTabsService" />
+    </intent>
   </queries>
 
   <application
@@ -87,6 +91,17 @@
         <category android:name="android.intent.category.DEFAULT" />
         <category android:name="android.intent.category.BROWSABLE" />
         <data android:scheme="https" android:host="hub.krate.tech" android:pathPrefix="/a/" />
+      </intent-filter>
+      <!-- krate:ui/sign-in: the one redirect scheme any app may use
+           (krate-signin://<app id>/...). Android returns a sign-in only to
+           a scheme an install manifest names, and Krate cannot name each
+           app's own; PKCE keeps a shared scheme safe, as a code is useless
+           without the verifier only the asking app holds. -->
+      <intent-filter>
+        <action android:name="android.intent.action.VIEW" />
+        <category android:name="android.intent.category.DEFAULT" />
+        <category android:name="android.intent.category.BROWSABLE" />
+        <data android:scheme="krate-signin" />
       </intent-filter>
       <!-- A .krate file from Files, a share sheet, or a download. Content
            resolvers usually report octet-stream and often drop the

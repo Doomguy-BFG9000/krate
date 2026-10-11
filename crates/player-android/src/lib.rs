@@ -81,6 +81,15 @@ mod player {
         // What was tapped decides what runs.
         let target = crate::intent::view_target(handles);
         log::info!("launch target: {target:?}");
+        // A sign-in coming back to a Krate that is no longer running: the
+        // app that asked is gone, so there is nothing to hand it to.
+        if target
+            .as_deref()
+            .is_some_and(|uri| uri.starts_with("krate-signin:"))
+        {
+            log::info!("a sign-in came back after its app closed; nothing to do");
+            return;
+        }
 
         let manifest_text: String;
         let component: Vec<u8>;

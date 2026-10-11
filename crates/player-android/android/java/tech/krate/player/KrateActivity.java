@@ -115,6 +115,10 @@ public class KrateActivity extends NativeActivity {
     @Override
     protected void onActivityResult(int request, int result, Intent data) {
         super.onActivityResult(request, result, data);
+        if (request == SignIn.AUTH_TAB) {
+            SignIn.authTabResult(result, data);
+            return;
+        }
         if (request == PHOTOS) {
             ArrayList<String> picked = new ArrayList<>();
             if (result == RESULT_OK && data != null) {
@@ -592,8 +596,15 @@ public class KrateActivity extends NativeActivity {
     private int exactStep;
 
     @Override
+    protected void onPause() {
+        super.onPause();
+        SignIn.paused();
+    }
+
+    @Override
     protected void onResume() {
         super.onResume();
+        SignIn.resumed();
         synchronized (lock) {
             if (exactStep == 2) {
                 exactStep = 3;
@@ -722,6 +733,18 @@ public class KrateActivity extends NativeActivity {
         return new float[] {dark ? 1f : 0f, contrast != 0 ? 1f : 0f, c.fontScale};
     }
 
+    // Sign-in (krate:ui/sign-in, IC-923).
+
+    /** Open the sign-in page in the browser: null once open, else why not. */
+    public String krateSignIn(String url, String scheme) {
+        return SignIn.start(this, url, scheme, Menu.appId());
+    }
+
+    /** Null while waiting; then the address sent back, "" for cancelled. */
+    public String krateSignInAnswer() {
+        return SignIn.answer();
+    }
+
     // Unlock (krate:ui/unlock, IC-924).
 
     public boolean krateUnlockAvailable() {
@@ -806,6 +829,9 @@ public class KrateActivity extends NativeActivity {
     @Override
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
+        if (SignIn.redirected(intent)) {
+            return;
+        }
         Log.i(TAG, "opened again while running: " + intent.getAction());
     }
 
