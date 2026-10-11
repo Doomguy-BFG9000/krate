@@ -2181,6 +2181,7 @@ dependencies = [
  "jni 0.21.1",
  "krate-adapter-common",
  "libc",
+ "log",
  "softbuffer",
  "winit",
 ]

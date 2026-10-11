@@ -32,7 +32,26 @@ pub const HOST_FAMILY: &str = "android";
 /// the same UI contract as macOS and Windows before the winit bridge lands.
 pub mod winit_native;
 
+mod appearance;
+pub mod behind;
+mod bluetooth;
+pub mod camera;
 mod clipboard;
+mod documents;
+mod haptics;
+#[cfg(target_os = "android")]
+mod java;
+mod location;
+pub mod menu;
+mod motion;
+pub mod phone;
+mod photos;
+pub mod reminders;
+mod share;
+mod sign_in;
+pub mod unlock;
+pub mod video;
+mod web_page;
 
 #[derive(Debug, Default)]
 pub struct AndroidUiAdapter {
@@ -416,6 +435,18 @@ impl WindowAdapter for AndroidWinitPrototypeUiAdapter {
 
     fn close_window(&self, id: WindowId) -> Result<(), UiAdapterError> {
         let _ = winit_native::close_native_window(id);
+        // The app is done with any folder it was given: what it changed
+        // goes back to the real folder (K-1032).
+        documents::put_back_folders();
+        // Sensors stop with the app, so they cost nothing after it.
+        motion::stop();
+        location::stop();
+        // Nothing stays connected after the app.
+        bluetooth::disconnect_all();
+        // Its web pages go with it, and what they kept.
+        web_page::close_all();
+        #[cfg(target_os = "android")]
+        camera::close();
         self.remove_session(id);
         WindowAdapter::close_window(&self.headless, id)
     }
@@ -508,13 +539,79 @@ impl UiAdapter for AndroidWinitPrototypeUiAdapter {
         winit_native::drain_pointer_samples()
     }
 
-    /// A phone or tablet is touched. Its covered edges (cutout, gesture
-    /// bar) are not read yet, so none are reported.
-    fn screen_kind(&self, _window: WindowId) -> krate_adapter_common::ui::ScreenKind {
+    /// A phone or tablet is touched, and its status bar, gesture bar and
+    /// camera cutout cover its edges (K-1039): reported in points, so an app
+    /// keeps its text out from under them.
+    fn screen_kind(&self, window: WindowId) -> krate_adapter_common::ui::ScreenKind {
+        let scale = winit_native::window_scale(window).max(0.25);
+        let (top, right, bottom, left) = phone::covered_edges();
+        // Over an app, the strip under the clock is Krate's: the hold that
+        // opens its menu lives there (IC-934).
+        let top = if menu::chrome_on() {
+            (top / scale).max(20.0) + menu::MENU_BAND
+        } else {
+            top / scale
+        };
         krate_adapter_common::ui::ScreenKind {
             touch: true,
-            safe: (0.0, 0.0, 0.0, 0.0),
+            safe: (top, right / scale, bottom / scale, left / scale),
         }
+    }
+
+    /// A widget-tree app is laid out below the status bar and Krate's menu
+    /// strip and above the gesture bar: the same covered edges krate:ui/screen
+    /// reports to apps that draw themselves (K-1060).
+    fn widget_insets(&self, window: WindowId) -> (f32, f32, f32, f32) {
+        if !cfg!(target_os = "android") {
+            return (0.0, 0.0, 0.0, 0.0);
+        }
+        self.screen_kind(window).safe
+    }
+
+    /// What the app drew, as it described it to the screen reader (IC-926):
+    /// kept so a finger on something adjustable drags it (K-1059). Android's
+    /// TalkBack does not read these yet.
+    fn describe_accessibility(
+        &self,
+        _window: WindowId,
+        elements: &[krate_adapter_common::ui::AccessElement],
+    ) -> Result<(), UiAdapterError> {
+        winit_native::set_described(elements);
+        Ok(())
+    }
+
+    /// A web page in a box of the app (IC-927): a WebView over it.
+    fn open_web_page(
+        &self,
+        window: WindowId,
+        address: &str,
+        frame: (f32, f32, f32, f32),
+        granted: Vec<(String, String)>,
+    ) -> Result<u64, String> {
+        if !winit_native::has_native_window(window).unwrap_or(false) {
+            return Err("the app's window is not on screen".to_string());
+        }
+        web_page::open(address, frame, winit_native::window_scale(window), granted)
+    }
+
+    fn place_web_page(&self, page: u64, frame: (f32, f32, f32, f32)) {
+        web_page::place(page, frame);
+    }
+
+    fn web_page_go(&self, page: u64, address: &str) {
+        web_page::go(page, address);
+    }
+
+    fn web_page_back(&self, page: u64) {
+        web_page::back(page);
+    }
+
+    fn web_page_state(&self, page: u64) -> Option<krate_adapter_common::ui::WebPageState> {
+        web_page::state(page)
+    }
+
+    fn close_web_page(&self, page: u64) {
+        web_page::close(page);
     }
 
     /// Every finger on the window (krate:ui/touch).
@@ -598,6 +695,194 @@ impl UiAdapter for AndroidWinitPrototypeUiAdapter {
         clipboard::write_text(text)
     }
 
+    /// The system's document picker for a file or a folder, copied in as a
+    /// path of Krate's own (K-1032).
+    fn choose_path(
+        &self,
+        _window: WindowId,
+        folder: bool,
+        filter: &str,
+    ) -> Option<std::path::PathBuf> {
+        documents::choose(folder, filter)
+    }
+
+    /// A reminder that comes with the app closed (IC-921).
+    #[cfg(target_os = "android")]
+    fn reminder_schedule(
+        &self,
+        id: &str,
+        sender: &str,
+        title: &str,
+        body: &str,
+        after_seconds: u64,
+        daily: bool,
+    ) -> Result<(), String> {
+        reminders::schedule(id, sender, title, body, after_seconds, daily)
+    }
+
+    #[cfg(target_os = "android")]
+    fn reminder_cancel(&self, id: &str) {
+        reminders::cancel(id)
+    }
+
+    #[cfg(target_os = "android")]
+    fn reminder_pending(&self) -> Vec<String> {
+        reminders::pending()
+    }
+
+    /// The system's photo picker; the photos picked, copied in (IC-920).
+    #[cfg(target_os = "android")]
+    fn pick_photos(
+        &self,
+        _window: WindowId,
+        limit: u32,
+    ) -> Option<Result<Vec<std::path::PathBuf>, String>> {
+        Some(photos::pick(limit))
+    }
+
+    /// Add a PNG or JPEG to Pictures/Krate (IC-920).
+    #[cfg(target_os = "android")]
+    fn save_photo(&self, data: &[u8]) -> Result<(), Option<String>> {
+        photos::save(data)
+    }
+
+    /// The system's share sheet with the app's text, link and files; true
+    /// when the person sent them to an app (IC-919).
+    #[cfg(target_os = "android")]
+    fn share(
+        &self,
+        _window: WindowId,
+        text: Option<&str>,
+        url: Option<&str>,
+        files: &[(String, Vec<u8>)],
+    ) -> Result<bool, String> {
+        share::share(text, url, files)
+    }
+
+    /// The service's sign-in page in the browser, and the address it sent
+    /// the person back to (IC-923).
+    #[cfg(target_os = "android")]
+    fn sign_in(
+        &self,
+        _window: WindowId,
+        authorize_url: &str,
+        scheme: &str,
+    ) -> Result<Option<String>, String> {
+        sign_in::sign_in(authorize_url, scheme)
+    }
+
+    /// Dark mode, more contrast and text size, as the person set them
+    /// (IC-925).
+    #[cfg(target_os = "android")]
+    fn appearance(&self) -> krate_adapter_common::ui::Appearance {
+        appearance::read()
+    }
+
+    /// Whether the phone has Bluetooth (IC-917).
+    #[cfg(target_os = "android")]
+    fn bluetooth_available(&self) -> bool {
+        bluetooth::available()
+    }
+
+    /// Krate's own list of nearby devices offering `service`, and the one
+    /// the person picks, connected; the runtime has checked the grant.
+    #[cfg(target_os = "android")]
+    fn bluetooth_choose(
+        &self,
+        _window: WindowId,
+        service: &str,
+        title: &str,
+    ) -> Result<Option<krate_adapter_common::ui::BtDevice>, krate_adapter_common::ui::BtError> {
+        bluetooth::choose(service, title)
+    }
+
+    #[cfg(target_os = "android")]
+    fn bluetooth_read(
+        &self,
+        device: u64,
+        service: &str,
+        characteristic: &str,
+    ) -> Result<Vec<u8>, krate_adapter_common::ui::BtError> {
+        bluetooth::read(device, service, characteristic)
+    }
+
+    #[cfg(target_os = "android")]
+    fn bluetooth_write(
+        &self,
+        device: u64,
+        service: &str,
+        characteristic: &str,
+        data: &[u8],
+        with_response: bool,
+    ) -> Result<(), krate_adapter_common::ui::BtError> {
+        bluetooth::write(device, service, characteristic, data, with_response)
+    }
+
+    #[cfg(target_os = "android")]
+    fn bluetooth_subscribe(
+        &self,
+        device: u64,
+        service: &str,
+        characteristic: &str,
+    ) -> Result<(), krate_adapter_common::ui::BtError> {
+        bluetooth::subscribe(device, service, characteristic)
+    }
+
+    #[cfg(target_os = "android")]
+    fn bluetooth_notifications(
+        &self,
+        device: u64,
+    ) -> Vec<krate_adapter_common::ui::BtNotification> {
+        bluetooth::notifications(device)
+    }
+
+    #[cfg(target_os = "android")]
+    fn bluetooth_connected(&self, device: u64) -> bool {
+        bluetooth::connected(device)
+    }
+
+    #[cfg(target_os = "android")]
+    fn bluetooth_disconnect(&self, device: u64) {
+        bluetooth::disconnect(device)
+    }
+
+    /// Whether the phone can tell where it is (IC-917).
+    fn location_available(&self) -> bool {
+        location::available()
+    }
+
+    /// The latest fix; the runtime has already checked `location.read`.
+    fn location(&self) -> krate_adapter_common::ui::LocationAnswer {
+        location::read()
+    }
+
+    /// Whether the phone has motion sensors (IC-917).
+    fn motion_available(&self) -> bool {
+        motion::available()
+    }
+
+    /// The latest reading in the screen's frame, sensors started on the
+    /// first ask.
+    fn motion(&self) -> Option<krate_adapter_common::ui::MotionReading> {
+        motion::read()
+    }
+
+    /// Whether the phone has a vibrator to tap back with (IC-917).
+    fn haptics_available(&self) -> bool {
+        haptics::available()
+    }
+
+    /// Tap back: one of the seven feels, or an impact at `strength`.
+    fn haptic(&self, feel: Option<krate_adapter_common::ui::HapticFeel>, strength: f32) -> bool {
+        haptics::play(feel, strength)
+    }
+
+    /// A save the app wrote, to the place the person picks in the system's
+    /// "save to" picker (K-1032).
+    fn export_file(&self, _window: WindowId, path: &Path) -> bool {
+        documents::export(path)
+    }
+
     fn pump_event_loop_once(
         &self,
         window: WindowId,
@@ -605,6 +890,12 @@ impl UiAdapter for AndroidWinitPrototypeUiAdapter {
         if winit_native::has_native_window(window).unwrap_or(false) {
             for (target, event) in winit_native::pump_native_events()? {
                 self.record_winit_native_event(target, event)?;
+            }
+            // Leaving Krate, the person may go and look at a folder they
+            // gave the app: what it changed there is put back now, not only
+            // when it closes (K-1032).
+            if winit_native::take_backgrounded() {
+                documents::put_back_folders();
             }
             winit_native::redraw_all()?;
         }

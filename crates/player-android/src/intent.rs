@@ -167,6 +167,34 @@ fn get_string(env: &mut jni::JNIEnv, obj: JObject) -> Option<String> {
     env.get_string(&jstring).ok().map(|s| s.into())
 }
 
+/// The activity's cache folder, the app's own temporary space.
+pub fn cache_dir(handles: ActivityHandles) -> Option<std::path::PathBuf> {
+    let found = (|| -> Result<Option<String>, String> {
+        let vm = unsafe { jni::JavaVM::from_raw(handles.vm.cast()) }.map_err(err)?;
+        let mut env = vm.attach_current_thread().map_err(err)?;
+        let activity = unsafe { JObject::from_raw(handles.activity.cast()) };
+        let dir = env
+            .call_method(&activity, "getCacheDir", "()Ljava/io/File;", &[])
+            .and_then(|v| v.l())
+            .map_err(err)?;
+        if dir.is_null() {
+            return Ok(None);
+        }
+        let path = env
+            .call_method(&dir, "getAbsolutePath", "()Ljava/lang/String;", &[])
+            .and_then(|v| v.l())
+            .map_err(err)?;
+        Ok(get_string(&mut env, path))
+    })();
+    match found {
+        Ok(path) => path.map(std::path::PathBuf::from),
+        Err(why) => {
+            log::warn!("no cache folder: {why}");
+            None
+        }
+    }
+}
+
 /// Finish the activity, so Android does not bring it back when the process
 /// ends.
 pub fn finish(handles: ActivityHandles) {

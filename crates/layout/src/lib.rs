@@ -140,6 +140,17 @@ impl LayoutSnapshot {
     pub fn rects(&self) -> &BTreeMap<WidgetId, ComputedRect> {
         &self.rects
     }
+
+    /// Move the whole layout by `dx`, `dy`. Every other rectangle sits
+    /// relative to its parent, so moving the root's carries them all: how a
+    /// window whose edges something covers (a phone's status bar) lays its
+    /// widgets out below it (K-1060).
+    pub fn offset(&mut self, dx: f32, dy: f32) {
+        if let Some(root) = self.rects.get_mut(&self.root) {
+            root.x += dx;
+            root.y += dy;
+        }
+    }
 }
 
 /// Hit-test result for a computed layout snapshot.

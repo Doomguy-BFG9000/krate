@@ -149,7 +149,7 @@ fn draw(win: u64, canvas: u64, screen: &Screen, page: &mut Page) -> Result<(), g
     Ok(())
 }
 
-fn run_check(win: u64, check: Check, page: &mut Page, now: u64) {
+fn run_check(win: u64, check: Check, page: &mut Page) {
     let slot = index(check);
     page.results[slot] = match check {
         Check::Copy => match clipboard::write_text("Copied by Phone Check, a Krate app") {
@@ -165,7 +165,10 @@ fn run_check(win: u64, check: Check, page: &mut Page, now: u64) {
             let config = capture::StreamConfig { sample_rate: RATE, channels: 1, format: krate::audio::types::SampleFormat::PcmS16, buffer_frames: 1024 };
             match capture::open(config).and_then(|id| capture::start(id).map(|()| id)) {
                 Ok(id) => {
-                    page.recording = Some((id, now, Vec::new(), check));
+                    // From when the microphone opened, not the tap: the
+                    // phone's own question can sit in between, and three
+                    // seconds of it were "recorded" as nothing.
+                    page.recording = Some((id, clock::monotonic_nanos(), Vec::new(), check));
                     String::from("recording\u{2026} speak now")
                 }
                 Err(e) => format!("failed: {e:?}"),
@@ -460,7 +463,7 @@ impl Guest for Component {
                 next = events::poll();
             }
             if let Some(i) = tapped {
-                run_check(win, CHECKS[i].0, &mut page, now);
+                run_check(win, CHECKS[i].0, &mut page);
             }
         }
     }

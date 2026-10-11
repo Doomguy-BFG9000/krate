@@ -7,8 +7,9 @@ repository.workspace = true
 rust-version.workspace = true
 publish = false
 
-# A cdylib: NativeActivity loads this as libkrate_player.so and calls
-# android_main. There is no Java in the player at all.
+# A cdylib: the player's NativeActivity loads this as libkrate_player.so and
+# calls android_main. Its only Java is KrateActivity (android/java), for the
+# answers Android gives an activity alone.
 [lib]
 name = "krate_player"
 crate-type = ["cdylib", "rlib"]

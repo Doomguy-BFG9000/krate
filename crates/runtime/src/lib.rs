@@ -42,6 +42,9 @@ pub mod camera_capture;
 // AVFoundation's capture classes are the same on an iPhone (IC-918).
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 mod camera_macos;
+// Camera2, through the Android player's activity (IC-918).
+#[cfg(target_os = "android")]
+mod camera_android;
 #[cfg(any(target_os = "windows", target_os = "linux"))]
 mod camera_nokhwa;
 mod canvas_raster;
@@ -56,6 +59,8 @@ mod gamepad_macos;
 mod sign_in;
 mod unlock;
 mod video;
+#[cfg(target_os = "android")]
+mod video_android;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 mod video_apple;
 pub use krate_adapter_common::canvas_list;
