@@ -391,6 +391,18 @@ pub(crate) mod abi {
 
 include!(concat!(env!("OUT_DIR"), "/core_glue.rs"));
 
+/// The app called `exit(code)`.
+#[derive(Debug)]
+pub(crate) struct AppExit(pub(crate) i32);
+
+impl std::fmt::Display for AppExit {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "the app exited with {}", self.0)
+    }
+}
+
+impl std::error::Error for AppExit {}
+
 /// A store's data: which app thread it runs.
 pub(crate) struct Thread {
     #[allow(dead_code)]
@@ -536,6 +548,14 @@ fn linker(
         "available-parallelism",
         |_: Caller<'_, Thread>| -> i32 { parallelism() },
     )?;
+    // `exit` from any thread ends the app with that code.
+    linker.func_wrap(
+        "krate:thread",
+        "exit",
+        |_: Caller<'_, Thread>, code: i32| -> wasmtime::Result<()> {
+            Err(wasmtime::Error::new(AppExit(code)))
+        },
+    )?;
     let spawn_shared = shared.clone();
     let spawn_module = module.clone();
     linker.func_wrap(
@@ -588,6 +608,9 @@ fn spawn(shared: &Arc<Shared>, engine: &wasmtime::Engine, module: &Module, start
                 r
             })();
             shared.live.fetch_sub(1, Ordering::SeqCst);
+            if let Some(AppExit(code)) = outcome.as_ref().err().and_then(|e| e.downcast_ref()) {
+                std::process::exit(*code);
+            }
             if let Err(error) = outcome {
                 // A thread's trap is the app's: end it with the reason, as a
                 // native process ends on a crashed thread.
@@ -711,14 +734,29 @@ impl super::Runtime {
             init.call(&mut store, ())
                 .map_err(|err| RuntimeError::Trap(super::trap_message(&err)))?;
         }
-        let run = instance
-            .get_typed_func::<(), i32>(&mut store, "run")
-            .map_err(|_| {
-                RuntimeError::InvalidComponent(
-                    "a threaded app exports `run: func() -> s32`".to_string(),
-                )
-            })?;
-        let outcome = run.call(&mut store, ());
+        // A Krate app exports `run`; an unmodified program (`fn main`) is a
+        // command and starts at `_start`, ending with `exit`.
+        let outcome = if let Ok(run) = instance.get_typed_func::<(), i32>(&mut store, "run") {
+            run.call(&mut store, ())
+        } else if let Ok(start) = instance.get_typed_func::<(), ()>(&mut store, "_start") {
+            match start.call(&mut store, ()) {
+                Ok(()) => Ok(0),
+                Err(error) => match error.downcast_ref::<AppExit>() {
+                    Some(AppExit(code)) => Ok(*code),
+                    None => Err(error),
+                },
+            }
+        } else {
+            return Err(RuntimeError::InvalidComponent(
+                "a threaded app exports `run: func() -> s32` or `_start`".to_string(),
+            ));
+        };
+        let outcome = match outcome {
+            Err(error) if error.downcast_ref::<AppExit>().is_some() => {
+                Ok(error.downcast_ref::<AppExit>().map_or(0, |e| e.0))
+            }
+            other => other,
+        };
         let mut host = shared.host.lock().unwrap_or_else(|p| p.into_inner());
         finish_gui_run(&mut host, outcome)
     }

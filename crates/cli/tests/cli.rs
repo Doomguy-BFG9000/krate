@@ -11183,3 +11183,61 @@ fn a_tokio_multi_thread_runtime_runs_inside_an_app() {
         "the timer waited its time: {timer} ms"
     );
 }
+
+/// winit's own `control_flow` example, its source unchanged, runs as a Krate
+/// app (IC-930): built with winit patched by crates/winit-krate/make-winit.py
+/// for wasm32-wasip1-threads, it starts at `_start` like any program. Keys
+/// pressed by the usability driver arrive as winit `KeyboardInput` with
+/// physical keys; "3" switches it to Poll mode, "r" turns on redraw requests,
+/// and Escape ends the event loop and the app with exit code 0.
+#[test]
+fn an_unmodified_winit_example_runs_and_hears_its_keys() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let wasm = dir.path().join("app.wasm");
+    std::fs::write(&wasm, include_bytes!("fixtures/winit-control-flow.wasm")).expect("example");
+    let manifest = dir.path().join("manifest.toml");
+    std::fs::write(
+        &manifest,
+        "[app]\nid = \"com.acme.winit\"\nname = \"winit\"\nversion = \"1.0.0\"\n\
+         entry = \"app.wasm\"\nworld = \"krate:app/gui@0.2.0\"\n\n\
+         [[capabilities]]\ncap = \"ui.window:create\"\nrationale = \"window\"\nrequired = true\n\n\
+         [[capabilities]]\ncap = \"io.stdout\"\nrationale = \"print\"\nrequired = true\n\n\
+         [[capabilities]]\ncap = \"random.bytes\"\nrationale = \"seed\"\nrequired = true\n",
+    )
+    .expect("manifest");
+    let task = dir.path().join("task.toml");
+    std::fs::write(
+        &task,
+        "name = \"switch modes and close\"\n\n[[step]]\nwait_ms = 400\n\n[[step]]\nkey = \"3\"\n\n\
+         [[step]]\nwait_ms = 300\n\n[[step]]\nkey = \"r\"\n\n[[step]]\nwait_ms = 300\n\n\
+         [[step]]\nkey = \"Escape\"\n\n[[step]]\nwait_ms = 300\n\n\
+         [[step]]\nexpect_no_text = \"a crash dialog\"\n",
+    )
+    .expect("task");
+    let out = krate()
+        .arg("run")
+        .arg(&wasm)
+        .arg("--manifest")
+        .arg(&manifest)
+        .arg("--auto-grant")
+        .arg("--usability-report")
+        .arg(dir.path().join("report.json"))
+        .arg("--task")
+        .arg(&task)
+        .output()
+        .expect("run");
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(out.status.success(), "{stdout}{stderr}");
+    for want in [
+        "Resized(PhysicalSize",
+        "physical_key: Code(Digit3), logical_key: Character(\"3\")",
+        "mode: Poll",
+        "physical_key: Code(KeyR)",
+        "request_redraw: true",
+        "RedrawRequested",
+        "physical_key: Code(Escape), logical_key: Named(Escape)",
+    ] {
+        assert!(stdout.contains(want), "no {want:?} in: {stdout}{stderr}");
+    }
+}

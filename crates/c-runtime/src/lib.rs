@@ -149,11 +149,7 @@ pub fn start() {
             return;
         }
         STARTED = true;
-        FDS = Vec::new();
-        FDS.push(Some(Entry::Stdin));
-        FDS.push(Some(Entry::Out(false)));
-        FDS.push(Some(Entry::Out(true)));
-        FDS.push(Some(Entry::Dir(String::new())));
+        init_fds();
     }
     // Through the SDK's own guard, never directly: the app's exported entry
     // has already run the constructors through it, and running them a second
@@ -166,8 +162,25 @@ pub fn exit_code() -> Option<i32> {
     unsafe { EXIT_CODE }
 }
 
+/// The standard streams and the preopened root.
+unsafe fn init_fds() {
+    FDS = Vec::new();
+    FDS.push(Some(Entry::Stdin));
+    FDS.push(Some(Entry::Out(false)));
+    FDS.push(Some(Entry::Out(true)));
+    FDS.push(Some(Entry::Dir(String::new())));
+}
+
 fn fds() -> &'static mut Vec<Option<Entry>> {
-    unsafe { &mut FDS }
+    unsafe {
+        // A program that starts at `_start` (an unmodified `main`, IC-930)
+        // never calls [`start`]; its first file call sets up the table, and
+        // its constructors are libc's to run, not ours.
+        if FDS.is_empty() {
+            init_fds();
+        }
+        &mut *core::ptr::addr_of_mut!(FDS)
+    }
 }
 
 fn put_fd(entry: Entry) -> i32 {
@@ -359,6 +372,10 @@ pub unsafe extern "C" fn __imported_wasi_snapshot_preview1_random_get(buf: i32, 
 #[no_mangle]
 pub unsafe extern "C" fn __imported_wasi_snapshot_preview1_proc_exit(code: i32) -> ! {
     EXIT_CODE = Some(code);
+    // A threaded app ends from whichever thread calls exit: the host stops
+    // every thread with this code.
+    #[cfg(krate_threads)]
+    krate_thread_exit(code);
     core::arch::wasm32::unreachable()
 }
 
@@ -1129,6 +1146,9 @@ pub extern "C" fn dlerror() -> *const core::ffi::c_char {
 extern "C" {
     #[link_name = "available-parallelism"]
     fn krate_available_parallelism() -> i32;
+    /// End the app with `code`, from any thread.
+    #[link_name = "exit"]
+    fn krate_thread_exit(code: i32);
 }
 
 /// `sysconf`, for a threaded build. wasi-libc answers the processor count
