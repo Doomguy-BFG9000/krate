@@ -706,6 +706,22 @@ public class KrateActivity extends NativeActivity {
         Video.close(id);
     }
 
+    // Appearance (krate:ui/appearance, IC-925).
+
+    /**
+     * How the person asked things to look: {dark, more contrast, text scale}
+     * from the configuration (night mode, font scale) and the high-contrast
+     * text setting.
+     */
+    public float[] krateAppearance() {
+        android.content.res.Configuration c = getResources().getConfiguration();
+        boolean dark = (c.uiMode & android.content.res.Configuration.UI_MODE_NIGHT_MASK)
+                == android.content.res.Configuration.UI_MODE_NIGHT_YES;
+        int contrast = android.provider.Settings.Secure.getInt(getContentResolver(),
+                "high_text_contrast_enabled", 0);
+        return new float[] {dark ? 1f : 0f, contrast != 0 ? 1f : 0f, c.fontScale};
+    }
+
     // Unlock (krate:ui/unlock, IC-924).
 
     public boolean krateUnlockAvailable() {

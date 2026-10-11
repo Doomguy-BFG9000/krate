@@ -72,7 +72,7 @@
         android:name="tech.krate.player.KrateActivity"
         android:exported="true"
         android:launchMode="singleTask"
-        android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|density">
+        android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|density|uiMode|fontScale">
       <meta-data android:name="android.app.lib_name" android:value="krate_player" />
       <intent-filter>
         <action android:name="android.intent.action.MAIN" />

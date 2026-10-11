@@ -32,6 +32,7 @@ pub const HOST_FAMILY: &str = "android";
 /// the same UI contract as macOS and Windows before the winit bridge lands.
 pub mod winit_native;
 
+mod appearance;
 mod bluetooth;
 pub mod camera;
 mod clipboard;
@@ -695,6 +696,13 @@ impl UiAdapter for AndroidWinitPrototypeUiAdapter {
         files: &[(String, Vec<u8>)],
     ) -> Result<bool, String> {
         share::share(text, url, files)
+    }
+
+    /// Dark mode, more contrast and text size, as the person set them
+    /// (IC-925).
+    #[cfg(target_os = "android")]
+    fn appearance(&self) -> krate_adapter_common::ui::Appearance {
+        appearance::read()
     }
 
     /// Whether the phone has Bluetooth (IC-917).
