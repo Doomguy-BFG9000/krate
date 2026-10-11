@@ -13488,10 +13488,32 @@ fn component_build_command(app_dir: &Path) -> ProcessCommand {
     // Build the child PATH: rustup's toolchain bin first (so a rustup cargo/rustc
     // with the wasm target wins over a Homebrew one), then the cargo bin dir that
     // holds cargo-component, then the inherited PATH.
+    //
+    // Not the toolchain's own bin when rustup's shims are there: from Rust
+    // 1.99, rust-lld loads libLLVM.dylib by an rpath that only resolves
+    // under the library path rustup's shims set, so a cargo run straight
+    // out of ~/.rustup/toolchains/<it>/bin could not link any wasm --
+    // "Library not loaded: @rpath/libLLVM.dylib" on every app build with
+    // stable selected (K-1078). The shims pick the same toolchain (the
+    // app's pin, else the person's default) and set what it needs. Windows
+    // keeps the bin first: it is how a working toolchain is chosen there
+    // (K-130), and a DLL is found through that PATH entry.
     let existing = std::env::var_os("PATH").unwrap_or_default();
     let mut prefix: Vec<PathBuf> = Vec::new();
-    if let Some(bin) = rustup_toolchain_bin() {
-        prefix.push(bin);
+    let shims = home_dir()
+        .map(|home| home.join(".cargo").join("bin"))
+        .filter(|shims| {
+            shims
+                .join(if cfg!(windows) { "rustc.exe" } else { "rustc" })
+                .exists()
+        });
+    match shims {
+        Some(shims) if !cfg!(windows) => prefix.push(shims),
+        _ => {
+            if let Some(bin) = rustup_toolchain_bin() {
+                prefix.push(bin);
+            }
+        }
     }
     if let Some(dir) = resolved.as_deref().and_then(Path::parent) {
         prefix.push(dir.to_path_buf());

@@ -25,7 +25,12 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 OLD = '''    } else if #[cfg(target_family = "wasm")] {
         #[path = "wasm.rs"]
         mod imp;'''
-NEW = '''    } else if #[cfg(all(target_family = "wasm", target_feature = "atomics"))] {
+# `target_feature = "atomics"` alone is not enough: stable Rust does not
+# expose that feature to crates' cfg (rustc 1.99 `--print cfg --target
+# wasm32-wasip1-threads` lists no atomics; nightly does), so on stable the
+# panicking parker was picked again (K-1055). Krate's threaded build passes
+# `--cfg krate_threads`, which is visible on every channel.
+NEW = '''    } else if #[cfg(all(target_family = "wasm", any(target_feature = "atomics", krate_threads)))] {
         #[path = "std_park.rs"]
         mod imp;
     } else if #[cfg(target_family = "wasm")] {

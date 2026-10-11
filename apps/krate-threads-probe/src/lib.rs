@@ -3,12 +3,12 @@
 //! pool sized by `available_parallelism`, timed against the same work on one
 //! thread.
 //!
-//! Built as a threaded app (a core module over a shared memory), with the
-//! nightly whose std asks `sysconf` for the processor count:
+//! Built as a threaded app (a core module over a shared memory) on stable
+//! Rust: from 1.99 std asks `sysconf` for the processor count, which
+//! krate-c-runtime answers from the host (K-1055). Krate's own build makes it:
 //!
 //! ```text
-//! TOOLCHAIN=nightly-2026-06-13 THREADS=1 \
-//!   ~/Projects/krate-bevy/build-app.sh $PWD/apps/krate-threads-probe
+//! krate check-app apps/krate-threads-probe --no-run
 //! ```
 //!
 //! The result is crates/cli/tests/fixtures/threads-probe.wasm.

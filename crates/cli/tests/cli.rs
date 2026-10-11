@@ -11922,6 +11922,23 @@ fn a_threaded_app_packs_into_a_krate_and_runs_from_it() {
             && stdout.contains("parking_lot: 8 threads took their turns (8)"),
         "{stdout}"
     );
+    // The pool is really parallel from the .krate, built on stable Rust
+    // (K-1055): 7x on this ten-core Mac when quiet. The floor is low on
+    // purpose -- a gate shares the machine with other builds -- and only
+    // asked of a machine with four cores or more.
+    let cores = std::thread::available_parallelism().map_or(1, |n| n.get());
+    if cores >= 4 {
+        let speed_up: f64 = stdout
+            .split("speed-up ")
+            .nth(1)
+            .and_then(|rest| rest.split('x').next())
+            .and_then(|n| n.parse().ok())
+            .unwrap_or(0.0);
+        assert!(
+            speed_up >= 1.5,
+            "rayon on {cores} cores must beat one thread: {stdout}"
+        );
+    }
 }
 
 /// A controller reaches a gilrs program (IC-936): `gamepad-probe.wasm` is
@@ -12673,6 +12690,103 @@ fn c_app(dir: &std::path::Path) {
         "cbits/src/lib.rs",
         "extern \"C\" { fn krate_answer() -> i32; }\n\
          pub fn answer() -> i32 { unsafe { krate_answer() } }\n",
+    );
+}
+
+/// An app builds on whichever Rust rustup selects, including stable 1.99
+/// and later (K-1078).
+///
+/// From 1.99, rust-lld loads libLLVM.dylib by an rpath that resolves only
+/// under the library path rustup's shims set. Krate put the toolchain's own
+/// bin first on the build's PATH, so cargo ran outside the shims and no wasm
+/// could link: "Library not loaded: @rpath/libLLVM.dylib". Stands down when
+/// this machine has no stable toolchain with the wasm32-wasip1 target.
+#[test]
+fn an_app_builds_on_the_stable_rust_rustup_selects() {
+    if !has_cargo_component() {
+        eprintln!("skipping: cargo-component is not installed");
+        return;
+    }
+    let rustup = |args: &[&str]| {
+        Command::new("rustup")
+            .args(args)
+            .output()
+            .ok()
+            .filter(|out| out.status.success())
+            .map(|out| String::from_utf8_lossy(&out.stdout).trim().to_string())
+    };
+    let Some(sysroot) = rustup(&["run", "stable", "rustc", "--print", "sysroot"]) else {
+        eprintln!("skipping: no stable toolchain");
+        return;
+    };
+    if !std::path::Path::new(&sysroot)
+        .join("lib/rustlib/wasm32-wasip1")
+        .is_dir()
+    {
+        eprintln!("skipping: stable has no wasm32-wasip1 target");
+        return;
+    }
+    let version = rustup(&["run", "stable", "rustc", "--version"]).unwrap_or_default();
+    // "rustc 1.99.0 (b940084d7 2026-09-28)" -> "1.99.0"
+    let number = version
+        .split_whitespace()
+        .nth(1)
+        .unwrap_or_default()
+        .to_string();
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sdk = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../bindings-rust");
+    let write = |path: &str, text: &str| {
+        let path = dir.path().join(path);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+    };
+    write(
+        "Cargo.toml",
+        &format!(
+            "[package]\nname = \"on-stable\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n\
+             [workspace]\n\n[lib]\ncrate-type = [\"cdylib\"]\n\n[dependencies]\n\
+             krate = {{ path = {sdk:?} }}\n\
+             wit-bindgen-rt = {{ version = \"0.44.0\", features = [\"bitflags\"] }}\n\n\
+             [profile.release]\npanic = \"abort\"\n"
+        ),
+    );
+    write(
+        "src/lib.rs",
+        "#![no_std]\nextern crate alloc;\nstruct App;\nimpl krate::Guest for App {\n    fn run() -> i32 { 0 }\n}\n\
+         krate::export!(App);\n",
+    );
+    write(
+        "manifest.toml",
+        "[app]\nid = \"dev.krate.on-stable\"\nname = \"On stable\"\nversion = \"0.1.0\"\n\
+         entry = \"target/wasm32-wasip1/release/on_stable.wasm\"\nworld = \"krate:app/cli@0.1.0\"\n",
+    );
+    let out = krate()
+        .arg("check-app")
+        .arg(dir.path())
+        .arg("--no-run")
+        .env("RUSTUP_TOOLCHAIN", "stable")
+        .output()
+        .expect("check-app");
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        !text.contains("libLLVM"),
+        "the build ran stable's cargo outside rustup's shims: {text}"
+    );
+    assert!(out.status.success(), "the app builds on {version}: {text}");
+    let built = std::fs::read(
+        dir.path()
+            .join("target/wasm32-wasip1/release/on_stable.wasm"),
+    )
+    .unwrap_or_default();
+    let said = String::from_utf8_lossy(&built);
+    assert!(
+        !number.is_empty() && said.contains(&number),
+        "the app was compiled by the selected {version}"
     );
 }
 
