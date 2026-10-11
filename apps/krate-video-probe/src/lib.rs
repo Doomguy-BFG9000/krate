@@ -2,7 +2,8 @@
 // (IC-922), with the controls a person expects: play and pause, a scrubber
 // to drag or tap, loop and sound.
 //
-//   krate run video-probe.krate -- quick   plays three seconds headless,
+//   krate run video-probe.krate -- quick [https://...]
+//                                          plays three seconds headless,
 //                                          then one line and exit:
 //                                          `video:ready=yes duration=8000
 //                                          size=960x540 moved=yes frames=N`
@@ -183,8 +184,8 @@ fn draw(canvas: u64, screen: &Screen, page: &Page) -> Result<(), gfx::GfxError> 
     canvas2d::present(canvas)
 }
 
-fn quick(canvas: u64) -> i32 {
-    let v = match video::open(CLIP) {
+fn quick(canvas: u64, source: &str) -> i32 {
+    let v = match video::open(source) {
         Ok(v) => v,
         Err(e) => {
             say(&format!("video:problem={e:?}"));
@@ -246,8 +247,11 @@ impl Guest for Component {
         let Ok(canvas) = canvas2d::bind(win, 2) else {
             return 1;
         };
-        if args::raw().split('\n').any(|a| a == "quick") {
-            return quick(canvas);
+        let raw = args::raw();
+        if raw.split('\n').any(|a| a == "quick") {
+            // `quick https://...` plays a stream instead of the bundled clip.
+            let source = raw.split('\n').find(|a| a.starts_with("https://")).unwrap_or(CLIP);
+            return quick(canvas, source);
         }
         let mut page = Page { video: None, problem: String::new(), looping: false, muted: false, dragging: None };
         match video::open(CLIP) {
