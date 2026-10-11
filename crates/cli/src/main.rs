@@ -6034,6 +6034,17 @@ fn pack_bundle(
         let _ = fs::remove_file(&rewritten);
     }
     println!("wrote {} ({size} bytes)", output.display());
+    // Bigger than the hub takes: it is a large local app (IC-942).
+    let asset_files = assets.as_deref().map(count_files).unwrap_or(0);
+    if size > krate_bundle::HUB_LIMITS.bundle_bytes
+        || asset_files > krate_bundle::HUB_LIMITS.asset_count
+    {
+        println!(
+            "this app is larger than the hub accepts ({asset_files} assets): it opens from the \
+             file on a desktop -- `krate run`, a double-click -- not through the hub, a link or \
+             a phone"
+        );
+    }
     if source.is_some() {
         println!("included the app's source, so it can be changed later");
     }
@@ -18465,6 +18476,24 @@ fn print_version() {
     println!("wasmtime  43.0.2");
     println!("rustc     {}", env!("KRATE_RUSTC_VERSION"));
     println!("commit    {}", env!("KRATE_GIT_SHA"));
+}
+
+/// How many files are under `dir`, however deep.
+fn count_files(dir: &Path) -> usize {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return 0;
+    };
+    entries
+        .flatten()
+        .map(|entry| {
+            let path = entry.path();
+            if path.is_dir() {
+                count_files(&path)
+            } else {
+                1
+            }
+        })
+        .sum()
 }
 
 /// `krate setup wasi-sdk` (IC-941).

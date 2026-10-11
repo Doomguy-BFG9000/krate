@@ -5345,8 +5345,10 @@ fn every_adversarial_archive_is_refused_by_the_binary_people_run() {
     }
 
     // 1484: more records than the container allows is refused before the
-    // guest is launched. One over the limit, each record a few bytes.
-    let crowd: Vec<(String, Vec<u8>)> = (0..=krate_bundle::MAX_ENTRY_COUNT)
+    // guest is launched. One over the limit, each record a few bytes. A file
+    // run from this machine is judged by the large local tier (IC-942), so
+    // the limit here is that tier's.
+    let crowd: Vec<(String, Vec<u8>)> = (0..=krate_bundle::LOCAL_LIMITS.entry_count)
         .map(|i| (format!("assets/f{i}.txt"), b"x".to_vec()))
         .collect();
     let crowded = dir.path().join("too-many-records.krate");
@@ -5367,7 +5369,7 @@ fn every_adversarial_archive_is_refused_by_the_binary_people_run() {
     assert!(
         stderr.contains(&format!(
             "more than {} files",
-            krate_bundle::MAX_ENTRY_COUNT
+            krate_bundle::LOCAL_LIMITS.entry_count
         )),
         "and refused for the count, not for something else in the archive: {stderr}"
     );

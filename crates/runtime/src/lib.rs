@@ -1730,17 +1730,20 @@ impl HostState {
             #[cfg(feature = "phase2-bindings")]
             phase2: phase2_host::Phase2Host::new_with_http_timeout(
                 UapiGuard::new(config.session_policy.clone()),
-                Box::new(LocalPhase2Adapter::new(
-                    output,
-                    config.test_time_millis,
-                    stepped_clock.clone(),
-                    config.test_locale.clone(),
-                    config.test_timezone.clone(),
-                    config.app_args.clone(),
-                    config.max_http_response_bytes,
-                    config.sandbox_root.clone(),
-                    chosen.clone(),
-                )),
+                Box::new(
+                    LocalPhase2Adapter::new(
+                        output,
+                        config.test_time_millis,
+                        stepped_clock.clone(),
+                        config.test_locale.clone(),
+                        config.test_timezone.clone(),
+                        config.app_args.clone(),
+                        config.max_http_response_bytes,
+                        config.sandbox_root.clone(),
+                        chosen.clone(),
+                    )
+                    .with_bundle_assets(config.bundle_assets_root.clone()),
+                ),
                 config.default_http_timeout_millis,
             )
             .with_asset_root(config.bundle_assets_root.clone())
@@ -1928,10 +1931,20 @@ struct LocalPhase2Adapter {
     /// dialog host. `picked/<token>/...` paths resolve against these roots
     /// with the same symlink and containment discipline as the sandbox.
     chosen: Rc<RefCell<chosen_files::ChosenFiles>>,
+    /// The assets of the .krate this app runs from, seen at `assets/` in its
+    /// files (IC-942): a program that reads its data with ordinary file
+    /// calls -- Veloren, Bevy's asset loader -- finds what was packed with it.
+    bundle_assets: Option<PathBuf>,
 }
 
 #[cfg(feature = "phase2-bindings")]
 impl LocalPhase2Adapter {
+    /// Show the bundle's assets at `assets/` (see the field).
+    fn with_bundle_assets(mut self, assets: Option<PathBuf>) -> Self {
+        self.bundle_assets = assets;
+        self
+    }
+
     // Nine arguments: the adapter genuinely has nine independent inputs,
     // and a builder here would obscure which test overrides what.
     #[allow(clippy::too_many_arguments)]
@@ -1956,6 +1969,7 @@ impl LocalPhase2Adapter {
             sandbox_root,
             canonical_root: std::cell::OnceCell::new(),
             chosen,
+            bundle_assets: None,
         }
     }
 
@@ -2019,15 +2033,27 @@ impl LocalPhase2Adapter {
         // folder instead of the sandbox. One choke point, so every fs
         // operation inherits the same discipline, and there is no way to
         // reach a picked folder except through a token this run issued.
-        if let Some((token, rest)) = split_picked_path(path) {
-            let Some(picked) = self
-                .chosen
-                .borrow()
-                .resolve_folder(&token)
-                .map(Path::to_path_buf)
-            else {
-                return Err(AdapterError::NotFound);
-            };
+        let mounted = match (&self.bundle_assets, split_assets_path(path)) {
+            (Some(assets), Some(rest)) => Some((assets.clone(), rest)),
+            _ => None,
+        };
+        let picked = match split_picked_path(path) {
+            Some((token, rest)) => {
+                let folder = self
+                    .chosen
+                    .borrow()
+                    .resolve_folder(&token)
+                    .map(Path::to_path_buf);
+                match folder {
+                    Some(folder) => Some((folder, rest)),
+                    None => return Err(AdapterError::NotFound),
+                }
+            }
+            None => None,
+        };
+        // `assets/...` in an app run from a .krate is the bundle's own
+        // assets (IC-942), with the same discipline as a picked folder.
+        if let Some((picked, rest)) = mounted.or(picked) {
             let root = canonicalize_path_on_host(picked.as_path()).map_err(map_io_error)?;
             let host_path = root.join(rest);
             ensure_no_symlink_segments(&root, &host_path, missing_leaf)?;
@@ -2205,6 +2231,20 @@ fn format_number_on_host(value: f64, style: HostNumberStyle, locale: &HostLocale
 /// refused `..`, control characters, and absolute prefixes, so the remainder
 /// is safe to join under the mounted root.
 #[cfg(feature = "phase2-bindings")]
+/// `assets` or `assets/...`: the part below `assets/`.
+fn split_assets_path(path: &LogicalPath) -> Option<PathBuf> {
+    let normalized = path.as_str();
+    let trimmed = normalized.strip_prefix('/').unwrap_or(normalized);
+    if trimmed == "assets" {
+        return Some(PathBuf::from("."));
+    }
+    let tail = trimmed.strip_prefix("assets/")?;
+    if tail.is_empty() {
+        return Some(PathBuf::from("."));
+    }
+    Some(tail.split('/').collect())
+}
+
 fn split_picked_path(path: &LogicalPath) -> Option<(String, PathBuf)> {
     let normalized = path.as_str();
     let trimmed = normalized.strip_prefix('/').unwrap_or(normalized);
@@ -4993,6 +5033,54 @@ mod tests {
 
         drop(adapter);
         std::fs::remove_dir_all(temp).expect("remove fixture directory");
+    }
+
+    #[cfg(feature = "phase2-bindings")]
+    #[test]
+    fn a_krate_s_own_assets_are_its_files_at_assets() {
+        // IC-942: a program that reads its data with file calls finds what
+        // was packed with it at `assets/`, and nowhere else changes.
+        let temp = tempfile::tempdir().expect("tempdir");
+        let sandbox = temp.path().join("sandbox");
+        let bundle = temp.path().join("bundle-assets");
+        std::fs::create_dir_all(sandbox.join("assets")).expect("sandbox assets");
+        std::fs::create_dir_all(bundle.join("voxygen")).expect("bundle assets");
+        std::fs::write(sandbox.join("assets/which.txt"), b"the sandbox").expect("write");
+        std::fs::write(bundle.join("which.txt"), b"the bundle").expect("write");
+        std::fs::write(bundle.join("voxygen/a.ron"), b"()").expect("write");
+        std::fs::write(sandbox.join("settings.ron"), b"mine").expect("write");
+        let adapter = |assets: Option<PathBuf>| {
+            LocalPhase2Adapter::new(
+                Rc::new(RefCell::new(OutputMode::Sink)),
+                None,
+                None,
+                None,
+                None,
+                Vec::new(),
+                1024,
+                sandbox.clone(),
+                Default::default(),
+            )
+            .with_bundle_assets(assets)
+        };
+        let read = |adapter: &LocalPhase2Adapter, path: &str| -> Vec<u8> {
+            let handle = adapter.open(path, OpenMode::Read).expect("open");
+            let bytes = adapter.read(&handle, 1024).expect("read");
+            let _ = adapter.close_file(&handle);
+            bytes
+        };
+        let run_from_bundle = adapter(Some(bundle.clone()));
+        assert_eq!(read(&run_from_bundle, "assets/which.txt"), b"the bundle");
+        assert_eq!(read(&run_from_bundle, "assets/voxygen/a.ron"), b"()");
+        assert_eq!(
+            read(&run_from_bundle, "settings.ron"),
+            b"mine",
+            "the rest is the sandbox"
+        );
+        let listed = run_from_bundle.list("assets").expect("list assets");
+        assert!(listed.iter().any(|e| e.contains("voxygen")), "{listed:?}");
+        let run_from_folder = adapter(None);
+        assert_eq!(read(&run_from_folder, "assets/which.txt"), b"the sandbox");
     }
 
     #[cfg(all(feature = "phase2-bindings", unix))]

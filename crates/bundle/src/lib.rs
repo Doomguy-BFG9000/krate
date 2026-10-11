@@ -813,6 +813,85 @@ pub const MAX_ENTRY_COUNT: usize = 8192;
 /// the per-file limit is a zip bomb that passes every per-file check.
 pub const MAX_TOTAL_SOURCE_BYTES: u64 = 256 * 1024 * 1024;
 
+/// The ceilings one door judges a bundle by (IC-942).
+///
+/// Every bound is the same kind at every door -- per entry, per asset, the
+/// totals, the counts -- so a zip bomb is refused everywhere; only how much a
+/// door accepts differs. [`HUB_LIMITS`] are the constants above, for
+/// anything a stranger can hand Krate: the hub's publish door and its wasm
+/// validator, a URL, a phone. [`LOCAL_LIMITS`] are for a file already on
+/// this machine that a person opens (`krate run`, a double-click, the
+/// desktop Player), large enough for a game with all its assets inside.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Limits {
+    /// The archive itself, compressed.
+    pub bundle_bytes: u64,
+    /// One entry other than an asset, expanded (the app's module).
+    pub entry_bytes: u64,
+    /// One asset, expanded.
+    pub asset_bytes: u64,
+    /// Every asset together, expanded.
+    pub total_asset_bytes: u64,
+    /// How many assets.
+    pub asset_count: usize,
+    /// How many entries of every kind.
+    pub entry_count: usize,
+    /// `source/` and `sdk/` together, expanded.
+    pub total_source_bytes: u64,
+}
+
+/// What the hub, a URL and a phone accept: today's limits.
+pub const HUB_LIMITS: Limits = Limits {
+    bundle_bytes: MAX_BUNDLE_BYTES,
+    entry_bytes: MAX_ENTRY_BYTES,
+    asset_bytes: MAX_ASSET_BYTES,
+    total_asset_bytes: MAX_TOTAL_ASSET_BYTES,
+    asset_count: MAX_ASSET_COUNT,
+    entry_count: MAX_ENTRY_COUNT,
+    total_source_bytes: MAX_TOTAL_SOURCE_BYTES,
+};
+
+/// What a desktop accepts from a file on its own disk (IC-942, the
+/// founder's decision of 2026-10-11): one game with everything in it.
+/// Veloren is a 245 MB module and 10,654 assets (442 MB); these leave it
+/// room to grow several times over and still bound what one file can make
+/// a machine unpack.
+pub const LOCAL_LIMITS: Limits = Limits {
+    bundle_bytes: 2 * 1024 * 1024 * 1024,
+    entry_bytes: 1024 * 1024 * 1024,
+    asset_bytes: 256 * 1024 * 1024,
+    total_asset_bytes: 4 * 1024 * 1024 * 1024,
+    // Three times Veloren's count, and inside what an archive without
+    // zip64's entry count can name (65,535), so every writer can make one.
+    asset_count: 32_000,
+    entry_count: 32_768,
+    total_source_bytes: MAX_TOTAL_SOURCE_BYTES,
+};
+
+thread_local! {
+    /// The limits the open running on this thread judges by. An open is one
+    /// synchronous call on one thread, so the ceiling it was given reaches
+    /// every check inside it without threading through each one.
+    static ACTIVE_LIMITS: std::cell::Cell<Limits> = const { std::cell::Cell::new(HUB_LIMITS) };
+}
+
+/// The limits in force for the open on this thread.
+fn lim() -> Limits {
+    ACTIVE_LIMITS.with(|active| active.get())
+}
+
+/// Run `f` judging by `limits`, then put back whatever was in force.
+fn with_limits<T>(limits: Limits, f: impl FnOnce() -> T) -> T {
+    struct Restore(Limits);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            ACTIVE_LIMITS.with(|active| active.set(self.0));
+        }
+    }
+    let _restore = Restore(ACTIVE_LIMITS.with(|active| active.replace(limits)));
+    f()
+}
+
 #[derive(Debug, Error)]
 pub enum BundleError {
     #[error("io error on {path}: {source}")]
@@ -843,8 +922,12 @@ pub enum BundleError {
          Or let `krate create` do the packing, which handles this for you."
     )]
     EntryMismatch { declared: String },
-    #[error("bundle is {size} bytes, larger than the {MAX_BUNDLE_BYTES} byte limit")]
-    TooLarge { size: u64 },
+    #[error("bundle is {size} bytes, larger than the {limit} byte limit here{}",
+        if *size <= LOCAL_LIMITS.bundle_bytes && *limit < LOCAL_LIMITS.bundle_bytes {
+            ". An app this large opens from a file on a desktop (Krate's large local tier), \
+             not through the hub, a link or a phone"
+        } else { "" })]
+    TooLarge { size: u64, limit: u64 },
     /// `limit` is the ceiling that was actually applied: an asset is held to
     /// [`MAX_ASSET_BYTES`], other entries to [`MAX_ENTRY_BYTES`], and the
     /// message must name the one that refused it (IC-714, tests 1479-1480).
@@ -854,8 +937,8 @@ pub enum BundleError {
     UnsafeAssetPath { path: String },
     #[error("asset `{path}` is a symbolic link; bundle assets must be regular files")]
     AssetSymlink { path: PathBuf },
-    #[error("bundle contains more than {MAX_ASSET_COUNT} asset files")]
-    TooManyAssets,
+    #[error("bundle contains more than {limit} asset files")]
+    TooManyAssets { limit: usize },
     #[error(
         "this bundle names the same file twice ({path}). What you review \
          would not be what runs, so Krate refuses it rather than picking \
@@ -941,12 +1024,12 @@ pub enum BundleError {
          there is free space on this disk."
     )]
     Unpack { detail: String },
-    #[error("bundle contains more than {MAX_ENTRY_COUNT} files")]
-    TooManyEntries,
-    #[error("bundle source and SDK expand to more than {MAX_TOTAL_SOURCE_BYTES} bytes")]
-    SourceTooLarge,
-    #[error("bundle assets expand to more than {MAX_TOTAL_ASSET_BYTES} bytes")]
-    AssetsTooLarge,
+    #[error("bundle contains more than {limit} files")]
+    TooManyEntries { limit: usize },
+    #[error("bundle source and SDK expand to more than {limit} bytes")]
+    SourceTooLarge { limit: u64 },
+    #[error("bundle assets expand to more than {limit} bytes")]
+    AssetsTooLarge { limit: u64 },
     #[error("refusing to fetch over plain HTTP: {url}\nuse https, or pass --insecure-http for a local test server")]
     InsecureUrl { url: String },
     #[error("could not fetch {url}: {message}")]
@@ -2253,19 +2336,36 @@ fn replace_entry(bundle_path: &Path, entry_name: &str, bytes: &[u8]) -> Result<(
 }
 
 /// Open a bundle from disk, extracting it into a temporary directory.
+///
+/// A file on this machine that a person opens, so it is judged by
+/// [`LOCAL_LIMITS`] (IC-942): a desktop opens a game with all its assets
+/// inside. Anything a stranger can hand Krate goes through [`open_bytes`],
+/// [`open_reader`] or [`fetch`], which keep [`HUB_LIMITS`].
 pub fn open(bundle_path: &Path) -> Result<OpenBundle> {
+    open_with_limits(bundle_path, LOCAL_LIMITS)
+}
+
+/// [`open`], judged by the given limits.
+pub fn open_with_limits(bundle_path: &Path, limits: Limits) -> Result<OpenBundle> {
+    with_limits(limits, || open_file(bundle_path))
+}
+
+fn open_file(bundle_path: &Path) -> Result<OpenBundle> {
     let size = fs::metadata(bundle_path)
         .map_err(|err| io_err(bundle_path, err))?
         .len();
-    if size > MAX_BUNDLE_BYTES {
-        return Err(BundleError::TooLarge { size });
+    if size > lim().bundle_bytes {
+        return Err(BundleError::TooLarge {
+            size,
+            limit: lim().bundle_bytes,
+        });
     }
     // Compare what the FILE claims against what the parser will see (K-252).
     let bytes = fs::read(bundle_path).map_err(|err| io_err(bundle_path, err))?;
     refuse_undeclared_duplicate(&bytes)?;
 
     let file = File::open(bundle_path).map_err(|err| io_err(bundle_path, err))?;
-    open_reader(file)
+    open_archive(file)
 }
 
 // Where a bundle is unpacked: the system temp directory in a real run.
@@ -2423,13 +2523,18 @@ fn refuse_undeclared_duplicate(bytes: &[u8]) -> Result<()> {
 /// has the bytes should use this rather than `open_reader`, so admission on
 /// the server is the same open the recipient runs.
 pub fn open_bytes(bytes: &[u8]) -> Result<OpenBundle> {
-    if bytes.len() as u64 > MAX_BUNDLE_BYTES {
+    with_limits(HUB_LIMITS, || open_bytes_here(bytes))
+}
+
+fn open_bytes_here(bytes: &[u8]) -> Result<OpenBundle> {
+    if bytes.len() as u64 > lim().bundle_bytes {
         return Err(BundleError::TooLarge {
             size: bytes.len() as u64,
+            limit: lim().bundle_bytes,
         });
     }
     refuse_undeclared_duplicate(bytes)?;
-    open_reader(io::Cursor::new(bytes.to_vec()))
+    open_archive(io::Cursor::new(bytes.to_vec()))
 }
 
 /// What the validator concluded about a bundle it judged in memory, for a
@@ -2489,11 +2594,17 @@ pub struct JudgedSignature {
 /// sets it to what it can hold. The archive itself is bounded by
 /// [`MAX_BUNDLE_BYTES`] as everywhere else.
 pub fn judge_bytes(bytes: &[u8], max_expanded: u64) -> Result<Judgement> {
+    // The hub's door: today's limits whatever else is running (IC-942).
+    with_limits(HUB_LIMITS, || judge_bytes_here(bytes, max_expanded))
+}
+
+fn judge_bytes_here(bytes: &[u8], max_expanded: u64) -> Result<Judgement> {
     use std::collections::BTreeMap;
 
-    if bytes.len() as u64 > MAX_BUNDLE_BYTES {
+    if bytes.len() as u64 > lim().bundle_bytes {
         return Err(BundleError::TooLarge {
             size: bytes.len() as u64,
+            limit: lim().bundle_bytes,
         });
     }
     refuse_undeclared_duplicate(bytes)?;
@@ -2530,23 +2641,25 @@ pub fn judge_bytes(bytes: &[u8], max_expanded: u64) -> Result<Judgement> {
             || name == EXTENSIONS_ENTRY
             || name == CLOSURE_ENTRY
         {
-            (MAX_ENTRY_BYTES, 'c')
+            (lim().entry_bytes, 'c')
         } else if name.starts_with(ASSETS_PREFIX) {
             safe_asset_relative_path(&name)?;
             asset_count += 1;
-            if asset_count > MAX_ASSET_COUNT {
-                return Err(BundleError::TooManyAssets);
+            if asset_count > lim().asset_count {
+                return Err(BundleError::TooManyAssets {
+                    limit: lim().asset_count,
+                });
             }
-            (MAX_ASSET_BYTES, 'a')
+            (lim().asset_bytes, 'a')
         } else if name.starts_with(SOURCE_PREFIX) {
             safe_source_relative_path(&name)?;
-            (MAX_ENTRY_BYTES, 's')
+            (lim().entry_bytes, 's')
         } else if name.starts_with(SDK_PREFIX) {
             safe_prefixed_relative_path(&name, SDK_PREFIX)?;
-            (MAX_ENTRY_BYTES, 's')
+            (lim().entry_bytes, 's')
         } else if name.starts_with(EXTENSION_PREFIX) {
             safe_prefixed_relative_path(&name, EXTENSION_PREFIX)?;
-            (MAX_ENTRY_BYTES, 's')
+            (lim().entry_bytes, 's')
         } else {
             continue; // unknown entries are ignored under profile 1, as `open` ignores them
         };
@@ -2577,17 +2690,26 @@ pub fn judge_bytes(bytes: &[u8], max_expanded: u64) -> Result<Judgement> {
             'a' => {
                 asset_bytes = asset_bytes
                     .checked_add(len)
-                    .ok_or(BundleError::AssetsTooLarge)?;
-                if asset_bytes > MAX_TOTAL_ASSET_BYTES {
-                    return Err(BundleError::AssetsTooLarge);
+                    .ok_or(BundleError::AssetsTooLarge {
+                        limit: lim().total_asset_bytes,
+                    })?;
+                if asset_bytes > lim().total_asset_bytes {
+                    return Err(BundleError::AssetsTooLarge {
+                        limit: lim().total_asset_bytes,
+                    });
                 }
             }
             's' => {
-                source_bytes = source_bytes
-                    .checked_add(len)
-                    .ok_or(BundleError::SourceTooLarge)?;
-                if source_bytes > MAX_TOTAL_SOURCE_BYTES {
-                    return Err(BundleError::SourceTooLarge);
+                source_bytes =
+                    source_bytes
+                        .checked_add(len)
+                        .ok_or(BundleError::SourceTooLarge {
+                            limit: lim().total_source_bytes,
+                        })?;
+                if source_bytes > lim().total_source_bytes {
+                    return Err(BundleError::SourceTooLarge {
+                        limit: lim().total_source_bytes,
+                    });
                 }
             }
             _ => {}
@@ -2750,6 +2872,18 @@ pub fn judge_bytes(bytes: &[u8], max_expanded: u64) -> Result<Judgement> {
 }
 
 pub fn open_reader<R: Read + io::Seek>(reader: R) -> Result<OpenBundle> {
+    with_limits(HUB_LIMITS, || open_archive(reader))
+}
+
+/// [`open_reader`], judged by the given limits.
+pub fn open_reader_with_limits<R: Read + io::Seek>(
+    reader: R,
+    limits: Limits,
+) -> Result<OpenBundle> {
+    with_limits(limits, || open_archive(reader))
+}
+
+fn open_archive<R: Read + io::Seek>(reader: R) -> Result<OpenBundle> {
     let mut archive = ZipArchive::new(reader)?;
 
     // Judge the archive as a whole before writing any of it to disk (IC-209).
@@ -2798,9 +2932,13 @@ pub fn open_reader<R: Read + io::Seek>(reader: R) -> Result<OpenBundle> {
         }
         total_asset_bytes = total_asset_bytes
             .checked_add(extract_asset_entry(&mut archive, name, &destination)?)
-            .ok_or(BundleError::AssetsTooLarge)?;
-        if total_asset_bytes > MAX_TOTAL_ASSET_BYTES {
-            return Err(BundleError::AssetsTooLarge);
+            .ok_or(BundleError::AssetsTooLarge {
+                limit: lim().total_asset_bytes,
+            })?;
+        if total_asset_bytes > lim().total_asset_bytes {
+            return Err(BundleError::AssetsTooLarge {
+                limit: lim().total_asset_bytes,
+            });
         }
     }
 
@@ -2835,9 +2973,13 @@ pub fn open_reader<R: Read + io::Seek>(reader: R) -> Result<OpenBundle> {
         }
         total_source_bytes = total_source_bytes
             .checked_add(extract_asset_entry(&mut archive, name, &destination)?)
-            .ok_or(BundleError::SourceTooLarge)?;
-        if total_source_bytes > MAX_TOTAL_SOURCE_BYTES {
-            return Err(BundleError::SourceTooLarge);
+            .ok_or(BundleError::SourceTooLarge {
+                limit: lim().total_source_bytes,
+            })?;
+        if total_source_bytes > lim().total_source_bytes {
+            return Err(BundleError::SourceTooLarge {
+                limit: lim().total_source_bytes,
+            });
         }
     }
 
@@ -2860,9 +3002,13 @@ pub fn open_reader<R: Read + io::Seek>(reader: R) -> Result<OpenBundle> {
         }
         total_source_bytes = total_source_bytes
             .checked_add(extract_asset_entry(&mut archive, name, &destination)?)
-            .ok_or(BundleError::SourceTooLarge)?;
-        if total_source_bytes > MAX_TOTAL_SOURCE_BYTES {
-            return Err(BundleError::SourceTooLarge);
+            .ok_or(BundleError::SourceTooLarge {
+                limit: lim().total_source_bytes,
+            })?;
+        if total_source_bytes > lim().total_source_bytes {
+            return Err(BundleError::SourceTooLarge {
+                limit: lim().total_source_bytes,
+            });
         }
     }
 
@@ -2890,9 +3036,13 @@ pub fn open_reader<R: Read + io::Seek>(reader: R) -> Result<OpenBundle> {
         }
         total_source_bytes = total_source_bytes
             .checked_add(extract_asset_entry(&mut archive, name, &destination)?)
-            .ok_or(BundleError::SourceTooLarge)?;
-        if total_source_bytes > MAX_TOTAL_SOURCE_BYTES {
-            return Err(BundleError::SourceTooLarge);
+            .ok_or(BundleError::SourceTooLarge {
+                limit: lim().total_source_bytes,
+            })?;
+        if total_source_bytes > lim().total_source_bytes {
+            return Err(BundleError::SourceTooLarge {
+                limit: lim().total_source_bytes,
+            });
         }
         ext_entries.insert(
             name.clone(),
@@ -2980,9 +3130,13 @@ pub fn open_reader<R: Read + io::Seek>(reader: R) -> Result<OpenBundle> {
             }
             total_source_bytes = total_source_bytes
                 .checked_add(extract_asset_entry(&mut archive, name, &destination)?)
-                .ok_or(BundleError::SourceTooLarge)?;
-            if total_source_bytes > MAX_TOTAL_SOURCE_BYTES {
-                return Err(BundleError::SourceTooLarge);
+                .ok_or(BundleError::SourceTooLarge {
+                    limit: lim().total_source_bytes,
+                })?;
+            if total_source_bytes > lim().total_source_bytes {
+                return Err(BundleError::SourceTooLarge {
+                    limit: lim().total_source_bytes,
+                });
             }
         }
     }
@@ -3244,7 +3398,14 @@ fn collect_files(root: &Path, skip: &dyn Fn(&str) -> bool) -> Result<Vec<(String
     Ok(out)
 }
 
+/// The assets under `root`, for packing. Packing happens on the author's
+/// machine and may make a bundle as large as [`LOCAL_LIMITS`] allow; a door
+/// with smaller limits says so when it is handed one (IC-942).
 fn collect_assets(root: &Path) -> Result<Vec<(String, PathBuf)>> {
+    with_limits(LOCAL_LIMITS, || collect_assets_here(root))
+}
+
+fn collect_assets_here(root: &Path) -> Result<Vec<(String, PathBuf)>> {
     fn visit(
         root: &Path,
         current: &Path,
@@ -3269,20 +3430,26 @@ fn collect_assets(root: &Path) -> Result<Vec<(String, PathBuf)>> {
             if !metadata.is_file() {
                 continue;
             }
-            if metadata.len() > MAX_ASSET_BYTES {
+            if metadata.len() > lim().asset_bytes {
                 return Err(BundleError::EntryTooLarge {
                     entry: path.display().to_string(),
-                    limit: MAX_ASSET_BYTES,
+                    limit: lim().asset_bytes,
                 });
             }
             *total = total
                 .checked_add(metadata.len())
-                .ok_or(BundleError::AssetsTooLarge)?;
-            if *total > MAX_TOTAL_ASSET_BYTES {
-                return Err(BundleError::AssetsTooLarge);
+                .ok_or(BundleError::AssetsTooLarge {
+                    limit: lim().total_asset_bytes,
+                })?;
+            if *total > lim().total_asset_bytes {
+                return Err(BundleError::AssetsTooLarge {
+                    limit: lim().total_asset_bytes,
+                });
             }
-            if assets.len() == MAX_ASSET_COUNT {
-                return Err(BundleError::TooManyAssets);
+            if assets.len() == lim().asset_count {
+                return Err(BundleError::TooManyAssets {
+                    limit: lim().asset_count,
+                });
             }
             let relative = path
                 .strip_prefix(root)
@@ -3586,8 +3753,10 @@ fn preflight_entries<R: Read + io::Seek>(archive: &mut ZipArchive<R>) -> Result<
             continue; // a directory record carries no content
         }
         files += 1;
-        if files > MAX_ENTRY_COUNT {
-            return Err(BundleError::TooManyEntries);
+        if files > lim().entry_count {
+            return Err(BundleError::TooManyEntries {
+                limit: lim().entry_count,
+            });
         }
 
         // ASCII only (IC-209).
@@ -3676,8 +3845,10 @@ fn preflight_entries<R: Read + io::Seek>(archive: &mut ZipArchive<R>) -> Result<
             || name.starts_with(EXTENSION_PREFIX)
         {
             source_bytes = source_bytes.saturating_add(entry.size());
-            if source_bytes > MAX_TOTAL_SOURCE_BYTES {
-                return Err(BundleError::SourceTooLarge);
+            if source_bytes > lim().total_source_bytes {
+                return Err(BundleError::SourceTooLarge {
+                    limit: lim().total_source_bytes,
+                });
             }
         }
     }
@@ -3779,8 +3950,10 @@ fn asset_entry_names<R: Read + io::Seek>(archive: &mut ZipArchive<R>) -> Result<
                 path: "duplicate asset entry".to_string(),
             });
         }
-        if names.len() > MAX_ASSET_COUNT {
-            return Err(BundleError::TooManyAssets);
+        if names.len() > lim().asset_count {
+            return Err(BundleError::TooManyAssets {
+                limit: lim().asset_count,
+            });
         }
     }
     Ok(names.into_iter().collect())
@@ -3792,19 +3965,19 @@ fn extract_asset_entry<R: Read + io::Seek>(
     destination: &Path,
 ) -> Result<u64> {
     let mut entry = archive.by_name(name)?;
-    if entry.size() > MAX_ASSET_BYTES {
+    if entry.size() > lim().asset_bytes {
         return Err(BundleError::EntryTooLarge {
             entry: name.to_string(),
-            limit: MAX_ASSET_BYTES,
+            limit: lim().asset_bytes,
         });
     }
     let mut out = File::create(destination).map_err(|err| io_err(destination, err))?;
-    let mut limited = entry.by_ref().take(MAX_ASSET_BYTES + 1);
+    let mut limited = entry.by_ref().take(lim().asset_bytes + 1);
     let written = io::copy(&mut limited, &mut out).map_err(|err| io_err(destination, err))?;
-    if written > MAX_ASSET_BYTES {
+    if written > lim().asset_bytes {
         return Err(BundleError::EntryTooLarge {
             entry: name.to_string(),
-            limit: MAX_ASSET_BYTES,
+            limit: lim().asset_bytes,
         });
     }
     Ok(written)
@@ -3823,22 +3996,22 @@ fn extract_entry<R: Read + io::Seek>(
         Err(err) => return Err(err.into()),
     };
 
-    if entry.size() > MAX_ENTRY_BYTES {
+    if entry.size() > lim().entry_bytes {
         return Err(BundleError::EntryTooLarge {
             entry: name.to_string(),
-            limit: MAX_ENTRY_BYTES,
+            limit: lim().entry_bytes,
         });
     }
 
     let mut out = File::create(destination).map_err(|err| io_err(destination, err))?;
     // Copy through a limited reader as well as checking the declared size: a
     // zip header can lie about how large an entry is.
-    let mut limited = entry.by_ref().take(MAX_ENTRY_BYTES + 1);
+    let mut limited = entry.by_ref().take(lim().entry_bytes + 1);
     let written = io::copy(&mut limited, &mut out).map_err(|err| io_err(destination, err))?;
-    if written > MAX_ENTRY_BYTES {
+    if written > lim().entry_bytes {
         return Err(BundleError::EntryTooLarge {
             entry: name.to_string(),
-            limit: MAX_ENTRY_BYTES,
+            limit: lim().entry_bytes,
         });
     }
     Ok(())
@@ -3990,6 +4163,12 @@ fn check_address(final_url: &str, bytes: &[u8]) -> Result<Option<String>> {
 
 #[cfg(feature = "fetch")]
 pub fn fetch_resolved(url: &str, allow_insecure_http: bool) -> Result<Fetched> {
+    // A URL is a stranger's: the hub's limits (IC-942).
+    with_limits(HUB_LIMITS, || fetch_resolved_here(url, allow_insecure_http))
+}
+
+#[cfg(feature = "fetch")]
+fn fetch_resolved_here(url: &str, allow_insecure_http: bool) -> Result<Fetched> {
     if url.starts_with("http://") && !allow_insecure_http {
         return Err(BundleError::InsecureUrl {
             url: url.to_string(),
@@ -4023,7 +4202,7 @@ pub fn fetch_resolved(url: &str, allow_insecure_http: bool) -> Result<Fetched> {
     let mut bytes = Vec::new();
     response
         .into_reader()
-        .take(MAX_BUNDLE_BYTES + 1)
+        .take(lim().bundle_bytes + 1)
         .read_to_end(&mut bytes)
         .map_err(|err| BundleError::Fetch {
             url: url.to_string(),
@@ -7022,7 +7201,7 @@ required = true
         EXTRACT_ROOT.with(|r| *r.borrow_mut() = None);
 
         assert!(
-            matches!(opened, Err(BundleError::SourceTooLarge)),
+            matches!(opened, Err(BundleError::SourceTooLarge { .. })),
             "the fixture must be refused during extraction"
         );
 
@@ -7063,28 +7242,155 @@ required = true
             buf
         }
 
+        // At each door's own ceiling: the hub's, and the large local tier's
+        // (IC-942), which is the same bound at a larger number.
         let dir = TempDir::new().expect("tempdir");
-        for (n, must_open) in [
-            (MAX_ENTRY_COUNT - 1, true),
-            (MAX_ENTRY_COUNT, true),
-            (MAX_ENTRY_COUNT + 1, false),
-        ] {
-            let bundle = dir.path().join(format!("n{n}.krate"));
-            fs::write(&bundle, archive_with_n_files(n)).expect("write");
-            let opened = open(&bundle);
-            if must_open {
-                assert!(
-                    !matches!(opened, Err(BundleError::TooManyEntries)),
-                    "{n} files is within the limit of {MAX_ENTRY_COUNT} and must not be \
-                     refused for its count"
-                );
-            } else {
-                assert!(
-                    matches!(opened, Err(BundleError::TooManyEntries)),
-                    "{n} files is over the limit of {MAX_ENTRY_COUNT} and must be refused"
-                );
+        for limits in [HUB_LIMITS, LOCAL_LIMITS] {
+            let max = limits.entry_count;
+            for (n, must_open) in [(max - 1, true), (max, true), (max + 1, false)] {
+                let bundle = dir.path().join(format!("n{n}.krate"));
+                fs::write(&bundle, archive_with_n_files(n)).expect("write");
+                let opened = open_with_limits(&bundle, limits);
+                let _ = fs::remove_file(&bundle);
+                if must_open {
+                    assert!(
+                        !matches!(opened, Err(BundleError::TooManyEntries { .. })),
+                        "{n} files is within the limit of {max} and must not be \
+                         refused for its count"
+                    );
+                } else {
+                    assert!(
+                        matches!(opened, Err(BundleError::TooManyEntries { .. })),
+                        "{n} files is over the limit of {max} and must be refused"
+                    );
+                }
             }
         }
+    }
+
+    /// The large local tier (IC-942): a bundle over the hub's limits opens
+    /// from a file on this machine, and every door a stranger can reach --
+    /// the hub's publish door, its in-memory judge, a reader -- still
+    /// refuses it, with the refusal naming the hub's limit.
+    #[test]
+    fn a_bundle_too_big_for_the_hub_opens_locally_and_nowhere_else() {
+        let n = MAX_ENTRY_COUNT + 1;
+        let mut buf = Vec::new();
+        {
+            let mut writer = ZipWriter::new(io::Cursor::new(&mut buf));
+            let opts = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+            writer.start_file(MANIFEST_ENTRY, opts).expect("manifest");
+            writer.write_all(MANIFEST.as_bytes()).expect("write");
+            writer.start_file(COMPONENT_ENTRY, opts).expect("component");
+            writer.write_all(MINIMAL_COMPONENT).expect("write");
+            for i in 0..n - 2 {
+                writer
+                    .start_file(format!("assets/a{i}.ron"), opts)
+                    .expect("asset");
+                writer.write_all(b"()").expect("write");
+            }
+            writer.finish().expect("finish");
+        }
+        let dir = TempDir::new().expect("tempdir");
+        let bundle = dir.path().join("big.krate");
+        fs::write(&bundle, &buf).expect("write");
+
+        let opened = open(&bundle).expect("a file on this machine opens in the large tier");
+        assert_eq!(opened.records.len(), n, "every entry came through");
+
+        for (door, refused) in [
+            (
+                "open_bytes (the hub's publish door)",
+                open_bytes(&buf).err(),
+            ),
+            (
+                "open_reader (a phone, a card)",
+                open_reader(io::Cursor::new(buf.clone())).err(),
+            ),
+            (
+                "judge_bytes (the hub's wasm validator)",
+                judge_bytes(&buf, u64::MAX).err(),
+            ),
+            (
+                "open_with_limits(HUB_LIMITS)",
+                open_with_limits(&bundle, HUB_LIMITS).err(),
+            ),
+        ] {
+            match refused {
+                Some(
+                    err @ (BundleError::TooManyEntries { .. } | BundleError::TooManyAssets { .. }),
+                ) => {
+                    let said = err.to_string();
+                    assert!(
+                        said.contains(&MAX_ENTRY_COUNT.to_string())
+                            || said.contains(&MAX_ASSET_COUNT.to_string()),
+                        "{door} names the hub's limit: {said}"
+                    );
+                }
+                other => panic!("{door} must refuse a bundle over the hub's limits: {other:?}"),
+            }
+        }
+    }
+
+    /// A bundle over the hub's size opens on a desktop, and the hub's
+    /// refusal says where such an app opens (IC-942).
+    #[test]
+    fn a_bundle_over_the_hubs_size_is_told_it_opens_on_a_desktop() {
+        let dir = TempDir::new().expect("tempdir");
+        let over = dir.path().join("over.krate");
+        fs::File::create(&over)
+            .expect("create")
+            .set_len(MAX_BUNDLE_BYTES + 1)
+            .expect("size it");
+        let said = open_with_limits(&over, HUB_LIMITS)
+            .expect_err("the hub's limit")
+            .to_string();
+        assert!(said.contains("opens from a file on a desktop"), "{said}");
+        let local = open(&over).expect_err("zeros are not an archive");
+        assert!(
+            !matches!(local, BundleError::TooLarge { .. }),
+            "the local tier holds it: {local}"
+        );
+    }
+
+    /// The totals are bounded by whatever ceiling a door was given: the same
+    /// code refuses at a small custom ceiling as at the hub's or the local
+    /// tier's, which are just larger numbers (IC-942).
+    #[test]
+    fn the_asset_total_is_bounded_at_any_ceiling() {
+        let small = Limits {
+            total_asset_bytes: 3 * 1024 * 1024,
+            ..LOCAL_LIMITS
+        };
+        let mut buf = Vec::new();
+        {
+            let mut writer = ZipWriter::new(io::Cursor::new(&mut buf));
+            let opts = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+            writer.start_file(MANIFEST_ENTRY, opts).expect("manifest");
+            writer.write_all(MANIFEST.as_bytes()).expect("write");
+            writer.start_file(COMPONENT_ENTRY, opts).expect("component");
+            writer.write_all(MINIMAL_COMPONENT).expect("write");
+            for i in 0..4 {
+                writer
+                    .start_file(format!("assets/m{i}.bin"), opts)
+                    .expect("asset");
+                writer.write_all(&vec![0u8; 1024 * 1024]).expect("write");
+            }
+            writer.finish().expect("finish");
+        }
+        let dir = TempDir::new().expect("tempdir");
+        let bundle = dir.path().join("four.krate");
+        fs::write(&bundle, &buf).expect("write");
+        match open_with_limits(&bundle, small) {
+            Err(BundleError::AssetsTooLarge { limit }) => {
+                assert_eq!(limit, small.total_asset_bytes)
+            }
+            other => panic!("4 MiB of assets over a 3 MiB ceiling: {other:?}"),
+        }
+        assert!(
+            open(&bundle).is_ok(),
+            "the same bundle opens at the local ceiling"
+        );
     }
 
     /// An overrun names the ceiling that refused it (IC-714, tests 1479 and
@@ -7121,13 +7427,16 @@ required = true
             buf
         }
         let dir = TempDir::new().expect("tempdir");
-        for (name, limit) in [
-            ("assets/huge.png", MAX_ASSET_BYTES),
-            (COMPONENT_ENTRY, MAX_ENTRY_BYTES),
+        for (name, limit, door) in [
+            ("assets/huge.png", MAX_ASSET_BYTES, HUB_LIMITS),
+            (COMPONENT_ENTRY, MAX_ENTRY_BYTES, HUB_LIMITS),
+            // The large local tier's own ceilings (IC-942).
+            ("assets/huge.png", LOCAL_LIMITS.asset_bytes, LOCAL_LIMITS),
+            (COMPONENT_ENTRY, LOCAL_LIMITS.entry_bytes, LOCAL_LIMITS),
         ] {
             let bundle = dir.path().join("over.krate");
             fs::write(&bundle, archive_with_zeros(name, limit + 1)).expect("write");
-            match open(&bundle) {
+            match open_with_limits(&bundle, door) {
                 Err(err @ BundleError::EntryTooLarge { limit: applied, .. }) => {
                     assert_eq!(applied, limit, "{name}: the applied ceiling");
                     assert!(
@@ -7178,7 +7487,7 @@ required = true
         let honest = dir.path().join("honest.krate");
         fs::write(&honest, &buf).expect("write");
         assert!(
-            matches!(open(&honest), Err(BundleError::SourceTooLarge)),
+            matches!(open(&honest), Err(BundleError::SourceTooLarge { .. })),
             "an honestly declared oversize source tree must be refused"
         );
 
@@ -7192,7 +7501,7 @@ required = true
         let bundle = dir.path().join("forged.krate");
         fs::write(&bundle, &forged).expect("write");
         assert!(
-            matches!(open(&bundle), Err(BundleError::SourceTooLarge)),
+            matches!(open(&bundle), Err(BundleError::SourceTooLarge { .. })),
             "a FORGED size must not get past the source limit"
         );
     }
@@ -7278,13 +7587,13 @@ required = true
             let opened = open(&bundle);
             if must_pass {
                 assert!(
-                    !matches!(opened, Err(BundleError::SourceTooLarge)),
+                    !matches!(opened, Err(BundleError::SourceTooLarge { .. })),
                     "{total} bytes is within the limit of {MAX_TOTAL_SOURCE_BYTES} and \
                      must not be refused for its size"
                 );
             } else {
                 assert!(
-                    matches!(opened, Err(BundleError::SourceTooLarge)),
+                    matches!(opened, Err(BundleError::SourceTooLarge { .. })),
                     "{total} bytes is over the limit of {MAX_TOTAL_SOURCE_BYTES} and \
                      must be refused"
                 );
@@ -8571,44 +8880,49 @@ required = true
 
     #[test]
     fn the_bundle_size_limit_holds_at_exactly_the_boundary() {
-        // IC-393 asks for the cap at its exact value and one past it. The
-        // limit is 256 MiB, which is far too much to write in a test -- but
-        // `open` reads the size from the file's METADATA, so a sparse file
-        // has the apparent size without the bytes. The whole fixture costs
-        // no disk at all.
-        let dir = TempDir::new().expect("tempdir");
+        for door in [HUB_LIMITS, LOCAL_LIMITS] {
+            let max_bundle = door.bundle_bytes;
+            // IC-393 asks for the cap at its exact value and one past it. The
+            // limit is 256 MiB, which is far too much to write in a test -- but
+            // `open` reads the size from the file's METADATA, so a sparse file
+            // has the apparent size without the bytes. The whole fixture costs
+            // no disk at all.
+            let dir = TempDir::new().expect("tempdir");
 
-        // One past the cap: refused for its size, naming both numbers.
-        let over = dir.path().join("over.krate");
-        fs::File::create(&over)
-            .expect("create")
-            .set_len(MAX_BUNDLE_BYTES + 1)
-            .expect("size it");
-        let err = open(&over).expect_err("a bundle over the cap must be refused");
-        assert!(
-            matches!(err, BundleError::TooLarge { .. }),
-            "it must be refused for its SIZE, not for anything else: {err}"
-        );
-        let text = err.to_string();
-        assert!(
-            text.contains(&(MAX_BUNDLE_BYTES + 1).to_string())
-                && text.contains(&MAX_BUNDLE_BYTES.to_string()),
-            "the refusal must name what arrived and what is allowed: {text}"
-        );
+            // One past the cap: refused for its size, naming both numbers.
+            let over = dir.path().join("over.krate");
+            fs::File::create(&over)
+                .expect("create")
+                .set_len(max_bundle + 1)
+                .expect("size it");
+            let err =
+                open_with_limits(&over, door).expect_err("a bundle over the cap must be refused");
+            assert!(
+                matches!(err, BundleError::TooLarge { .. }),
+                "it must be refused for its SIZE, not for anything else: {err}"
+            );
+            let text = err.to_string();
+            assert!(
+                text.contains(&(max_bundle + 1).to_string())
+                    && text.contains(&max_bundle.to_string()),
+                "the refusal must name what arrived and what is allowed: {text}"
+            );
 
-        // Exactly the cap: the size check must NOT fire. It still fails --
-        // a file of zeros is not an archive -- and that is the point: the
-        // refusal has to come from what the bytes are, not from how many.
-        let exact = dir.path().join("exact.krate");
-        fs::File::create(&exact)
-            .expect("create")
-            .set_len(MAX_BUNDLE_BYTES)
-            .expect("size it");
-        let err = open(&exact).expect_err("a file of zeros is not an archive");
-        assert!(
-            !matches!(err, BundleError::TooLarge { .. }),
-            "a bundle of exactly the limit is within it: {err}"
-        );
+            // Exactly the cap: the size check must NOT fire. It still fails --
+            // a file of zeros is not an archive -- and that is the point: the
+            // refusal has to come from what the bytes are, not from how many.
+            let exact = dir.path().join("exact.krate");
+            fs::File::create(&exact)
+                .expect("create")
+                .set_len(max_bundle)
+                .expect("size it");
+            let err =
+                open_with_limits(&exact, door).expect_err("a file of zeros is not an archive");
+            assert!(
+                !matches!(err, BundleError::TooLarge { .. }),
+                "a bundle of exactly the limit is within it: {err}"
+            );
+        }
     }
 
     #[cfg(feature = "fetch")]
