@@ -722,6 +722,7 @@ impl super::Runtime {
         config: &Config,
         output: OutputMode,
     ) -> Result<RunOutcome> {
+        krate_adapter_common::ui::clear_app_ending();
         let engine = &self.engine;
         let module = Module::from_binary(engine, bytes)
             .map_err(|err| RuntimeError::InvalidComponent(err.to_string()))?;
@@ -788,6 +789,9 @@ impl super::Runtime {
             let pump = shared.clone();
             store.set_epoch_deadline(super::EPOCH_TICKS_PER_PUMP);
             store.epoch_deadline_callback(move |_| {
+                if krate_adapter_common::ui::app_ending() {
+                    return Err(wasmtime::Error::msg(super::ENDED_BY_KRATE));
+                }
                 // Only when no other thread is in the host: the pump must
                 // never wait behind a worker.
                 if let Some(host) = pump.host.try_lock() {

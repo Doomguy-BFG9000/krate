@@ -4499,7 +4499,7 @@ impl Phase3GuiHost {
         // so the second unanswered close click has to be honoured here or the
         // window cannot be shut at all (K-121).
         if self.close_ignored_by_guest() {
-            std::process::exit(0);
+            return Err(crate::end_unanswered_close());
         }
         // A GPU adapter's present blocks for the panel inside
         // get_current_texture, and that IS the pacing. Adding our own timer
@@ -5672,7 +5672,7 @@ impl ui::events::Host for Phase3GuiHost {
             // behaviour) left a window nothing could shut, and a machine was
             // power-cycled over it (K-121). Same two-press contract as
             // Ctrl-C, ended the same way.
-            std::process::exit(0);
+            return Err(crate::end_unanswered_close());
         }
         Ok(event)
     }
@@ -5771,7 +5771,7 @@ impl ui::events::Host for Phase3GuiHost {
             if event.is_some() {
                 if self.close_ignored_by_guest() {
                     // Second unanswered close click; see poll (K-121).
-                    std::process::exit(0);
+                    return Err(crate::end_unanswered_close());
                 }
                 self.idle_waits.set(0);
                 if std::env::var_os("KRATE_EVENT_TRACE").is_some() {
@@ -7422,7 +7422,7 @@ impl gfx::scene3d::Host for Phase3GuiHost {
         // A scene game loop lives in present exactly like a canvas one; the
         // second unanswered close click ends the app here too (K-121).
         if self.close_ignored_by_guest() {
-            std::process::exit(0);
+            return Err(crate::end_unanswered_close());
         }
         // Pace the frame, exactly as the 2D path does.
         //

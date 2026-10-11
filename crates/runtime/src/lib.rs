@@ -1172,6 +1172,11 @@ impl Runtime {
         if config.phase3_ui_mode.can_open_a_window() {
             store.set_epoch_deadline(EPOCH_TICKS_PER_PUMP);
             store.epoch_deadline_callback(|mut ctx| {
+                // Krate's own Close went unanswered: end the app here, the
+                // one place an app that never calls the host still reaches.
+                if krate_adapter_common::ui::app_ending() {
+                    return Err(wasmtime::Error::msg(ENDED_BY_KRATE));
+                }
                 EPOCH_PUMPS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 if let Some(gui) = ctx.data_mut().phase3_gui.as_ref() {
                     gui.pump_native_windows_for_epoch();
@@ -1186,26 +1191,43 @@ impl Runtime {
 
     /// Tick the engine's epoch on a background thread, forever.
     ///
-    /// One thread for the process, started on first use: the epoch is a
-    /// property of the engine, and a thread per store would multiply ticks
-    /// without making anything more responsive.
+    /// One thread for the process, started on first use, ticking every
+    /// engine that asked: a player makes a new runtime -- a new engine --
+    /// for each app it opens, and a ticker tied to the first engine stopped
+    /// when that one was dropped, so on a phone no app after Krate's own
+    /// library was ever ticked, and an app stuck in a loop could not be
+    /// reached at all (IC-934).
     ///
-    /// The thread outlives the run deliberately. It holds only a weak
-    /// reference to the engine, so it cannot keep one alive, and it costs one
-    /// atomic increment per interval.
+    /// The thread holds only weak references, so it keeps no engine alive,
+    /// and drops each one once it is gone.
     fn start_epoch_ticker(&self) {
+        static ENGINES: std::sync::Mutex<Vec<wasmtime::EngineWeak>> =
+            std::sync::Mutex::new(Vec::new());
         static STARTED: std::sync::Once = std::sync::Once::new();
-        let weak = self.engine.weak();
-        STARTED.call_once(move || {
+        {
+            let mut engines = ENGINES.lock().expect("epoch engines lock");
+            let this = self.engine.weak();
+            let known = engines
+                .iter()
+                .filter_map(wasmtime::EngineWeak::upgrade)
+                .any(|engine| wasmtime::Engine::same(&engine, &self.engine));
+            if !known {
+                engines.push(this);
+            }
+        }
+        STARTED.call_once(|| {
             std::thread::Builder::new()
                 .name("krate-epoch".to_string())
-                .spawn(move || loop {
+                .spawn(|| loop {
                     std::thread::sleep(EPOCH_TICK_INTERVAL);
-                    let Some(engine) = weak.upgrade() else {
-                        // The engine is gone; nothing left to interrupt.
-                        return;
-                    };
-                    engine.increment_epoch();
+                    let mut engines = ENGINES.lock().expect("epoch engines lock");
+                    engines.retain(|weak| match weak.upgrade() {
+                        Some(engine) => {
+                            engine.increment_epoch();
+                            true
+                        }
+                        None => false,
+                    });
                 })
                 .ok();
         });
@@ -1283,6 +1305,7 @@ impl Runtime {
         config: &Config,
         output: OutputMode,
     ) -> Result<RunOutcome> {
+        krate_adapter_common::ui::clear_app_ending();
         let mut store = self.new_store(config, output)?;
         let gui_host = phase3_gui_host::Phase3GuiHost::new(
             UapiGuard::new(config.session_policy.clone()),
@@ -1328,6 +1351,7 @@ impl Runtime {
         config: &Config,
         output: OutputMode,
     ) -> Result<RunOutcome> {
+        krate_adapter_common::ui::clear_app_ending();
         let setup_started = std::time::Instant::now();
         let timed = std::env::var_os("KRATE_STAGE_TIMES").is_some();
         let mut store = self.new_store(config, output)?;
@@ -1639,6 +1663,12 @@ fn finish_gui_run(
 
         let code = match outcome {
             Ok(code) => code,
+            // Ended by Krate's own Close, as the person asked: a close, not
+            // a crash.
+            Err(_) if krate_adapter_common::ui::app_ending() => {
+                krate_adapter_common::ui::clear_app_ending();
+                return Ok(RunOutcome::Exited(0));
+            }
             Err(err) => {
                 if let Some(message) = classify_limit_error(&err) {
                     return Ok(RunOutcome::LimitExceeded(message));
@@ -1651,6 +1681,23 @@ fn finish_gui_run(
         Ok(RunOutcome::Exited(code))
     }
 }
+
+/// The person's second unanswered close (K-121). A desktop app is its own
+/// process, so the process ends. On a phone the process is Krate's player,
+/// and ending it threw the person out of Krate to the home screen, so there
+/// only the app ends, as Krate's own Close does (K-1074).
+pub(crate) fn end_unanswered_close() -> wasmtime::Error {
+    #[cfg(not(any(target_os = "ios", target_os = "android")))]
+    std::process::exit(0);
+    #[cfg(any(target_os = "ios", target_os = "android"))]
+    {
+        krate_adapter_common::ui::end_running_app();
+        wasmtime::Error::msg(ENDED_BY_KRATE)
+    }
+}
+
+/// What a run ended by Krate's own Close traps with (IC-934).
+pub(crate) const ENDED_BY_KRATE: &str = "ended by Krate: the app did not answer Close";
 
 /// Code memory that is already executable: the host binary's own signed
 /// text. See [`Runtime::new_for_native_image`].
@@ -3796,6 +3843,43 @@ fn classify_limit_error(err: &wasmtime::Error) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    /// Every engine is ticked, not only the first (IC-934). A player makes a
+    /// new runtime for each app it opens; the ticker was tied to the first
+    /// engine, which is dropped when Krate's own library closes, so on the
+    /// iPhone no app after it was ever ticked and one stuck in a loop could
+    /// not be ended by Krate's Close.
+    #[test]
+    fn every_engine_is_ticked_not_only_the_first() {
+        let config = super::Config {
+            phase3_ui_mode: super::phase3_ui::Phase3HostUiMode::NativePrototype,
+            ..super::Config::default()
+        };
+        let first = super::Runtime::new(&config).expect("first runtime");
+        first.start_epoch_ticker();
+        drop(first);
+        let second = super::Runtime::new(&config).expect("second runtime");
+        second.start_epoch_ticker();
+        let bytes =
+            wat::parse_str(r#"(module (func (export "spin") (loop br 0)))"#).expect("spin module");
+        let module = wasmtime::Module::from_binary(&second.engine, &bytes).expect("compile");
+        let mut store = wasmtime::Store::new(&second.engine, ());
+        store.set_epoch_deadline(1);
+        store.epoch_deadline_trap();
+        let instance = wasmtime::Instance::new(&mut store, &module, &[]).expect("instance");
+        let spin = instance
+            .get_typed_func::<(), ()>(&mut store, "spin")
+            .expect("spin export");
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(spin.call(&mut store, ()).is_err());
+        });
+        assert!(
+            rx.recv_timeout(std::time::Duration::from_secs(10))
+                .expect("a guest spinning on the second engine was never interrupted: its epoch is not ticked"),
+            "the spin must end in the epoch trap"
+        );
+    }
+
     /// A trap report names what the trap was, not only where (K-1010). The
     /// kind lives in the error's cause; the outer error is just the backtrace.
     #[test]

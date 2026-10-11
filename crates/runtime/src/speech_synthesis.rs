@@ -350,6 +350,12 @@ mod macos {
             let rate = (DEFAULT_RATE * rate).clamp(0.0, MAXIMUM_RATE);
             unsafe {
                 let _: () = msg_send![&*utterance, setRate: rate];
+                // KRATE_SILENT_SPEECH=1: the real synthesizer speaks at no
+                // volume, so tests prove a line starts and stops without
+                // sound on the machine running them (K-1077).
+                if std::env::var_os("KRATE_SILENT_SPEECH").is_some() {
+                    let _: () = msg_send![&*utterance, setVolume: 0.0f32];
+                }
                 if let Some(chosen) = &chosen {
                     let _: () = msg_send![&*utterance, setVoice: &**chosen];
                 }

@@ -1893,6 +1893,27 @@ impl Default for Appearance {
     }
 }
 
+/// Krate's own Close or Restart was not answered (IC-934): the engine ends
+/// the app at its next safepoint, whatever it is doing. Process-wide, as the
+/// one running app is.
+static END_APP: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// End the running app at its next safepoint: an app that stopped calling
+/// the host cannot be asked to close, so Krate's controls end it instead.
+pub fn end_running_app() {
+    END_APP.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Whether Krate has asked the engine to end the running app.
+pub fn app_ending() -> bool {
+    END_APP.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// A new app begins: an end asked for the last one is not meant for it.
+pub fn clear_app_ending() {
+    END_APP.store(false, std::sync::atomic::Ordering::Relaxed);
+}
+
 /// The look Krate's own widgets are drawn in, for every window of this
 /// process: set by the runtime each frame from the person's settings, read
 /// by layout (text sizes) and the painters (colours and text sizes).
