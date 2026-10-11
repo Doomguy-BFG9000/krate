@@ -554,6 +554,16 @@ impl UiAdapter for AndroidWinitPrototypeUiAdapter {
         }
     }
 
+    /// A widget-tree app is laid out below the status bar and Krate's menu
+    /// strip and above the gesture bar: the same covered edges krate:ui/screen
+    /// reports to apps that draw themselves (K-1060).
+    fn widget_insets(&self, window: WindowId) -> (f32, f32, f32, f32) {
+        if !cfg!(target_os = "android") {
+            return (0.0, 0.0, 0.0, 0.0);
+        }
+        self.screen_kind(window).safe
+    }
+
     /// Every finger on the window (krate:ui/touch).
     fn touches(&self, window: WindowId) -> Vec<(u64, f32, f32)> {
         winit_native::touches(window)

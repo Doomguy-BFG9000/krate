@@ -2121,6 +2121,15 @@ pub trait UiAdapter: WindowAdapter {
         None
     }
 
+    /// Space at the top, right, bottom and left edges of `window` that a
+    /// widget-tree app's layout keeps clear on this host: a phone's status
+    /// bar, gesture bar and camera cutout (K-1060). Apps that draw their
+    /// own canvas read the covered edges from krate:ui/screen instead. None
+    /// on hosts whose window already excludes them.
+    fn widget_insets(&self, _window: WindowId) -> (f32, f32, f32, f32) {
+        (0.0, 0.0, 0.0, 0.0)
+    }
+
     /// Whether this device can tap back (IC-917). Desktops cannot.
     fn haptics_available(&self) -> bool {
         false

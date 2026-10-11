@@ -377,8 +377,39 @@ impl<'a> Phase3UiDispatcher<'a> {
                 window: window.get(),
             })?;
 
-        compute_layout_measured(&tree, viewport, &measure_label)
-            .map_err(|err| UiDispatchError::Layout(err.to_string()))
+        self.layout_inside(window, &tree, viewport)
+    }
+
+    /// Lay a window's tree out inside the edges its host keeps clear (a
+    /// phone's status bar and gesture bar), offset past them (K-1060). A
+    /// tree with a canvas is left full-bleed: such an app reads the covered
+    /// edges from krate:ui/screen and lays itself out.
+    fn layout_inside(
+        &self,
+        window: WindowId,
+        tree: &WidgetTree,
+        viewport: LayoutViewport,
+    ) -> UiDispatchResult<LayoutSnapshot> {
+        let draws_itself = tree
+            .nodes()
+            .values()
+            .any(|node| node.kind == krate_adapter_common::ui::WidgetKind::Canvas);
+        let (top, right, bottom, left) = if draws_itself {
+            (0.0, 0.0, 0.0, 0.0)
+        } else {
+            self.adapter.widget_insets(window)
+        };
+        let clear = |v: f32| if v.is_finite() { v.max(0.0) } else { 0.0 };
+        let (top, right, bottom, left) = (clear(top), clear(right), clear(bottom), clear(left));
+        let inner = LayoutViewport::new(
+            (viewport.width - left - right).max(1.0),
+            (viewport.height - top - bottom).max(1.0),
+        )
+        .map_err(|err| UiDispatchError::Layout(err.to_string()))?;
+        let mut layout = compute_layout_measured(tree, inner, &measure_label)
+            .map_err(|err| UiDispatchError::Layout(err.to_string()))?;
+        layout.offset(left, top);
+        Ok(layout)
     }
 
     pub fn prepare_layout(&self, window: WindowId) -> UiDispatchResult<PreparedLayoutTree> {
@@ -406,8 +437,7 @@ impl<'a> Phase3UiDispatcher<'a> {
                 .ok_or(UiAdapterError::MissingWidgetTree {
                     window: request.window.get(),
                 })?;
-        let layout = compute_layout_measured(&tree, request.viewport, &measure_label)
-            .map_err(|err| UiDispatchError::Layout(err.to_string()))?;
+        let layout = self.layout_inside(request.window, &tree, request.viewport)?;
         let widget = hit_test(&tree, &layout, point).map(|hit| hit.widget);
         if std::env::var_os("KRATE_EVENT_TRACE").is_some() {
             eprintln!(
@@ -449,8 +479,7 @@ impl<'a> Phase3UiDispatcher<'a> {
                 .ok_or(UiAdapterError::MissingWidgetTree {
                     window: request.window.get(),
                 })?;
-        let layout = compute_layout_measured(&tree, request.viewport, &measure_label)
-            .map_err(|err| UiDispatchError::Layout(err.to_string()))?;
+        let layout = self.layout_inside(request.window, &tree, request.viewport)?;
         let widget = hit_test(&tree, &layout, point).map(|hit| hit.widget);
 
         self.adapter.queue_wheel_event(WheelEvent {
