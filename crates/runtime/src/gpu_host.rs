@@ -97,6 +97,9 @@ impl Obj {
 struct DeviceEntry {
     device: wgpu::Device,
     queue: wgpu::Queue,
+    /// The adapter it came from, which a window presenter asks whether it
+    /// can show this device's frames (IC-940).
+    adapter: wgpu::Adapter,
     /// Set by wgpu's lost callback, or by `destroy-device`.
     lost: Arc<Mutex<Option<String>>>,
     /// Errors no scope caught (from submit or poll), reported on the next call.
@@ -137,6 +140,10 @@ struct SurfaceEntry {
     frame: Option<u64>,
     /// Where frames are copied to on their way to the canvas.
     readback: Option<Readback>,
+    /// Where a frame is copied for the window to present straight from the
+    /// GPU (IC-940): one command after the app's last for the frame, so the
+    /// window never shows a frame half drawn.
+    staged: Option<wgpu::Texture>,
 }
 
 /// Two buffers frames are copied into, used in turn. A present copies the
@@ -961,6 +968,7 @@ impl g::Host for Phase3GuiHost {
             Obj::Device(Box::new(DeviceEntry {
                 device,
                 queue,
+                adapter: a,
                 lost,
                 uncaptured,
             })),
@@ -2238,6 +2246,7 @@ impl g::Host for Phase3GuiHost {
                 texture: None,
                 frame: None,
                 readback: None,
+                staged: None,
             })),
         )))
     }
@@ -2377,6 +2386,7 @@ impl g::Host for Phase3GuiHost {
         });
         s.texture = Some(texture);
         s.readback = None;
+        s.staged = None;
         Ok(Ok(()))
     }
 
@@ -2473,6 +2483,31 @@ impl g::Host for Phase3GuiHost {
                 1
             })
             .min(3);
+        // A window that can show the app's GPU frames takes them from the
+        // GPU (IC-940); headless and --shoot runs, and every other host, read
+        // them back to the CPU.
+        if !self.headless
+            && self.screenshot.is_none()
+            && krate_presenter_gpu::shared::app_frames::available()
+        {
+            let (window, widget, frame) = match self.gpu.get_mut().stage_frame(surface) {
+                Ok(staged) => staged,
+                Err(e) => return Ok(Err(e)),
+            };
+            krate_presenter_gpu::shared::app_frames::publish(widget.get(), frame);
+            // No CPU pixels for this canvas: the window draws the frame.
+            self.images.borrow_mut().remove(&(window, widget));
+            let result = if self.screen.on_main() {
+                self.sync_native_widgets(window)
+                    .map_err(|error| t::GpuError::Internal(error.to_string()))
+            } else {
+                self.hand_frame_to_main(window, false);
+                Ok(())
+            };
+            self.frame_ended.set(true);
+            self.end_stepped_frame();
+            return Ok(result);
+        }
         let (window, widget, image) = {
             let gpu = self.gpu.get_mut();
             match gpu.read_frame(surface, lag) {
@@ -2877,6 +2912,96 @@ impl GpuState {
     }
 
     /// Copy a surface's current frame out as RGBA for the canvas.
+    /// Copy the surface's frame into the texture a window presents from
+    /// (IC-940), on the app's own device, and say where it is.
+    fn stage_frame(
+        &mut self,
+        surface: u64,
+    ) -> GpuResult<(
+        WindowId,
+        WidgetId,
+        krate_presenter_gpu::shared::app_frames::AppFrame,
+    )> {
+        let (window, widget, config, texture, frame) = match self.objects.get(&surface) {
+            Some(Entry {
+                obj: Obj::Surface(s),
+                ..
+            }) => match (&s.config, &s.texture) {
+                (Some(c), Some(t)) => (s.window, s.widget, c.clone(), t.clone(), s.frame),
+                _ => return Err(validation("the surface is not configured")),
+            },
+            _ => return Err(invalid(surface, "surface")),
+        };
+        if frame.is_none() {
+            return Err(validation(
+                "present needs a frame: call current-texture and draw into it first",
+            ));
+        }
+        let instance = self.instance();
+        let d = self.device(config.device)?;
+        let (device, queue, adapter) = (d.device.clone(), d.queue.clone(), d.adapter.clone());
+        let Some(Entry {
+            obj: Obj::Surface(s),
+            ..
+        }) = self.objects.get_mut(&surface)
+        else {
+            return Err(invalid(surface, "surface"));
+        };
+        // The same bytes under a non-sRGB format, so the window's blit
+        // copies them as they are, as the CPU path does.
+        let staged_format = config.format.remove_srgb_suffix();
+        let staged = match &s.staged {
+            Some(staged) => staged.clone(),
+            None => {
+                let staged = device.create_texture(&wgpu::TextureDescriptor {
+                    label: Some("krate surface for the window"),
+                    size: wgpu::Extent3d {
+                        width: config.width,
+                        height: config.height,
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: staged_format,
+                    usage: wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::TEXTURE_BINDING,
+                    view_formats: &[],
+                });
+                s.staged = Some(staged.clone());
+                staged
+            }
+        };
+        let (_, error) = scoped(&device, || {
+            let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("krate surface to the window"),
+            });
+            encoder.copy_texture_to_texture(
+                texture.as_image_copy(),
+                staged.as_image_copy(),
+                wgpu::Extent3d {
+                    width: config.width,
+                    height: config.height,
+                    depth_or_array_layers: 1,
+                },
+            );
+            queue.submit([encoder.finish()])
+        });
+        if let Some(error) = error {
+            return Err(error);
+        }
+        Ok((
+            window,
+            widget,
+            krate_presenter_gpu::shared::app_frames::AppFrame {
+                texture: staged,
+                device,
+                queue,
+                adapter,
+                instance,
+            },
+        ))
+    }
+
     /// Copy the surface's frame out and hand over the one copied `lag`
     /// presents ago (`None` while the ring fills, after the first frame).
     /// At 0 every present waits for the GPU to finish the frame just drawn,

@@ -828,8 +828,12 @@ impl<'a> Gen<'a> {
         } else {
             format!(", {}", args.join(", "))
         };
-        // A GPU present's frame pacing is waited out once the host is let go.
-        let paced = if iface == "gpu/gpu" && func.name == "present" {
+        // A GPU present's frame pacing, and a sleep, are waited out once the
+        // host is let go: a thread waiting while it holds the host holds out
+        // every other thread of the app.
+        let paced = if (iface == "gpu/gpu" && func.name == "present")
+            || (iface == "time/sleep" && func.name == "sleep-millis")
+        {
             "crate::core_app::paced(); "
         } else {
             ""

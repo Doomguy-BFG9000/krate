@@ -732,6 +732,9 @@ pub fn discover_appkit_prototype_ui_adapter(
             "AppKit prototype UI adapter is only available on macOS".to_string(),
         ));
     }
+    // A window here presents a krate:gpu app's frames from its own texture
+    // (IC-940); the runtime reads them back only where nothing can.
+    krate_presenter_gpu::shared::app_frames::add_consumer();
     Ok(adapter)
 }
 

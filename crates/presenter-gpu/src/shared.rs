@@ -236,3 +236,206 @@ pub mod scene_frames {
         }
     }
 }
+
+/// Frames a krate:gpu app drew, by canvas widget id (IC-940).
+///
+/// The seam for an app's own GPU device, beside `scene_frames` for Krate's 3D
+/// scene. An app's device is its own -- the features and limits it asked
+/// for -- so a frame travels with the device, queue, adapter and instance it
+/// belongs to, and the window's presenter for that canvas is built on that
+/// device. The frame never leaves the GPU: no copy down to the CPU and back.
+///
+/// The runtime publishes only while something can consume (`available`):
+/// the macOS window adapter says so when it starts, and retires the path the
+/// first time presenting a frame fails, after which the runtime reads frames
+/// back to the CPU as before. A platform that never says so never gets one.
+pub mod app_frames {
+    use std::collections::BTreeMap;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Mutex;
+
+    use vello::wgpu::{Adapter, Device, Instance, Queue, Texture};
+
+    /// One frame and the GPU it lives on.
+    #[derive(Clone)]
+    pub struct AppFrame {
+        pub texture: Texture,
+        pub device: Device,
+        pub queue: Queue,
+        pub adapter: Adapter,
+        pub instance: Instance,
+    }
+
+    static FRAMES: Mutex<BTreeMap<u64, AppFrame>> = Mutex::new(BTreeMap::new());
+    static CONSUMER: AtomicBool = AtomicBool::new(false);
+    static RETIRED: AtomicBool = AtomicBool::new(false);
+
+    /// A window presenter can take frames from here (the macOS adapter).
+    pub fn add_consumer() {
+        CONSUMER.store(true, Ordering::SeqCst);
+    }
+
+    /// Presenting a frame from here failed: stop publishing, read back.
+    pub fn retire() {
+        RETIRED.store(true, Ordering::SeqCst);
+    }
+
+    /// Whether publishing a frame will get it on screen. Off when nothing
+    /// consumes, after a failure, and with KRATE_GPU_READBACK=1.
+    pub fn available() -> bool {
+        CONSUMER.load(Ordering::SeqCst)
+            && !RETIRED.load(Ordering::SeqCst)
+            && std::env::var_os("KRATE_GPU_READBACK").is_none()
+            && std::env::var_os("KRATE_CPU_PRESENT").is_none()
+    }
+
+    /// Publish a canvas's latest frame, replacing one not yet taken.
+    pub fn publish(widget: u64, frame: AppFrame) {
+        if let Ok(mut frames) = FRAMES.lock() {
+            frames.insert(widget, frame);
+        }
+    }
+
+    /// Take a canvas's latest frame.
+    pub fn take(widget: u64) -> Option<AppFrame> {
+        FRAMES.lock().ok()?.remove(&widget)
+    }
+
+    /// Whether a frame waits for this canvas.
+    pub fn has(widget: u64) -> bool {
+        FRAMES
+            .lock()
+            .map(|frames| frames.contains_key(&widget))
+            .unwrap_or(false)
+    }
+
+    /// Forget a canvas's frame.
+    pub fn forget(widget: u64) {
+        if let Ok(mut frames) = FRAMES.lock() {
+            frames.remove(&widget);
+        }
+    }
+}
+
+#[cfg(test)]
+mod app_frame_tests {
+    use super::app_frames;
+    use vello::wgpu;
+
+    /// Nothing is published to a platform that cannot show it, and a
+    /// failure turns the path off for the rest of the run.
+    #[test]
+    fn app_frames_go_out_only_while_a_window_can_take_them() {
+        assert!(!app_frames::available(), "no consumer yet");
+        app_frames::add_consumer();
+        assert!(app_frames::available(), "the macOS window says it can");
+        app_frames::retire();
+        assert!(!app_frames::available(), "retired after a failure");
+    }
+
+    /// The direct path's colour: an app's sRGB frame, copied on the GPU to
+    /// the same bytes under the non-sRGB format (the runtime's staging) and
+    /// blitted to a window-format target (the presenter), arrives with its
+    /// bytes unchanged -- what the CPU readback path shows. Sampling the
+    /// sRGB texture itself would decode it and the window would be darker.
+    #[test]
+    fn an_app_frame_reaches_the_window_format_with_its_bytes_unchanged() {
+        let Some(gpu) = super::shared_gpu() else {
+            eprintln!("skipping: no usable GPU on this machine");
+            return;
+        };
+        let (w, h) = (4u32, 4u32);
+        let make = |format, usage| {
+            gpu.device.create_texture(&wgpu::TextureDescriptor {
+                label: None,
+                size: wgpu::Extent3d {
+                    width: w,
+                    height: h,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format,
+                usage,
+                view_formats: &[],
+            })
+        };
+        let usage = wgpu::TextureUsages::COPY_SRC
+            | wgpu::TextureUsages::COPY_DST
+            | wgpu::TextureUsages::TEXTURE_BINDING
+            | wgpu::TextureUsages::RENDER_ATTACHMENT;
+        let drawn = make(wgpu::TextureFormat::Bgra8UnormSrgb, usage);
+        let staged = make(wgpu::TextureFormat::Bgra8Unorm, usage);
+        let window = make(wgpu::TextureFormat::Bgra8Unorm, usage);
+        let pixel = [40u8, 120, 200, 255];
+        let bytes: Vec<u8> = pixel
+            .iter()
+            .copied()
+            .cycle()
+            .take((w * h * 4) as usize)
+            .collect();
+        gpu.queue.write_texture(
+            drawn.as_image_copy(),
+            &bytes,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(w * 4),
+                rows_per_image: Some(h),
+            },
+            wgpu::Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            },
+        );
+        let size = wgpu::Extent3d {
+            width: w,
+            height: h,
+            depth_or_array_layers: 1,
+        };
+        let padded = (w * 4).next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
+        let buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size: (padded * h) as u64,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let blitter = wgpu::util::TextureBlitter::new(&gpu.device, wgpu::TextureFormat::Bgra8Unorm);
+        let mut encoder = gpu
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        encoder.copy_texture_to_texture(drawn.as_image_copy(), staged.as_image_copy(), size);
+        blitter.copy(
+            &gpu.device,
+            &mut encoder,
+            &staged.create_view(&Default::default()),
+            &window.create_view(&Default::default()),
+        );
+        encoder.copy_texture_to_buffer(
+            window.as_image_copy(),
+            wgpu::TexelCopyBufferInfo {
+                buffer: &buffer,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(padded),
+                    rows_per_image: Some(h),
+                },
+            },
+            size,
+        );
+        gpu.queue.submit([encoder.finish()]);
+        buffer.slice(..).map_async(wgpu::MapMode::Read, |_| {});
+        let _ = gpu.device.poll(wgpu::PollType::Wait {
+            submission_index: None,
+            timeout: None,
+        });
+        let got = buffer.slice(..).get_mapped_range()[..4].to_vec();
+        for (g, p) in got.iter().zip(pixel) {
+            assert!(
+                g.abs_diff(p) <= 1,
+                "the window got {got:?} for a frame of {pixel:?}"
+            );
+        }
+    }
+}

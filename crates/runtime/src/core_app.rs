@@ -751,6 +751,7 @@ impl super::Runtime {
         .with_stepped_clock(state.stepped_clock.clone())
         .with_app_name(config.app_name.clone());
         gui_host.screen.pace_outside.set(true);
+        state.phase2.sleep_outside_host = true;
         state.phase3_gui = Some(gui_host);
 
         let shared = Arc::new(Shared {

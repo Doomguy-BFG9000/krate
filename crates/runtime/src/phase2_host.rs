@@ -64,6 +64,9 @@ pub struct Phase2Host<'a> {
     /// TCP connections, UDP sockets and lookups (`krate:net/sockets`).
     #[cfg(not(target_arch = "wasm32"))]
     async_sockets: crate::async_sockets::AsyncSockets,
+    /// A threaded app (IC-940): a sleep is judged here and slept after the
+    /// host is let go, so one thread's sleep never holds the others out.
+    pub(crate) sleep_outside_host: bool,
 }
 
 impl<'a> Phase2Host<'a> {
@@ -94,6 +97,7 @@ impl<'a> Phase2Host<'a> {
             #[cfg(not(target_arch = "wasm32"))]
             async_sockets: crate::async_sockets::AsyncSockets::new(),
             default_http_timeout_millis,
+            sleep_outside_host: false,
         }
     }
 
@@ -1410,6 +1414,16 @@ impl time::clock::Host for Phase2Host<'_> {
 
 impl time::sleep::Host for Phase2Host<'_> {
     fn sleep_millis(&mut self, millis: u32) -> wasmtime::Result<()> {
+        #[cfg(not(any(target_os = "ios", target_arch = "wasm32")))]
+        if self.sleep_outside_host {
+            self.dispatcher()
+                .check_sleep()
+                .map_err(bridge::dispatch_error_to_trap)?;
+            crate::core_app::pace_until(
+                std::time::Instant::now() + std::time::Duration::from_millis(millis.into()),
+            );
+            return Ok(());
+        }
         self.dispatcher()
             .sleep_millis(millis)
             .map_err(bridge::dispatch_error_to_trap)

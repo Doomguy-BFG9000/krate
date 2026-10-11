@@ -731,6 +731,12 @@ impl<'a> UapiDispatcher<'a> {
         self.adapter.time().monotonic_nanos().map_err(Into::into)
     }
 
+    /// Judge a sleep without sleeping: a threaded app sleeps after it has
+    /// let go of the host (IC-940).
+    pub fn check_sleep(&self) -> DispatchResult<()> {
+        self.check(&UapiCall::Time(TimeCall::Sleep))
+    }
+
     pub fn sleep_millis(&self, millis: u32) -> DispatchResult<()> {
         self.check(&UapiCall::Time(TimeCall::Sleep))?;
         self.adapter.time().sleep_millis(millis).map_err(Into::into)
