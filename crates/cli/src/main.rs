@@ -18645,9 +18645,35 @@ fn print_rust_toolchain_status() {
     }
 }
 
-/// The minimum Rust the workspace builds with, from Cargo.toml's
-/// rust-version. Compiled in so doctor cannot drift from the real bound.
-const MIN_RUST: (u32, u32) = (1, 91);
+/// The minimum Rust apps build with: the workspace's `rust-version`, which
+/// the SDK crate every app depends on inherits. Read from Cargo at compile
+/// time (this crate inherits it too), so it cannot drift from the bound the
+/// way a copied number did -- 1.91 here while builds needed 1.94 (K-1073).
+const MIN_RUST: (u32, u32) = major_minor(env!("CARGO_PKG_RUST_VERSION"));
+
+/// "1.94" or "1.94.1" as (1, 94), at compile time.
+const fn major_minor(version: &str) -> (u32, u32) {
+    let bytes = version.as_bytes();
+    let (mut major, mut minor, mut part, mut i) = (0u32, 0u32, 0, 0);
+    while i < bytes.len() {
+        let b = bytes[i];
+        if b == b'.' {
+            part += 1;
+            if part > 1 {
+                break;
+            }
+        } else if b.is_ascii_digit() {
+            let digit = (b - b'0') as u32;
+            if part == 0 {
+                major = major * 10 + digit;
+            } else {
+                minor = minor * 10 + digit;
+            }
+        }
+        i += 1;
+    }
+    (major, minor)
+}
 
 /// Print the toolchain's version beside its path, and `rustup update` when it
 /// is older than the workspace needs.
@@ -24003,6 +24029,43 @@ again: {} -> {}",
         assert!(silent_author_failure(Some(126)).contains("permission"));
         assert!(silent_author_failure(Some(3)).contains("error 3"));
         assert!(silent_author_failure(None).contains("stopped before"));
+    }
+
+    /// Doctor's minimum is the one the SDK apps build against (K-1073): the
+    /// workspace's rust-version, which the SDK crate inherits. A copied
+    /// number said 1.91 while every app build needed 1.94.
+    #[test]
+    fn doctors_minimum_rust_is_the_sdks() {
+        let workspace = include_str!("../../../Cargo.toml")
+            .parse::<toml::Table>()
+            .expect("the workspace Cargo.toml");
+        let declared = workspace["workspace"]["package"]["rust-version"]
+            .as_str()
+            .expect("a workspace rust-version");
+        assert_eq!(
+            super::MIN_RUST,
+            super::major_minor(declared),
+            "doctor says {:?}",
+            super::MIN_RUST
+        );
+        let sdk = include_str!("../../bindings-rust/Cargo.toml")
+            .parse::<toml::Table>()
+            .expect("the SDK's Cargo.toml");
+        let sdk_rust = &sdk["package"]["rust-version"];
+        let sdk_min = match sdk_rust.as_str() {
+            Some(own) => super::major_minor(own),
+            None => {
+                assert_eq!(
+                    sdk_rust["workspace"].as_bool(),
+                    Some(true),
+                    "the SDK states its rust-version or inherits the workspace's"
+                );
+                super::major_minor(declared)
+            }
+        };
+        assert_eq!(super::MIN_RUST, sdk_min, "doctor and the SDK disagree");
+        assert_eq!(super::major_minor("1.94.1"), (1, 94));
+        assert_eq!(super::major_minor("2.0"), (2, 0));
     }
 
     /// Doctor must compare versions, not admire paths (K-080): 1.85 on a
