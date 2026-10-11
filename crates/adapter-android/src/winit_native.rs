@@ -137,6 +137,11 @@ mod real {
         start: (f32, f32),
         last: (f32, f32),
         scrolling: bool,
+        /// When a finger landed on the strip under the clock, for Krate's
+        /// menu (IC-934); None elsewhere, or once it moved.
+        hold_from: Option<std::time::Instant>,
+        /// The hold opened the menu: the lift is no tap for the app.
+        held: bool,
     }
 
     #[derive(Default)]
@@ -397,12 +402,17 @@ mod real {
                     match touch.phase {
                         winit::event::TouchPhase::Started => {
                             if self.touch.is_none() {
+                                let top = crate::phone::covered_edges().0 / scale as f32;
+                                let strip =
+                                    crate::menu::chrome_on() && crate::menu::in_strip(y, top);
                                 self.touch = Some(TouchGesture {
                                     finger: touch.id,
                                     native,
                                     start: (x, y),
                                     last: (x, y),
                                     scrolling: false,
+                                    hold_from: strip.then(std::time::Instant::now),
+                                    held: false,
                                 });
                                 // The finger is the cursor: hit tests and
                                 // wheel positions read from here.
@@ -432,6 +442,7 @@ mod real {
                                     let sy = y - gesture.start.1;
                                     if sx * sx + sy * sy > SLOP * SLOP {
                                         gesture.scrolling = true;
+                                        gesture.hold_from = None;
                                     }
                                 }
                                 let dx = x - gesture.last.0;
@@ -461,7 +472,7 @@ mod real {
                                 .is_some_and(|g| g.finger == touch.id && g.native == native);
                             if same {
                                 let gesture = self.touch.take().expect("gesture checked");
-                                if !gesture.scrolling {
+                                if !gesture.scrolling && !gesture.held {
                                     // A tap: one press and one release at
                                     // the touch point, exactly what a click
                                     // delivers. Apps' double-tap detection
@@ -589,10 +600,16 @@ mod real {
                         )
                     ) && event.state == winit::event::ElementState::Pressed =>
                 {
-                    // The system back gesture/button. Apps already handle
-                    // close-requested on every platform; back is Android's
-                    // spelling of the same intent.
-                    Some(WinitWindowNativeEvent::CloseRequested)
+                    // The system back gesture/button. Over an app it opens
+                    // Krate's menu, where Close is (IC-934): back ended the
+                    // app outright, a swipe away from losing it. Over
+                    // Krate's own sheet it is still a cancel.
+                    if crate::menu::chrome_on() {
+                        crate::menu::show();
+                        None
+                    } else {
+                        Some(WinitWindowNativeEvent::CloseRequested)
+                    }
                 }
                 WindowEvent::KeyboardInput { event, .. } => {
                     if let Some(key) = key_name(&event.logical_key) {
@@ -757,6 +774,26 @@ mod real {
     fn pump(host: &mut Host) {
         let Host { event_loop, app } = host;
         let _status = event_loop.pump_app_events(Some(Duration::ZERO), app);
+        // A finger held still on the strip under the clock opens Krate's
+        // menu, and its lift is then no tap (IC-934).
+        if let Some(gesture) = app.touch.as_mut() {
+            let due = gesture
+                .hold_from
+                .is_some_and(|at| at.elapsed().as_millis() >= crate::menu::HOLD_MS);
+            if due && !gesture.held {
+                gesture.held = true;
+                gesture.hold_from = None;
+                crate::menu::show();
+            }
+        }
+        // Close (or Restart) in the menu: the app hears it as a desktop
+        // close button, and Krate closes it anyway if it does not answer.
+        if crate::menu::chrome_on() && crate::menu::take_close() {
+            for tracked in app.windows.values() {
+                app.events
+                    .push((tracked.krate, WinitWindowNativeEvent::CloseRequested));
+            }
+        }
         // Turning the phone resizes the window without a resize event; a
         // layout left at the old shape drew every frame cropped and zoomed
         // onto the new one. Whatever changed the size, report it.

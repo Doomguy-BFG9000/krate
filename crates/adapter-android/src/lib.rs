@@ -40,6 +40,7 @@ mod haptics;
 #[cfg(target_os = "android")]
 mod java;
 mod location;
+pub mod menu;
 mod motion;
 pub mod phone;
 mod photos;
@@ -536,9 +537,16 @@ impl UiAdapter for AndroidWinitPrototypeUiAdapter {
     fn screen_kind(&self, window: WindowId) -> krate_adapter_common::ui::ScreenKind {
         let scale = winit_native::window_scale(window).max(0.25);
         let (top, right, bottom, left) = phone::covered_edges();
+        // Over an app, the strip under the clock is Krate's: the hold that
+        // opens its menu lives there (IC-934).
+        let top = if menu::chrome_on() {
+            (top / scale).max(20.0) + menu::MENU_BAND
+        } else {
+            top / scale
+        };
         krate_adapter_common::ui::ScreenKind {
             touch: true,
-            safe: (top / scale, right / scale, bottom / scale, left / scale),
+            safe: (top, right / scale, bottom / scale, left / scale),
         }
     }
 

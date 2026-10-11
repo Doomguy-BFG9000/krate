@@ -101,6 +101,13 @@
         <data android:scheme="file" android:mimeType="*/*" android:pathPattern=".*\\.krate" />
       </intent-filter>
     </activity>
+    <!-- Restart from Krate's menu: ends Krate's process and opens it again
+         on the same app, from a process of its own. -->
+    <activity
+        android:name="tech.krate.player.Restarter"
+        android:process=":restart"
+        android:exported="false"
+        android:theme="@android:style/Theme.NoDisplay" />
     <!-- krate:ui/reminders: posts a reminder when its alarm comes, and sets
          them all again when the phone restarts or the person allows exact
          alarms. -->

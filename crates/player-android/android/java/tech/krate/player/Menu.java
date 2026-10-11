@@ -1,0 +1,396 @@
+package tech.krate.player;
+
+import android.app.Dialog;
+import android.content.Context;
+import android.content.Intent;
+import android.content.SharedPreferences;
+import android.graphics.Color;
+import android.graphics.drawable.GradientDrawable;
+import android.net.Uri;
+import android.os.Handler;
+import android.os.Looper;
+import android.os.Process;
+import android.util.Log;
+import android.util.TypedValue;
+import android.view.Gravity;
+import android.view.View;
+import android.view.ViewGroup;
+import android.view.Window;
+import android.view.WindowManager;
+import android.widget.LinearLayout;
+import android.widget.PopupWindow;
+import android.widget.TextView;
+
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+
+/**
+ * Krate's menu over a running app (IC-934). Nothing sits over an app: a
+ * touch and hold on the strip under the clock, or the phone's back gesture,
+ * drops Krate's own panel from the top -- the app's name, then Close,
+ * Restart, Share this app, What it can use and Report a problem. It is
+ * Krate's, drawn on the UI thread, so it opens whatever the app is doing.
+ *
+ * Close and Restart ask the app to close as a desktop close button does; an
+ * app that does not answer within two seconds is closed anyway.
+ */
+final class Menu {
+    private Menu() {}
+
+    private static final Handler MAIN = new Handler(Looper.getMainLooper());
+
+    /** The running app, as the player says: null between apps. */
+    private static String name;
+    private static String id;
+    private static String[] uses = new String[0];
+    private static String opens = "";
+
+    /** What the app's thread should do next: 0 nothing, 1 close. */
+    private static int action;
+    /** Open the app again once it has closed. */
+    private static boolean restart;
+
+    private static Dialog panel;
+
+    static synchronized void setApp(KrateActivity activity, String appName, String appId,
+            String[] appUses, String appOpens) {
+        name = appName;
+        id = appId;
+        uses = appUses == null ? new String[0] : appUses;
+        if (appName != null) {
+            // A new app starts with nothing asked; the end of one keeps a
+            // Restart asked, for the player to act on.
+            opens = appOpens == null ? "" : appOpens;
+            action = 0;
+            restart = false;
+            MAIN.post(new Runnable() {
+                @Override
+                public void run() {
+                    showGrab(activity);
+                }
+            });
+        }
+    }
+
+    static synchronized boolean running() {
+        return name != null;
+    }
+
+    static synchronized int takeAction() {
+        int out = action;
+        action = 0;
+        return out;
+    }
+
+    static synchronized boolean restartAsked() {
+        return restart;
+    }
+
+    private static int dp(Context context, float value) {
+        return Math.round(TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, value,
+                context.getResources().getDisplayMetrics()));
+    }
+
+    private static boolean dark(Context context) {
+        return (context.getResources().getConfiguration().uiMode
+                & android.content.res.Configuration.UI_MODE_NIGHT_MASK)
+                == android.content.res.Configuration.UI_MODE_NIGHT_YES;
+    }
+
+    /** Krate's panel, dropping from the top. UI thread. */
+    static void show(final KrateActivity activity) {
+        if (!running() || (panel != null && panel.isShowing())) {
+            return;
+        }
+        final boolean dark = dark(activity);
+        final int ink = dark ? Color.WHITE : Color.rgb(17, 17, 20);
+        final int muted = dark ? Color.rgb(160, 160, 170) : Color.rgb(110, 110, 120);
+        final int card = dark ? Color.rgb(32, 32, 36) : Color.WHITE;
+
+        final Dialog dialog = new Dialog(activity);
+        dialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
+        LinearLayout box = new LinearLayout(activity);
+        box.setOrientation(LinearLayout.VERTICAL);
+        int pad = dp(activity, 20);
+        box.setPadding(pad, dp(activity, 18), pad, dp(activity, 12));
+        GradientDrawable bg = new GradientDrawable();
+        bg.setColor(card);
+        float r = dp(activity, 22);
+        bg.setCornerRadii(new float[] {0, 0, 0, 0, r, r, r, r});
+        box.setBackground(bg);
+
+        TextView title = new TextView(activity);
+        title.setText(name);
+        title.setTextColor(ink);
+        title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 20);
+        title.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
+        box.addView(title);
+        TextView sub = new TextView(activity);
+        sub.setText("Krate");
+        sub.setTextColor(muted);
+        sub.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+        sub.setPadding(0, 0, 0, dp(activity, 8));
+        box.addView(sub);
+
+        String[] labels = {"Close", "Restart", "Share this app", "What it can use",
+            "Report a problem"};
+        for (int i = 0; i < labels.length; i++) {
+            final int which = i;
+            TextView row = new TextView(activity);
+            row.setText(labels[i]);
+            row.setTextColor(i == 0 ? Color.rgb(220, 50, 50) : ink);
+            row.setTextSize(TypedValue.COMPLEX_UNIT_SP, 17);
+            row.setPadding(0, dp(activity, 13), 0, dp(activity, 13));
+            TypedValue ripple = new TypedValue();
+            activity.getTheme().resolveAttribute(android.R.attr.selectableItemBackground,
+                    ripple, true);
+            row.setBackgroundResource(ripple.resourceId);
+            row.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    dialog.dismiss();
+                    pick(activity, which);
+                }
+            });
+            box.addView(row);
+        }
+
+        dialog.setContentView(box);
+        Window window = dialog.getWindow();
+        if (window != null) {
+            window.setBackgroundDrawableResource(android.R.color.transparent);
+            window.setGravity(Gravity.TOP);
+            window.setLayout(ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT);
+            WindowManager.LayoutParams lp = window.getAttributes();
+            lp.y = 0;
+            window.setAttributes(lp);
+            window.setDimAmount(0.35f);
+        }
+        dialog.setOnShowListener(new android.content.DialogInterface.OnShowListener() {
+            @Override
+            public void onShow(android.content.DialogInterface d) {
+                box.setTranslationY(-box.getHeight());
+                box.animate().translationY(0).setDuration(180).start();
+            }
+        });
+        panel = dialog;
+        dialog.show();
+        Log.i(KrateActivity.TAG, "menu: open over " + name);
+    }
+
+    private static void pick(KrateActivity activity, int which) {
+        switch (which) {
+            case 0:
+                close(activity, false);
+                break;
+            case 1:
+                close(activity, true);
+                break;
+            case 2:
+                shareApp(activity);
+                break;
+            case 3:
+                showUses(activity);
+                break;
+            default:
+                reportProblem(activity);
+                break;
+        }
+    }
+
+    /** Ask the app to close (and open again); close it anyway after 2 s. */
+    static void close(final KrateActivity activity, boolean again) {
+        synchronized (Menu.class) {
+            action = 1;
+            restart = again;
+        }
+        Log.i(KrateActivity.TAG, "menu: " + (again ? "restart" : "close"));
+        MAIN.postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                // Still here: the app did not answer. Krate closes it.
+                Log.i(KrateActivity.TAG, "menu: the app did not answer; closing it");
+                if (restartAsked()) {
+                    relaunch(activity);
+                } else {
+                    activity.finishAndRemoveTask();
+                    Process.killProcess(Process.myPid());
+                }
+            }
+        }, 2000);
+    }
+
+    /** Start Krate on the same app in a fresh process (Restarter.java). */
+    static void relaunch(KrateActivity activity) {
+        Intent again = new Intent(activity, KrateActivity.class);
+        synchronized (Menu.class) {
+            if (opens != null && !opens.isEmpty()) {
+                again.setAction(Intent.ACTION_VIEW);
+                again.setDataAndType(Uri.parse(opens), "application/octet-stream");
+            } else {
+                again.setAction(Intent.ACTION_MAIN);
+            }
+        }
+        Intent restarter = new Intent(activity, Restarter.class)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                .putExtra(Restarter.OPEN, again)
+                .putExtra(Restarter.PID, Process.myPid());
+        activity.startActivity(restarter);
+        // finish, not finishAndRemoveTask: the restarter opens in this task,
+        // and removing the task took it too, so nothing opened again.
+        activity.finish();
+        Runtime.getRuntime().exit(0);
+    }
+
+    /** The share sheet with the app's own .krate; Krate's address for the built-in one. */
+    private static void shareApp(KrateActivity activity) {
+        String from;
+        synchronized (Menu.class) {
+            from = opens;
+        }
+        if (from == null || !from.startsWith("file://")) {
+            activity.krateShare("Krate: open apps anyone can make. https://krate.tech",
+                    new String[0]);
+            return;
+        }
+        File source = new File(Uri.parse(from).getPath());
+        File folder = new File(new File(activity.getCacheDir(), "krate-share"), "menu");
+        if (!folder.isDirectory() && !folder.mkdirs()) {
+            return;
+        }
+        File copy = new File(folder, Documents.safeName(name) + ".krate");
+        try (InputStream in = new FileInputStream(source);
+             OutputStream out = new FileOutputStream(copy)) {
+            byte[] buf = new byte[64 * 1024];
+            int n;
+            while ((n = in.read(buf)) > 0) {
+                out.write(buf, 0, n);
+            }
+        } catch (IOException e) {
+            Log.w(KrateActivity.TAG, "menu: could not stage the app: " + e);
+            return;
+        }
+        activity.krateShare("", new String[] {copy.getAbsolutePath()});
+    }
+
+    /** This run's grants in the permission sheet's words, with Ask again. */
+    private static void showUses(final KrateActivity activity) {
+        StringBuilder text = new StringBuilder();
+        String[] list;
+        synchronized (Menu.class) {
+            list = uses;
+        }
+        if (list.length == 0) {
+            text.append("Only its own window: nothing on this phone beyond it.");
+        } else {
+            for (String use : list) {
+                if (text.length() > 0) {
+                    text.append('\n');
+                }
+                text.append("• ").append(use);
+            }
+        }
+        new android.app.AlertDialog.Builder(activity)
+                .setTitle(name + " can use")
+                .setMessage(text.toString())
+                .setPositiveButton("Ask again",
+                        new android.content.DialogInterface.OnClickListener() {
+                            @Override
+                            public void onClick(android.content.DialogInterface d, int w) {
+                                close(activity, true);
+                            }
+                        })
+                .setNegativeButton("Done", null)
+                .show();
+    }
+
+    /** A mail to Krate about the running app, its name and id filled in. */
+    private static void reportProblem(KrateActivity activity) {
+        String subject = "A problem with " + name;
+        String body = "App: " + name + " (" + id + ")\n\nWhat happened:\n";
+        Intent mail = new Intent(Intent.ACTION_SENDTO, Uri.parse("mailto:yashraj@krate.tech"
+                + "?subject=" + Uri.encode(subject) + "&body=" + Uri.encode(body)));
+        try {
+            activity.startActivity(mail);
+        } catch (android.content.ActivityNotFoundException e) {
+            android.widget.Toast.makeText(activity,
+                    "No mail app here. Write to yashraj@krate.tech about " + name + ".",
+                    android.widget.Toast.LENGTH_LONG).show();
+        }
+    }
+
+    /**
+     * The grab bar at the top centre over a newly opened app, fading after two
+     * seconds, and on the first three apps a person opens a line saying how
+     * to reach the menu. UI thread.
+     */
+    private static void showGrab(final KrateActivity activity) {
+        final View decor = activity.getWindow().getDecorView();
+        if (decor.getWindowToken() == null) {
+            MAIN.postDelayed(new Runnable() {
+                @Override
+                public void run() {
+                    showGrab(activity);
+                }
+            }, 200);
+            return;
+        }
+        int top = activity.krateCovered()[0];
+        LinearLayout box = new LinearLayout(activity);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setGravity(Gravity.CENTER_HORIZONTAL);
+        View bar = new View(activity);
+        GradientDrawable pill = new GradientDrawable();
+        pill.setColor(Color.argb(217, 140, 140, 140));
+        pill.setCornerRadius(dp(activity, 2.5f));
+        bar.setBackground(pill);
+        box.addView(bar, new LinearLayout.LayoutParams(dp(activity, 36), dp(activity, 5)));
+        SharedPreferences prefs =
+                activity.getSharedPreferences("krate-menu", Context.MODE_PRIVATE);
+        int shown = prefs.getInt("hints", 0);
+        if (shown < 3) {
+            prefs.edit().putInt("hints", shown + 1).apply();
+            TextView hint = new TextView(activity);
+            hint.setText("Touch and hold the top for Krate's menu");
+            hint.setTextColor(Color.WHITE);
+            hint.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+            int p = dp(activity, 12);
+            hint.setPadding(p, dp(activity, 6), p, dp(activity, 6));
+            GradientDrawable chip = new GradientDrawable();
+            chip.setColor(Color.argb(184, 0, 0, 0));
+            chip.setCornerRadius(dp(activity, 15));
+            hint.setBackground(chip);
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            lp.topMargin = dp(activity, 8);
+            box.addView(hint, lp);
+        }
+        final PopupWindow popup = new PopupWindow(box, ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT, false);
+        popup.setTouchable(false);
+        popup.setClippingEnabled(false);
+        try {
+            popup.showAtLocation(decor, Gravity.TOP | Gravity.CENTER_HORIZONTAL, 0,
+                    top + dp(activity, 6));
+        } catch (RuntimeException e) {
+            return;
+        }
+        final long hold = shown < 3 ? 3500 : 2000;
+        MAIN.postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                box.animate().alpha(0f).setDuration(400).withEndAction(new Runnable() {
+                    @Override
+                    public void run() {
+                        popup.dismiss();
+                    }
+                }).start();
+            }
+        }, hold);
+    }
+}

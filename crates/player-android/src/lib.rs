@@ -217,7 +217,25 @@ mod player {
                 Some(format!("file://{}", path.display()))
             })
             .unwrap_or_default();
-        krate_adapter_android::reminders::set_current_app(Some((manifest.app.id.clone(), opens)));
+        krate_adapter_android::reminders::set_current_app(Some((
+            manifest.app.id.clone(),
+            opens.clone(),
+        )));
+        // For Krate's menu (IC-934): the app's name, and what it may use this
+        // run in the permission sheet's own words.
+        let mut uses: Vec<String> = manifest
+            .capabilities
+            .iter()
+            .filter(|request| request.required || granted.contains(&request.cap))
+            .filter_map(|request| use_in_words(&request.cap))
+            .collect();
+        uses.dedup();
+        krate_adapter_android::menu::set_app(Some((
+            &manifest.app.name,
+            &manifest.app.id,
+            &uses,
+            &opens,
+        )));
         let runtime = match krate_runtime::Runtime::new(&config) {
             Ok(runtime) => runtime,
             Err(err) => {
@@ -225,7 +243,10 @@ mod player {
                 return;
             }
         };
-        match runtime.run_bytes_for_world(&component, &config, krate_runtime::RuntimeWorld::Auto) {
+        let ran =
+            runtime.run_bytes_for_world(&component, &config, krate_runtime::RuntimeWorld::Auto);
+        krate_adapter_android::menu::set_app(None);
+        match ran {
             Ok(outcome) => log::info!("app finished: {outcome:?}"),
             Err(err) => {
                 log::error!("app failed: {err:#}");
@@ -236,6 +257,53 @@ mod player {
                 );
             }
         }
+        // Restart (or Ask again) in Krate's menu: the app closed, so open it
+        // again, from the wall, in a fresh process.
+        if krate_adapter_android::menu::restart_asked() {
+            krate_adapter_android::menu::relaunch();
+        }
+    }
+
+    /// A granted capability as the permission sheet words it (apps/krate-wall
+    /// `describe`), or None for what every app has: its window, its output,
+    /// the clock and randomness. The iPhone player's list, for Krate's menu.
+    fn use_in_words(cap: &str) -> Option<String> {
+        let mut parts = cap.splitn(2, ':');
+        let kind = parts.next().unwrap_or("");
+        let target = parts.next().unwrap_or("");
+        let host = target.split(':').next().unwrap_or("");
+        let own = target.is_empty() || target.starts_with('.');
+        Some(match kind {
+            "ui.window" | "io.stdout" | "io.stderr" | "io.stdin" | "io.args" | "io.env"
+            | "time.clock" | "time.monotonic" | "random.bytes" | "memory.budget" => return None,
+            "net.fetch" | "net.connect" if !host.is_empty() && host != "*" => {
+                format!("The internet, at {host}")
+            }
+            "net.fetch" | "net.connect" => "The internet".to_string(),
+            "net.listen" => "The local network".to_string(),
+            "net.ws" => "A live connection".to_string(),
+            "hub" | "hub.rooms" => "Krate online".to_string(),
+            "fs.read" | "fs.list" if own => "Read its own files".to_string(),
+            "fs.write" | "fs.remove" if own => "Save its own files".to_string(),
+            "fs.read" | "fs.list" => "Read files".to_string(),
+            "fs.write" | "fs.remove" => "Change files".to_string(),
+            "ui.dialog" => "Files you pick".to_string(),
+            "audio.playback" => "Sound".to_string(),
+            "audio.capture" => "The microphone".to_string(),
+            "speech" | "speech.say" | "speech.listen" => "Speech".to_string(),
+            "camera.capture" | "camera" => "The camera".to_string(),
+            "location.read" => "Where you are".to_string(),
+            "bluetooth.connect" => "Bluetooth devices you pick".to_string(),
+            "photos.add" => "Adding to your Photos".to_string(),
+            "store.kv" | "store.sql" => "Keeping its data".to_string(),
+            "store.shared" => "Sharing data with people you invite".to_string(),
+            "store.secret" => "Keeping secrets safe".to_string(),
+            "ui.clipboard" => "The clipboard".to_string(),
+            "ui.notify" => "Notifications".to_string(),
+            "ui.open-url" => "Opening links".to_string(),
+            "gfx.gpu" => "The graphics chip".to_string(),
+            _ => cap.to_string(),
+        })
     }
 
     /// Run the wall sheet and return the granted capability names, or None

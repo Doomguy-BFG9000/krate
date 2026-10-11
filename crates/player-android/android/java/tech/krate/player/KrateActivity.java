@@ -680,6 +680,49 @@ public class KrateActivity extends NativeActivity {
                 .show();
     }
 
+    // Krate's menu (IC-934).
+
+    /** The app now running, for the menu; a null name when none is. */
+    public void krateSetApp(String name, String id, String[] uses, String opens) {
+        Menu.setApp(this, name, id, uses, opens);
+    }
+
+    /** Open Krate's menu over the app: a hold on the strip under the clock. */
+    public void krateShowMenu() {
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                Menu.show(KrateActivity.this);
+            }
+        });
+    }
+
+    /** What the menu asked the app's thread to do: 0 nothing, 1 close. */
+    public int krateMenuAction() {
+        return Menu.takeAction();
+    }
+
+    /** Whether the menu asked for the app to open again once closed. */
+    public boolean krateRestartAsked() {
+        return Menu.restartAsked();
+    }
+
+    /** Open Krate again on the same app, in a fresh process. */
+    public void krateRelaunch() {
+        Menu.relaunch(this);
+    }
+
+    /** Back, while an app runs, opens Krate's menu rather than ending it. */
+    @Override
+    @SuppressWarnings("deprecation")
+    public void onBackPressed() {
+        if (Menu.running()) {
+            Menu.show(this);
+            return;
+        }
+        super.onBackPressed();
+    }
+
     /** Set a reminder (krate:ui/reminders); null once set, else why not. */
     public String krateRemind(String id, String sender, String title, String body,
             long afterSeconds, boolean daily, String opens) {
