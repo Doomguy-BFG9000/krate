@@ -15,8 +15,8 @@ Developer ownership and control is the default (IC-175, IC-176). Krate enforces 
 
 ## Summary
 
-- 69 boundaries reviewed, 60 of them WIT interfaces (60 declared under wit/krate).
-- 35 compulsory, each with a justification or a recorded gap; 34 optional.
+- 70 boundaries reviewed, 61 of them WIT interfaces (61 declared under wit/krate).
+- 35 compulsory, each with a justification or a recorded gap; 35 optional.
 - 7 recorded gaps where the escape hatch does not yet exist or the boundary is narrower than a developer would want.
 
 ## Every boundary
@@ -82,6 +82,7 @@ Developer ownership and control is the default (IC-175, IC-176). Krate enforces 
 | `krate:ui@0.1.0/touch` | wit | every finger on a touch screen, by a stable id, in logical pixels, cleared when the window loses focus | what each finger does: a stick, a look, a button, a gesture | the raw finger positions, unfiltered | yes | platform |
 | `krate:ui@0.1.0/tree` | wit | nothing: an optional portable widget tree the hosts lower to native controls or paint | any UI approach; a canvas of the app's own pixels is equal to a tree | image and canvas widgets with the app's own rendering | no | -- |
 | `krate:ui@0.1.0/types` | wit | widget kinds, event shapes and errors every host lowers to | what the app builds from them | none needed: a type carries no authority | yes | portability |
+| `krate:ui@0.1.0/unlock` | wit | asking the system to check it is the device owner (Face ID, Touch ID, the passcode) with the app's reason, answered yes, no or unavailable | what to guard, when to ask and lock again, the reason shown, and what to do when the device cannot check | the app's own passphrase | no | -- |
 | `krate:ui@0.1.0/window` | wit | that windows come from the host and are closed by the person | how many, what size, what is drawn in them | none: a window is the host's | yes | platform |
 | `manifest.toml and the capability declaration` | format | what an app declares it needs, so the person can be told before it runs; an undeclared call is denied | everything not declared as a capability: architecture, libraries, data model | declare narrowly; optional capabilities are asked for at feature time (CP2) | yes | recipient-permission |
 | `the .krate archive` | format | one container every host opens: fixed core entries, namespaces, ceilings, a versioned profile | what the app is made of; unknown entries survive so a tool may carry its own | unknown entries are ignored by the runtime and kept by the packer | yes | portability |

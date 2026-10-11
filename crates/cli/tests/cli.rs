@@ -11625,3 +11625,72 @@ fn an_app_signs_in_through_the_system_sheet() {
         "with nothing on screen there is no sheet, and the app is told: {none}"
     );
 }
+
+/// A vault opens only for its owner (krate:ui/unlock, IC-924).
+///
+/// `unlock-probe.wasm` is apps/krate-unlock-probe built ("Vault").
+/// Headless, KRATE_UNLOCK stands in for the person at the system's Face ID
+/// or Touch ID sheet: a yes opens the vault and its three entries are read
+/// from the secret store; a no keeps it locked; a device that cannot check
+/// says so and keeps it locked too.
+#[test]
+fn a_vault_opens_only_for_its_owner() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let wasm = dir.path().join("code.wasm");
+    std::fs::write(&wasm, include_bytes!("fixtures/unlock-probe.wasm")).expect("probe");
+    let manifest = dir.path().join("manifest.toml");
+    std::fs::write(
+        &manifest,
+        "[app]\nid = \"dev.krate.unlock-probe\"\nname = \"Vault\"\nversion = \"1.0.0\"\n\
+         entry = \"code.wasm\"\nworld = \"krate:app/gui@0.2.0\"\n\n\
+         [[capabilities]]\ncap = \"ui.window:create\"\nrationale = \"window\"\nrequired = true\n\n\
+         [[capabilities]]\ncap = \"store.secret\"\nrationale = \"vault\"\nrequired = true\n\n\
+         [[capabilities]]\ncap = \"io.stdout\"\nrationale = \"print\"\nrequired = true\n\n\
+         [[capabilities]]\ncap = \"io.args\"\nrationale = \"args\"\nrequired = true\n",
+    )
+    .expect("manifest");
+    let home = dir.path().join("home");
+    std::fs::create_dir_all(&home).expect("home");
+    let run = |answer: &str| -> String {
+        let out = krate()
+            .arg("run")
+            .arg("--headless")
+            .arg(&wasm)
+            .arg("--manifest")
+            .arg(&manifest)
+            .arg("--auto-grant")
+            .arg("--")
+            .arg("quick")
+            .env("HOME", &home)
+            .env("KRATE_UNLOCK", answer)
+            .output()
+            .expect("run");
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+    let owner = run("yes");
+    assert!(
+        owner
+            .lines()
+            .any(|l| l == "unlock:available=yes answer=yes entries=3"),
+        "the owner opens the vault and reads its entries: {owner}"
+    );
+    let stranger = run("no");
+    assert!(
+        stranger
+            .lines()
+            .any(|l| l == "unlock:available=yes answer=no entries=hidden"),
+        "a no keeps the vault locked: {stranger}"
+    );
+    let cannot = run("none");
+    assert!(
+        cannot
+            .lines()
+            .any(|l| l == "unlock:available=no answer=unavailable entries=hidden"),
+        "a device that cannot check keeps it locked and says so: {cannot}"
+    );
+}

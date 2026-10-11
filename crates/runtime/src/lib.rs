@@ -44,6 +44,7 @@ mod camera_macos;
 mod camera_nokhwa;
 mod canvas_raster;
 mod sign_in;
+mod unlock;
 mod video;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 mod video_apple;
@@ -1459,6 +1460,8 @@ impl Runtime {
         link_gui!(ui4::reminders);
         // Phase 4 only: signing in through the system sheet (IC-923).
         link_gui!(ui4::sign_in);
+        // Phase 4 only: Face ID, Touch ID or the passcode (IC-924).
+        link_gui!(ui4::unlock);
         // Phase 4 only: pictures a canvas keeps and draws by handle.
         link_gui!(phase4_gui_bindings::krate::gfx::canvas_images);
         link_gui!(phase4_gui_bindings::krate::gfx::video);

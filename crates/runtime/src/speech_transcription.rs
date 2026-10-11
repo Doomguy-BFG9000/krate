@@ -66,7 +66,7 @@ impl LocalSpeechRuntime {
             return krate_adapter_ios::uikit_native::transcribe(
                 pcm_s16_le,
                 sample_rate,
-                language.as_deref(),
+                language,
             )
             .map_err(SpeechError::Inference);
         }

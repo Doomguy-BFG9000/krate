@@ -94,6 +94,7 @@ cat > "$OUT/Info.plist" <<PLIST
   <key>UILaunchScreen</key><dict/>
   <key>NSCameraUsageDescription</key><string>An app you opened in Krate asked to use the camera, and you allowed it on Krate's sheet. It sees through it only while it is open.</string>
   <key>NSMicrophoneUsageDescription</key><string>An app you opened in Krate asked to use the microphone, and you allowed it on Krate's sheet. It hears only while it is open.</string>
+  <key>NSFaceIDUsageDescription</key><string>An app you opened in Krate asked you to prove it is you before it shows something private. Face ID answers only yes or no; the app never sees your face.</string>
   <key>NSSpeechRecognitionUsageDescription</key><string>An app you opened in Krate asked to turn speech into text. Apple's recognizer does it, on this phone where it can.</string>
   <key>NSPhotoLibraryAddUsageDescription</key><string>An app you opened in Krate asked to add a picture to your Photos, and you allowed it on Krate's sheet. It can add pictures, never see your library.</string>
   <key>NSBluetoothAlwaysUsageDescription</key><string>An app you opened in Krate asked to reach a Bluetooth device, and you allowed it on Krate's sheet. It reaches only the device you pick.</string>

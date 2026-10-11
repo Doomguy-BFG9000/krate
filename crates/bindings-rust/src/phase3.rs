@@ -7,7 +7,7 @@
 
 #![allow(clippy::too_many_arguments)]
 
-/// `krate:ui`: bluetooth, clipboard, dialog, events, haptics, image, launcher, location, menu, motion, notify, photos, pointer, print, reminders, screen, share, sign_in, text_entry, touch, tree, window.
+/// `krate:ui`: bluetooth, clipboard, dialog, events, haptics, image, launcher, location, menu, motion, notify, photos, pointer, print, reminders, screen, share, sign_in, text_entry, touch, tree, unlock, window.
 pub mod ui {
     /// `krate:ui/bluetooth`.
     pub mod bluetooth {
@@ -566,6 +566,21 @@ pub mod ui {
     /// The records and errors this package's interfaces share.
     pub mod types {
         pub use crate::bindings::krate::ui::types::*;
+    }
+    /// `krate:ui/unlock`.
+    pub mod unlock {
+        pub use crate::bindings::krate::ui::unlock::UnlockAnswer;
+
+        /// Whether this device can check it is the person.
+        pub fn available() -> bool {
+            crate::bindings::krate::ui::unlock::available()
+        }
+
+        /// Ask, with the app's reason in the system's own sheet ("Unlock your
+        /// vault"). Waits while the person looks or types their passcode.
+        pub fn check(reason: &str) -> UnlockAnswer {
+            crate::bindings::krate::ui::unlock::check(reason)
+        }
     }
     /// `krate:ui/window`.
     pub mod window {

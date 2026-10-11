@@ -1212,6 +1212,33 @@ interface sign-in {
   start: func(window: u64, authorize-url: string, callback-scheme: string) -> result<string, sign-in-error>;
 }
 
+/// Asking the person to prove it is them before the app shows something
+/// private (IC-924): Face ID or the passcode on an iPhone, Touch ID or the
+/// password on a Mac.
+///
+/// The check is the system's own; the app never sees a face, a finger or a
+/// passcode, only whether the person passed. Use it in front of what
+/// `store.secret` keeps: unlock the vault, then read it.
+interface unlock {
+  /// How the check went.
+  variant unlock-answer {
+    /// It is them.
+    yes,
+    /// They cancelled or failed it: keep it locked.
+    no,
+    /// This device cannot check (no passcode set, no biometrics, a
+    /// computer without them), and why. Offer the app's own way or say so.
+    unavailable(string),
+  }
+
+  /// Whether this device can check it is the person.
+  available: func() -> bool;
+
+  /// Ask, with the app's reason in the system's own sheet ("Unlock your
+  /// vault"). Waits while the person looks or types their passcode.
+  check: func(reason: string) -> unlock-answer;
+}
+
 /// Desktop notifications.
 ///
 /// An app that finishes a long task, receives a message, or hits a timer needs

@@ -482,7 +482,13 @@ person back to: check its `state`, read its `code`, then POST the code and \
 `code_verifier` to the token address with `net.connect` to that host, and \
 keep the token in `store.secret`. `Err(Cancelled)` means they closed the \
 sheet: offer the button again. A computer other than a Mac answers \
-`Err(Unavailable)` for now. A picture that does not change \
+`Err(Unavailable)` for now. Something private (a vault, a diary, a \
+banking screen): show it only after `krate::ui::unlock::check(\"Unlock your \
+vault\")` answers `UnlockAnswer::Yes` -- Face ID or the passcode on an \
+iPhone, Touch ID or the password on a Mac, in the system's own sheet. \
+`No` keeps it locked; `Unavailable(why)` means this device cannot check: \
+say so rather than opening it. Keep what it guards in `store.secret`, and \
+lock again when the app goes to the background. No capability. A picture that does not change \
 between frames (a screenshot, an avatar, a sprite sheet) is kept once \
 with `krate::gfx::canvas_images::keep(canvas, w, h, &rgba)` and drawn \
 by handle with `draw`/`draw_round` each frame: `draw_pixels` sends \

@@ -919,6 +919,33 @@ impl Phase3GuiHost {
             .map_err(|why| (true, why))
     }
 
+    /// Whether this device can check it is the person (IC-924). Headless,
+    /// only when `KRATE_UNLOCK` stands in for one that can.
+    pub(crate) fn unlock_available(&self) -> bool {
+        if self.headless {
+            return matches!(std::env::var("KRATE_UNLOCK").as_deref(), Ok("yes" | "no"));
+        }
+        crate::unlock::available()
+    }
+
+    /// Ask the person to prove it is them (IC-924). Headless, `KRATE_UNLOCK`
+    /// stands in for them: `yes`, `no`, or anything else for a device that
+    /// cannot check.
+    pub(crate) fn unlock_check(&self, reason: &str) -> crate::unlock::Answer {
+        if let Err(why) = crate::unlock::check_reason(reason) {
+            return crate::unlock::Answer::Unavailable(why);
+        }
+        if self.headless {
+            return match std::env::var("KRATE_UNLOCK") {
+                Ok(answer) => crate::unlock::stand_in(&answer),
+                Err(_) => crate::unlock::Answer::Unavailable(
+                    "nothing is on screen to ask with".to_string(),
+                ),
+            };
+        }
+        crate::unlock::check(reason.trim())
+    }
+
     /// Sign the person in through the system's sheet (IC-923): the address
     /// the service sent them back to, None when they closed it; Err((true,
     /// why)) when there is no sheet, Err((false, why)) for a bad request.

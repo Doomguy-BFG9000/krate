@@ -696,6 +696,25 @@ impl ui4::sign_in::Host for Phase3GuiHost {
     }
 }
 
+/// Face ID, Touch ID or the passcode before something private (IC-924).
+/// Phase 4 only. No capability: the system asks the person itself, and the
+/// app learns only whether they passed.
+impl ui4::unlock::Host for Phase3GuiHost {
+    fn available(&mut self) -> wasmtime::Result<bool> {
+        Ok(self.unlock_available())
+    }
+
+    fn check(&mut self, reason: String) -> wasmtime::Result<ui4::unlock::UnlockAnswer> {
+        use crate::unlock::Answer;
+        use ui4::unlock::UnlockAnswer;
+        Ok(match self.unlock_check(&reason) {
+            Answer::Yes => UnlockAnswer::Yes,
+            Answer::No => UnlockAnswer::No,
+            Answer::Unavailable(why) => UnlockAnswer::Unavailable(why),
+        })
+    }
+}
+
 /// Bluetooth devices the person picks (IC-917). Phase 4 only, behind
 /// `bluetooth.connect`.
 impl ui4::bluetooth::Host for Phase3GuiHost {

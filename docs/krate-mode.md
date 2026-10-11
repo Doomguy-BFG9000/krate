@@ -718,6 +718,8 @@ takes this path, so any of them is a model for the wiring.
 - `share::share: func(window: u64, text: option<string>, url: option<string>, files: list<shared-file>) -> result<bool, share-error>`
 - `sign-in::pkce: func() -> tuple<string, string>`
 - `sign-in::start: func(window: u64, authorize-url: string, callback-scheme: string) -> result<string, sign-in-error>`
+- `unlock::available: func() -> bool`
+- `unlock::check: func(reason: string) -> unlock-answer`
 - `notify::show: func(title: string, body: string) -> result<_, notify-error>`
 - `reminders::schedule: func(id: string, title: string, body: string, after-seconds: u64, daily: bool) -> result<_, notify-error>`
 - `reminders::cancel: func(id: string)`
