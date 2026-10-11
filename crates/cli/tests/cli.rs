@@ -28,6 +28,11 @@ fn krate() -> Command {
     if std::env::var_os("KRATE_TEST_WATCHDOG_SECS").is_none() {
         command.env("KRATE_TEST_WATCHDOG_SECS", "600");
     }
+    // A test that needs a real window (the GPU presenter's teardown, K-881)
+    // gets one that is transparent, behind everything and never focused:
+    // the founder saw a test's "Rate card" window jump in front of his work
+    // every few minutes while the gate ran.
+    command.env("KRATE_QUIET_WINDOW", "1");
     command
 }
 

@@ -2234,6 +2234,17 @@ mod platform {
         ) -> Result<(), UiAdapterError> {
             let mtm = main_thread_marker()?;
             let app = NSApplication::sharedApplication(mtm);
+            // The test suite's windowed runs (KRATE_QUIET_WINDOW): a real
+            // window and presenter, but transparent, behind every other
+            // window and never taking focus. Without it every gate run put
+            // a test app's window in front of whatever the person was
+            // doing, every few minutes, all day.
+            if std::env::var_os("KRATE_QUIET_WINDOW").is_some() {
+                window.window.setAlphaValue(0.0);
+                window.window.orderBack(None);
+                record_window_scale(window.id, window.window.backingScaleFactor() as f32);
+                return WindowAdapter::show_window(adapter, window.id);
+            }
             app.setActivationPolicy(NSApplicationActivationPolicy::Regular);
             install_edit_menu(&app, mtm);
             // Arrive, don't pop: every modern app opens with a short fade
