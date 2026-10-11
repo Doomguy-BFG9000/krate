@@ -11,7 +11,7 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 use krate::gfx::{canvas2d, types as gfx};
-use krate::layout::{Look, Screen};
+use krate::layout::{Look, Rect, Said, Screen};
 use krate::{
     io::{args, stdio},
     ui::{
@@ -83,14 +83,18 @@ fn wrap(canvas: u64, text: &str, size: f32, width: f32) -> Vec<String> {
     lines
 }
 
-fn draw(canvas: u64, screen: &Screen) -> Result<(), gfx::GfxError> {
+fn draw(win: u64, canvas: u64, screen: &Screen) -> Result<(), gfx::GfxError> {
     let look: Look = screen.look;
     let colors = look.palette();
     canvas2d::clear(canvas, colors.background)?;
     let area = screen.safe_area().inset(16.0, 16.0, 16.0, 16.0);
+    // What VoiceOver and TalkBack say about this page (IC-926), built as it
+    // is drawn.
+    let mut said = Said::new();
     let title = look.text(30.0);
     let mut y = area.y + title;
     canvas2d::draw_text_styled(canvas, "Look", gfx::Point { x: area.x, y }, title, colors.ink, style(800))?;
+    said.heading(Rect::new(area.x, y - title, area.w, title * 1.2), "Look");
     y += look.text(14.0) + 12.0;
     let state = format!(
         "{} mode{}, text at {:.0}%",
@@ -99,6 +103,7 @@ fn draw(canvas: u64, screen: &Screen) -> Result<(), gfx::GfxError> {
         look.text_scale * 100.0
     );
     canvas2d::draw_text_styled(canvas, &state, gfx::Point { x: area.x, y }, look.text(14.0), colors.muted, style(500))?;
+    said.text(Rect::new(area.x, y - look.text(14.0), area.w, look.text(14.0) * 1.3), &state);
     y += 20.0;
     let body = screen.body();
     let pad = 16.0;
@@ -115,9 +120,12 @@ fn draw(canvas: u64, screen: &Screen) -> Result<(), gfx::GfxError> {
             canvas2d::draw_text_styled(canvas, line, gfx::Point { x: area.x + pad, y: ly }, body, colors.ink, style(450))?;
             ly += line_h;
         }
+        said.text(Rect::new(area.x, y, area.w, h), paragraph);
         y += h + 12.0;
     }
-    canvas2d::present(canvas)
+    canvas2d::present(canvas)?;
+    said.send(win);
+    Ok(())
 }
 
 struct Component;
@@ -136,7 +144,7 @@ impl Guest for Component {
             return 1;
         };
         if args::raw().split('\n').any(|a| a == "quick") {
-            let _ = draw(canvas, &Screen::of(win));
+            let _ = draw(win, canvas, &Screen::of(win));
             let look = Look::now();
             say(&format!(
                 "look:dark={} contrast={} text={:.2}",
@@ -147,7 +155,7 @@ impl Guest for Component {
             return 0;
         }
         loop {
-            if draw(canvas, &Screen::of(win)).is_err() {
+            if draw(win, canvas, &Screen::of(win)).is_err() {
                 return 1;
             }
             // Twice a second is enough to follow a change made in Settings.

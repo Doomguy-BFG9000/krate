@@ -1801,6 +1801,68 @@ mod motion_tests {
     }
 }
 
+/// What kind of thing a described element is (IC-926).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AccessRole {
+    Button,
+    Link,
+    Heading,
+    Text,
+    Image,
+    Toggle,
+    Adjustable,
+    Field,
+}
+
+/// One thing on screen, as a screen reader is told it (IC-926).
+#[derive(Clone, Debug, PartialEq)]
+pub struct AccessElement {
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+    pub role: AccessRole,
+    pub label: String,
+    pub value: String,
+    pub checked: Option<bool>,
+    pub enabled: bool,
+}
+
+impl AccessElement {
+    /// What a screen reader says for a widget Krate draws, so widget apps
+    /// are described without doing anything; None for what it skips
+    /// (containers, an unlabelled spacer).
+    pub fn for_placement(placement: &WidgetPlacement) -> Option<Self> {
+        let role = match placement.kind {
+            WidgetKind::Button => AccessRole::Button,
+            WidgetKind::Text => AccessRole::Text,
+            WidgetKind::Checkbox | WidgetKind::Switch | WidgetKind::Radio => AccessRole::Toggle,
+            WidgetKind::Slider | WidgetKind::Progress => AccessRole::Adjustable,
+            WidgetKind::TextField | WidgetKind::TextArea => AccessRole::Field,
+            WidgetKind::Image => AccessRole::Image,
+            _ => return None,
+        };
+        let label = placement.label.clone().unwrap_or_default();
+        if label.trim().is_empty() && !matches!(role, AccessRole::Adjustable | AccessRole::Field) {
+            return None;
+        }
+        Some(Self {
+            x: placement.x,
+            y: placement.y,
+            width: placement.width,
+            height: placement.height,
+            role,
+            label,
+            value: placement
+                .value
+                .map(|v| format!("{:.0}%", (v.clamp(0.0, 1.0)) * 100.0))
+                .unwrap_or_default(),
+            checked: placement.checked,
+            enabled: true,
+        })
+    }
+}
+
 /// How the person asked things to look (IC-925).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Appearance {
@@ -2122,6 +2184,20 @@ pub trait UiAdapter: WindowAdapter {
         _files: &[(String, Vec<u8>)],
     ) -> Result<bool, String> {
         Err("this device has no share sheet yet".to_string())
+    }
+
+    /// Tell the platform's screen reader what the window shows (IC-926).
+    fn describe_accessibility(
+        &self,
+        _window: WindowId,
+        _elements: &[AccessElement],
+    ) -> Result<(), UiAdapterError> {
+        Ok(())
+    }
+
+    /// Whether a screen reader is on (IC-926).
+    fn screen_reader_on(&self) -> bool {
+        false
     }
 
     /// How the person asked things to look: dark mode, contrast, text size

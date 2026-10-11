@@ -315,6 +315,18 @@ mod real {
         }
 
         impl KrateSurfaceView {
+            // VoiceOver reads the elements the app described (IC-926), not
+            // the view as one picture.
+            #[unsafe(method(isAccessibilityElement))]
+            fn is_accessibility_element(&self) -> bool {
+                false
+            }
+
+            #[unsafe(method_id(accessibilityElements))]
+            fn accessibility_elements(&self) -> Option<Retained<objc2::runtime::AnyObject>> {
+                access_elements_for(self)
+            }
+
             // Only a first responder gets the keyboard's typing.
             #[unsafe(method(canBecomeFirstResponder))]
             fn can_become_first_responder(&self) -> bool {
@@ -400,6 +412,145 @@ mod real {
         }
         SHARED.lock().expect("shared state lock").close_tapped = true;
         INPUT_ARRIVED.notify_all();
+    }
+
+    // ------------------------------------------------------------------
+    // The screen reader (IC-926).
+
+    /// What the running app told VoiceOver it shows, and what Krate drew
+    /// for it as widgets; the app's own description wins when it has one.
+    static ACCESS_DESCRIBED: Mutex<Vec<krate_adapter_common::ui::AccessElement>> =
+        Mutex::new(Vec::new());
+    static ACCESS_WIDGETS: Mutex<Vec<krate_adapter_common::ui::AccessElement>> =
+        Mutex::new(Vec::new());
+    /// Bumped whenever either changes, so the built elements are rebuilt.
+    static ACCESS_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+    thread_local! {
+        /// The UIAccessibilityElements last built, and for which generation.
+        static ACCESS_BUILT: RefCell<Option<(u64, Retained<objc2::runtime::AnyObject>)>> = const { RefCell::new(None) };
+    }
+
+    #[link(name = "UIKit", kind = "framework")]
+    unsafe extern "C" {
+        fn UIAccessibilityIsVoiceOverRunning() -> bool;
+        fn UIAccessibilityPostNotification(
+            notification: u32,
+            argument: *mut objc2::runtime::AnyObject,
+        );
+    }
+
+    /// Whether VoiceOver is on.
+    pub fn voice_over_on() -> bool {
+        // SAFETY: a C query UIKit allows from any thread.
+        unsafe { UIAccessibilityIsVoiceOverRunning() }
+    }
+
+    /// Tell VoiceOver the screen changed, so it reads the new elements.
+    fn access_changed(widgets: bool, elements: Vec<krate_adapter_common::ui::AccessElement>) {
+        let slot = if widgets {
+            &ACCESS_WIDGETS
+        } else {
+            &ACCESS_DESCRIBED
+        };
+        {
+            let mut held = slot.lock().expect("access lock");
+            if *held == elements {
+                return;
+            }
+            *held = elements;
+        }
+        ACCESS_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        DispatchQueue::main().exec_async(|| {
+            // SAFETY: UIAccessibilityLayoutChangedNotification (1001), on the
+            // main thread, with no element to move to.
+            unsafe { UIAccessibilityPostNotification(1001, std::ptr::null_mut()) };
+        });
+    }
+
+    /// The app described its screen (IC-926).
+    pub fn describe_accessibility(elements: &[krate_adapter_common::ui::AccessElement]) {
+        access_changed(false, elements.to_vec());
+    }
+
+    /// The app is gone: nothing of it stays for VoiceOver.
+    fn access_clear() {
+        access_changed(false, Vec::new());
+        access_changed(true, Vec::new());
+    }
+
+    /// VoiceOver's elements for Krate's view, built on the main thread.
+    fn access_elements_for(view: &KrateSurfaceView) -> Option<Retained<objc2::runtime::AnyObject>> {
+        use krate_adapter_common::ui::AccessRole;
+        let generation = ACCESS_GENERATION.load(std::sync::atomic::Ordering::Relaxed);
+        if let Some(built) = ACCESS_BUILT.with(|b| {
+            b.borrow()
+                .as_ref()
+                .filter(|(g, _)| *g == generation)
+                .map(|(_, array)| array.clone())
+        }) {
+            return Some(built);
+        }
+        let described = ACCESS_DESCRIBED.lock().expect("access lock").clone();
+        let elements = if described.is_empty() {
+            ACCESS_WIDGETS.lock().expect("access lock").clone()
+        } else {
+            described
+        };
+        let class = objc2::runtime::AnyClass::get(c"UIAccessibilityElement")?;
+        let mut built: Vec<Retained<objc2::runtime::AnyObject>> =
+            Vec::with_capacity(elements.len());
+        // SAFETY: UIAccessibilityElements made for Krate's view as their
+        // container, with documented properties, on the main thread.
+        unsafe {
+            for e in &elements {
+                let made: objc2::rc::Allocated<objc2::runtime::AnyObject> = msg_send![class, alloc];
+                let element: Retained<objc2::runtime::AnyObject> =
+                    msg_send![made, initWithAccessibilityContainer: view];
+                let frame = CGRect::new(
+                    CGPoint::new(e.x as f64, e.y as f64),
+                    objc2_core_foundation::CGSize::new(e.width as f64, e.height as f64),
+                );
+                let _: () = msg_send![&*element, setAccessibilityFrameInContainerSpace: frame];
+                let _: () = msg_send![&*element, setIsAccessibilityElement: true];
+                let _: () = msg_send![
+                    &*element,
+                    setAccessibilityLabel: &*objc2_foundation::NSString::from_str(&e.label)
+                ];
+                let value = match e.checked {
+                    Some(true) => "On".to_string(),
+                    Some(false) => "Off".to_string(),
+                    None => e.value.clone(),
+                };
+                if !value.is_empty() {
+                    let _: () = msg_send![
+                        &*element,
+                        setAccessibilityValue: &*objc2_foundation::NSString::from_str(&value)
+                    ];
+                }
+                // UIAccessibilityTraits: button 1, link 2, image 4, static
+                // text 64, not enabled 256, adjustable 4096, header 65536.
+                let mut traits: u64 = match e.role {
+                    AccessRole::Button | AccessRole::Toggle => 1,
+                    AccessRole::Link => 2,
+                    AccessRole::Image => 4,
+                    AccessRole::Text => 64,
+                    AccessRole::Adjustable => 4096,
+                    AccessRole::Heading => 65536,
+                    AccessRole::Field => 0,
+                };
+                if !e.enabled {
+                    traits |= 256;
+                }
+                let _: () = msg_send![&*element, setAccessibilityTraits: traits];
+                built.push(element);
+            }
+        }
+        let array: Retained<objc2::runtime::AnyObject> = unsafe {
+            Retained::cast_unchecked(objc2_foundation::NSArray::from_retained_slice(&built))
+        };
+        ACCESS_BUILT.with(|b| *b.borrow_mut() = Some((generation, array.clone())));
+        Some(array)
     }
 
     // ------------------------------------------------------------------
@@ -515,10 +666,11 @@ mod real {
 
     /// What the running app was granted this run, in plain words, for "What
     /// it can use". Set by the player.
-    static CURRENT_USES: Mutex<Vec<String>> = Mutex::new(Vec::new());
+    static CURRENT_USES: Mutex<Option<Vec<String>>> = Mutex::new(None);
 
-    /// The player says what the running app may use this run (IC-934).
-    pub fn set_current_uses(uses: Vec<String>) {
+    /// The player says what the running app may use this run (IC-934);
+    /// None while the person has not been asked yet.
+    pub fn set_current_uses(uses: Option<Vec<String>>) {
         *CURRENT_USES.lock().expect("uses lock") = uses;
     }
 
@@ -853,13 +1005,16 @@ mod real {
             .clone()
             .unwrap_or_else(|| "This app".to_string());
         let uses = CURRENT_USES.lock().expect("uses lock").clone();
-        let message = if uses.is_empty() {
-            "Only its own window: nothing on this phone beyond it.".to_string()
-        } else {
-            uses.iter()
+        let message = match &uses {
+            None => "Nothing yet: it has not been allowed anything.".to_string(),
+            Some(uses) if uses.is_empty() => {
+                "Only its own window: nothing on this phone beyond it.".to_string()
+            }
+            Some(uses) => uses
+                .iter()
                 .map(|u| format!("\u{2022} {u}"))
                 .collect::<Vec<_>>()
-                .join("\n")
+                .join("\n"),
         };
         let (Some(controller), Some(alert_class), Some(action_class)) = (
             main_controller(),
@@ -1146,6 +1301,7 @@ mod real {
     /// an app that does not answer.
     pub fn set_app_chrome(visible: bool) {
         if !visible {
+            access_clear();
             stop_motion();
             stop_location();
             crate::bluetooth::disconnect_all();
@@ -3662,6 +3818,14 @@ mod real {
                 .cloned()
                 .collect();
             let drawn = guest.placements.len();
+            access_changed(
+                true,
+                guest
+                    .placements
+                    .iter()
+                    .filter_map(krate_adapter_common::ui::AccessElement::for_placement)
+                    .collect(),
+            );
             guest.dirty = true;
             if !GPU_ACTIVE.load(std::sync::atomic::Ordering::Relaxed) {
                 blit(guest);
@@ -4197,7 +4361,13 @@ mod stub {
 
     pub fn set_current_name(_name: Option<String>) {}
 
-    pub fn set_current_uses(_uses: Vec<String>) {}
+    pub fn describe_accessibility(_elements: &[krate_adapter_common::ui::AccessElement]) {}
+
+    pub fn voice_over_on() -> bool {
+        false
+    }
+
+    pub fn set_current_uses(_uses: Option<Vec<String>>) {}
 
     pub fn transcribe(_pcm: &[u8], _rate: u32, _language: Option<&str>) -> Result<String, String> {
         Err("speech recognition is on the iOS player only".to_string())

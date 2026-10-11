@@ -19724,6 +19724,17 @@ fn run_screens_stage(
         .unwrap_or((1280.0, 800.0));
     let fixed = desktop["fixed"].as_bool().unwrap_or(false);
     let mut faults = Vec::new();
+    // A screen reader hears nothing from a canvas the app never described
+    // (IC-926). A game drawn at a fixed design size is left out.
+    let mut undescribed = false;
+    if let Some(texts) = desktop["facts"]["texts"].as_u64() {
+        if !fixed && texts >= 3 && !desktop["described"].as_bool().unwrap_or(false) {
+            undescribed = true;
+            faults.push(format!(
+                "a screen reader hears nothing: the app draws {texts} pieces of text and describes none of them"
+            ));
+        }
+    }
     let mut phone = None;
     for (name, w, h) in screen_fit::screens(asked, fixed) {
         let report = if name == "a desktop window" {
@@ -19773,7 +19784,14 @@ fn run_screens_stage(
             "the app does not fit every screen it will open on: {}",
             faults.join(" | ")
         ),
-        fix: if ignores_look {
+        fix: if undescribed {
+            "Tell the screen reader what each frame shows, as you draw it: \
+             `let mut said = krate::layout::Said::new();` then `said.heading(rect, \"Inbox\")`, \
+             `said.button(rect, \"New message\")`, `said.text(rect, &line)` with the rects \
+             you drew them in, and `said.send(win)` after `present`. A person using VoiceOver \
+             hears them and double-taps a button to press it."
+                .to_string()
+        } else if ignores_look {
             "Draw from the person's look every frame: `let look = krate::layout::Look::now();` \
              (or `Screen::of(win).look`), `let colors = look.palette();`, clear with \
              `colors.background`, draw text in `colors.ink` and `colors.muted`, cards in \

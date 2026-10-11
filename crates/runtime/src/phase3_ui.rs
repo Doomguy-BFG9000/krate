@@ -641,6 +641,20 @@ impl<'a> Phase3UiDispatcher<'a> {
         self.adapter.share(id, text, url, files)
     }
 
+    /// Tell the screen reader what a window shows (IC-926).
+    pub fn describe_accessibility(
+        &self,
+        id: WindowId,
+        elements: &[krate_adapter_common::ui::AccessElement],
+    ) -> Result<(), krate_adapter_common::ui::UiAdapterError> {
+        self.adapter.describe_accessibility(id, elements)
+    }
+
+    /// Whether a screen reader is on (IC-926).
+    pub fn screen_reader_on(&self) -> bool {
+        self.adapter.screen_reader_on()
+    }
+
     /// How the person asked things to look (IC-925).
     pub fn appearance(&self) -> krate_adapter_common::ui::Appearance {
         self.adapter.appearance()

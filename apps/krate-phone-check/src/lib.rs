@@ -10,7 +10,7 @@ use alloc::vec::Vec;
 use krate::audio::{capture, playback};
 use krate::camera::capture as camera;
 use krate::gfx::{canvas2d, canvas_images, types as gfx};
-use krate::layout::{Rect, Screen};
+use krate::layout::{Rect, Said, Screen};
 use krate::speech::synthesis;
 use krate::ui::{clipboard, launcher, notify, photos, reminders, share};
 use krate::{
@@ -114,12 +114,16 @@ fn index(check: Check) -> usize {
     CHECKS.iter().position(|(c, _)| *c == check).unwrap_or(0)
 }
 
-fn draw(canvas: u64, screen: &Screen, page: &mut Page) -> Result<(), gfx::GfxError> {
+fn draw(win: u64, canvas: u64, screen: &Screen, page: &mut Page) -> Result<(), gfx::GfxError> {
     let ink = rgb(0.07, 0.07, 0.09);
     let muted = rgb(0.43, 0.44, 0.48);
     canvas2d::clear(canvas, rgb(0.96, 0.96, 0.97))?;
     let area = screen.safe_area().inset(12.0, 16.0, 12.0, 16.0);
     canvas2d::draw_text_styled(canvas, "Phone Check", gfx::Point { x: area.x, y: area.y + 30.0 }, 28.0, ink, style(800))?;
+    // What VoiceOver and TalkBack say (IC-926): each check is a button, its
+    // last result said as its value.
+    let mut said = Said::new();
+    said.heading(Rect::new(area.x, area.y, area.w, 40.0), "Phone Check");
     let mut y = area.y + 48.0;
     if let Some((image, w, h)) = page.picture {
         let ph = (area.w * h as f32 / w.max(1) as f32).min(area.h * 0.32);
@@ -137,9 +141,12 @@ fn draw(canvas: u64, screen: &Screen, page: &mut Page) -> Result<(), gfx::GfxErr
         let result = &page.results[i];
         let colour = if result.starts_with("ok") { rgb(0.13, 0.62, 0.30) } else { muted };
         canvas2d::draw_text_styled(canvas, result, gfx::Point { x: r.x + 14.0, y: r.y + r.h / 2.0 + 16.0 }, 13.0, colour, style(500))?;
+        said.button(r, &if result.is_empty() { String::from(*label) } else { format!("{label}, {result}") });
         y += row_h;
     }
-    canvas2d::present(canvas)
+    canvas2d::present(canvas)?;
+    said.send(win);
+    Ok(())
 }
 
 fn run_check(win: u64, check: Check, page: &mut Page, now: u64) {
@@ -431,7 +438,7 @@ impl Guest for Component {
             let now = clock::monotonic_nanos();
             follow_recording(&mut page, now);
             follow_camera(canvas, &mut page, now);
-            if draw(canvas, &Screen::of(win), &mut page).is_err() {
+            if draw(win, canvas, &Screen::of(win), &mut page).is_err() {
                 return 1;
             }
             let busy = page.recording.is_some() || page.camera.is_some();

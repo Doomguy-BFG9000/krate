@@ -169,6 +169,11 @@ pub struct Phase3GuiHost {
     pub(crate) video_frames: std::cell::RefCell<std::collections::BTreeMap<u64, Arc<ImagePixels>>>,
     /// Where the app's bundled assets are, for a video named by path.
     pub(crate) asset_root: Option<std::path::PathBuf>,
+    /// What each window last told the screen reader (IC-926), for
+    /// check-app and `KRATE_ACCESS_DUMP`.
+    pub(crate) described: std::cell::RefCell<
+        std::collections::BTreeMap<u64, Vec<krate_adapter_common::ui::AccessElement>>,
+    >,
     /// The look the platform reported last, and when (IC-925).
     appearance_cache:
         std::cell::Cell<Option<(std::time::Instant, krate_adapter_common::ui::Appearance)>>,
@@ -498,6 +503,7 @@ impl Phase3GuiHost {
             video_frames: std::cell::RefCell::new(std::collections::BTreeMap::new()),
             asset_root: None,
             appearance_cache: std::cell::Cell::new(None),
+            described: std::cell::RefCell::new(std::collections::BTreeMap::new()),
             requested_sizes: std::cell::RefCell::new(std::collections::BTreeMap::new()),
             canvases_that_asked: std::cell::RefCell::new(std::collections::BTreeSet::new()),
             screen_windows: std::cell::RefCell::new(Vec::new()),
@@ -944,6 +950,79 @@ impl Phase3GuiHost {
         let look = self.dispatcher().appearance();
         self.appearance_cache.set(Some((now, look)));
         look
+    }
+
+    /// The most elements one description may carry, and the longest label.
+    const MAX_ACCESS_ELEMENTS: usize = 2000;
+    const MAX_ACCESS_TEXT: usize = 500;
+
+    /// Tell the screen reader what a window shows (IC-926). Headless, the
+    /// description is kept, and written as JSON to `KRATE_ACCESS_DUMP`.
+    pub(crate) fn describe_accessibility(
+        &self,
+        window: u64,
+        mut elements: Vec<krate_adapter_common::ui::AccessElement>,
+    ) -> Result<(), ui::types::UiError> {
+        let id = self.window_id(window)?;
+        elements.truncate(Self::MAX_ACCESS_ELEMENTS);
+        for element in &mut elements {
+            for text in [&mut element.label, &mut element.value] {
+                if text.len() > Self::MAX_ACCESS_TEXT {
+                    let mut cut = Self::MAX_ACCESS_TEXT;
+                    while !text.is_char_boundary(cut) {
+                        cut -= 1;
+                    }
+                    text.truncate(cut);
+                }
+            }
+        }
+        if let Some(path) = std::env::var_os("KRATE_ACCESS_DUMP") {
+            let dump: Vec<serde_json::Value> = elements
+                .iter()
+                .map(|e| {
+                    serde_json::json!({
+                        "role": format!("{:?}", e.role).to_lowercase(),
+                        "label": e.label,
+                        "value": e.value,
+                        "checked": e.checked,
+                        "enabled": e.enabled,
+                        "frame": [e.x, e.y, e.width, e.height],
+                    })
+                })
+                .collect();
+            let _ = std::fs::write(path, serde_json::Value::Array(dump).to_string());
+        }
+        let result = if self.headless {
+            Ok(())
+        } else {
+            self.dispatcher()
+                .describe_accessibility(id, &elements)
+                .map_err(|error| ui::types::UiError::Platform(error.to_string()))
+        };
+        // check-app's frame report is written at `present`, and an app
+        // describes the frame just after drawing it: mark the report too.
+        if !elements.is_empty() {
+            if let Some(path) = std::env::var_os("KRATE_FIT_REPORT") {
+                if let Some(mut report) = std::fs::read_to_string(&path)
+                    .ok()
+                    .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+                {
+                    report["described"] = serde_json::Value::Bool(true);
+                    let _ = std::fs::write(&path, report.to_string());
+                }
+            }
+        }
+        self.described.borrow_mut().insert(window, elements);
+        result
+    }
+
+    /// Whether a screen reader is on (IC-926). Headless,
+    /// `KRATE_SCREEN_READER=1` stands in for one.
+    pub(crate) fn screen_reader_on(&self) -> bool {
+        if self.headless {
+            return std::env::var("KRATE_SCREEN_READER").as_deref() == Ok("1");
+        }
+        self.dispatcher().screen_reader_on()
     }
 
     /// Draw Krate's own widgets in the person's look (IC-925), checked at
@@ -3350,7 +3429,14 @@ impl Phase3GuiHost {
                 let asked = self.requested_sizes.borrow().values().next().copied();
                 // Fixed: the app draws in a size of its own, not the screen's.
                 let fixed = (canvas.0 - screen.0).abs() > 1.0 || (canvas.1 - screen.1).abs() > 1.0;
-                let report = serde_json::json!({ "facts": facts, "asked": asked, "fixed": fixed });
+                // Whether the app told the screen reader anything (IC-926).
+                let described = self.described.borrow().values().any(|e| !e.is_empty());
+                let report = serde_json::json!({
+                    "facts": facts,
+                    "asked": asked,
+                    "fixed": fixed,
+                    "described": described,
+                });
                 let _ = std::fs::write(path, report.to_string());
             }
         }

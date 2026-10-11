@@ -665,6 +665,19 @@ impl UiAdapter for IosUikitPrototypeUiAdapter {
         uikit_native::appearance()
     }
 
+    fn describe_accessibility(
+        &self,
+        _window: WindowId,
+        elements: &[krate_adapter_common::ui::AccessElement],
+    ) -> Result<(), UiAdapterError> {
+        uikit_native::describe_accessibility(elements);
+        Ok(())
+    }
+
+    fn screen_reader_on(&self) -> bool {
+        uikit_native::voice_over_on()
+    }
+
     fn sign_in(
         &self,
         _window: WindowId,
