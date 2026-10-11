@@ -313,6 +313,8 @@ pub(crate) struct WorkerScreen {
     pub(crate) used: std::cell::Cell<bool>,
     /// A threaded app: a GPU present's frame pacing waits after the host is
     /// let go (`core_app::paced`), not while holding it.
+    // Threaded apps only, which iOS and the web do not run.
+    #[cfg_attr(any(target_os = "ios", target_arch = "wasm32"), allow(dead_code))]
     pub(crate) pace_outside: std::cell::Cell<bool>,
 }
 
@@ -682,6 +684,8 @@ impl Phase3GuiHost {
     /// The main thread's turn at the host, in a threaded app (IC-929): lower
     /// the frames workers presented since, and note each window's density
     /// for them. Free until a worker first touches the screen.
+    // Threaded apps only, which iOS and the web do not run.
+    #[cfg_attr(any(target_os = "ios", target_arch = "wasm32"), allow(dead_code))]
     pub(crate) fn main_turn(&self) {
         if !self.screen.used.get() || !self.screen.on_main() {
             return;

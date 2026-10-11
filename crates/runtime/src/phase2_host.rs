@@ -66,6 +66,8 @@ pub struct Phase2Host<'a> {
     async_sockets: crate::async_sockets::AsyncSockets,
     /// A threaded app (IC-940): a sleep is judged here and slept after the
     /// host is let go, so one thread's sleep never holds the others out.
+    // Threaded apps only, which iOS and the web do not run.
+    #[cfg_attr(any(target_os = "ios", target_arch = "wasm32"), allow(dead_code))]
     pub(crate) sleep_outside_host: bool,
 }
 
@@ -1419,7 +1421,7 @@ impl time::sleep::Host for Phase2Host<'_> {
             self.dispatcher()
                 .check_sleep()
                 .map_err(bridge::dispatch_error_to_trap)?;
-            crate::core_app::pace_until(
+            crate::core_app::sleep_after(
                 std::time::Instant::now() + std::time::Duration::from_millis(millis.into()),
             );
             return Ok(());

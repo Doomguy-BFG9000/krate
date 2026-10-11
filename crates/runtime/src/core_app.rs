@@ -398,22 +398,35 @@ pub(crate) mod abi {
 include!(concat!(env!("OUT_DIR"), "/core_glue.rs"));
 
 thread_local! {
-    /// When this thread's GPU present may return: its frame pacing, waited
-    /// out after the host is let go so the app's other threads keep their
-    /// turns (`Phase3GuiHost::pace_frame`).
-    static PACE_UNTIL: std::cell::Cell<Option<std::time::Instant>> =
+    /// When this thread's host call may return, waited out after the host is
+    /// let go so the app's other threads keep their turns: a GPU present's
+    /// frame pacing (`Phase3GuiHost::pace_frame`, to the frame) or a sleep.
+    static PACE_UNTIL: std::cell::Cell<Option<(std::time::Instant, bool)>> =
         const { std::cell::Cell::new(None) };
 }
 
-/// Ask this thread to wait until `due` once it lets go of the host.
+/// Ask this thread to wait until `due` once it lets go of the host, exactly:
+/// a frame's pacing, which yields through the last moment.
 pub(crate) fn pace_until(due: std::time::Instant) {
-    PACE_UNTIL.with(|p| p.set(Some(due)));
+    PACE_UNTIL.with(|p| p.set(Some((due, true))));
 }
 
-/// Wait out the pacing a present asked for, outside the host.
+/// Ask this thread to sleep until `due` once it lets go of the host: an
+/// app's own sleep, which the OS may end a little late, as a sleep does. A
+/// short sleep made exact by yielding would hold a core for its whole length
+/// (net-krate's 1 ms socket ticker, an event loop's 1 ms wait).
+pub(crate) fn sleep_after(due: std::time::Instant) {
+    PACE_UNTIL.with(|p| p.set(Some((due, false))));
+}
+
+/// Wait out what the call asked for, outside the host.
 pub(crate) fn paced() {
-    if let Some(due) = PACE_UNTIL.with(|p| p.take()) {
-        crate::phase3_gui_host::sleep_until(due);
+    match PACE_UNTIL.with(|p| p.take()) {
+        Some((due, true)) => crate::phase3_gui_host::sleep_until(due),
+        Some((due, false)) => {
+            std::thread::sleep(due.saturating_duration_since(std::time::Instant::now()))
+        }
+        None => {}
     }
 }
 
