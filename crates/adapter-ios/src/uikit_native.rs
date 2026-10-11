@@ -435,6 +435,32 @@ mod real {
         }
         SHARED.lock().expect("shared state lock").close_tapped = true;
         INPUT_ARRIVED.notify_all();
+        end_if_unanswered();
+    }
+
+    /// Which app is running, counted: a watchdog started for one app must
+    /// not end the next.
+    static APP_RUN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+    /// Krate's Close or Restart is the person's, not a request the app may
+    /// sit on: an app still running two seconds later -- stuck in a loop,
+    /// never calling the host -- is ended by the engine at its next
+    /// safepoint (IC-934).
+    fn end_if_unanswered() {
+        if !APP_CHROME.load(std::sync::atomic::Ordering::Relaxed) {
+            return;
+        }
+        let run = APP_RUN.load(std::sync::atomic::Ordering::Relaxed);
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_secs(2));
+            if APP_CHROME.load(std::sync::atomic::Ordering::Relaxed)
+                && APP_RUN.load(std::sync::atomic::Ordering::Relaxed) == run
+            {
+                eprintln!("krate-menu: the app did not answer Close; ending it");
+                krate_adapter_common::ui::end_running_app();
+                INPUT_ARRIVED.notify_all();
+            }
+        });
     }
 
     // ------------------------------------------------------------------
@@ -931,6 +957,7 @@ mod real {
                 // SAFETY: UIGestureRecognizer's state; 1 is Began.
                 let state: isize = unsafe { msg_send![recognizer, state] };
                 if state == 1 {
+                    eprintln!("krate-menu: held");
                     show_menu(self.mtm(), self);
                 }
             }
@@ -943,18 +970,22 @@ mod real {
                 _recognizer: &objc2::runtime::AnyObject,
                 touch: &objc2::runtime::AnyObject,
             ) -> objc2::runtime::Bool {
-                if !APP_CHROME.load(std::sync::atomic::Ordering::Relaxed)
-                    || MENU.with(|m| m.borrow().is_some())
-                {
-                    return objc2::runtime::Bool::NO;
-                }
                 let Some(main_side) = MAIN_SIDE.0.get() else {
                     return objc2::runtime::Bool::NO;
                 };
                 let host: &UIView = &main_side.view;
                 // SAFETY: the touch's location in Krate's own view.
                 let at: CGPoint = unsafe { msg_send![touch, locationInView: host] };
-                objc2::runtime::Bool::new((at.y as f32) < hold_band())
+                if (at.y as f32) >= hold_band() {
+                    return objc2::runtime::Bool::NO;
+                }
+                let chrome = APP_CHROME.load(std::sync::atomic::Ordering::Relaxed);
+                let open = MENU.with(|m| m.borrow().is_some());
+                if !chrome || open {
+                    eprintln!("krate-menu: touch in the strip refused (app running: {chrome}, menu open: {open})");
+                    return objc2::runtime::Bool::NO;
+                }
+                objc2::runtime::Bool::YES
             }
 
             /// Let the hold be seen beside the app's own touch handling.
@@ -1698,7 +1729,21 @@ mod real {
         l.cover.setHidden(false);
         let host: &UIView = &main_side.view;
         host.bringSubviewToFront(&l.cover);
+        raise_menu(host);
         l.spinner.startAnimating();
+    }
+
+    /// Krate's menu stays above everything, the opening cover included:
+    /// the cover is raised on every layout, and adding the menu is itself a
+    /// layout, so a menu opened over the cover was put straight back under
+    /// it -- open, untouchable, and refusing a second hold. Main thread.
+    fn raise_menu(host: &UIView) {
+        MENU.with(|m| {
+            if let Some((shade, panel)) = m.borrow().as_ref() {
+                host.bringSubviewToFront(shade);
+                host.bringSubviewToFront(panel);
+            }
+        });
     }
 
     /// Cover the screen with Krate's loading cover. It lifts by itself on
@@ -1778,6 +1823,7 @@ mod real {
             // A close tapped before this app began (on the screen before
             // it) is not meant for it: it must not close the app at once.
             SHARED.lock().expect("shared state lock").close_tapped = false;
+            APP_RUN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }
         APP_CHROME.store(visible, std::sync::atomic::Ordering::Relaxed);
         DispatchQueue::main().exec_async(move || {
@@ -3490,6 +3536,7 @@ mod real {
         }
         SHARED.lock().expect("shared state lock").close_tapped = true;
         INPUT_ARRIVED.notify_all();
+        end_if_unanswered();
     }
 
     /// Krate is in the background: nothing is drawn (iOS ends an app that
@@ -3714,6 +3761,7 @@ mod real {
             if !l.cover.isHidden() {
                 uiview.bringSubviewToFront(&l.cover);
             }
+            raise_menu(uiview);
         }
         let Ok(logical) = WindowSize::new(
             (bounds.size.width as u32).max(1),
