@@ -402,6 +402,22 @@ pub unsafe extern "C" fn __imported_wasi_snapshot_preview1_sched_yield() -> i32 
     SUCCESS
 }
 
+/// The userdata mio puts on the clock subscription of an event loop's wait
+/// (tokio's I/O driver, and anything else on mio).
+const MIO_TIMEOUT_USERDATA: u64 = u64::MAX;
+
+/// The longest an event loop waits in one call, in a threaded app (K-1069).
+///
+/// On WASI, tokio cannot wake its I/O driver from another thread: its
+/// `unpark` does nothing there, because WASI had no threads. A task woken
+/// from another thread then waits for the driver's next timer -- measured in
+/// a Krate app at up to 28.6 s, which is how Veloren's QUIC connection
+/// stalled at a different point each time and was timed out by the server.
+/// An event loop's wait therefore returns after at most this long, and the
+/// loop looks at its queues again; a plain sleep is not touched.
+#[cfg(krate_threads)]
+const EVENT_LOOP_WAIT_MS: u64 = 1;
+
 /// Clock subscriptions sleep; anything else returns at once.
 #[no_mangle]
 pub unsafe extern "C" fn __imported_wasi_snapshot_preview1_poll_oneoff(
@@ -411,16 +427,25 @@ pub unsafe extern "C" fn __imported_wasi_snapshot_preview1_poll_oneoff(
     nevents: i32,
 ) -> i32 {
     let mut longest_ns: u64 = 0;
+    #[cfg_attr(not(krate_threads), allow(unused_variables, unused_mut))]
+    let mut event_loop = false;
     for i in 0..n {
         let sub = inp + i * 48;
         if *((sub + 8) as usize as *const u8) == 0 {
             let timeout = ((sub + 24) as usize as *const u64).read_unaligned();
             longest_ns = longest_ns.max(timeout);
+            if ((sub) as usize as *const u64).read_unaligned() == MIO_TIMEOUT_USERDATA {
+                event_loop = true;
+            }
         }
         let ev = out + i * 32;
         core::ptr::write_bytes(ev as usize as *mut u8, 0, 32);
         put_u64(ev, ((sub) as usize as *const u64).read_unaligned());
         *((ev + 10) as usize as *mut u8) = *((sub + 8) as usize as *const u8);
+    }
+    #[cfg(krate_threads)]
+    if event_loop {
+        longest_ns = longest_ns.min(EVENT_LOOP_WAIT_MS * 1_000_000);
     }
     if longest_ns > 0 {
         sleep::sleep_millis((longest_ns / 1_000_000).max(1) as u32);

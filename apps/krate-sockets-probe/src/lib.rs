@@ -11,16 +11,20 @@
 //! quic HOST PORT NAME  a QUIC connection (certificate for NAME, trusted from
 //!                      the DER file cert.der in the app's files): send a
 //!                      line on a stream, print the answer
+//! wake                 a tokio runtime with its I/O driver (as `enable_all`
+//!                      builds it), one worker, a timer 30 s away: how long
+//!                      a task woken from another thread waits (K-1069)
 //! ```
 //!
 //! Built as a threaded app (the socket ticker and tokio want threads):
 //!
 //! ```text
-//! TOOLCHAIN=nightly-2026-06-13 THREADS=1 \
+//! TOOLCHAIN=nightly-2026-06-13 THREADS=1 EXTRA_RUSTFLAGS="--cfg tokio_unstable" \
 //!   ~/Projects/krate-bevy/build-app.sh $PWD/apps/krate-sockets-probe
 //! ```
 //!
-//! after `python3 crates/net-krate/make-quinn.py ~/Projects/krate-bevy/patches`.
+//! after `python3 crates/net-krate/make-quinn.py patches` from the repo root
+//! (tokio's I/O driver on WASI needs `tokio_unstable`, as in Veloren).
 //! The result is crates/cli/tests/fixtures/sockets-probe.wasm.
 
 use std::io::{Read, Write};
@@ -141,6 +145,32 @@ async fn quic(host: &str, port: u16, name: &str) -> Result<String, Box<dyn std::
     ))
 }
 
+/// A task woken from a thread outside the runtime, while the runtime's one
+/// worker waits in its I/O driver for a timer 30 s away: the worst wait of
+/// five, in milliseconds. Natively microseconds; on WASI tokio cannot wake
+/// its driver from another thread, and this was seconds (K-1069).
+fn remote_wake() -> f64 {
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .enable_all()
+        .build()
+        .expect("a runtime");
+    let mut worst = 0.0f64;
+    for _ in 0..5 {
+        let (tx, rx) = tokio::sync::oneshot::channel::<Instant>();
+        let task = rt.spawn(async move {
+            let _far = tokio::spawn(tokio::time::sleep(std::time::Duration::from_secs(30)));
+            rx.await.map(|sent| sent.elapsed()).unwrap_or_default()
+        });
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        let _ = tx.send(Instant::now());
+        let waited = rt.block_on(task).unwrap_or_default();
+        worst = worst.max(waited.as_secs_f64() * 1000.0);
+    }
+    rt.shutdown_background();
+    worst
+}
+
 struct App;
 
 impl krate::Guest for App {
@@ -174,7 +204,13 @@ impl krate::Guest for App {
                 .expect("a runtime")
                 .block_on(quic(&a(2), port(3), &a(4)))
                 .map_err(|e| e.to_string()),
-            other => Err(format!("no job {other:?}: tcp, udp, lookup, tokio or quic")),
+            "wake" => Ok(format!(
+                "a task woken from another thread waited at most {:.1} ms",
+                remote_wake()
+            )),
+            other => Err(format!(
+                "no job {other:?}: tcp, udp, lookup, tokio, quic, quic-mt or wake"
+            )),
         };
         let code = match out {
             Ok(line) => {

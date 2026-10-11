@@ -11249,6 +11249,53 @@ fn a_gilrs_program_sees_a_stand_in_controller() {
     }
 }
 
+/// A tokio task woken from another thread runs promptly in a threaded app
+/// (K-1069). On WASI tokio cannot wake its I/O driver from another thread, so
+/// with `enable_all` and one worker such a task waited for the driver's next
+/// timer: 28.6 s in this probe, which is how Veloren's QUIC connection
+/// stalled. krate-c-runtime now caps an event loop's wait at 1 ms.
+#[test]
+fn a_tokio_task_woken_from_another_thread_runs_within_milliseconds() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let wasm = dir.path().join("app.wasm");
+    std::fs::write(&wasm, include_bytes!("fixtures/sockets-probe.wasm")).expect("probe");
+    let manifest = dir.path().join("manifest.toml");
+    std::fs::write(
+        &manifest,
+        "[app]\nid = \"com.acme.sockets\"\nname = \"sockets\"\nversion = \"1.0.0\"\n\
+         entry = \"app.wasm\"\nworld = \"krate:app/cli@0.1.0\"\n\n\
+         [[capabilities]]\ncap = \"io.stdout\"\nrationale = \"print\"\nrequired = true\n\n\
+         [[capabilities]]\ncap = \"random.bytes\"\nrationale = \"seed\"\nrequired = true\n",
+    )
+    .expect("manifest");
+    let out = krate()
+        .arg("run")
+        .arg(&wasm)
+        .arg("--manifest")
+        .arg(&manifest)
+        .arg("--auto-grant")
+        .arg("--")
+        .arg("wake")
+        .output()
+        .expect("run");
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let ms: f64 = stdout
+        .split("waited at most ")
+        .nth(1)
+        .and_then(|rest| rest.split(' ').next())
+        .and_then(|n| n.parse().ok())
+        .unwrap_or_else(|| {
+            panic!(
+                "no wait reported: {stdout}{}",
+                String::from_utf8_lossy(&out.stderr)
+            )
+        });
+    assert!(
+        ms < 250.0,
+        "a woken task waited {ms} ms for tokio's driver: {stdout}"
+    );
+}
+
 /// Raw sockets inside a Krate app (IC-935): `sockets-probe.wasm` is
 /// apps/krate-sockets-probe built. Its TCP, UDP, lookup and tokio jobs reach
 /// echo servers this test runs, under a `net.connect` grant; without the
