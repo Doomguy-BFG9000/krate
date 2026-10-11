@@ -724,8 +724,10 @@ impl super::Runtime {
     ) -> Result<RunOutcome> {
         krate_adapter_common::ui::clear_app_ending();
         let engine = &self.engine;
+        super::stage_mark("threaded: compiling or loading the module");
         let module = Module::from_binary(engine, bytes)
             .map_err(|err| RuntimeError::InvalidComponent(err.to_string()))?;
+        super::stage_mark("threaded: module ready");
         let memory_type = module
             .imports()
             .find_map(|i| match i.ty() {
@@ -777,8 +779,10 @@ impl super::Runtime {
             max_threads: (parallelism() * 8).clamp(16, 512),
             live: AtomicI32::new(0),
         });
+        super::stage_mark("threaded: host ready");
         let linker = linker(engine, &shared, &module)
             .map_err(|err| RuntimeError::Instantiate(err.to_string()))?;
+        super::stage_mark("threaded: linked");
         let mut store = Store::new(engine, Thread { tid: 0 });
         if let Some(fuel) = config.fuel {
             store
@@ -808,6 +812,7 @@ impl super::Runtime {
         let instance = linker
             .instantiate(&mut store, &module)
             .map_err(|err| RuntimeError::Instantiate(super::instantiate_error(&err)))?;
+        super::stage_mark("threaded: instantiated, the app starts");
         // The main thread's own pthread: wasi-libc sets it up in `_start` or
         // `_initialize`, and an app's `run` reaches neither. Without it the
         // first thread-local key walks an uninitialised thread list forever

@@ -1671,6 +1671,7 @@ fn arm_test_watchdog() {
 }
 
 fn main() -> ExitCode {
+    krate_runtime::stage_mark("cli: process starts");
     arm_test_watchdog();
     #[cfg(windows)]
     detach_owned_console();
@@ -14701,6 +14702,7 @@ fn profile_name_problem(profile: &str) -> Option<String> {
 }
 
 fn run_component_inner(request: RunRequest) -> Result<u8> {
+    krate_runtime::stage_mark("cli: run starts");
     if let Some(problem) = profile_name_problem(&request.profile) {
         eprintln!("--profile {:?}: {problem}", request.profile);
         return Ok(2);
@@ -14721,6 +14723,7 @@ fn run_component_inner(request: RunRequest) -> Result<u8> {
     // Held for the whole run: dropping it removes the extracted bundle.
     let (file, bundle_manifest, bundle) =
         resolve_run_target(&request.target, request.insecure_http)?;
+    krate_runtime::stage_mark("cli: bundle opened");
 
     if !file.exists() {
         anyhow::bail!("input file does not exist: {}", file.display());
@@ -14738,21 +14741,28 @@ fn run_component_inner(request: RunRequest) -> Result<u8> {
     // file the person actually passed; the other two come from its contents.
     // A digest that cannot be computed is left absent rather than guessed --
     // an identity nobody can check is worse than none.
-    let run_identity = bundle.as_ref().map(|bundle| RunIdentity {
-        derived_from: bundle.derived_from().ok().flatten(),
-        release: bundle.release().ok().flatten(),
-        archive: std::fs::read(&request.target)
-            .ok()
-            .map(|bytes| krate_bundle::provenance::digest_archive_bytes(&bytes).digest),
-        execution: bundle.digest().ok().map(|d| d.digest),
-        project: bundle.project_digest().ok().and_then(|project| {
-            // Only when there is genuinely more to rebuild. The two layers
-            // differ by schema tag even over identical entries, so comparing
-            // their values would report a project that does not exist.
-            let execution = bundle.digest().ok()?;
-            (project.entries.len() > execution.entries.len()).then_some(project.digest)
-        }),
-    });
+    // Only a --json run reports it, and it is not free: the archive and
+    // execution digests read and hash the whole bundle, five seconds of
+    // every Veloren launch spent on a report nobody asked for (K-1079).
+    let run_identity = bundle
+        .as_ref()
+        .filter(|_| request.json)
+        .map(|bundle| RunIdentity {
+            derived_from: bundle.derived_from().ok().flatten(),
+            release: bundle.release().ok().flatten(),
+            archive: std::fs::read(&request.target)
+                .ok()
+                .map(|bytes| krate_bundle::provenance::digest_archive_bytes(&bytes).digest),
+            execution: bundle.digest().ok().map(|d| d.digest),
+            project: bundle.project_digest().ok().and_then(|project| {
+                // Only when there is genuinely more to rebuild. The two layers
+                // differ by schema tag even over identical entries, so comparing
+                // their values would report a project that does not exist.
+                let execution = bundle.digest().ok()?;
+                (project.entries.len() > execution.entries.len()).then_some(project.digest)
+            }),
+        });
+    krate_runtime::stage_mark("cli: run identity digested");
 
     // An app the hub removed is refused, offline included (IC-669, test
     // 1311): the list this machine last fetched names the file's own bytes.
@@ -14777,6 +14787,7 @@ fn run_component_inner(request: RunRequest) -> Result<u8> {
         }
     }
 
+    krate_runtime::stage_mark("cli: blocklist checked");
     // A signature that says the file changed is a refusal, not a note
     // (IC-015). The publisher signed one thing and this is another, so
     // running it would be running something nobody vouched for while a
@@ -14795,6 +14806,7 @@ fn run_component_inner(request: RunRequest) -> Result<u8> {
             .ok()
             .flatten()
     });
+    krate_runtime::stage_mark("cli: signature judged");
     if let Some(krate_bundle::signing::Verdict::Tampered { problems }) =
         full_verdict.as_ref().map(|full| &full.signature)
     {
@@ -15173,6 +15185,7 @@ fn run_component_inner(request: RunRequest) -> Result<u8> {
         eprintln!("warning: {concern}");
     }
 
+    krate_runtime::stage_mark("cli: signature state read");
     // Who this app is for storage purposes (IC-736).
     //
     // A verified publisher gets their own namespace; anything unsigned,
@@ -15307,7 +15320,9 @@ fn run_component_inner(request: RunRequest) -> Result<u8> {
             None => None,
         },
     };
+    krate_runtime::stage_mark("cli: config built");
     let runtime = Runtime::new(&config)?;
+    krate_runtime::stage_mark("cli: engine made");
     let runtime_world = match manifest.map(Manifest::app_world).transpose()? {
         Some(AppWorld::Phase2Cli) => RuntimeWorld::Cli,
         Some(AppWorld::Phase3Gui) => RuntimeWorld::Gui,
@@ -15356,6 +15371,7 @@ fn run_component_inner(request: RunRequest) -> Result<u8> {
         return Ok(cli_code);
     }
 
+    krate_runtime::stage_mark("cli: checks done, handing to the runtime");
     match runtime.run_file_for_world(&request.file, &config, runtime_world) {
         Ok(RunOutcome::Exited(code)) => {
             // A screenshot that was asked for and never taken is a failure

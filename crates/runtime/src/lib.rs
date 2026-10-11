@@ -470,6 +470,21 @@ fn compile_cache_dir() -> Option<PathBuf> {
     Some(root.join("compiled"))
 }
 
+/// KRATE_STAGE_TIMES: one line per launch stage, stamped with the wall
+/// clock, so a harness outside the process -- one that started the app the
+/// way a double-click does -- can line the stages up against its own clock
+/// and the app's first output.
+pub fn stage_mark(label: &str) {
+    if std::env::var_os("KRATE_STAGE_TIMES").is_none() {
+        return;
+    }
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs_f64())
+        .unwrap_or(0.0);
+    eprintln!("krate-stage: {label} at {now:.3}");
+}
+
 pub struct Runtime {
     engine: Engine,
 }
@@ -632,7 +647,9 @@ impl Runtime {
         config: &Config,
         world: RuntimeWorld,
     ) -> Result<RunOutcome> {
+        stage_mark("runtime: reading the code");
         let bytes = read_path_on_host(path.as_ref())?;
+        stage_mark("runtime: code read");
         self.run_bytes_for_world(&bytes, config, world)
     }
 
