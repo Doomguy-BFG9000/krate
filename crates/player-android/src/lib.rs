@@ -78,6 +78,18 @@ mod player {
     }
 
     fn run_player(data_root: &std::path::Path, handles: crate::intent::ActivityHandles) {
+        // The picture the permission sheet sits over is the app the person
+        // just restarted from Krate's menu, written moments ago; any older
+        // one belongs to another visit, and the sheet sits on its wash.
+        let behind = data_root.join("wall").join("behind.rgba");
+        let fresh = std::fs::metadata(&behind)
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|at| at.elapsed().ok())
+            .is_some_and(|age| age < std::time::Duration::from_secs(20));
+        if !fresh {
+            let _ = std::fs::remove_file(&behind);
+        }
         // What was tapped decides what runs.
         let target = crate::intent::view_target(handles);
         log::info!("launch target: {target:?}");
@@ -276,6 +288,8 @@ mod player {
         // Restart (or Ask again) in Krate's menu: the app closed, so open it
         // again, from the wall, in a fresh process.
         if krate_adapter_android::menu::restart_asked() {
+            // The app as it was, blurred, for the sheet to sit over.
+            krate_adapter_android::behind::write(&data_root.join("wall").join("behind.rgba"));
             krate_adapter_android::menu::relaunch();
         }
     }

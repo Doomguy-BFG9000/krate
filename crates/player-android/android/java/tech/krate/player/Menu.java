@@ -111,85 +111,92 @@ final class Menu {
                 == android.content.res.Configuration.UI_MODE_NIGHT_YES;
     }
 
-    /** Krate's panel, dropping from the top. UI thread. */
+    /**
+     * Krate's menu: one glass row of five buttons, each an icon over a word
+     * -- Close, Restart, Share, Access, Report -- like the phone's own Copy,
+     * Move and Share row, sliding in under the status bar with a light tap.
+     * The window behind it is blurred where Android can blur (12 and up).
+     * UI thread.
+     */
     static void show(final KrateActivity activity) {
         if (!running() || (panel != null && panel.isShowing())) {
             return;
         }
         final boolean dark = dark(activity);
-        final int ink = dark ? Color.WHITE : Color.rgb(17, 17, 20);
-        final int muted = dark ? Color.rgb(160, 160, 170) : Color.rgb(110, 110, 120);
-        final int card = dark ? Color.rgb(32, 32, 36) : Color.WHITE;
+        final int ink = dark ? Color.WHITE : Color.rgb(20, 20, 24);
+        final String[] words = {"Close", "Restart", "Share", "Access", "Report"};
+        final String[] said = {"Close", "Restart", "Share this app", "What it can use",
+            "Report a problem"};
 
         final Dialog dialog = new Dialog(activity);
         dialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
-        LinearLayout box = new LinearLayout(activity);
-        box.setOrientation(LinearLayout.VERTICAL);
-        int pad = dp(activity, 20);
-        box.setPadding(pad, dp(activity, 18), pad, dp(activity, 12));
-        GradientDrawable bg = new GradientDrawable();
-        bg.setColor(card);
-        float r = dp(activity, 22);
-        bg.setCornerRadii(new float[] {0, 0, 0, 0, r, r, r, r});
-        box.setBackground(bg);
-
-        TextView title = new TextView(activity);
-        title.setText(name);
-        title.setTextColor(ink);
-        title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 20);
-        title.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
-        box.addView(title);
-        TextView sub = new TextView(activity);
-        sub.setText("Krate");
-        sub.setTextColor(muted);
-        sub.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
-        sub.setPadding(0, 0, 0, dp(activity, 8));
-        box.addView(sub);
-
-        String[] labels = {"Close", "Restart", "Share this app", "What it can use",
-            "Report a problem"};
-        for (int i = 0; i < labels.length; i++) {
+        final LinearLayout row = new LinearLayout(activity);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        for (int i = 0; i < words.length; i++) {
             final int which = i;
-            TextView row = new TextView(activity);
-            row.setText(labels[i]);
-            row.setTextColor(i == 0 ? Color.rgb(220, 50, 50) : ink);
-            row.setTextSize(TypedValue.COMPLEX_UNIT_SP, 17);
-            row.setPadding(0, dp(activity, 13), 0, dp(activity, 13));
+            LinearLayout cell = new LinearLayout(activity);
+            cell.setOrientation(LinearLayout.VERTICAL);
+            cell.setGravity(Gravity.CENTER);
+            cell.setContentDescription(said[i]);
             TypedValue ripple = new TypedValue();
-            activity.getTheme().resolveAttribute(android.R.attr.selectableItemBackground,
+            activity.getTheme().resolveAttribute(android.R.attr.selectableItemBackgroundBorderless,
                     ripple, true);
-            row.setBackgroundResource(ripple.resourceId);
-            row.setOnClickListener(new View.OnClickListener() {
+            cell.setBackgroundResource(ripple.resourceId);
+            cell.addView(new MenuIcon(activity, i, i == 0 ? Color.rgb(230, 60, 60) : ink),
+                    new LinearLayout.LayoutParams(dp(activity, 26), dp(activity, 26)));
+            TextView word = new TextView(activity);
+            word.setText(words[i]);
+            word.setTextColor(ink);
+            word.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+            word.setGravity(Gravity.CENTER);
+            word.setPadding(0, dp(activity, 6), 0, 0);
+            cell.addView(word);
+            cell.setOnClickListener(new View.OnClickListener() {
                 @Override
                 public void onClick(View v) {
                     dialog.dismiss();
                     pick(activity, which);
                 }
             });
-            box.addView(row);
+            row.addView(cell, new LinearLayout.LayoutParams(0, dp(activity, 80), 1f));
         }
-
-        dialog.setContentView(box);
+        dialog.setContentView(row);
         Window window = dialog.getWindow();
         if (window != null) {
-            window.setBackgroundDrawableResource(android.R.color.transparent);
-            window.setGravity(Gravity.TOP);
-            window.setLayout(ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT);
+            int screen = activity.getResources().getDisplayMetrics().widthPixels;
+            int width = Math.min(screen - dp(activity, 32), dp(activity, 380));
+            GradientDrawable glass = new GradientDrawable();
+            glass.setCornerRadius(dp(activity, 26));
+            boolean blur = android.os.Build.VERSION.SDK_INT >= 31
+                    && activity.getWindowManager().isCrossWindowBlurEnabled();
+            // Frosted where the phone blurs, nearly solid where it cannot.
+            int alpha = blur ? 200 : 240;
+            glass.setColor(dark ? Color.argb(alpha, 40, 40, 46) : Color.argb(alpha, 250, 250, 252));
+            glass.setStroke(1, dark ? Color.argb(60, 255, 255, 255) : Color.argb(40, 0, 0, 0));
+            window.setBackgroundDrawable(glass);
+            if (blur) {
+                window.setBackgroundBlurRadius(dp(activity, 30));
+            }
+            window.setGravity(Gravity.TOP | Gravity.CENTER_HORIZONTAL);
+            window.setLayout(width, ViewGroup.LayoutParams.WRAP_CONTENT);
             WindowManager.LayoutParams lp = window.getAttributes();
-            lp.y = 0;
+            // A dialog's window already starts below the status bar.
+            lp.y = dp(activity, 6);
             window.setAttributes(lp);
-            window.setDimAmount(0.35f);
+            window.setDimAmount(0.12f);
         }
         dialog.setOnShowListener(new android.content.DialogInterface.OnShowListener() {
             @Override
             public void onShow(android.content.DialogInterface d) {
-                box.setTranslationY(-box.getHeight());
-                box.animate().translationY(0).setDuration(180).start();
+                row.setTranslationY(-dp(activity, 24));
+                row.setAlpha(0f);
+                row.animate().translationY(0).alpha(1f).setDuration(200).start();
             }
         });
         panel = dialog;
         dialog.show();
+        // A light tap: the hold was heard.
+        Haptics.play(activity, Haptics.LIGHT, 1f);
         Log.i(KrateActivity.TAG, "menu: open over " + name);
     }
 

@@ -605,6 +605,7 @@ mod real {
                     // app outright, a swipe away from losing it. Over
                     // Krate's own sheet it is still a cancel.
                     if crate::menu::chrome_on() {
+                        remember_frame(&self.windows);
                         crate::menu::show();
                         None
                     } else {
@@ -771,6 +772,20 @@ mod real {
         })
     }
 
+    /// Keep a picture of what the app shows now, for the permission sheet
+    /// to sit over if the person restarts it from Krate's menu (F-314).
+    fn remember_frame(windows: &BTreeMap<NativeWindowId, TrackedWindow>) {
+        if let Some(tracked) = windows.values().next() {
+            let size = tracked.window.inner_size();
+            crate::behind::remember(
+                &tracked.staging,
+                size.width as usize,
+                size.height as usize,
+                tracked.window.scale_factor() as f32,
+            );
+        }
+    }
+
     fn pump(host: &mut Host) {
         let Host { event_loop, app } = host;
         let _status = event_loop.pump_app_events(Some(Duration::ZERO), app);
@@ -783,6 +798,7 @@ mod real {
             if due && !gesture.held {
                 gesture.held = true;
                 gesture.hold_from = None;
+                remember_frame(&app.windows);
                 crate::menu::show();
             }
         }
