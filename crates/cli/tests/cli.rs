@@ -7184,6 +7184,91 @@ fn a_grant_the_manifest_never_declared_is_refused_on_the_command_line() {
     assert_eq!(String::from_utf8_lossy(&fine.stdout).trim(), "held=10");
 }
 
+/// `krate judge` gives the hub's own answer (IC-945): for the publish
+/// door, exactly what the wasm validator in the Worker answers (the same
+/// function builds both); for the big tier, the same checks at its own
+/// ceilings, so the build service can judge what the Worker cannot hold.
+#[test]
+fn krate_judge_answers_as_the_hub_does_at_either_tier() {
+    use std::io::Write as _;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let manifest_text =
+        "[app]\nid = \"dev.krate.judged\"\nname = \"Judged\"\nversion = \"1.0.0\"\n\
+                         entry = \"code.wasm\"\nworld = \"krate:app/cli@0.1.0\"\n";
+    let component = include_bytes!("../../bundle/tests/fixtures/minimal-run.wasm");
+    let bundle_with = |name: &str, extra: usize| {
+        let path = dir.path().join(name);
+        let file = std::fs::File::create(&path).expect("create");
+        let mut writer = zip::ZipWriter::new(file);
+        let opts = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
+        writer.start_file("manifest.toml", opts).expect("m");
+        writer.write_all(manifest_text.as_bytes()).expect("w");
+        writer.start_file("code.wasm", opts).expect("c");
+        writer.write_all(component).expect("w");
+        for i in 0..extra {
+            writer
+                .start_file(format!("assets/a{i}.ron"), opts)
+                .expect("a");
+            writer.write_all(b"()").expect("w");
+        }
+        writer.finish().expect("finish");
+        path
+    };
+    let judge = |path: &std::path::Path, tier: &str| {
+        let out = krate()
+            .arg("judge")
+            .arg(path)
+            .args(["--tier", tier])
+            .output()
+            .expect("judge");
+        (
+            out.status.code(),
+            String::from_utf8_lossy(&out.stdout).trim().to_string(),
+        )
+    };
+
+    // The door's answer, byte for byte.
+    let small = bundle_with("small.krate", 1);
+    let bytes = std::fs::read(&small).expect("read");
+    let door = krate_bundle::judgement_json(krate_bundle::judge_bytes(
+        &bytes,
+        krate_bundle::HUB_MAX_EXPANDED_BYTES,
+    ));
+    let (code, said) = judge(&small, "hub");
+    assert_eq!(code, Some(0), "{said}");
+    assert_eq!(said, door, "krate judge --tier hub is the door's answer");
+
+    // Past the door's entry count: the door refuses, the big tier judges.
+    let crowd = bundle_with("crowd.krate", krate_bundle::HUB_LIMITS.entry_count);
+    let (code, said) = judge(&crowd, "hub");
+    assert_eq!(code, Some(1));
+    let answer: serde_json::Value = serde_json::from_str(&said).expect("json");
+    assert_eq!(answer["ok"], false, "{said}");
+    let (code, said) = judge(&crowd, "hub-big");
+    assert_eq!(code, Some(0), "{said}");
+    let answer: serde_json::Value = serde_json::from_str(&said).expect("json");
+    assert_eq!(answer["ok"], true);
+    assert_eq!(
+        answer["judgement"]["manifest"]["app"]["id"],
+        "dev.krate.judged"
+    );
+
+    // Past the big tier's size: refused from the file's size, unread (a
+    // sparse file costs no disk).
+    let huge = dir.path().join("huge.krate");
+    std::fs::File::create(&huge)
+        .expect("create")
+        .set_len(krate_bundle::HUB_BIG_LIMITS.bundle_bytes + 1)
+        .expect("size");
+    let (code, said) = judge(&huge, "hub-big");
+    assert_eq!(code, Some(1));
+    assert!(
+        said.contains(&krate_bundle::HUB_BIG_LIMITS.bundle_bytes.to_string()),
+        "names the big tier's ceiling: {said}"
+    );
+}
+
 /// A large bundle is unpacked once and reused (IC-944): the second run of
 /// the same file writes nothing again, and nothing of it lands in the temp
 /// folder, where a killed run used to leave every byte (687 MB for Veloren).

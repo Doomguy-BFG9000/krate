@@ -578,6 +578,21 @@ enum Command {
         trace: PathBuf,
     },
 
+    /// Judge a .krate the way Krate Cloud does, and print the hub's answer
+    /// as JSON: `{"ok":true,"judgement":{...}}` or `{"ok":false,"problem":...}`.
+    /// The build service runs this for the hub's big tier, whose bundles
+    /// are too large to judge inside the hub (IC-945). Exits 1 on a refusal.
+    #[command(hide = true)]
+    Judge {
+        /// The .krate to judge.
+        bundle: PathBuf,
+
+        /// Which door's limits: `hub` (the publish door, 5 MiB uploads) or
+        /// `hub-big` (the big tier, up to 1 GiB).
+        #[arg(long, default_value = "hub")]
+        tier: String,
+    },
+
     /// Say what a .krate is without running it: its identities, its format
     /// profile, every record and the class the format gives it, the
     /// extensions it declares, its signature and the permissions it asks
@@ -2261,6 +2276,7 @@ fn run() -> Result<u8> {
             Ok(0)
         }
         Command::StudyReport { trace } => study_report_command(&trace),
+        Command::Judge { bundle, tier } => judge_command(&bundle, &tier),
         Command::Inspect { bundle, format } => inspect_command(&bundle, format),
         Command::Manifest { command } => match command {
             ManifestCommand::Check { file, format } => check_manifest(&file, format),
@@ -14572,6 +14588,38 @@ fn resolve_run_target(
     }
 
     Ok((path, None, None))
+}
+
+/// `krate judge`: the hub's own answer for a file, by a door's limits
+/// (IC-945). The size is checked from the file's metadata first, so a file
+/// past the tier's ceiling is refused without being read.
+fn judge_command(bundle: &Path, tier: &str) -> Result<u8> {
+    let (limits, max_expanded) = match tier {
+        "hub" => (
+            krate_bundle::HUB_LIMITS,
+            krate_bundle::HUB_MAX_EXPANDED_BYTES,
+        ),
+        "hub-big" => (
+            krate_bundle::HUB_BIG_LIMITS,
+            krate_bundle::HUB_BIG_MAX_EXPANDED_BYTES,
+        ),
+        other => bail!("--tier is `hub` or `hub-big`, not `{other}`"),
+    };
+    let size = fs::metadata(bundle)
+        .with_context(|| format!("reading {}", bundle.display()))?
+        .len();
+    let judged = if size > limits.bundle_bytes {
+        Err(krate_bundle::BundleError::TooLarge {
+            size,
+            limit: limits.bundle_bytes,
+        })
+    } else {
+        let bytes = fs::read(bundle).with_context(|| format!("reading {}", bundle.display()))?;
+        krate_bundle::judge_bytes_with_limits(&bytes, max_expanded, limits)
+    };
+    let ok = judged.is_ok();
+    println!("{}", krate_bundle::judgement_json(judged));
+    Ok(if ok { 0 } else { 1 })
 }
 
 /// The smallest bundle worth an unpacked-cache entry (IC-944).

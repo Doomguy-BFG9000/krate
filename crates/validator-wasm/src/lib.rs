@@ -27,16 +27,13 @@ getrandom::register_custom_getrandom!(no_randomness_here);
 /// judged, in bytes. A Worker has 128 MiB; the archive itself is at most
 /// 5 MiB at this door, so this is generous for any real app and small
 /// enough that a bomb is refused before it costs anything.
-pub const MAX_EXPANDED_BYTES: u64 = 64 * 1024 * 1024;
+pub const MAX_EXPANDED_BYTES: u64 = krate_bundle::HUB_MAX_EXPANDED_BYTES;
 
 /// Judge `bytes` and answer as JSON: `{"ok":true,"judgement":{...}}` or
 /// `{"ok":false,"problem":"..."}`. The problem text is `BundleError`'s own
 /// words, the ones `krate run` would print for the same file.
 pub fn judge_to_json(bytes: &[u8]) -> String {
-    match krate_bundle::judge_bytes(bytes, MAX_EXPANDED_BYTES) {
-        Ok(judgement) => serde_json::json!({ "ok": true, "judgement": judgement }).to_string(),
-        Err(err) => serde_json::json!({ "ok": false, "problem": err.to_string() }).to_string(),
-    }
+    krate_bundle::judgement_json(krate_bundle::judge_bytes(bytes, MAX_EXPANDED_BYTES))
 }
 
 /// Reserve `len` bytes in the module's memory for the host to write into.

@@ -859,6 +859,30 @@ pub const HUB_LIMITS: Limits = Limits {
 /// Veloren is a 245 MB module and 10,654 assets (442 MB); these leave it
 /// room to grow several times over and still bound what one file can make
 /// a machine unpack.
+/// The hub's big tier (IC-945): an app too large for the publish door's
+/// one request, uploaded in parts and judged on the build service rather
+/// than in the Worker. Half the local tier's ceiling, so anything the hub
+/// lists in it opens on every desktop; the counts are the local tier's.
+pub const HUB_BIG_LIMITS: Limits = Limits {
+    bundle_bytes: 1024 * 1024 * 1024,
+    entry_bytes: 512 * 1024 * 1024,
+    asset_bytes: 256 * 1024 * 1024,
+    total_asset_bytes: 2 * 1024 * 1024 * 1024,
+    asset_count: 32_000,
+    entry_count: 32_768,
+    total_source_bytes: MAX_TOTAL_SOURCE_BYTES,
+};
+
+/// What the publish door's entries may expand to together while judged in
+/// the Worker, which has 128 MiB (the wasm validator's ceiling, kept here
+/// so `krate judge --tier hub` answers exactly as the door does).
+pub const HUB_MAX_EXPANDED_BYTES: u64 = 64 * 1024 * 1024;
+
+/// What the big tier's entries may expand to together while judged: the
+/// component and the assets at their ceilings, held in memory on a build
+/// box with room for it.
+pub const HUB_BIG_MAX_EXPANDED_BYTES: u64 = 3 * 1024 * 1024 * 1024;
+
 pub const LOCAL_LIMITS: Limits = Limits {
     bundle_bytes: 2 * 1024 * 1024 * 1024,
     entry_bytes: 1024 * 1024 * 1024,
@@ -2750,6 +2774,27 @@ pub struct JudgedSignature {
 pub fn judge_bytes(bytes: &[u8], max_expanded: u64) -> Result<Judgement> {
     // The hub's door: today's limits whatever else is running (IC-942).
     with_limits(HUB_LIMITS, || judge_bytes_here(bytes, max_expanded))
+}
+
+/// The answer the hub reads, as JSON: `{"ok":true,"judgement":{...}}` or
+/// `{"ok":false,"problem":"..."}`, the problem in `BundleError`'s own words.
+/// One function for both judges -- the wasm validator in the Worker and
+/// `krate judge` on the build service -- so the two cannot drift (IC-945).
+pub fn judgement_json(judged: Result<Judgement>) -> String {
+    match judged {
+        Ok(judgement) => serde_json::json!({ "ok": true, "judgement": judgement }).to_string(),
+        Err(err) => serde_json::json!({ "ok": false, "problem": err.to_string() }).to_string(),
+    }
+}
+
+/// [`judge_bytes`] by another tier's limits: the hub's big tier, judged on
+/// the build service (IC-945). The same checks and the same answer.
+pub fn judge_bytes_with_limits(
+    bytes: &[u8],
+    max_expanded: u64,
+    limits: Limits,
+) -> Result<Judgement> {
+    with_limits(limits, || judge_bytes_here(bytes, max_expanded))
 }
 
 fn judge_bytes_here(bytes: &[u8], max_expanded: u64) -> Result<Judgement> {
@@ -7567,6 +7612,62 @@ required = true
         }
     }
 
+    /// The hub's big tier (IC-945) judges what the publish door refuses,
+    /// with the same checks at its own ceilings: a bundle past the door's
+    /// entry count passes it, and one past the big tier's count does not.
+    #[test]
+    fn the_big_hub_tier_judges_what_the_door_refuses_and_holds_its_own_ceiling() {
+        let crowd = |n: usize| {
+            let mut buf = Vec::new();
+            {
+                let mut writer = ZipWriter::new(io::Cursor::new(&mut buf));
+                let opts =
+                    SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+                writer.start_file(MANIFEST_ENTRY, opts).expect("manifest");
+                writer.write_all(MANIFEST.as_bytes()).expect("write");
+                writer.start_file(COMPONENT_ENTRY, opts).expect("component");
+                writer.write_all(MINIMAL_COMPONENT).expect("write");
+                for i in 0..n - 2 {
+                    writer
+                        .start_file(format!("assets/a{i}.ron"), opts)
+                        .expect("asset");
+                    writer.write_all(b"()").expect("write");
+                }
+                writer.finish().expect("finish");
+            }
+            buf
+        };
+        let past_the_door = crowd(MAX_ENTRY_COUNT + 1);
+        assert!(
+            judge_bytes(&past_the_door, u64::MAX).is_err(),
+            "the publish door refuses it"
+        );
+        let judged =
+            judge_bytes_with_limits(&past_the_door, HUB_BIG_MAX_EXPANDED_BYTES, HUB_BIG_LIMITS)
+                .expect("the big tier judges it");
+        assert_eq!(judged.manifest.app.id, "com.example.demo");
+
+        let past_the_big_tier = crowd(HUB_BIG_LIMITS.entry_count + 1);
+        match judge_bytes_with_limits(
+            &past_the_big_tier,
+            HUB_BIG_MAX_EXPANDED_BYTES,
+            HUB_BIG_LIMITS,
+        ) {
+            Err(err @ (BundleError::TooManyEntries { .. } | BundleError::TooManyAssets { .. })) => {
+                let said = err.to_string();
+                assert!(
+                    said.contains(&HUB_BIG_LIMITS.entry_count.to_string())
+                        || said.contains(&HUB_BIG_LIMITS.asset_count.to_string()),
+                    "names the big tier's limit: {said}"
+                );
+            }
+            other => panic!("the big tier must refuse past its own count: {other:?}"),
+        }
+        // Its expansion ceiling holds too: the same bundle judged with a
+        // ceiling below what it expands to is refused.
+        assert!(judge_bytes_with_limits(&past_the_door, 1024, HUB_BIG_LIMITS).is_err());
+    }
+
     /// A bundle over the hub's size opens on a desktop, and the hub's
     /// refusal says where such an app opens (IC-942).
     #[test]
@@ -9322,7 +9423,7 @@ required = true
 
     #[test]
     fn the_bundle_size_limit_holds_at_exactly_the_boundary() {
-        for door in [HUB_LIMITS, LOCAL_LIMITS] {
+        for door in [HUB_LIMITS, HUB_BIG_LIMITS, LOCAL_LIMITS] {
             let max_bundle = door.bundle_bytes;
             // IC-393 asks for the cap at its exact value and one past it. The
             // limit is 256 MiB, which is far too much to write in a test -- but
