@@ -63,12 +63,8 @@ impl LocalSpeechRuntime {
         #[cfg(all(target_os = "ios", not(feature = "speech")))]
         {
             let _ = model_asset;
-            return krate_adapter_ios::uikit_native::transcribe(
-                pcm_s16_le,
-                sample_rate,
-                language,
-            )
-            .map_err(SpeechError::Inference);
+            return krate_adapter_ios::uikit_native::transcribe(pcm_s16_le, sample_rate, language)
+                .map_err(SpeechError::Inference);
         }
         #[allow(unreachable_code)]
         let model_path = self.model_path(model_asset)?;
