@@ -44,7 +44,7 @@ fn turn(mtm: MainThreadMarker) {
 
 /// Wait for an answer on `rx`, turning the app's loop when on the main
 /// thread so what is being waited for can happen.
-fn wait<T>(rx: &Receiver<T>, most: Duration) -> Option<T> {
+pub(crate) fn wait<T>(rx: &Receiver<T>, most: Duration) -> Option<T> {
     let deadline = Instant::now() + most;
     match MainThreadMarker::new() {
         Some(mtm) => loop {

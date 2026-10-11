@@ -9,6 +9,7 @@ mod appkit;
 mod clipboard;
 mod consent;
 mod open_document;
+mod reminders;
 mod share_photos;
 mod sign_in;
 mod web_page;
@@ -541,6 +542,28 @@ impl UiAdapter for MacosUiAdapter {
     ) -> Result<Option<String>, String> {
         sign_in::sign_in(authorize_url, scheme)
     }
+
+    /// Reminders that arrive with the app closed (IC-921). The installed
+    /// app's bundle carries its name, so `sender` is not repeated.
+    fn reminder_schedule(
+        &self,
+        id: &str,
+        _sender: &str,
+        title: &str,
+        body: &str,
+        after_seconds: u64,
+        daily: bool,
+    ) -> Result<(), String> {
+        reminders::schedule(id, title, body, after_seconds, daily)
+    }
+
+    fn reminder_cancel(&self, id: &str) {
+        reminders::cancel(id)
+    }
+
+    fn reminder_pending(&self) -> Vec<String> {
+        reminders::pending()
+    }
 }
 
 impl UiAdapter for MacosAppKitPrototypeUiAdapter {
@@ -782,6 +805,28 @@ impl UiAdapter for MacosAppKitPrototypeUiAdapter {
 
     fn save_photo(&self, data: &[u8]) -> Result<(), Option<String>> {
         share_photos::save_photo(data)
+    }
+
+    /// Reminders that arrive with the app closed (IC-921). The installed
+    /// app's bundle carries its name, so `sender` is not repeated.
+    fn reminder_schedule(
+        &self,
+        id: &str,
+        _sender: &str,
+        title: &str,
+        body: &str,
+        after_seconds: u64,
+        daily: bool,
+    ) -> Result<(), String> {
+        reminders::schedule(id, title, body, after_seconds, daily)
+    }
+
+    fn reminder_cancel(&self, id: &str) {
+        reminders::cancel(id)
+    }
+
+    fn reminder_pending(&self) -> Vec<String> {
+        reminders::pending()
     }
 
     fn pump_event_loop_once(
