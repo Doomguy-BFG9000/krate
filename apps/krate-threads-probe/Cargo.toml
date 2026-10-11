@@ -1,0 +1,22 @@
+[package]
+name = "krate-threads-probe"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "A Krate app that runs a rayon pool and a std::thread, timed against one thread (IC-929)."
+
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+rayon = "1"
+krate = { path = "../../crates/bindings-rust", features = ["std"] }
+krate-c-runtime = { path = "../../crates/c-runtime" }
+wit-bindgen-rt = { version = "0.44.0", features = ["bitflags"] }
+
+[profile.release]
+panic = "abort"
+opt-level = 3
+debug = false

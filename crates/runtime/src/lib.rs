@@ -42,6 +42,12 @@ mod camera_macos;
 #[cfg(any(target_os = "windows", target_os = "linux"))]
 mod camera_nokhwa;
 mod canvas_raster;
+/// Threaded apps (IC-929).
+#[cfg(all(
+    feature = "phase2-bindings",
+    not(any(target_os = "ios", target_arch = "wasm32"))
+))]
+mod core_app;
 pub use krate_adapter_common::canvas_list;
 pub mod chosen_files;
 pub mod dead_space;
@@ -553,6 +559,22 @@ impl Runtime {
             wt_config.epoch_interruption(true);
         }
 
+        // KRATE_PERFMAP=1 writes /tmp/perf-<pid>.map, naming each compiled
+        // wasm function's address range: a native sampler's addresses in an
+        // app's code then read as the app's own function names.
+        #[cfg(not(any(target_os = "ios", target_arch = "wasm32")))]
+        if std::env::var_os("KRATE_PERFMAP").is_some() {
+            wt_config.profiler(wasmtime::ProfilingStrategy::PerfMap);
+        }
+
+        // Threaded apps (IC-929): a core module may import a shared memory
+        // and use atomics. Nothing changes for a component.
+        #[cfg(not(any(target_os = "ios", target_arch = "wasm32")))]
+        {
+            wt_config.wasm_threads(true);
+            wt_config.shared_memory(true);
+        }
+
         // Compiled code is kept on disk, keyed by the component's bytes and
         // these exact engine settings, so an app compiles once rather than on
         // every run. Measured on an M4 with a 38 MB Bevy app (the Bistro
@@ -854,6 +876,16 @@ impl Runtime {
         // One number cannot be optimised. This prints the two the runtime
         // owns, so the next person starts from a measurement.
         let timed = std::env::var_os("KRATE_STAGE_TIMES").is_some();
+        // A threaded app is a core module over a shared memory, linked by
+        // Krate itself (IC-929).
+        #[cfg(all(
+            feature = "phase2-bindings",
+            not(any(target_os = "ios", target_arch = "wasm32"))
+        ))]
+        if core_app::is_threaded_module(bytes) {
+            let _ = world;
+            return self.run_threaded(bytes, config, output);
+        }
         let engine_started = std::time::Instant::now();
         let compile_started = std::time::Instant::now();
         let component = self.load_component(bytes)?;
@@ -1513,6 +1545,18 @@ impl Runtime {
         store: &mut Store<HostState>,
         outcome: std::result::Result<i32, wasmtime::Error>,
     ) -> Result<RunOutcome> {
+        finish_gui_run(store.data_mut(), outcome)
+    }
+}
+
+/// The end of a GUI run, for a component's store or a threaded app's shared
+/// host alike.
+#[cfg(feature = "phase2-bindings")]
+fn finish_gui_run(
+    state: &mut HostState,
+    outcome: std::result::Result<i32, wasmtime::Error>,
+) -> Result<RunOutcome> {
+    {
         // Write the usability report before anything else can return, so a run
         // that trapped or ran out of fuel still reports what it saw. An app
         // that dies halfway is exactly the kind this stage exists to describe,
@@ -1523,7 +1567,7 @@ impl Runtime {
                 EPOCH_PUMPS.load(std::sync::atomic::Ordering::Relaxed)
             );
         }
-        if let Some(gui) = store.data().phase3_gui.as_ref() {
+        if let Some(gui) = state.phase3_gui.as_ref() {
             if let (Some(report), Some(path)) =
                 (gui.usability_report(), gui.usability_report_path())
             {
@@ -1534,7 +1578,7 @@ impl Runtime {
         }
         // After the report, which reads the windows; before the process
         // winds down, which must not be what drops them (K-881).
-        if let Some(gui) = store.data_mut().phase3_gui.as_mut() {
+        if let Some(gui) = state.phase3_gui.as_mut() {
             gui.close_open_windows();
         }
 

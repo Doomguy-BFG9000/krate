@@ -89,6 +89,35 @@ fn listing_slot(fd: i32) -> &'static mut Option<Vec<(String, u8)>> {
     &mut listings[i]
 }
 static mut ARGS: Vec<String> = Vec::new();
+
+/// One lock over the descriptor table, for an app built with threads
+/// (IC-929): two threads opening or writing files at once would otherwise
+/// race on `FDS`. Uncontended it is one atomic swap, and a single-threaded
+/// build compiles it to nothing that waits.
+static FD_LOCK: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
+struct FdGuard;
+
+impl Drop for FdGuard {
+    fn drop(&mut self) {
+        FD_LOCK.store(false, core::sync::atomic::Ordering::Release);
+    }
+}
+
+fn lock() -> FdGuard {
+    while FD_LOCK
+        .compare_exchange_weak(
+            false,
+            true,
+            core::sync::atomic::Ordering::Acquire,
+            core::sync::atomic::Ordering::Relaxed,
+        )
+        .is_err()
+    {
+        core::hint::spin_loop();
+    }
+    FdGuard
+}
 static mut STARTED: bool = false;
 static mut EXIT_CODE: Option<i32> = None;
 
@@ -370,6 +399,7 @@ pub unsafe extern "C" fn __imported_wasi_snapshot_preview1_fd_prestat_get(
     fd: i32,
     out: i32,
 ) -> i32 {
+    let _guard = lock();
     if fd == 3 {
         *(out as usize as *mut u8) = 0;
         put_u32(out + 4, 1);
@@ -384,6 +414,7 @@ pub unsafe extern "C" fn __imported_wasi_snapshot_preview1_fd_prestat_dir_name(
     path: i32,
     len: i32,
 ) -> i32 {
+    let _guard = lock();
     if fd == 3 && len >= 1 {
         *(path as usize as *mut u8) = b'/';
         return SUCCESS;
@@ -393,6 +424,7 @@ pub unsafe extern "C" fn __imported_wasi_snapshot_preview1_fd_prestat_dir_name(
 
 #[no_mangle]
 pub unsafe extern "C" fn __imported_wasi_snapshot_preview1_fd_fdstat_get(fd: i32, out: i32) -> i32 {
+    let _guard = lock();
     let Some(e) = entry(fd) else { return EBADF };
     core::ptr::write_bytes(out as usize as *mut u8, 0, 24);
     let ft = match e {
@@ -419,6 +451,7 @@ pub unsafe extern "C" fn __imported_wasi_snapshot_preview1_fd_fdstat_set_flags(
     _fd: i32,
     _f: i32,
 ) -> i32 {
+    let _guard = lock();
     SUCCESS
 }
 
@@ -428,11 +461,13 @@ pub unsafe extern "C" fn __imported_wasi_snapshot_preview1_fd_fdstat_set_rights(
     _b: i64,
     _i: i64,
 ) -> i32 {
+    let _guard = lock();
     SUCCESS
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn __imported_wasi_snapshot_preview1_fd_close(fd: i32) -> i32 {
+    let _guard = lock();
     match fds().get_mut(fd as usize) {
         Some(slot @ Some(_)) if fd > 2 => {
             *slot = None;
@@ -446,6 +481,16 @@ pub unsafe extern "C" fn __imported_wasi_snapshot_preview1_fd_close(fd: i32) -> 
 
 #[no_mangle]
 pub unsafe extern "C" fn __imported_wasi_snapshot_preview1_fd_write(
+    fd: i32,
+    iovs: i32,
+    n: i32,
+    written: i32,
+) -> i32 {
+    let _guard = lock();
+    fd_write_unlocked(fd, iovs, n, written)
+}
+
+unsafe fn fd_write_unlocked(
     fd: i32,
     iovs: i32,
     n: i32,
@@ -489,6 +534,16 @@ pub unsafe extern "C" fn __imported_wasi_snapshot_preview1_fd_write(
 
 #[no_mangle]
 pub unsafe extern "C" fn __imported_wasi_snapshot_preview1_fd_read(
+    fd: i32,
+    iovs: i32,
+    n: i32,
+    read: i32,
+) -> i32 {
+    let _guard = lock();
+    fd_read_unlocked(fd, iovs, n, read)
+}
+
+unsafe fn fd_read_unlocked(
     fd: i32,
     iovs: i32,
     n: i32,
@@ -541,6 +596,7 @@ pub unsafe extern "C" fn __imported_wasi_snapshot_preview1_fd_seek(
     whence: i32,
     out: i32,
 ) -> i32 {
+    let _guard = lock();
     let Some(Entry::File { file, pos, .. }) = entry(fd) else {
         return EBADF;
     };
@@ -568,6 +624,7 @@ pub unsafe extern "C" fn __imported_wasi_snapshot_preview1_fd_seek(
 
 #[no_mangle]
 pub unsafe extern "C" fn __imported_wasi_snapshot_preview1_fd_tell(fd: i32, out: i32) -> i32 {
+    let _guard = lock();
     let Some(Entry::File { pos, .. }) = entry(fd) else {
         return EBADF;
     };
@@ -583,6 +640,7 @@ pub unsafe extern "C" fn __imported_wasi_snapshot_preview1_fd_pread(
     offset: i64,
     read: i32,
 ) -> i32 {
+    let _guard = lock();
     let Some(Entry::File { file, pos, .. }) = entry(fd) else {
         return EBADF;
     };
@@ -591,7 +649,7 @@ pub unsafe extern "C" fn __imported_wasi_snapshot_preview1_fd_pread(
         return errno(&err);
     }
     *pos = offset as u64;
-    let r = __imported_wasi_snapshot_preview1_fd_read(fd, iovs, n, read);
+    let r = fd_read_unlocked(fd, iovs, n, read);
     if let Some(Entry::File { file, pos, .. }) = entry(fd) {
         let _ = file.seek_set(back);
         *pos = back;
@@ -607,6 +665,7 @@ pub unsafe extern "C" fn __imported_wasi_snapshot_preview1_fd_pwrite(
     offset: i64,
     written: i32,
 ) -> i32 {
+    let _guard = lock();
     let Some(Entry::File { file, pos, .. }) = entry(fd) else {
         return EBADF;
     };
@@ -615,7 +674,7 @@ pub unsafe extern "C" fn __imported_wasi_snapshot_preview1_fd_pwrite(
         return errno(&err);
     }
     *pos = offset as u64;
-    let r = __imported_wasi_snapshot_preview1_fd_write(fd, iovs, n, written);
+    let r = fd_write_unlocked(fd, iovs, n, written);
     if let Some(Entry::File { file, pos, .. }) = entry(fd) {
         let _ = file.seek_set(back);
         *pos = back;
@@ -628,6 +687,7 @@ pub unsafe extern "C" fn __imported_wasi_snapshot_preview1_fd_filestat_get(
     fd: i32,
     out: i32,
 ) -> i32 {
+    let _guard = lock();
     match entry(fd) {
         Some(Entry::File { file, .. }) => match file.stat() {
             Ok(st) => {
@@ -656,6 +716,7 @@ pub unsafe extern "C" fn __imported_wasi_snapshot_preview1_path_filestat_get(
     len: i32,
     out: i32,
 ) -> i32 {
+    let _guard = lock();
     let path = match resolve(fd, ptr, len) {
         Ok(p) => p,
         Err(e) => return e,
@@ -698,6 +759,7 @@ pub unsafe extern "C" fn __imported_wasi_snapshot_preview1_path_open(
     fdflags: i32,
     out: i32,
 ) -> i32 {
+    let _guard = lock();
     let path = match resolve(fd, ptr, len) {
         Ok(p) => p,
         Err(e) => return e,
@@ -759,6 +821,7 @@ pub unsafe extern "C" fn __imported_wasi_snapshot_preview1_fd_readdir(
     cookie: i64,
     used: i32,
 ) -> i32 {
+    let _guard = lock();
     let Some(Entry::Dir(path)) = entry(fd) else {
         return EBADF;
     };
@@ -816,6 +879,7 @@ pub unsafe extern "C" fn __imported_wasi_snapshot_preview1_path_create_directory
     ptr: i32,
     len: i32,
 ) -> i32 {
+    let _guard = lock();
     match resolve(fd, ptr, len) {
         Ok(p) => match files::mkdir(&p) {
             Ok(()) => SUCCESS,
@@ -831,6 +895,7 @@ pub unsafe extern "C" fn __imported_wasi_snapshot_preview1_path_remove_directory
     ptr: i32,
     len: i32,
 ) -> i32 {
+    let _guard = lock();
     match resolve(fd, ptr, len) {
         Ok(p) => match files::remove_dir(&p) {
             Ok(()) => SUCCESS,
@@ -846,6 +911,7 @@ pub unsafe extern "C" fn __imported_wasi_snapshot_preview1_path_unlink_file(
     ptr: i32,
     len: i32,
 ) -> i32 {
+    let _guard = lock();
     match resolve(fd, ptr, len) {
         Ok(p) => match files::remove_file(&p) {
             Ok(()) => SUCCESS,
@@ -864,6 +930,7 @@ pub unsafe extern "C" fn __imported_wasi_snapshot_preview1_path_rename(
     b: i32,
     bl: i32,
 ) -> i32 {
+    let _guard = lock();
     let from = match resolve(fd, a, al) {
         Ok(p) => p,
         Err(e) => return e,
@@ -880,6 +947,7 @@ pub unsafe extern "C" fn __imported_wasi_snapshot_preview1_path_rename(
 
 #[no_mangle]
 pub unsafe extern "C" fn __imported_wasi_snapshot_preview1_fd_renumber(fd: i32, to: i32) -> i32 {
+    let _guard = lock();
     let fds = fds();
     let Some(e) = fds.get_mut(fd as usize).and_then(|e| e.take()) else {
         return EBADF;
@@ -894,10 +962,12 @@ pub unsafe extern "C" fn __imported_wasi_snapshot_preview1_fd_renumber(fd: i32, 
 // Calls a sandboxed app answers with "fine" or "not here".
 #[no_mangle]
 pub unsafe extern "C" fn __imported_wasi_snapshot_preview1_fd_sync(_fd: i32) -> i32 {
+    let _guard = lock();
     SUCCESS
 }
 #[no_mangle]
 pub unsafe extern "C" fn __imported_wasi_snapshot_preview1_fd_datasync(_fd: i32) -> i32 {
+    let _guard = lock();
     SUCCESS
 }
 #[no_mangle]
@@ -907,6 +977,7 @@ pub unsafe extern "C" fn __imported_wasi_snapshot_preview1_fd_advise(
     _l: i64,
     _a: i32,
 ) -> i32 {
+    let _guard = lock();
     SUCCESS
 }
 #[no_mangle]
@@ -915,6 +986,7 @@ pub unsafe extern "C" fn __imported_wasi_snapshot_preview1_fd_allocate(
     _o: i64,
     _l: i64,
 ) -> i32 {
+    let _guard = lock();
     SUCCESS
 }
 #[no_mangle]
@@ -922,6 +994,7 @@ pub unsafe extern "C" fn __imported_wasi_snapshot_preview1_fd_filestat_set_size(
     _fd: i32,
     _s: i64,
 ) -> i32 {
+    let _guard = lock();
     ENOTSUP
 }
 #[no_mangle]
@@ -931,6 +1004,7 @@ pub unsafe extern "C" fn __imported_wasi_snapshot_preview1_fd_filestat_set_times
     _m: i64,
     _f: i32,
 ) -> i32 {
+    let _guard = lock();
     SUCCESS
 }
 #[no_mangle]
@@ -943,6 +1017,7 @@ pub unsafe extern "C" fn __imported_wasi_snapshot_preview1_path_filestat_set_tim
     _m: i64,
     _ff: i32,
 ) -> i32 {
+    let _guard = lock();
     SUCCESS
 }
 #[no_mangle]
@@ -955,6 +1030,7 @@ pub unsafe extern "C" fn __imported_wasi_snapshot_preview1_path_link(
     _f: i32,
     _g: i32,
 ) -> i32 {
+    let _guard = lock();
     ENOTSUP
 }
 #[no_mangle]
@@ -966,6 +1042,7 @@ pub unsafe extern "C" fn __imported_wasi_snapshot_preview1_path_readlink(
     _bl: i32,
     _o: i32,
 ) -> i32 {
+    let _guard = lock();
     EINVAL
 }
 #[no_mangle]
@@ -976,6 +1053,7 @@ pub unsafe extern "C" fn __imported_wasi_snapshot_preview1_path_symlink(
     _d: i32,
     _e: i32,
 ) -> i32 {
+    let _guard = lock();
     ENOTSUP
 }
 #[no_mangle]
@@ -1040,4 +1118,36 @@ pub extern "C" fn dlclose(_handle: *mut core::ffi::c_void) -> i32 {
 #[no_mangle]
 pub extern "C" fn dlerror() -> *const core::ffi::c_char {
     DL_ERROR.as_ptr() as *const core::ffi::c_char
+}
+
+// ---- threads (IC-929) -----------------------------------------------------
+
+/// How many threads the machine runs at once, from the host. Only a threaded
+/// build imports it; a single-threaded app's imports are unchanged.
+#[cfg(krate_threads)]
+#[link(wasm_import_module = "krate:thread")]
+extern "C" {
+    #[link_name = "available-parallelism"]
+    fn krate_available_parallelism() -> i32;
+}
+
+/// `sysconf`, for a threaded build. wasi-libc answers the processor count
+/// with -1, so Rust's `available_parallelism` reported Unsupported and rayon,
+/// tokio and Bevy each sized their pools at one thread. The other names keep
+/// wasi-libc's answers.
+#[cfg(krate_threads)]
+#[no_mangle]
+pub unsafe extern "C" fn sysconf(name: i32) -> i32 {
+    const SC_CLK_TCK: i32 = 2;
+    const SC_OPEN_MAX: i32 = 4;
+    const SC_PAGE_SIZE: i32 = 30;
+    const SC_NPROCESSORS_CONF: i32 = 83;
+    const SC_NPROCESSORS_ONLN: i32 = 84;
+    match name {
+        SC_NPROCESSORS_CONF | SC_NPROCESSORS_ONLN => krate_available_parallelism().max(1),
+        SC_PAGE_SIZE => 65536,
+        SC_CLK_TCK => 100,
+        SC_OPEN_MAX => 1024,
+        _ => -1,
+    }
 }

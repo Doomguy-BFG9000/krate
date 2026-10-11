@@ -1,0 +1,22 @@
+[package]
+name = "krate-tokio-probe"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "A tokio multi-thread runtime inside a Krate app (IC-929): tasks on several workers, timers, channels, spawn_blocking."
+
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"] }
+krate = { path = "../../crates/bindings-rust", features = ["std"] }
+krate-c-runtime = { path = "../../crates/c-runtime" }
+wit-bindgen-rt = { version = "0.44.0", features = ["bitflags"] }
+
+[profile.release]
+panic = "abort"
+opt-level = 3
+debug = false

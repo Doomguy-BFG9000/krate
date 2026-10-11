@@ -1,0 +1,11 @@
+[app]
+id = "dev.krate.threads-probe"
+name = "Threads probe"
+version = "0.1.0"
+entry = "app.wasm"
+world = "krate:app/cli@0.1.0"
+
+[[capabilities]]
+cap = "io.stdout"
+rationale = "Print the timings"
+required = true

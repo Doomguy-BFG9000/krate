@@ -11083,3 +11083,103 @@ fn an_app_draws_and_computes_on_the_gpu_and_a_bad_shader_is_refused() {
     assert_eq!(line("lost="), "lost=yes recovered=yes");
     assert!(out.status.success(), "{stdout}{stderr}");
 }
+
+/// A threaded app (IC-929) through the binary a person runs: a core module
+/// over a shared memory, built for wasm32-wasip1-threads, whose `std::thread`,
+/// scoped threads and rayon pool are real OS threads sharing its memory, and
+/// whose processor count comes from the host.
+#[test]
+fn a_threaded_app_runs_its_threads_and_rayon_pool_on_real_cores() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let wasm = dir.path().join("app.wasm");
+    std::fs::write(&wasm, include_bytes!("fixtures/threads-probe.wasm")).expect("probe");
+    let manifest = dir.path().join("manifest.toml");
+    std::fs::write(
+        &manifest,
+        "[app]\nid = \"com.acme.threads\"\nname = \"threads\"\nversion = \"1.0.0\"\n\
+         entry = \"app.wasm\"\nworld = \"krate:app/cli@0.1.0\"\n\n\
+         [[capabilities]]\ncap = \"io.stdout\"\nrationale = \"print\"\nrequired = true\n",
+    )
+    .expect("manifest");
+    let out = krate()
+        .arg("run")
+        .arg(&wasm)
+        .arg("--manifest")
+        .arg(&manifest)
+        .arg("--auto-grant")
+        .output()
+        .expect("run");
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(out.status.success(), "{stdout}{stderr}");
+    let cores = std::thread::available_parallelism().map_or(1, |n| n.get());
+    assert!(
+        stdout.contains(&format!("available_parallelism: Ok({cores})")),
+        "the app is told this machine's {cores} cores: {stdout}"
+    );
+    assert!(
+        stdout.contains("std::thread ThreadId(2) returned"),
+        "a std::thread ran and was joined: {stdout}"
+    );
+    assert!(
+        stdout.contains("4 scoped threads counted 400000"),
+        "four scoped threads shared one counter: {stdout}"
+    );
+    assert!(
+        stdout.contains(&format!("rayon on {cores} threads"))
+            && stdout.contains("same answer: true"),
+        "rayon sized its pool from the cores and agreed with one thread: {stdout}"
+    );
+}
+
+/// A tokio multi-thread runtime inside a Krate app (IC-929): tasks spread over
+/// worker threads, a channel between tasks, a timer and spawn_blocking.
+#[test]
+fn a_tokio_multi_thread_runtime_runs_inside_an_app() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let wasm = dir.path().join("app.wasm");
+    std::fs::write(&wasm, include_bytes!("fixtures/tokio-probe.wasm")).expect("probe");
+    let manifest = dir.path().join("manifest.toml");
+    std::fs::write(
+        &manifest,
+        "[app]\nid = \"com.acme.tokio\"\nname = \"tokio\"\nversion = \"1.0.0\"\n\
+         entry = \"app.wasm\"\nworld = \"krate:app/cli@0.1.0\"\n\n\
+         [[capabilities]]\ncap = \"io.stdout\"\nrationale = \"print\"\nrequired = true\n\n\
+         [[capabilities]]\ncap = \"random.bytes\"\nrationale = \"seed\"\nrequired = true\n",
+    )
+    .expect("manifest");
+    let out = krate()
+        .arg("run")
+        .arg(&wasm)
+        .arg("--manifest")
+        .arg(&manifest)
+        .arg("--auto-grant")
+        .output()
+        .expect("run");
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(out.status.success(), "{stdout}{stderr}");
+    let workers: usize = stdout
+        .split(" worker threads")
+        .next()
+        .and_then(|s| s.rsplit(' ').next())
+        .and_then(|n| n.parse().ok())
+        .unwrap_or_else(|| panic!("no worker count in: {stdout}{stderr}"));
+    let cores = std::thread::available_parallelism().map_or(1, |n| n.get());
+    assert!(
+        workers > 1 || cores == 1,
+        "tasks ran on more than one worker: {stdout}"
+    );
+    assert!(stdout.contains("same answer: true"), "{stdout}");
+    assert!(stdout.contains("channel got [0, 1, 2, 3, 4]"), "{stdout}");
+    let timer: u64 = stdout
+        .split("a 100 ms timer took ")
+        .nth(1)
+        .and_then(|s| s.split(' ').next())
+        .and_then(|n| n.parse().ok())
+        .unwrap_or_else(|| panic!("no timer line in: {stdout}"));
+    assert!(
+        (100..2000).contains(&timer),
+        "the timer waited its time: {timer} ms"
+    );
+}

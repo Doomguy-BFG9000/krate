@@ -11,3 +11,8 @@ description = "Run C and C++ programs built with wasi-sdk as Krate apps: their W
 krate = { path = "../bindings-rust" }
 # The guard the SDK's exports already use to run static constructors once.
 wit-bindgen-rt = "0.44.0"
+
+[lints.rust]
+# `--cfg krate_threads`: the app is built for wasm32-wasip1-threads (IC-929);
+# set by the build, since rustc gives no stable cfg for wasm atomics.
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(krate_threads)'] }
