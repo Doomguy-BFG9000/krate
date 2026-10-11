@@ -146,11 +146,13 @@ struct SurfaceEntry {
 /// taking turns (K-405). The cost is one frame of latency.
 struct Readback {
     size: u64,
-    buffers: [wgpu::Buffer; 2],
+    buffers: Vec<wgpu::Buffer>,
     /// The buffer the next frame is copied into.
     next: usize,
-    /// The frame copied at the previous present, not yet handed over.
-    pending: Option<PendingFrame>,
+    /// Frames copied at earlier presents, not yet handed over, oldest first.
+    pending: std::collections::VecDeque<PendingFrame>,
+    /// Whether a frame has been handed over since the ring was made.
+    shown: bool,
 }
 
 struct PendingFrame {
@@ -2457,12 +2459,32 @@ impl g::Host for Phase3GuiHost {
         if std::env::var_os("KRATE_GPU_UNPACED").is_none() {
             self.pace_frame();
         }
+        // Headless and `--shoot` runs show the frame just drawn, waiting for
+        // it, so a picture is of exactly that frame. A window shows the frame
+        // before, so the GPU finishes one while the app draws the next:
+        // Veloren in the world went from 37-51 fps to 47-57 on this M4, its
+        // frame work from 20-27 ms to 5-19. KRATE_PRESENT_LAG overrides.
+        let lag = std::env::var("KRATE_PRESENT_LAG")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(if self.headless || self.screenshot.is_some() {
+                0
+            } else {
+                1
+            })
+            .min(3);
         let (window, widget, image) = {
             let gpu = self.gpu.get_mut();
-            match gpu.read_frame(surface) {
+            match gpu.read_frame(surface, lag) {
                 Ok(found) => found,
                 Err(e) => return Ok(Err(e)),
             }
+        };
+        let Some(image) = image else {
+            // The ring is filling: the window keeps the frame it has.
+            self.frame_ended.set(true);
+            self.end_stepped_frame();
+            return Ok(Ok(()));
         };
         // A GPU engine's first presents come before its pipelines and assets
         // exist, so they are one flat colour (black, or the clear colour). A
@@ -2501,6 +2523,25 @@ impl Phase3GuiHost {
     /// Whether `--shoot` asked for a picture that has not been taken yet.
     fn shot_pending(&self) -> bool {
         self.screenshot.is_some() && !self.screenshot_taken.get()
+    }
+}
+
+/// The frame a present hands over: the one copied `lag` presents ago. On the
+/// first present there is none, so the frame just copied is (and is waited
+/// for); while the ring fills after it, none is, and the window keeps the
+/// frame it has.
+fn hand_over<T>(
+    pending: &mut std::collections::VecDeque<T>,
+    shown: &mut bool,
+    copied: T,
+    lag: usize,
+) -> Option<T> {
+    pending.push_back(copied);
+    if pending.len() > lag || !*shown {
+        *shown = true;
+        pending.pop_front()
+    } else {
+        None
     }
 }
 
@@ -2836,7 +2877,16 @@ impl GpuState {
     }
 
     /// Copy a surface's current frame out as RGBA for the canvas.
-    fn read_frame(&mut self, surface: u64) -> GpuResult<(WindowId, WidgetId, ImagePixels)> {
+    /// Copy the surface's frame out and hand over the one copied `lag`
+    /// presents ago (`None` while the ring fills, after the first frame).
+    /// At 0 every present waits for the GPU to finish the frame just drawn,
+    /// and the app cannot draw the next meanwhile; one behind lets the GPU
+    /// finish a frame while the app draws the next; two lets it hold two.
+    fn read_frame(
+        &mut self,
+        surface: u64,
+        lag: usize,
+    ) -> GpuResult<(WindowId, WidgetId, Option<ImagePixels>)> {
         let (window, widget, config, texture, frame) = match self.objects.get(&surface) {
             Some(Entry {
                 obj: Obj::Surface(s),
@@ -2865,7 +2915,7 @@ impl GpuState {
             else {
                 return Err(invalid(surface, "surface"));
             };
-            if s.readback.as_ref().map(|r| r.size) != Some(size) {
+            if s.readback.as_ref().map(|r| (r.size, r.buffers.len())) != Some((size, lag + 1)) {
                 let buffer = || {
                     device.create_buffer(&wgpu::BufferDescriptor {
                         label: Some("krate surface readback"),
@@ -2876,9 +2926,10 @@ impl GpuState {
                 };
                 s.readback = Some(Readback {
                     size,
-                    buffers: [buffer(), buffer()],
+                    buffers: (0..=lag).map(|_| buffer()).collect(),
                     next: 0,
-                    pending: None,
+                    pending: Default::default(),
+                    shown: false,
                 });
             }
             let Some(ring) = s.readback.as_mut() else {
@@ -2932,15 +2983,9 @@ impl GpuState {
             submission,
             mapped,
         };
-        ring.next = 1 - slot;
-        // Hand over the frame copied one present ago; on the first present
-        // there is none, so this one is waited for.
-        let shown = match ring.pending.replace(copied) {
-            Some(previous) => previous,
-            None => match ring.pending.take() {
-                Some(this) => this,
-                None => return Err(t::GpuError::Internal("no frame to present".to_string())),
-            },
+        ring.next = (slot + 1) % ring.buffers.len();
+        let Some(shown) = hand_over(&mut ring.pending, &mut ring.shown, copied, lag) else {
+            return Ok((window, widget, None));
         };
         let readback = ring.buffers[shown.slot].clone();
         let _ = device.poll(wgpu::PollType::Wait {
@@ -2987,13 +3032,31 @@ impl GpuState {
         let _ = config.usage;
         let image = ImagePixels::new(width, height, rgba)
             .map_err(|error| t::GpuError::Internal(error.to_string()))?;
-        Ok((window, widget, image))
+        Ok((window, widget, Some(image)))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_present_hands_over_the_frame_drawn_lag_presents_ago() {
+        let run = |lag: usize, frames: u32| {
+            let (mut pending, mut shown) = (std::collections::VecDeque::new(), false);
+            (1..=frames)
+                .map(|f| super::hand_over(&mut pending, &mut shown, f, lag))
+                .collect::<Vec<_>>()
+        };
+        // None behind (headless, --shoot): each present waits for and shows
+        // the frame just drawn, so a picture is of that frame.
+        assert_eq!(run(0, 3), [Some(1), Some(2), Some(3)]);
+        // One behind: the first frame waits for itself, then each present
+        // shows the frame before it.
+        assert_eq!(run(1, 4), [Some(1), None, Some(2), Some(3)]);
+        // Two behind: the GPU may hold two frames.
+        assert_eq!(run(2, 6), [Some(1), None, None, Some(2), Some(3), Some(4)]);
+    }
 
     #[test]
     fn a_flat_frame_is_uniform_and_a_drawn_one_is_not() {
