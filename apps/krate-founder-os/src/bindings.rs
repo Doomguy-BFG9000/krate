@@ -28309,6 +28309,570 @@ pub mod krate {
                 }
             }
         }
+        /// A web page shown inside the app (IC-927): a help page, a checkout, a
+        /// document, in a box of the app's window, in the system's own web view.
+        ///
+        /// The page goes only where the app may go: its first address and every
+        /// link it follows must be https on a host the person granted the app
+        /// `net.connect` to; anything else is refused and said in `problem`. The
+        /// page keeps no cookies or storage between openings and sees nothing of
+        /// the app's own data, and its scripts have no way to reach the app.
+        #[allow(dead_code, async_fn_in_trait, unused_imports, clippy::all)]
+        pub mod web_page {
+            #[used]
+            #[doc(hidden)]
+            static __FORCE_SECTION_REF: fn() = super::super::super::__link_custom_section_describing_imports;
+            use super::super::super::_rt;
+            pub type UiError = super::super::super::krate::ui::types::UiError;
+            /// Where a page is and what it is doing.
+            #[derive(Clone)]
+            pub struct PageState {
+                /// The address it shows now.
+                pub address: _rt::String,
+                /// The page's title, once it has one.
+                pub title: _rt::String,
+                /// True while it loads.
+                pub loading: bool,
+                /// Why the last address was not shown -- a host the app may not open,
+                /// a page that failed to load -- or empty.
+                pub problem: _rt::String,
+            }
+            impl ::core::fmt::Debug for PageState {
+                fn fmt(
+                    &self,
+                    f: &mut ::core::fmt::Formatter<'_>,
+                ) -> ::core::fmt::Result {
+                    f.debug_struct("PageState")
+                        .field("address", &self.address)
+                        .field("title", &self.title)
+                        .field("loading", &self.loading)
+                        .field("problem", &self.problem)
+                        .finish()
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Show `address` in a box of the window: `x`, `y`, `width` and `height`
+            /// in points, as the app lays it out. Refused when the address is not
+            /// https on a host the app was granted `net.connect` to.
+            pub fn open(
+                window: u64,
+                address: &str,
+                x: f32,
+                y: f32,
+                width: f32,
+                height: f32,
+            ) -> Result<u64, UiError> {
+                unsafe {
+                    #[repr(align(8))]
+                    struct RetArea(
+                        [::core::mem::MaybeUninit<
+                            u8,
+                        >; 16 + 2 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let mut ret_area = RetArea(
+                        [::core::mem::MaybeUninit::uninit(); 16
+                            + 2 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let vec0 = address;
+                    let ptr0 = vec0.as_ptr().cast::<u8>();
+                    let len0 = vec0.len();
+                    let ptr1 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:ui/web-page@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "open"]
+                        fn wit_import2(
+                            _: i64,
+                            _: *mut u8,
+                            _: usize,
+                            _: f32,
+                            _: f32,
+                            _: f32,
+                            _: f32,
+                            _: *mut u8,
+                        );
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import2(
+                        _: i64,
+                        _: *mut u8,
+                        _: usize,
+                        _: f32,
+                        _: f32,
+                        _: f32,
+                        _: f32,
+                        _: *mut u8,
+                    ) {
+                        unreachable!()
+                    }
+                    unsafe {
+                        wit_import2(
+                            _rt::as_i64(&window),
+                            ptr0.cast_mut(),
+                            len0,
+                            _rt::as_f32(&x),
+                            _rt::as_f32(&y),
+                            _rt::as_f32(&width),
+                            _rt::as_f32(&height),
+                            ptr1,
+                        )
+                    };
+                    let l3 = i32::from(*ptr1.add(0).cast::<u8>());
+                    let result13 = match l3 {
+                        0 => {
+                            let e = {
+                                let l4 = *ptr1.add(8).cast::<i64>();
+                                l4 as u64
+                            };
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l5 = i32::from(*ptr1.add(8).cast::<u8>());
+                                use super::super::super::krate::ui::types::UiError as V12;
+                                let v12 = match l5 {
+                                    0 => V12::PermissionDenied,
+                                    1 => V12::InvalidWindow,
+                                    2 => V12::InvalidWidget,
+                                    3 => {
+                                        let e12 = {
+                                            let l6 = *ptr1
+                                                .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l7 = *ptr1
+                                                .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len8 = l7;
+                                            let bytes8 = _rt::Vec::from_raw_parts(
+                                                l6.cast(),
+                                                len8,
+                                                len8,
+                                            );
+                                            _rt::string_lift(bytes8)
+                                        };
+                                        V12::Unsupported(e12)
+                                    }
+                                    n => {
+                                        debug_assert_eq!(n, 4, "invalid enum discriminant");
+                                        let e12 = {
+                                            let l9 = *ptr1
+                                                .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l10 = *ptr1
+                                                .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len11 = l10;
+                                            let bytes11 = _rt::Vec::from_raw_parts(
+                                                l9.cast(),
+                                                len11,
+                                                len11,
+                                            );
+                                            _rt::string_lift(bytes11)
+                                        };
+                                        V12::Platform(e12)
+                                    }
+                                };
+                                v12
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    };
+                    result13
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Move or resize its box (the screen turned, the layout changed).
+            pub fn place(
+                page: u64,
+                x: f32,
+                y: f32,
+                width: f32,
+                height: f32,
+            ) -> Result<(), UiError> {
+                unsafe {
+                    #[cfg_attr(target_pointer_width = "64", repr(align(8)))]
+                    #[cfg_attr(target_pointer_width = "32", repr(align(4)))]
+                    struct RetArea(
+                        [::core::mem::MaybeUninit<
+                            u8,
+                        >; 4 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let mut ret_area = RetArea(
+                        [::core::mem::MaybeUninit::uninit(); 4
+                            * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:ui/web-page@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "place"]
+                        fn wit_import1(
+                            _: i64,
+                            _: f32,
+                            _: f32,
+                            _: f32,
+                            _: f32,
+                            _: *mut u8,
+                        );
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import1(
+                        _: i64,
+                        _: f32,
+                        _: f32,
+                        _: f32,
+                        _: f32,
+                        _: *mut u8,
+                    ) {
+                        unreachable!()
+                    }
+                    unsafe {
+                        wit_import1(
+                            _rt::as_i64(&page),
+                            _rt::as_f32(&x),
+                            _rt::as_f32(&y),
+                            _rt::as_f32(&width),
+                            _rt::as_f32(&height),
+                            ptr0,
+                        )
+                    };
+                    let l2 = i32::from(*ptr0.add(0).cast::<u8>());
+                    let result11 = match l2 {
+                        0 => {
+                            let e = ();
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l3 = i32::from(
+                                    *ptr0.add(::core::mem::size_of::<*const u8>()).cast::<u8>(),
+                                );
+                                use super::super::super::krate::ui::types::UiError as V10;
+                                let v10 = match l3 {
+                                    0 => V10::PermissionDenied,
+                                    1 => V10::InvalidWindow,
+                                    2 => V10::InvalidWidget,
+                                    3 => {
+                                        let e10 = {
+                                            let l4 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l5 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len6 = l5;
+                                            let bytes6 = _rt::Vec::from_raw_parts(
+                                                l4.cast(),
+                                                len6,
+                                                len6,
+                                            );
+                                            _rt::string_lift(bytes6)
+                                        };
+                                        V10::Unsupported(e10)
+                                    }
+                                    n => {
+                                        debug_assert_eq!(n, 4, "invalid enum discriminant");
+                                        let e10 = {
+                                            let l7 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l8 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len9 = l8;
+                                            let bytes9 = _rt::Vec::from_raw_parts(
+                                                l7.cast(),
+                                                len9,
+                                                len9,
+                                            );
+                                            _rt::string_lift(bytes9)
+                                        };
+                                        V10::Platform(e10)
+                                    }
+                                };
+                                v10
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    };
+                    result11
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Go to another address, judged as `open` judges the first.
+            pub fn go(page: u64, address: &str) -> Result<(), UiError> {
+                unsafe {
+                    #[cfg_attr(target_pointer_width = "64", repr(align(8)))]
+                    #[cfg_attr(target_pointer_width = "32", repr(align(4)))]
+                    struct RetArea(
+                        [::core::mem::MaybeUninit<
+                            u8,
+                        >; 4 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let mut ret_area = RetArea(
+                        [::core::mem::MaybeUninit::uninit(); 4
+                            * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let vec0 = address;
+                    let ptr0 = vec0.as_ptr().cast::<u8>();
+                    let len0 = vec0.len();
+                    let ptr1 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:ui/web-page@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "go"]
+                        fn wit_import2(_: i64, _: *mut u8, _: usize, _: *mut u8);
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import2(
+                        _: i64,
+                        _: *mut u8,
+                        _: usize,
+                        _: *mut u8,
+                    ) {
+                        unreachable!()
+                    }
+                    unsafe {
+                        wit_import2(_rt::as_i64(&page), ptr0.cast_mut(), len0, ptr1)
+                    };
+                    let l3 = i32::from(*ptr1.add(0).cast::<u8>());
+                    let result12 = match l3 {
+                        0 => {
+                            let e = ();
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l4 = i32::from(
+                                    *ptr1.add(::core::mem::size_of::<*const u8>()).cast::<u8>(),
+                                );
+                                use super::super::super::krate::ui::types::UiError as V11;
+                                let v11 = match l4 {
+                                    0 => V11::PermissionDenied,
+                                    1 => V11::InvalidWindow,
+                                    2 => V11::InvalidWidget,
+                                    3 => {
+                                        let e11 = {
+                                            let l5 = *ptr1
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l6 = *ptr1
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len7 = l6;
+                                            let bytes7 = _rt::Vec::from_raw_parts(
+                                                l5.cast(),
+                                                len7,
+                                                len7,
+                                            );
+                                            _rt::string_lift(bytes7)
+                                        };
+                                        V11::Unsupported(e11)
+                                    }
+                                    n => {
+                                        debug_assert_eq!(n, 4, "invalid enum discriminant");
+                                        let e11 = {
+                                            let l8 = *ptr1
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l9 = *ptr1
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len10 = l9;
+                                            let bytes10 = _rt::Vec::from_raw_parts(
+                                                l8.cast(),
+                                                len10,
+                                                len10,
+                                            );
+                                            _rt::string_lift(bytes10)
+                                        };
+                                        V11::Platform(e11)
+                                    }
+                                };
+                                v11
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    };
+                    result12
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Back to the page before, when there is one.
+            pub fn back(page: u64) -> () {
+                unsafe {
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:ui/web-page@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "back"]
+                        fn wit_import0(_: i64);
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import0(_: i64) {
+                        unreachable!()
+                    }
+                    unsafe { wit_import0(_rt::as_i64(&page)) };
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Where it is and what it is doing.
+            pub fn state(page: u64) -> Result<PageState, UiError> {
+                unsafe {
+                    #[cfg_attr(target_pointer_width = "64", repr(align(8)))]
+                    #[cfg_attr(target_pointer_width = "32", repr(align(4)))]
+                    struct RetArea(
+                        [::core::mem::MaybeUninit<
+                            u8,
+                        >; 8 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let mut ret_area = RetArea(
+                        [::core::mem::MaybeUninit::uninit(); 8
+                            * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:ui/web-page@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "state"]
+                        fn wit_import1(_: i64, _: *mut u8);
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import1(_: i64, _: *mut u8) {
+                        unreachable!()
+                    }
+                    unsafe { wit_import1(_rt::as_i64(&page), ptr0) };
+                    let l2 = i32::from(*ptr0.add(0).cast::<u8>());
+                    let result21 = match l2 {
+                        0 => {
+                            let e = {
+                                let l3 = *ptr0
+                                    .add(::core::mem::size_of::<*const u8>())
+                                    .cast::<*mut u8>();
+                                let l4 = *ptr0
+                                    .add(2 * ::core::mem::size_of::<*const u8>())
+                                    .cast::<usize>();
+                                let len5 = l4;
+                                let bytes5 = _rt::Vec::from_raw_parts(
+                                    l3.cast(),
+                                    len5,
+                                    len5,
+                                );
+                                let l6 = *ptr0
+                                    .add(3 * ::core::mem::size_of::<*const u8>())
+                                    .cast::<*mut u8>();
+                                let l7 = *ptr0
+                                    .add(4 * ::core::mem::size_of::<*const u8>())
+                                    .cast::<usize>();
+                                let len8 = l7;
+                                let bytes8 = _rt::Vec::from_raw_parts(
+                                    l6.cast(),
+                                    len8,
+                                    len8,
+                                );
+                                let l9 = i32::from(
+                                    *ptr0
+                                        .add(5 * ::core::mem::size_of::<*const u8>())
+                                        .cast::<u8>(),
+                                );
+                                let l10 = *ptr0
+                                    .add(6 * ::core::mem::size_of::<*const u8>())
+                                    .cast::<*mut u8>();
+                                let l11 = *ptr0
+                                    .add(7 * ::core::mem::size_of::<*const u8>())
+                                    .cast::<usize>();
+                                let len12 = l11;
+                                let bytes12 = _rt::Vec::from_raw_parts(
+                                    l10.cast(),
+                                    len12,
+                                    len12,
+                                );
+                                PageState {
+                                    address: _rt::string_lift(bytes5),
+                                    title: _rt::string_lift(bytes8),
+                                    loading: _rt::bool_lift(l9 as u8),
+                                    problem: _rt::string_lift(bytes12),
+                                }
+                            };
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l13 = i32::from(
+                                    *ptr0.add(::core::mem::size_of::<*const u8>()).cast::<u8>(),
+                                );
+                                use super::super::super::krate::ui::types::UiError as V20;
+                                let v20 = match l13 {
+                                    0 => V20::PermissionDenied,
+                                    1 => V20::InvalidWindow,
+                                    2 => V20::InvalidWidget,
+                                    3 => {
+                                        let e20 = {
+                                            let l14 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l15 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len16 = l15;
+                                            let bytes16 = _rt::Vec::from_raw_parts(
+                                                l14.cast(),
+                                                len16,
+                                                len16,
+                                            );
+                                            _rt::string_lift(bytes16)
+                                        };
+                                        V20::Unsupported(e20)
+                                    }
+                                    n => {
+                                        debug_assert_eq!(n, 4, "invalid enum discriminant");
+                                        let e20 = {
+                                            let l17 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l18 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len19 = l18;
+                                            let bytes19 = _rt::Vec::from_raw_parts(
+                                                l17.cast(),
+                                                len19,
+                                                len19,
+                                            );
+                                            _rt::string_lift(bytes19)
+                                        };
+                                        V20::Platform(e20)
+                                    }
+                                };
+                                v20
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    };
+                    result21
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Take it away.
+            pub fn close(page: u64) -> () {
+                unsafe {
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:ui/web-page@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "close"]
+                        fn wit_import0(_: i64);
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import0(_: i64) {
+                        unreachable!()
+                    }
+                    unsafe { wit_import0(_rt::as_i64(&page)) };
+                }
+            }
+        }
     }
 }
 #[rustfmt::skip]
@@ -28580,9 +29144,9 @@ pub(crate) use __export_gui_impl as export;
 )]
 #[doc(hidden)]
 #[allow(clippy::octal_escapes)]
-pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 17990] = *b"\
-\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\xcb\x8b\x01\x01A\x02\
-\x01A\xa6\x01\x01B\x04\x01m\x05\x05trace\x05debug\x04info\x04warn\x05error\x04\0\
+pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 18282] = *b"\
+\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\xef\x8d\x01\x01A\x02\
+\x01A\xa8\x01\x01B\x04\x01m\x05\x05trace\x05debug\x04info\x04warn\x05error\x04\0\
 \x09log-level\x03\0\0\x01q\x05\x06closed\0\0\x0binterrupted\0\0\x0eunexpected-eo\
 f\0\0\x0cinvalid-utf8\0\0\x05other\x01s\0\x04\0\x08io-error\x03\0\x02\x03\0\x14k\
 rate:io/types@0.1.0\x05\0\x02\x03\0\0\x08io-error\x01B\x15\x02\x03\x02\x01\x01\x04\
@@ -28851,129 +29415,136 @@ ield\x04\0\x04role\x03\0\x02\x01k\x7f\x01r\x09\x01xv\x01yv\x05widthv\x06heightv\
 role\x03\x05labels\x05values\x07checked\x04\x07enabled\x7f\x04\0\x07element\x03\0\
 \x05\x01p\x06\x01j\0\x01\x01\x01@\x02\x06windoww\x08elements\x07\0\x08\x04\0\x08\
 describe\x01\x09\x01@\0\0\x7f\x04\0\x10screen-reader-on\x01\x0a\x03\0\x1ckrate:u\
-i/accessibility@0.1.0\x05G\x01B\x14\x01r\x04\x01rv\x01gv\x01bv\x01av\x04\0\x05co\
-lor\x03\0\0\x01r\x02\x01xv\x01yv\x04\0\x05point\x03\0\x02\x01r\x02\x05widthv\x06\
-heightv\x04\0\x04size\x03\0\x04\x01r\x04\x05widthv\x06heightv\x06ascentv\x07desc\
-entv\x04\0\x0ctext-metrics\x03\0\x06\x01r\x04\x01xv\x01yv\x05widthv\x06heightv\x04\
-\0\x04rect\x03\0\x08\x01r\x02\x06offsetv\x05color\x01\x04\0\x0dgradient-stop\x03\
-\0\x0a\x01m\x03\x04sans\x05serif\x04mono\x04\0\x0bfont-family\x03\0\x0c\x01r\x04\
-\x06weight{\x06italic\x7f\x0eletter-spacingv\x06family\x0d\x04\0\x0atext-style\x03\
-\0\x0e\x01r\x04\x08top-leftv\x09top-rightv\x0cbottom-rightv\x0bbottom-leftv\x04\0\
-\x0ccorner-radii\x03\0\x10\x01q\x04\x11permission-denied\0\0\x0einvalid-target\0\
-\0\x0bunsupported\x01s\0\x08platform\x01s\0\x04\0\x09gfx-error\x03\0\x12\x03\0\x15\
-krate:gfx/types@0.1.0\x05H\x02\x03\01\x05color\x02\x03\01\x05point\x02\x03\01\x04\
-rect\x02\x03\01\x04size\x02\x03\01\x0ctext-metrics\x02\x03\01\x09gfx-error\x02\x03\
-\01\x0dgradient-stop\x02\x03\01\x0ccorner-radii\x02\x03\01\x0atext-style\x02\x03\
-\01\x0bfont-family\x01BK\x02\x03\x02\x01I\x04\0\x05color\x03\0\0\x02\x03\x02\x01\
-J\x04\0\x05point\x03\0\x02\x02\x03\x02\x01K\x04\0\x04rect\x03\0\x04\x02\x03\x02\x01\
-L\x04\0\x04size\x03\0\x06\x02\x03\x02\x01M\x04\0\x0ctext-metrics\x03\0\x08\x02\x03\
-\x02\x01N\x04\0\x09gfx-error\x03\0\x0a\x02\x03\x02\x01O\x04\0\x0dgradient-stop\x03\
-\0\x0c\x02\x03\x02\x01P\x04\0\x0ccorner-radii\x03\0\x0e\x02\x03\x02\x01Q\x04\0\x0a\
-text-style\x03\0\x10\x02\x03\x02\x01R\x04\0\x0bfont-family\x03\0\x12\x01j\x01w\x01\
-\x0b\x01@\x02\x06windoww\x06widgetw\0\x14\x04\0\x04bind\x01\x15\x01j\x01\x07\x01\
-\x0b\x01@\x01\x06canvasw\0\x16\x04\0\x0bcanvas-size\x01\x17\x01j\0\x01\x0b\x01@\x02\
-\x06canvasw\x04size\x07\0\x18\x04\0\x0fset-design-size\x01\x19\x01@\x05\x06canva\
-sw\x01xv\x01yv\x01wv\x01hv\0\x18\x04\0\x08set-clip\x01\x1a\x01@\x01\x06canvasw\0\
-\x18\x04\0\x0aclear-clip\x01\x1b\x01@\x02\x06canvasw\x04fill\x01\0\x18\x04\0\x05\
-clear\x01\x1c\x01@\x03\x06canvasw\x04area\x05\x04fill\x01\0\x18\x04\0\x09fill-re\
-ct\x01\x1d\x01@\x04\x06canvasw\x04area\x05\x06stroke\x01\x05widthv\0\x18\x04\0\x0b\
-stroke-rect\x01\x1e\x01@\x04\x06canvasw\x04area\x05\x05radii\x0f\x04fill\x01\0\x18\
-\x04\0\x0ffill-round-rect\x01\x1f\x01@\x05\x06canvasw\x04area\x05\x05radii\x0f\x05\
-widthv\x06stroke\x01\0\x18\x04\0\x11stroke-round-rect\x01\x20\x01@\x05\x06canvas\
-w\x04area\x05\x05radii\x0f\x04blurv\x06shadow\x01\0\x18\x04\0\x16drop-shadow-rou\
-nd-rect\x01!\x01p\x0d\x01@\x04\x06canvasw\x04area\x05\x0dangle-degreesv\x05stops\
-\"\0\x18\x04\0\x15linear-gradient-stops\x01#\x01@\x06\x06canvasw\x04texts\x06ori\
-gin\x03\x09font-sizev\x03ink\x01\x05style\x11\0\x18\x04\0\x10draw-text-styled\x01\
-$\x01j\x01\x09\x01\x0b\x01@\x04\x06canvasw\x04texts\x09font-sizev\x05style\x11\0\
-%\x04\0\x13measure-text-styled\x01&\x01@\x07\x06canvasw\x06center\x03\x06radiusv\
-\x0dstart-degreesv\x0dsweep-degreesv\x05widthv\x06stroke\x01\0\x18\x04\0\x0astro\
-ke-arc\x01'\x01p}\x01@\x06\x06canvasw\x04area\x05\x05radii\x0f\x05widthy\x06heig\
-hty\x04rgba(\0\x18\x04\0\x11draw-pixels-round\x01)\x01@\x04\x06canvasw\x06center\
-\x03\x06radiusv\x04fill\x01\0\x18\x04\0\x0bfill-circle\x01*\x01@\x05\x06canvasw\x06\
-center\x03\x06radiusv\x05widthv\x06stroke\x01\0\x18\x04\0\x0dstroke-circle\x01+\x01\
-@\x05\x06canvasw\x06center\x03\x06radiusv\x05inner\x01\x05outer\x01\0\x18\x04\0\x0f\
-radial-gradient\x01,\x01@\x04\x06canvasw\x04area\x05\x03top\x01\x06bottom\x01\0\x18\
-\x04\0\x0flinear-gradient\x01-\x01@\x05\x06canvasw\x04texts\x06origin\x03\x09fon\
-t-sizev\x03ink\x01\0\x18\x04\0\x09draw-text\x01.\x01@\x03\x06canvasw\x04texts\x09\
-font-sizev\0%\x04\0\x0cmeasure-text\x01/\x01@\x05\x06canvasw\x04area\x05\x05widt\
-hy\x06heighty\x04rgba(\0\x18\x04\0\x0bdraw-pixels\x010\x01@\x07\x06canvasw\x06ce\
-nter\x03\x03dst\x07\x05anglev\x05widthy\x06heighty\x04rgba(\0\x18\x04\0\x0bdraw-\
-sprite\x011\x04\0\x07present\x01\x1b\x03\0\x18krate:gfx/canvas2d@0.1.0\x05S\x01B\
-%\x02\x03\x02\x01I\x04\0\x05color\x03\0\0\x02\x03\x02\x01N\x04\0\x09gfx-error\x03\
-\0\x02\x01pv\x01r\x0a\x07ambientv\x08specularv\x09shininessv\x0bfog-densityv\x09\
-fog-color\x01\x0efill-direction\x04\x0afill-color\x01\x0dshadow-radiusv\x0fshado\
-w-softnessv\x08exposurev\x04\0\x08lighting\x03\0\x05\x01j\x01w\x01\x03\x01@\x02\x06\
-windoww\x06widgetw\0\x07\x04\0\x04bind\x01\x08\x01j\0\x01\x03\x01@\x02\x05scenew\
-\x03sky\x01\0\x09\x04\0\x05clear\x01\x0a\x01@\x04\x05scenew\x03eye\x04\x07look-a\
-t\x04\x0bfov-degreesv\0\x09\x04\0\x06camera\x01\x0b\x01@\x02\x05scenew\x09direct\
-ion\x04\0\x09\x04\0\x05light\x01\x0c\x01@\x03\x05scenew\x08vertices\x04\x04tint\x01\
-\0\x09\x04\0\x09triangles\x01\x0d\x01@\x06\x05scenew\x08vertices\x04\x09translat\
-e\x04\x0erotate-degrees\x04\x05scalev\x04tint\x01\0\x09\x04\0\x05place\x01\x0e\x01\
-p}\x01@\x04\x05scenew\x05widthy\x06heighty\x04rgba\x0f\0\x07\x04\0\x0eupload-tex\
-ture\x01\x10\x01@\x05\x05scenew\x08vertices\x04\x03uvs\x04\x07texturew\x04tint\x01\
-\0\x09\x04\0\x08textured\x01\x11\x01@\x06\x05scenew\x08vertices\x04\x07normals\x04\
-\x03uvs\x04\x07texturew\x04tint\x01\0\x09\x04\0\x06smooth\x01\x12\x01@\x02\x05sc\
-enew\x08lighting\x06\0\x09\x04\0\x0cset-lighting\x01\x13\x01@\x08\x05scenew\x08v\
-ertices\x04\x07normals\x04\x08tangents\x04\x03uvs\x04\x07texturew\x0enormal-text\
-urew\x04tint\x01\0\x09\x04\0\x0dnormal-mapped\x01\x14\x04\0\x05unlit\x01\x11\x01\
-@\x02\x05scenew\x07enabled\x7f\0\x09\x04\0\x0fcull-back-faces\x01\x15\x01@\x01\x05\
-scenew\0\x09\x04\0\x07present\x01\x16\x03\0\x17krate:gfx/scene3d@0.1.0\x05T\x01B\
-\x11\x02\x03\x02\x01K\x04\0\x04rect\x03\0\0\x02\x03\x02\x01P\x04\0\x0ccorner-rad\
-ii\x03\0\x02\x02\x03\x02\x01N\x04\0\x09gfx-error\x03\0\x04\x01p}\x01j\x01w\x01\x05\
-\x01@\x04\x06canvasw\x05widthy\x06heighty\x04rgba\x06\0\x07\x04\0\x04keep\x01\x08\
-\x01j\0\x01\x05\x01@\x03\x06canvasw\x05imagew\x04area\x01\0\x09\x04\0\x04draw\x01\
-\x0a\x01@\x04\x06canvasw\x05imagew\x04area\x01\x05radii\x03\0\x09\x04\0\x0adraw-\
-round\x01\x0b\x01@\x02\x06canvasw\x05imagew\x01\0\x04\0\x06forget\x01\x0c\x03\0\x1d\
-krate:gfx/canvas-images@0.1.0\x05U\x01B\x1e\x02\x03\x02\x01K\x04\0\x04rect\x03\0\
-\0\x02\x03\x02\x01P\x04\0\x0ccorner-radii\x03\0\x02\x02\x03\x02\x01N\x04\0\x09gf\
-x-error\x03\0\x04\x01r\x08\x0fposition-millisw\x0fduration-millisw\x05widthy\x06\
-heighty\x05ready\x7f\x07playing\x7f\x05ended\x7f\x07problems\x04\0\x0bvideo-stat\
-e\x03\0\x06\x01j\x01w\x01\x05\x01@\x01\x06sources\0\x08\x04\0\x04open\x01\x09\x01\
-j\0\x01\x05\x01@\x01\x05videow\0\x0a\x04\0\x04play\x01\x0b\x04\0\x05pause\x01\x0b\
-\x01@\x02\x05videow\x06millisw\0\x0a\x04\0\x04seek\x01\x0c\x01@\x02\x05videow\x07\
-looping\x7f\0\x0a\x04\0\x0bset-looping\x01\x0d\x01@\x02\x05videow\x05muted\x7f\0\
-\x0a\x04\0\x09set-muted\x01\x0e\x01j\x01\x07\x01\x05\x01@\x01\x05videow\0\x0f\x04\
-\0\x05state\x01\x10\x01@\x03\x06canvasw\x05videow\x04area\x01\0\x0a\x04\0\x04dra\
-w\x01\x11\x01@\x04\x06canvasw\x05videow\x04area\x01\x05radii\x03\0\x0a\x04\0\x0a\
-draw-round\x01\x12\x01@\x01\x05videow\x01\0\x04\0\x05close\x01\x13\x03\0\x15krat\
-e:gfx/video@0.1.0\x05V\x01B\x06\x01m\x02\x07pcm-s16\x07float32\x04\0\x0dsample-f\
-ormat\x03\0\0\x01r\x04\x0bsample-ratey\x08channels{\x06format\x01\x0dbuffer-fram\
-esy\x04\0\x0dstream-config\x03\0\x02\x01q\x05\x11permission-denied\0\0\x0einvali\
-d-stream\0\0\x12device-unavailable\0\0\x0bunsupported\x01s\0\x08platform\x01s\0\x04\
-\0\x0baudio-error\x03\0\x04\x03\0\x17krate:audio/types@0.1.0\x05W\x02\x03\06\x0b\
-audio-error\x02\x03\06\x0dstream-config\x01B\x15\x02\x03\x02\x01X\x04\0\x0baudio\
--error\x03\0\0\x02\x03\x02\x01Y\x04\0\x0dstream-config\x03\0\x02\x01j\x01w\x01\x01\
-\x01@\x01\x06config\x03\0\x04\x04\0\x04open\x01\x05\x01j\0\x01\x01\x01@\x01\x09s\
-tream-idw\0\x06\x04\0\x05start\x01\x07\x04\0\x04stop\x01\x07\x01p}\x01j\x01y\x01\
+i/accessibility@0.1.0\x05G\x01B\x12\x02\x03\x02\x01&\x04\0\x08ui-error\x03\0\0\x01\
+r\x04\x07addresss\x05titles\x07loading\x7f\x07problems\x04\0\x0apage-state\x03\0\
+\x02\x01j\x01w\x01\x01\x01@\x06\x06windoww\x07addresss\x01xv\x01yv\x05widthv\x06\
+heightv\0\x04\x04\0\x04open\x01\x05\x01j\0\x01\x01\x01@\x05\x04pagew\x01xv\x01yv\
+\x05widthv\x06heightv\0\x06\x04\0\x05place\x01\x07\x01@\x02\x04pagew\x07addresss\
+\0\x06\x04\0\x02go\x01\x08\x01@\x01\x04pagew\x01\0\x04\0\x04back\x01\x09\x01j\x01\
+\x03\x01\x01\x01@\x01\x04pagew\0\x0a\x04\0\x05state\x01\x0b\x04\0\x05close\x01\x09\
+\x03\0\x17krate:ui/web-page@0.1.0\x05H\x01B\x14\x01r\x04\x01rv\x01gv\x01bv\x01av\
+\x04\0\x05color\x03\0\0\x01r\x02\x01xv\x01yv\x04\0\x05point\x03\0\x02\x01r\x02\x05\
+widthv\x06heightv\x04\0\x04size\x03\0\x04\x01r\x04\x05widthv\x06heightv\x06ascen\
+tv\x07descentv\x04\0\x0ctext-metrics\x03\0\x06\x01r\x04\x01xv\x01yv\x05widthv\x06\
+heightv\x04\0\x04rect\x03\0\x08\x01r\x02\x06offsetv\x05color\x01\x04\0\x0dgradie\
+nt-stop\x03\0\x0a\x01m\x03\x04sans\x05serif\x04mono\x04\0\x0bfont-family\x03\0\x0c\
+\x01r\x04\x06weight{\x06italic\x7f\x0eletter-spacingv\x06family\x0d\x04\0\x0atex\
+t-style\x03\0\x0e\x01r\x04\x08top-leftv\x09top-rightv\x0cbottom-rightv\x0bbottom\
+-leftv\x04\0\x0ccorner-radii\x03\0\x10\x01q\x04\x11permission-denied\0\0\x0einva\
+lid-target\0\0\x0bunsupported\x01s\0\x08platform\x01s\0\x04\0\x09gfx-error\x03\0\
+\x12\x03\0\x15krate:gfx/types@0.1.0\x05I\x02\x03\02\x05color\x02\x03\02\x05point\
+\x02\x03\02\x04rect\x02\x03\02\x04size\x02\x03\02\x0ctext-metrics\x02\x03\02\x09\
+gfx-error\x02\x03\02\x0dgradient-stop\x02\x03\02\x0ccorner-radii\x02\x03\02\x0at\
+ext-style\x02\x03\02\x0bfont-family\x01BK\x02\x03\x02\x01J\x04\0\x05color\x03\0\0\
+\x02\x03\x02\x01K\x04\0\x05point\x03\0\x02\x02\x03\x02\x01L\x04\0\x04rect\x03\0\x04\
+\x02\x03\x02\x01M\x04\0\x04size\x03\0\x06\x02\x03\x02\x01N\x04\0\x0ctext-metrics\
+\x03\0\x08\x02\x03\x02\x01O\x04\0\x09gfx-error\x03\0\x0a\x02\x03\x02\x01P\x04\0\x0d\
+gradient-stop\x03\0\x0c\x02\x03\x02\x01Q\x04\0\x0ccorner-radii\x03\0\x0e\x02\x03\
+\x02\x01R\x04\0\x0atext-style\x03\0\x10\x02\x03\x02\x01S\x04\0\x0bfont-family\x03\
+\0\x12\x01j\x01w\x01\x0b\x01@\x02\x06windoww\x06widgetw\0\x14\x04\0\x04bind\x01\x15\
+\x01j\x01\x07\x01\x0b\x01@\x01\x06canvasw\0\x16\x04\0\x0bcanvas-size\x01\x17\x01\
+j\0\x01\x0b\x01@\x02\x06canvasw\x04size\x07\0\x18\x04\0\x0fset-design-size\x01\x19\
+\x01@\x05\x06canvasw\x01xv\x01yv\x01wv\x01hv\0\x18\x04\0\x08set-clip\x01\x1a\x01\
+@\x01\x06canvasw\0\x18\x04\0\x0aclear-clip\x01\x1b\x01@\x02\x06canvasw\x04fill\x01\
+\0\x18\x04\0\x05clear\x01\x1c\x01@\x03\x06canvasw\x04area\x05\x04fill\x01\0\x18\x04\
+\0\x09fill-rect\x01\x1d\x01@\x04\x06canvasw\x04area\x05\x06stroke\x01\x05widthv\0\
+\x18\x04\0\x0bstroke-rect\x01\x1e\x01@\x04\x06canvasw\x04area\x05\x05radii\x0f\x04\
+fill\x01\0\x18\x04\0\x0ffill-round-rect\x01\x1f\x01@\x05\x06canvasw\x04area\x05\x05\
+radii\x0f\x05widthv\x06stroke\x01\0\x18\x04\0\x11stroke-round-rect\x01\x20\x01@\x05\
+\x06canvasw\x04area\x05\x05radii\x0f\x04blurv\x06shadow\x01\0\x18\x04\0\x16drop-\
+shadow-round-rect\x01!\x01p\x0d\x01@\x04\x06canvasw\x04area\x05\x0dangle-degrees\
+v\x05stops\"\0\x18\x04\0\x15linear-gradient-stops\x01#\x01@\x06\x06canvasw\x04te\
+xts\x06origin\x03\x09font-sizev\x03ink\x01\x05style\x11\0\x18\x04\0\x10draw-text\
+-styled\x01$\x01j\x01\x09\x01\x0b\x01@\x04\x06canvasw\x04texts\x09font-sizev\x05\
+style\x11\0%\x04\0\x13measure-text-styled\x01&\x01@\x07\x06canvasw\x06center\x03\
+\x06radiusv\x0dstart-degreesv\x0dsweep-degreesv\x05widthv\x06stroke\x01\0\x18\x04\
+\0\x0astroke-arc\x01'\x01p}\x01@\x06\x06canvasw\x04area\x05\x05radii\x0f\x05widt\
+hy\x06heighty\x04rgba(\0\x18\x04\0\x11draw-pixels-round\x01)\x01@\x04\x06canvasw\
+\x06center\x03\x06radiusv\x04fill\x01\0\x18\x04\0\x0bfill-circle\x01*\x01@\x05\x06\
+canvasw\x06center\x03\x06radiusv\x05widthv\x06stroke\x01\0\x18\x04\0\x0dstroke-c\
+ircle\x01+\x01@\x05\x06canvasw\x06center\x03\x06radiusv\x05inner\x01\x05outer\x01\
+\0\x18\x04\0\x0fradial-gradient\x01,\x01@\x04\x06canvasw\x04area\x05\x03top\x01\x06\
+bottom\x01\0\x18\x04\0\x0flinear-gradient\x01-\x01@\x05\x06canvasw\x04texts\x06o\
+rigin\x03\x09font-sizev\x03ink\x01\0\x18\x04\0\x09draw-text\x01.\x01@\x03\x06can\
+vasw\x04texts\x09font-sizev\0%\x04\0\x0cmeasure-text\x01/\x01@\x05\x06canvasw\x04\
+area\x05\x05widthy\x06heighty\x04rgba(\0\x18\x04\0\x0bdraw-pixels\x010\x01@\x07\x06\
+canvasw\x06center\x03\x03dst\x07\x05anglev\x05widthy\x06heighty\x04rgba(\0\x18\x04\
+\0\x0bdraw-sprite\x011\x04\0\x07present\x01\x1b\x03\0\x18krate:gfx/canvas2d@0.1.\
+0\x05T\x01B%\x02\x03\x02\x01J\x04\0\x05color\x03\0\0\x02\x03\x02\x01O\x04\0\x09g\
+fx-error\x03\0\x02\x01pv\x01r\x0a\x07ambientv\x08specularv\x09shininessv\x0bfog-\
+densityv\x09fog-color\x01\x0efill-direction\x04\x0afill-color\x01\x0dshadow-radi\
+usv\x0fshadow-softnessv\x08exposurev\x04\0\x08lighting\x03\0\x05\x01j\x01w\x01\x03\
+\x01@\x02\x06windoww\x06widgetw\0\x07\x04\0\x04bind\x01\x08\x01j\0\x01\x03\x01@\x02\
+\x05scenew\x03sky\x01\0\x09\x04\0\x05clear\x01\x0a\x01@\x04\x05scenew\x03eye\x04\
+\x07look-at\x04\x0bfov-degreesv\0\x09\x04\0\x06camera\x01\x0b\x01@\x02\x05scenew\
+\x09direction\x04\0\x09\x04\0\x05light\x01\x0c\x01@\x03\x05scenew\x08vertices\x04\
+\x04tint\x01\0\x09\x04\0\x09triangles\x01\x0d\x01@\x06\x05scenew\x08vertices\x04\
+\x09translate\x04\x0erotate-degrees\x04\x05scalev\x04tint\x01\0\x09\x04\0\x05pla\
+ce\x01\x0e\x01p}\x01@\x04\x05scenew\x05widthy\x06heighty\x04rgba\x0f\0\x07\x04\0\
+\x0eupload-texture\x01\x10\x01@\x05\x05scenew\x08vertices\x04\x03uvs\x04\x07text\
+urew\x04tint\x01\0\x09\x04\0\x08textured\x01\x11\x01@\x06\x05scenew\x08vertices\x04\
+\x07normals\x04\x03uvs\x04\x07texturew\x04tint\x01\0\x09\x04\0\x06smooth\x01\x12\
+\x01@\x02\x05scenew\x08lighting\x06\0\x09\x04\0\x0cset-lighting\x01\x13\x01@\x08\
+\x05scenew\x08vertices\x04\x07normals\x04\x08tangents\x04\x03uvs\x04\x07texturew\
+\x0enormal-texturew\x04tint\x01\0\x09\x04\0\x0dnormal-mapped\x01\x14\x04\0\x05un\
+lit\x01\x11\x01@\x02\x05scenew\x07enabled\x7f\0\x09\x04\0\x0fcull-back-faces\x01\
+\x15\x01@\x01\x05scenew\0\x09\x04\0\x07present\x01\x16\x03\0\x17krate:gfx/scene3\
+d@0.1.0\x05U\x01B\x11\x02\x03\x02\x01L\x04\0\x04rect\x03\0\0\x02\x03\x02\x01Q\x04\
+\0\x0ccorner-radii\x03\0\x02\x02\x03\x02\x01O\x04\0\x09gfx-error\x03\0\x04\x01p}\
+\x01j\x01w\x01\x05\x01@\x04\x06canvasw\x05widthy\x06heighty\x04rgba\x06\0\x07\x04\
+\0\x04keep\x01\x08\x01j\0\x01\x05\x01@\x03\x06canvasw\x05imagew\x04area\x01\0\x09\
+\x04\0\x04draw\x01\x0a\x01@\x04\x06canvasw\x05imagew\x04area\x01\x05radii\x03\0\x09\
+\x04\0\x0adraw-round\x01\x0b\x01@\x02\x06canvasw\x05imagew\x01\0\x04\0\x06forget\
+\x01\x0c\x03\0\x1dkrate:gfx/canvas-images@0.1.0\x05V\x01B\x1e\x02\x03\x02\x01L\x04\
+\0\x04rect\x03\0\0\x02\x03\x02\x01Q\x04\0\x0ccorner-radii\x03\0\x02\x02\x03\x02\x01\
+O\x04\0\x09gfx-error\x03\0\x04\x01r\x08\x0fposition-millisw\x0fduration-millisw\x05\
+widthy\x06heighty\x05ready\x7f\x07playing\x7f\x05ended\x7f\x07problems\x04\0\x0b\
+video-state\x03\0\x06\x01j\x01w\x01\x05\x01@\x01\x06sources\0\x08\x04\0\x04open\x01\
+\x09\x01j\0\x01\x05\x01@\x01\x05videow\0\x0a\x04\0\x04play\x01\x0b\x04\0\x05paus\
+e\x01\x0b\x01@\x02\x05videow\x06millisw\0\x0a\x04\0\x04seek\x01\x0c\x01@\x02\x05\
+videow\x07looping\x7f\0\x0a\x04\0\x0bset-looping\x01\x0d\x01@\x02\x05videow\x05m\
+uted\x7f\0\x0a\x04\0\x09set-muted\x01\x0e\x01j\x01\x07\x01\x05\x01@\x01\x05video\
+w\0\x0f\x04\0\x05state\x01\x10\x01@\x03\x06canvasw\x05videow\x04area\x01\0\x0a\x04\
+\0\x04draw\x01\x11\x01@\x04\x06canvasw\x05videow\x04area\x01\x05radii\x03\0\x0a\x04\
+\0\x0adraw-round\x01\x12\x01@\x01\x05videow\x01\0\x04\0\x05close\x01\x13\x03\0\x15\
+krate:gfx/video@0.1.0\x05W\x01B\x06\x01m\x02\x07pcm-s16\x07float32\x04\0\x0dsamp\
+le-format\x03\0\0\x01r\x04\x0bsample-ratey\x08channels{\x06format\x01\x0dbuffer-\
+framesy\x04\0\x0dstream-config\x03\0\x02\x01q\x05\x11permission-denied\0\0\x0ein\
+valid-stream\0\0\x12device-unavailable\0\0\x0bunsupported\x01s\0\x08platform\x01\
+s\0\x04\0\x0baudio-error\x03\0\x04\x03\0\x17krate:audio/types@0.1.0\x05X\x02\x03\
+\07\x0baudio-error\x02\x03\07\x0dstream-config\x01B\x15\x02\x03\x02\x01Y\x04\0\x0b\
+audio-error\x03\0\0\x02\x03\x02\x01Z\x04\0\x0dstream-config\x03\0\x02\x01j\x01w\x01\
+\x01\x01@\x01\x06config\x03\0\x04\x04\0\x04open\x01\x05\x01j\0\x01\x01\x01@\x01\x09\
+stream-idw\0\x06\x04\0\x05start\x01\x07\x04\0\x04stop\x01\x07\x01p}\x01j\x01y\x01\
 \x01\x01@\x02\x09stream-idw\x05bytes\x08\0\x09\x04\0\x05write\x01\x0a\x01@\x02\x09\
 stream-idw\x05bytes\x08\0\x04\x04\0\x0aload-sound\x01\x0b\x01@\x03\x09stream-idw\
 \x05soundw\x04gainv\0\x06\x04\0\x0aplay-sound\x01\x0c\x01@\x02\x09stream-idw\x05\
 soundw\0\x06\x04\0\x0astop-sound\x01\x0d\x03\0\x1akrate:audio/playback@0.1.0\x05\
-Z\x01B\x05\x02\x03\x02\x01X\x04\0\x0baudio-error\x03\0\0\x01j\x01y\x01\x01\x01@\x01\
+[\x01B\x05\x02\x03\x02\x01Y\x04\0\x0baudio-error\x03\0\0\x01j\x01y\x01\x01\x01@\x01\
 \x09stream-idw\0\x02\x04\0\x06queued\x01\x03\x03\0\x20krate:audio/playback-queue\
-@0.1.0\x05[\x01B\x0f\x02\x03\x02\x01X\x04\0\x0baudio-error\x03\0\0\x02\x03\x02\x01\
-Y\x04\0\x0dstream-config\x03\0\x02\x01j\x01w\x01\x01\x01@\x01\x06config\x03\0\x04\
+@0.1.0\x05\\\x01B\x0f\x02\x03\x02\x01Y\x04\0\x0baudio-error\x03\0\0\x02\x03\x02\x01\
+Z\x04\0\x0dstream-config\x03\0\x02\x01j\x01w\x01\x01\x01@\x01\x06config\x03\0\x04\
 \x04\0\x04open\x01\x05\x01j\0\x01\x01\x01@\x01\x09stream-idw\0\x06\x04\0\x05star\
 t\x01\x07\x04\0\x04stop\x01\x07\x01p}\x01j\x01\x08\x01\x01\x01@\x02\x09stream-id\
 w\x09max-bytesy\0\x09\x04\0\x04read\x01\x0a\x03\0\x19krate:audio/capture@0.1.0\x05\
-\\\x01B\x0d\x01m\x01\x05rgba8\x04\0\x0cframe-format\x03\0\0\x01r\x04\x05widthy\x06\
+]\x01B\x0d\x01m\x01\x05rgba8\x04\0\x0cframe-format\x03\0\0\x01r\x04\x05widthy\x06\
 heighty\x03fpsy\x06format\x01\x04\0\x0dstream-config\x03\0\x02\x01r\x04\x05width\
 y\x06heighty\x03fpsy\x06format\x01\x04\0\x0aframe-info\x03\0\x04\x01r\x02\x02ids\
 \x05labels\x04\0\x0bdevice-info\x03\0\x06\x01p}\x01r\x04\x05bytes\x08\x05widthy\x06\
 heighty\x0eelapsed-millisw\x04\0\x05frame\x03\0\x09\x01q\x06\x11permission-denie\
 d\0\0\x0einvalid-stream\0\0\x12device-unavailable\0\0\x0dsystem-denied\0\0\x0bun\
 supported\x01s\0\x08platform\x01s\0\x04\0\x0ccamera-error\x03\0\x0b\x03\0\x18kra\
-te:camera/types@0.1.0\x05]\x02\x03\0:\x0ccamera-error\x02\x03\0:\x0bdevice-info\x02\
-\x03\0:\x05frame\x02\x03\0:\x0aframe-info\x02\x03\0:\x0dstream-config\x01B\x1d\x02\
-\x03\x02\x01^\x04\0\x0ccamera-error\x03\0\0\x02\x03\x02\x01_\x04\0\x0bdevice-inf\
-o\x03\0\x02\x02\x03\x02\x01`\x04\0\x05frame\x03\0\x04\x02\x03\x02\x01a\x04\0\x0a\
-frame-info\x03\0\x06\x02\x03\x02\x01b\x04\0\x0dstream-config\x03\0\x08\x01p\x03\x01\
+te:camera/types@0.1.0\x05^\x02\x03\0;\x0ccamera-error\x02\x03\0;\x0bdevice-info\x02\
+\x03\0;\x05frame\x02\x03\0;\x0aframe-info\x02\x03\0;\x0dstream-config\x01B\x1d\x02\
+\x03\x02\x01_\x04\0\x0ccamera-error\x03\0\0\x02\x03\x02\x01`\x04\0\x0bdevice-inf\
+o\x03\0\x02\x02\x03\x02\x01a\x04\0\x05frame\x03\0\x04\x02\x03\x02\x01b\x04\0\x0a\
+frame-info\x03\0\x06\x02\x03\x02\x01c\x04\0\x0dstream-config\x03\0\x08\x01p\x03\x01\
 j\x01\x0a\x01\x01\x01@\0\0\x0b\x04\0\x07devices\x01\x0c\x01j\x01w\x01\x01\x01@\x02\
 \x06devices\x06config\x09\0\x0d\x04\0\x04open\x01\x0e\x01j\x01\x07\x01\x01\x01@\x01\
 \x09stream-idw\0\x0f\x04\0\x04info\x01\x10\x01j\0\x01\x01\x01@\x01\x09stream-idw\
 \0\x11\x04\0\x05start\x01\x12\x04\0\x04stop\x01\x12\x01k\x05\x01j\x01\x13\x01\x01\
 \x01@\x01\x09stream-idw\0\x14\x04\0\x04read\x01\x15\x04\0\x05close\x01\x12\x03\0\
-\x1akrate:camera/capture@0.1.0\x05c\x01B\x12\x01r\x01\x04texts\x04\0\x0atranscri\
+\x1akrate:camera/capture@0.1.0\x05d\x01B\x12\x01r\x01\x04texts\x04\0\x0atranscri\
 pt\x03\0\0\x01q\x05\x0finvalid-request\x01s\0\x0fmodel-not-found\0\0\x0dmodel-in\
 valid\x01s\0\x0bunsupported\x01s\0\x09inference\x01s\0\x04\0\x0cspeech-error\x03\
 \0\x02\x01m\x05\x0finvalid-request\x0fmodel-not-found\x0dmodel-invalid\x0bunsupp\
@@ -28983,14 +29554,14 @@ orted\x09inference\x04\0\x0bmatch-error\x03\0\x04\x01p}\x01ks\x01j\x01\x01\x01\x
 16-le\x06\x0bsample-ratey\x08language\x07\x08expecteds\0\x0a\x04\0\x0amatch-line\
 \x01\x0b\x01k}\x01j\x01\x0c\x01\x05\x01@\x06\x0bmodel-assets\x0apcm-s16-le\x06\x0b\
 sample-ratey\x08language\x07\x08expecteds\x06finish\x7f\0\x0d\x04\0\x11match-lin\
-e-stream\x01\x0e\x03\0\x20krate:speech/transcription@0.1.0\x05d\x01B\x12\x01r\x03\
+e-stream\x01\x0e\x03\0\x20krate:speech/transcription@0.1.0\x05e\x01B\x12\x01r\x03\
 \x02ids\x04names\x08languages\x04\0\x05voice\x03\0\0\x01q\x04\x11permission-deni\
 ed\0\0\x0finvalid-request\x01s\0\x0bunsupported\x01s\0\x08platform\x01s\0\x04\0\x09\
 say-error\x03\0\x02\x01p\x01\x01j\x01\x04\x01\x03\x01@\0\0\x05\x04\0\x06voices\x01\
 \x06\x01ks\x01kv\x01j\0\x01\x03\x01@\x03\x04texts\x05voice\x07\x04rate\x08\0\x09\
 \x04\0\x03say\x01\x0a\x01@\0\0\x09\x04\0\x04stop\x01\x0b\x01j\x01\x7f\x01\x03\x01\
-@\0\0\x0c\x04\0\x08speaking\x01\x0d\x03\0\x1ckrate:speech/synthesis@0.1.0\x05e\x01\
-@\0\0z\x04\0\x03run\x01f\x04\0\x13krate:app/gui@0.2.0\x04\0\x0b\x09\x01\0\x03gui\
+@\0\0\x0c\x04\0\x08speaking\x01\x0d\x03\0\x1ckrate:speech/synthesis@0.1.0\x05f\x01\
+@\0\0z\x04\0\x03run\x01g\x04\0\x13krate:app/gui@0.2.0\x04\0\x0b\x09\x01\0\x03gui\
 \x03\0\0\0G\x09producers\x01\x0cprocessed-by\x02\x0dwit-component\x070.227.1\x10\
 wit-bindgen-rust\x060.41.0";
 #[inline(never)]
