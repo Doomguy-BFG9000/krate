@@ -1,8 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- The Krate player is pure native code: NativeActivity loads
-     libkrate_player.so and calls android_main. hasCode=false because there
-     is not one line of Java or Kotlin in it, and extractNativeLibs=true so
-     the packaging stays a plain zip without page-alignment ceremony. -->
+<!-- The Krate player is native code: its activity is a NativeActivity
+     that loads libkrate_player.so and calls android_main. KrateActivity
+     (android/java) adds only what Android tells an activity alone, such as
+     what the person picked in the system's file picker, so hasCode is true
+     for that one small classes.dex. extractNativeLibs=true keeps the packaging
+     a plain zip without page-alignment ceremony. -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="tech.krate.player"
     android:versionCode="1"
@@ -13,15 +15,68 @@
   <!-- Fetching a tapped krate.tech link, and apps' own granted net.fetch
        calls, both go through the network. -->
   <uses-permission android:name="android.permission.INTERNET" />
+  <!-- krate:ui/haptics: the phone tapping back under the finger. Granted at
+       install; there is no prompt, as for any app's touch feedback. -->
+  <uses-permission android:name="android.permission.VIBRATE" />
+  <!-- krate:ui/location, for an app the person allowed location.read on
+       Krate's sheet; the phone asks too, the first time such an app asks. -->
+  <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+  <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+  <!-- krate:ui/bluetooth, for an app the person allowed bluetooth.connect:
+       Krate looks for devices only to list them for the person, never to
+       place them, so the scan says neverForLocation. Before Android 12 a
+       scan needs location instead (above). -->
+  <uses-permission android:name="android.permission.BLUETOOTH_SCAN"
+      android:usesPermissionFlags="neverForLocation" />
+  <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+  <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
+  <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />
+  <uses-feature android:name="android.hardware.bluetooth_le" android:required="false" />
+  <!-- IC-918, each for an app the person allowed it on Krate's sheet; the
+       phone asks too, the first time such an app uses it. -->
+  <uses-permission android:name="android.permission.CAMERA" />
+  <uses-permission android:name="android.permission.RECORD_AUDIO" />
+  <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+  <!-- krate:ui/reminders: alarms at the time asked (when the person allows
+       "Alarms & reminders" for Krate; otherwise Android picks a time close
+       by), and set again after the phone restarts. -->
+  <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+  <!-- krate:ui/unlock: the system's own sheet asks for a fingerprint, a
+       face or the screen lock; Krate never sees any of them. -->
+  <uses-permission android:name="android.permission.USE_BIOMETRIC" />
+  <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+  <!-- krate:ui/photos save, for an app allowed photos.add: from Android 10
+       adding to Pictures needs no permission; before, it needs this. -->
+  <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+      android:maxSdkVersion="28" />
+  <uses-feature android:name="android.hardware.camera" android:required="false" />
+  <uses-feature android:name="android.hardware.microphone" android:required="false" />
+  <!-- Which apps open a link, and which voices speak: Android 11 and up
+       show an app only what it says it looks for. -->
+  <queries>
+    <intent>
+      <action android:name="android.intent.action.VIEW" />
+      <category android:name="android.intent.category.BROWSABLE" />
+      <data android:scheme="https" />
+    </intent>
+    <intent>
+      <action android:name="android.intent.action.TTS_SERVICE" />
+    </intent>
+    <!-- Which browser offers Custom Tabs and Chrome's Auth Tab. -->
+    <intent>
+      <action android:name="android.support.customtabs.action.CustomTabsService" />
+    </intent>
+  </queries>
 
   <application
       android:label="Krate"
-      android:hasCode="false"
+      android:hasCode="true"
       android:extractNativeLibs="true">
     <activity
-        android:name="android.app.NativeActivity"
+        android:name="tech.krate.player.KrateActivity"
         android:exported="true"
-        android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|density">
+        android:launchMode="singleTask"
+        android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|density|uiMode|fontScale">
       <meta-data android:name="android.app.lib_name" android:value="krate_player" />
       <intent-filter>
         <action android:name="android.intent.action.MAIN" />
@@ -36,6 +91,17 @@
         <category android:name="android.intent.category.DEFAULT" />
         <category android:name="android.intent.category.BROWSABLE" />
         <data android:scheme="https" android:host="hub.krate.tech" android:pathPrefix="/a/" />
+      </intent-filter>
+      <!-- krate:ui/sign-in: the one redirect scheme any app may use
+           (krate-signin://<app id>/...). Android returns a sign-in only to
+           a scheme an install manifest names, and Krate cannot name each
+           app's own; PKCE keeps a shared scheme safe, as a code is useless
+           without the verifier only the asking app holds. -->
+      <intent-filter>
+        <action android:name="android.intent.action.VIEW" />
+        <category android:name="android.intent.category.DEFAULT" />
+        <category android:name="android.intent.category.BROWSABLE" />
+        <data android:scheme="krate-signin" />
       </intent-filter>
       <!-- A .krate file from Files, a share sheet, or a download. Content
            resolvers usually report octet-stream and often drop the
@@ -53,5 +119,28 @@
         <data android:scheme="file" android:mimeType="*/*" android:pathPattern=".*\\.krate" />
       </intent-filter>
     </activity>
+    <!-- Restart from Krate's menu: ends Krate's process and opens it again
+         on the same app, from a process of its own. -->
+    <activity
+        android:name="tech.krate.player.Restarter"
+        android:process=":restart"
+        android:exported="false"
+        android:theme="@android:style/Theme.NoDisplay" />
+    <!-- krate:ui/reminders: posts a reminder when its alarm comes, and sets
+         them all again when the phone restarts or the person allows exact
+         alarms. -->
+    <receiver android:name="tech.krate.player.Reminder" android:exported="false">
+      <intent-filter>
+        <action android:name="android.intent.action.BOOT_COMPLETED" />
+        <action android:name="android.app.action.SCHEDULE_EXACT_ALARM_PERMISSION_STATE_CHANGED" />
+      </intent-filter>
+    </receiver>
+    <!-- Files an app shares (krate:ui/share), read-only, to the one app the
+         person picked in the share sheet. -->
+    <provider
+        android:name="tech.krate.player.Shared"
+        android:authorities="tech.krate.player.share"
+        android:exported="false"
+        android:grantUriPermissions="true" />
   </application>
 </manifest>

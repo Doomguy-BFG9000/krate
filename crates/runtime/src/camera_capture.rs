@@ -359,11 +359,16 @@ fn platform_backend() -> Option<Box<dyn CameraBackend>> {
     {
         Some(Box::new(crate::camera_nokhwa::NokhwaCameraBackend))
     }
+    #[cfg(target_os = "android")]
+    {
+        Some(Box::new(crate::camera_android::AndroidCameraBackend))
+    }
     #[cfg(not(any(
         target_os = "macos",
         target_os = "ios",
         target_os = "windows",
-        target_os = "linux"
+        target_os = "linux",
+        target_os = "android"
     )))]
     {
         None

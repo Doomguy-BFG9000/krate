@@ -57,6 +57,16 @@ mod player {
             vm: app.vm_as_ptr(),
             activity: app.activity_as_ptr(),
         };
+        // An app's temporary space is the activity's cache: Rust's
+        // temp_dir() is /data/local/tmp on Android, which no app may write,
+        // and a save on a phone is written there before it is placed
+        // (K-1032). Picks and saves a run left behind go at the next start.
+        let cache = crate::intent::cache_dir(handles).unwrap_or_else(|| data_root.join("tmp"));
+        for left in ["krate-picked", "krate-saves", "krate-share"] {
+            let _ = std::fs::remove_dir_all(cache.join(left));
+        }
+        let _ = std::fs::create_dir_all(&cache);
+        std::env::set_var("TMPDIR", &cache);
         run_player(&data_root, handles);
         // The app is the process: when the flow ends -- back button, close,
         // cancel at the wall -- no blank activity shell may linger. Finish
@@ -68,9 +78,30 @@ mod player {
     }
 
     fn run_player(data_root: &std::path::Path, handles: crate::intent::ActivityHandles) {
+        // The picture the permission sheet sits over is the app the person
+        // just restarted from Krate's menu, written moments ago; any older
+        // one belongs to another visit, and the sheet sits on its wash.
+        let behind = data_root.join("wall").join("behind.rgba");
+        let fresh = std::fs::metadata(&behind)
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|at| at.elapsed().ok())
+            .is_some_and(|age| age < std::time::Duration::from_secs(20));
+        if !fresh {
+            let _ = std::fs::remove_file(&behind);
+        }
         // What was tapped decides what runs.
         let target = crate::intent::view_target(handles);
         log::info!("launch target: {target:?}");
+        // A sign-in coming back to a Krate that is no longer running: the
+        // app that asked is gone, so there is nothing to hand it to.
+        if target
+            .as_deref()
+            .is_some_and(|uri| uri.starts_with("krate-signin:"))
+        {
+            log::info!("a sign-in came back after its app closed; nothing to do");
+            return;
+        }
 
         let manifest_text: String;
         let component: Vec<u8>;
@@ -78,6 +109,10 @@ mod player {
         // The extracted bundle dir is removed on drop, and the runtime
         // reads assets from it during the run -- it must live to the end.
         let mut _opened_bundle = None;
+        // The bundle as it came, kept so a reminder tapped later can open
+        // this app again (IC-921): a link may be offline by then, and a
+        // file's grant from the app that sent it does not last.
+        let mut kept_bytes: Option<Vec<u8>> = None;
 
         match target {
             Some(uri) => {
@@ -102,6 +137,7 @@ mod player {
                         }
                     }
                 };
+                kept_bytes = Some(bytes.clone());
                 let open = match krate_bundle::open_reader(Cursor::new(bytes)) {
                     Ok(open) => open,
                     Err(err) => {
@@ -184,10 +220,50 @@ mod player {
             sandbox_root: sandbox,
             app_store_path: Some(store.clone()),
             app_database_path: Some(store.with_extension("sqlite")),
+            // Its secrets (store.secret), encrypted with a key of this
+            // phone's: a Vault's entries had nowhere to live on Android.
+            app_secrets: Some((
+                store.with_extension("secrets"),
+                manifest.app.id.clone(),
+                machine_key(data_root),
+            )),
             bundle_assets_root: assets_root,
+            // The name the person agreed to on the wall: a notification's
+            // sender line, never text the app picks per call.
+            app_name: Some(manifest.app.name.clone()),
             phase3_ui_mode: krate_runtime::phase3_ui::Phase3HostUiMode::NativePrototype,
             ..Default::default()
         };
+        // Which app runs, for its reminders: their ids carry its id, and a
+        // tapped one opens the copy kept here.
+        let opens = kept_bytes
+            .and_then(|bytes| {
+                let kept = data_root.join("kept");
+                let _ = std::fs::create_dir_all(&kept);
+                let path = kept.join(format!("{}.krate", sanitize(&manifest.app.id)));
+                std::fs::write(&path, bytes).ok()?;
+                Some(format!("file://{}", path.display()))
+            })
+            .unwrap_or_default();
+        krate_adapter_android::reminders::set_current_app(Some((
+            manifest.app.id.clone(),
+            opens.clone(),
+        )));
+        // For Krate's menu (IC-934): the app's name, and what it may use this
+        // run in the permission sheet's own words.
+        let mut uses: Vec<String> = manifest
+            .capabilities
+            .iter()
+            .filter(|request| request.required || granted.contains(&request.cap))
+            .filter_map(|request| use_in_words(&request.cap))
+            .collect();
+        uses.dedup();
+        krate_adapter_android::menu::set_app(Some((
+            &manifest.app.name,
+            &manifest.app.id,
+            &uses,
+            &opens,
+        )));
         let runtime = match krate_runtime::Runtime::new(&config) {
             Ok(runtime) => runtime,
             Err(err) => {
@@ -195,7 +271,10 @@ mod player {
                 return;
             }
         };
-        match runtime.run_bytes_for_world(&component, &config, krate_runtime::RuntimeWorld::Auto) {
+        let ran =
+            runtime.run_bytes_for_world(&component, &config, krate_runtime::RuntimeWorld::Auto);
+        krate_adapter_android::menu::set_app(None);
+        match ran {
             Ok(outcome) => log::info!("app finished: {outcome:?}"),
             Err(err) => {
                 log::error!("app failed: {err:#}");
@@ -206,6 +285,55 @@ mod player {
                 );
             }
         }
+        // Restart (or Ask again) in Krate's menu: the app closed, so open it
+        // again, from the wall, in a fresh process.
+        if krate_adapter_android::menu::restart_asked() {
+            // The app as it was, blurred, for the sheet to sit over.
+            krate_adapter_android::behind::write(&data_root.join("wall").join("behind.rgba"));
+            krate_adapter_android::menu::relaunch();
+        }
+    }
+
+    /// A granted capability as the permission sheet words it (apps/krate-wall
+    /// `describe`), or None for what every app has: its window, its output,
+    /// the clock and randomness. The iPhone player's list, for Krate's menu.
+    fn use_in_words(cap: &str) -> Option<String> {
+        let mut parts = cap.splitn(2, ':');
+        let kind = parts.next().unwrap_or("");
+        let target = parts.next().unwrap_or("");
+        let host = target.split(':').next().unwrap_or("");
+        let own = target.is_empty() || target.starts_with('.');
+        Some(match kind {
+            "ui.window" | "io.stdout" | "io.stderr" | "io.stdin" | "io.args" | "io.env"
+            | "time.clock" | "time.monotonic" | "random.bytes" | "memory.budget" => return None,
+            "net.fetch" | "net.connect" if !host.is_empty() && host != "*" => {
+                format!("The internet, at {host}")
+            }
+            "net.fetch" | "net.connect" => "The internet".to_string(),
+            "net.listen" => "The local network".to_string(),
+            "net.ws" => "A live connection".to_string(),
+            "hub" | "hub.rooms" => "Krate online".to_string(),
+            "fs.read" | "fs.list" if own => "Read its own files".to_string(),
+            "fs.write" | "fs.remove" if own => "Save its own files".to_string(),
+            "fs.read" | "fs.list" => "Read files".to_string(),
+            "fs.write" | "fs.remove" => "Change files".to_string(),
+            "ui.dialog" => "Files you pick".to_string(),
+            "audio.playback" => "Sound".to_string(),
+            "audio.capture" => "The microphone".to_string(),
+            "speech" | "speech.say" | "speech.listen" => "Speech".to_string(),
+            "camera.capture" | "camera" => "The camera".to_string(),
+            "location.read" => "Where you are".to_string(),
+            "bluetooth.connect" => "Bluetooth devices you pick".to_string(),
+            "photos.add" => "Adding to your Photos".to_string(),
+            "store.kv" | "store.sql" => "Keeping its data".to_string(),
+            "store.shared" => "Sharing data with people you invite".to_string(),
+            "store.secret" => "Keeping secrets safe".to_string(),
+            "ui.clipboard" => "The clipboard".to_string(),
+            "ui.notify" => "Notifications".to_string(),
+            "ui.open-url" => "Opening links".to_string(),
+            "gfx.gpu" => "The graphics chip".to_string(),
+            _ => cap.to_string(),
+        })
     }
 
     /// Run the wall sheet and return the granted capability names, or None
@@ -324,6 +452,27 @@ mod player {
             return Err("that download is larger than any Krate app".to_string());
         }
         Ok(bytes)
+    }
+
+    /// This phone's key for apps' secrets: 32 random bytes made once and
+    /// kept in Krate's own data, which no other app can read. Copying an
+    /// app's secrets file elsewhere carries nothing usable.
+    fn machine_key(data_root: &std::path::Path) -> Vec<u8> {
+        let path = data_root.join("machine.key");
+        if let Ok(existing) = std::fs::read(&path) {
+            if existing.len() >= 32 {
+                return existing;
+            }
+        }
+        let mut key = vec![0u8; 32];
+        let made = std::fs::File::open("/dev/urandom").and_then(|mut f| {
+            use std::io::Read;
+            f.read_exact(&mut key)
+        });
+        if made.is_ok() {
+            let _ = std::fs::write(&path, &key);
+        }
+        key
     }
 
     /// App ids become directory names; nothing an id says may escape the

@@ -5454,10 +5454,11 @@ impl Phase3GuiHost {
             return Ok(None);
         }
         // A phone: the app writes into a file of Krate's, and once it lets
-        // go the file goes to the system's save sheet, where the person
-        // picks the place (K-1032). The person's tap on Save in the app is
-        // the ask; the sheet is the answer.
-        #[cfg(target_os = "ios")]
+        // go the file goes to the system's save sheet (iOS) or its "save
+        // to" picker (Android), where the person picks the place (K-1032).
+        // The person's tap on Save in the app is the ask; the sheet is the
+        // answer.
+        #[cfg(any(target_os = "ios", target_os = "android"))]
         {
             let _ = title;
             let chosen = export_path(suggested, filter);
@@ -5469,7 +5470,7 @@ impl Phase3GuiHost {
             };
             Ok(Some((name, token)))
         }
-        #[cfg(any(target_os = "android", target_arch = "wasm32"))]
+        #[cfg(target_arch = "wasm32")]
         {
             let _ = (title, suggested, filter);
             Ok(None)
@@ -5951,10 +5952,10 @@ impl ui::dialog::Host for Phase3GuiHost {
             return Ok(Ok(None));
         }
         // Phones have no rfd backend: the adapter shows the platform's own
-        // picker (iOS: the Files picker). Every dialog there used to answer
-        // as cancelled, so a Studio-made recipe book's "Add photo" did
-        // nothing on an iPhone (IC-915). A host without a picker still
-        // answers cancelled.
+        // picker (iOS: the Files picker; Android: its document picker).
+        // Every dialog there used to answer as cancelled, so a Studio-made
+        // recipe book's "Add photo" did nothing on an iPhone (IC-915). A
+        // host without a picker still answers cancelled.
         #[cfg(any(target_os = "android", target_os = "ios", target_arch = "wasm32"))]
         {
             let _ = &title;
@@ -8325,7 +8326,7 @@ pub(crate) fn short_uuid(uuid: &str) -> String {
 /// fresh folder of its own in the app's temporary space (so two saves of
 /// one name never meet), under the name the app suggested, with the
 /// filter's first extension when the name has none.
-#[cfg(any(target_os = "ios", test))]
+#[cfg(any(target_os = "ios", target_os = "android", test))]
 pub(crate) fn export_path(suggested: &str, filter: &str) -> std::path::PathBuf {
     let mut name: String = suggested
         .chars()

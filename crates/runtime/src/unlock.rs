@@ -135,12 +135,28 @@ mod apple {
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub(crate) use apple::{available, check};
 
-#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+/// Android: the system's BiometricPrompt, fingerprint or face with the
+/// screen lock as the other way in (IC-924).
+#[cfg(target_os = "android")]
+pub(crate) fn available() -> bool {
+    krate_adapter_android::unlock::available()
+}
+
+#[cfg(target_os = "android")]
+pub(crate) fn check(reason: &str) -> Answer {
+    match krate_adapter_android::unlock::check(reason) {
+        krate_adapter_android::unlock::Answer::Yes => Answer::Yes,
+        krate_adapter_android::unlock::Answer::No => Answer::No,
+        krate_adapter_android::unlock::Answer::Unavailable(why) => Answer::Unavailable(why),
+    }
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "android")))]
 pub(crate) fn available() -> bool {
     false
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+#[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "android")))]
 pub(crate) fn check(_reason: &str) -> Answer {
     Answer::Unavailable("checking it is you is not on this system yet".to_string())
 }

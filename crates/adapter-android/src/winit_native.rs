@@ -106,6 +106,7 @@ mod real {
     /// Must run on the thread that will pump the event loop, before the
     /// runtime first touches the adapter.
     pub fn set_android_app(app: winit::platform::android::activity::AndroidApp) {
+        crate::java::set_handles(app.vm_as_ptr(), app.activity_as_ptr());
         ANDROID_APP.with(|slot| *slot.borrow_mut() = Some(app));
     }
 
@@ -136,6 +137,40 @@ mod real {
         start: (f32, f32),
         last: (f32, f32),
         scrolling: bool,
+        /// When a finger landed on the strip under the clock, for Krate's
+        /// menu (IC-934); None elsewhere, or once it moved.
+        hold_from: Option<std::time::Instant>,
+        /// The hold opened the menu: the lift is no tap for the app.
+        held: bool,
+        /// It began on something that drags -- a slider, or what the app
+        /// described as adjustable (a scrubber, a volume) -- so moving it
+        /// moves that, never scrolls (K-1059).
+        drags: bool,
+    }
+
+    /// What the app last described to the screen reader (IC-926), for
+    /// knowing what a finger may drag.
+    static DESCRIBED: std::sync::Mutex<Vec<krate_adapter_common::ui::AccessElement>> =
+        std::sync::Mutex::new(Vec::new());
+
+    /// Keep what the app described (krate:ui/accessibility).
+    pub fn set_described(elements: &[krate_adapter_common::ui::AccessElement]) {
+        *DESCRIBED.lock().expect("described lock") = elements.to_vec();
+    }
+
+    /// Whether a finger landing at (x, y) is on something that drags: a
+    /// slider Krate draws, or an element the app described as adjustable,
+    /// with 8 points to spare above and below -- the iPhone's rule.
+    fn drags_at(placements: &[WidgetPlacement], x: f32, y: f32) -> bool {
+        let inside =
+            |px: f32, py: f32, w: f32, h: f32| x >= px && x < px + w && y >= py && y < py + h;
+        placements.iter().any(|p| {
+            p.kind == krate_adapter_common::ui::WidgetKind::Slider
+                && inside(p.x, p.y, p.width, p.height)
+        }) || DESCRIBED.lock().expect("described lock").iter().any(|e| {
+            e.role == krate_adapter_common::ui::AccessRole::Adjustable
+                && inside(e.x, e.y - 8.0, e.width, e.height + 16.0)
+        })
     }
 
     #[derive(Default)]
@@ -289,6 +324,7 @@ mod real {
         }
 
         fn suspended(&mut self, _event_loop: &ActiveEventLoop) {
+            BACKGROUNDED.store(true, std::sync::atomic::Ordering::Relaxed);
             // Android tears the native window down when the app leaves the
             // foreground. Drop every softbuffer surface now; the draw path
             // lazily recreates one against the fresh native window on the
@@ -395,13 +431,34 @@ mod real {
                     match touch.phase {
                         winit::event::TouchPhase::Started => {
                             if self.touch.is_none() {
+                                let top = crate::phone::covered_edges().0 / scale as f32;
+                                let strip =
+                                    crate::menu::chrome_on() && crate::menu::in_strip(y, top);
+                                let drags = !strip
+                                    && self
+                                        .windows
+                                        .get(&native)
+                                        .is_some_and(|t| drags_at(&t.placements, x, y));
                                 self.touch = Some(TouchGesture {
                                     finger: touch.id,
                                     native,
                                     start: (x, y),
                                     last: (x, y),
                                     scrolling: false,
+                                    hold_from: strip.then(std::time::Instant::now),
+                                    held: false,
+                                    drags,
                                 });
+                                // Something that drags is pressed at once, so
+                                // the first movement already moves it.
+                                if drags {
+                                    self.pointer_samples.push(RawPointerSample {
+                                        window: krate,
+                                        x,
+                                        y,
+                                        pressed: true,
+                                    });
+                                }
                                 // The finger is the cursor: hit tests and
                                 // wheel positions read from here.
                                 self.cursor.insert(native, (x, y));
@@ -425,11 +482,25 @@ mod real {
                                 .is_some_and(|g| g.finger == touch.id && g.native == native);
                             if same {
                                 let gesture = self.touch.as_mut().expect("gesture checked");
+                                if gesture.drags {
+                                    // The finger moves what it is on: the
+                                    // press follows it, held, until it lifts.
+                                    gesture.last = (x, y);
+                                    self.cursor.insert(native, (x, y));
+                                    self.pointer_samples.push(RawPointerSample {
+                                        window: krate,
+                                        x,
+                                        y,
+                                        pressed: true,
+                                    });
+                                    return;
+                                }
                                 if !gesture.scrolling {
                                     let sx = x - gesture.start.0;
                                     let sy = y - gesture.start.1;
                                     if sx * sx + sy * sy > SLOP * SLOP {
                                         gesture.scrolling = true;
+                                        gesture.hold_from = None;
                                     }
                                 }
                                 let dx = x - gesture.last.0;
@@ -459,7 +530,16 @@ mod real {
                                 .is_some_and(|g| g.finger == touch.id && g.native == native);
                             if same {
                                 let gesture = self.touch.take().expect("gesture checked");
-                                if !gesture.scrolling {
+                                if gesture.drags {
+                                    // Let go where the finger lifted.
+                                    self.cursor.insert(native, (x, y));
+                                    self.pointer_samples.push(RawPointerSample {
+                                        window: krate,
+                                        x,
+                                        y,
+                                        pressed: false,
+                                    });
+                                } else if !gesture.scrolling && !gesture.held {
                                     // A tap: one press and one release at
                                     // the touch point, exactly what a click
                                     // delivers. Apps' double-tap detection
@@ -587,10 +667,17 @@ mod real {
                         )
                     ) && event.state == winit::event::ElementState::Pressed =>
                 {
-                    // The system back gesture/button. Apps already handle
-                    // close-requested on every platform; back is Android's
-                    // spelling of the same intent.
-                    Some(WinitWindowNativeEvent::CloseRequested)
+                    // The system back gesture/button. Over an app it opens
+                    // Krate's menu, where Close is (IC-934): back ended the
+                    // app outright, a swipe away from losing it. Over
+                    // Krate's own sheet it is still a cancel.
+                    if crate::menu::chrome_on() {
+                        remember_frame(&self.windows);
+                        crate::menu::show();
+                        None
+                    } else {
+                        Some(WinitWindowNativeEvent::CloseRequested)
+                    }
                 }
                 WindowEvent::KeyboardInput { event, .. } => {
                     if let Some(key) = key_name(&event.logical_key) {
@@ -752,9 +839,44 @@ mod real {
         })
     }
 
+    /// Keep a picture of what the app shows now, for the permission sheet
+    /// to sit over if the person restarts it from Krate's menu (F-314).
+    fn remember_frame(windows: &BTreeMap<NativeWindowId, TrackedWindow>) {
+        if let Some(tracked) = windows.values().next() {
+            let size = tracked.window.inner_size();
+            crate::behind::remember(
+                &tracked.staging,
+                size.width as usize,
+                size.height as usize,
+                tracked.window.scale_factor() as f32,
+            );
+        }
+    }
+
     fn pump(host: &mut Host) {
         let Host { event_loop, app } = host;
         let _status = event_loop.pump_app_events(Some(Duration::ZERO), app);
+        // A finger held still on the strip under the clock opens Krate's
+        // menu, and its lift is then no tap (IC-934).
+        if let Some(gesture) = app.touch.as_mut() {
+            let due = gesture
+                .hold_from
+                .is_some_and(|at| at.elapsed().as_millis() >= crate::menu::HOLD_MS);
+            if due && !gesture.held {
+                gesture.held = true;
+                gesture.hold_from = None;
+                remember_frame(&app.windows);
+                crate::menu::show();
+            }
+        }
+        // Close (or Restart) in the menu: the app hears it as a desktop
+        // close button, and Krate closes it anyway if it does not answer.
+        if crate::menu::chrome_on() && crate::menu::take_close() {
+            for tracked in app.windows.values() {
+                app.events
+                    .push((tracked.krate, WinitWindowNativeEvent::CloseRequested));
+            }
+        }
         // Turning the phone resizes the window without a resize event; a
         // layout left at the old shape drew every frame cropped and zoomed
         // onto the new one. Whatever changed the size, report it.
@@ -901,6 +1023,29 @@ mod real {
         })
     }
 
+    /// Set when Krate leaves the screen: the person may be going to look at
+    /// what an app did in a folder they gave it.
+    static BACKGROUNDED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+    /// Whether Krate left the screen since last asked.
+    pub fn take_backgrounded() -> bool {
+        BACKGROUNDED.swap(false, std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Pump the native event loop once and keep what it brings for the next
+    /// [`pump_native_events`]: Android's lifecycle waits on this thread,
+    /// so while Krate waits for the person (a picker, a prompt), it must
+    /// still answer.
+    pub fn keep_alive() {
+        if !host_initialized() {
+            return;
+        }
+        let _ = with_host(|host| {
+            pump(host);
+            Ok(())
+        });
+    }
+
     /// Pump the native event loop once and drain mapped window events.
     pub fn pump_native_events() -> Result<CollectedNativeEvents, UiAdapterError> {
         if !host_initialized() {
@@ -1041,6 +1186,14 @@ mod stub {
     pub fn window_scale(_krate: WindowId) -> f32 {
         1.0
     }
+
+    /// No Android lifecycle off Android.
+    pub fn take_backgrounded() -> bool {
+        false
+    }
+
+    /// No touch screen to drag on off Android.
+    pub fn set_described(_elements: &[krate_adapter_common::ui::AccessElement]) {}
 
     /// Winit windows are only available in Linux builds.
     pub fn show_native_window(_krate: WindowId) -> Result<bool, UiAdapterError> {

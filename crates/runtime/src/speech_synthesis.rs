@@ -216,11 +216,50 @@ fn platform_backend() -> Result<Box<dyn Backend>, SayError> {
     Ok(Box::new(helper::Helper::default()))
 }
 
+// The phone's own TextToSpeech engine (IC-918).
+#[cfg(target_os = "android")]
+fn platform_backend() -> Result<Box<dyn Backend>, SayError> {
+    krate_adapter_android::phone::speech_ready().map_err(SayError::Unsupported)?;
+    Ok(Box::new(android::Tts))
+}
+
+#[cfg(target_os = "android")]
+mod android {
+    use super::{Backend, SayError, Voice};
+    use krate_adapter_android::phone;
+
+    /// Android's TextToSpeech, through the player activity. It speaks on
+    /// its own service, so this worker only asks and tells.
+    pub(super) struct Tts;
+
+    impl Backend for Tts {
+        fn voices(&mut self) -> Result<Vec<Voice>, SayError> {
+            Ok(phone::voices()
+                .into_iter()
+                .map(|(id, name, language)| Voice { id, name, language })
+                .collect())
+        }
+
+        fn say(&mut self, text: &str, voice: Option<&str>, rate: f32) -> Result<(), SayError> {
+            phone::say(text, voice, rate).map_err(SayError::Platform)
+        }
+
+        fn stop(&mut self) {
+            phone::stop_speaking();
+        }
+
+        fn speaking(&mut self) -> bool {
+            phone::speaking()
+        }
+    }
+}
+
 #[cfg(not(any(
     target_os = "macos",
     target_os = "ios",
     target_os = "linux",
-    target_os = "windows"
+    target_os = "windows",
+    target_os = "android"
 )))]
 fn platform_backend() -> Result<Box<dyn Backend>, SayError> {
     Err(SayError::Unsupported(

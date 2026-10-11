@@ -1,0 +1,11 @@
+[app]
+id = "dev.krate.stuck-probe"
+name = "Stuck"
+version = "0.1.0"
+entry = "target/wasm32-wasip1/release/krate_stuck_probe.wasm"
+world = "krate:app/gui@0.2.0"
+
+[[capabilities]]
+cap = "ui.window:create"
+rationale = "A window it never draws in, to prove Krate's menu still gets you out"
+required = true

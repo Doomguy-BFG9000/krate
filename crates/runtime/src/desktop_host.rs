@@ -216,12 +216,19 @@ fn open_checked_url(url: &str) -> Result<(), LaunchError> {
     krate_adapter_ios::uikit_native::open_url(url).map_err(LaunchError::Unavailable)
 }
 
+/// Android: the link goes to the app that opens it, through an ACTION_VIEW
+/// intent (IC-918). No process to spawn on a phone.
+#[cfg(target_os = "android")]
+fn open_checked_url(url: &str) -> Result<(), LaunchError> {
+    krate_adapter_android::phone::open_url(url).map_err(LaunchError::Unavailable)
+}
+
 /// The same handoff on macOS and Linux.
 ///
 /// `open` and `xdg-open` take the URL as one argument and are executed
 /// directly, not through a shell, so nothing in it can be read as a command.
 /// Unlike Windows there is no interpreter in the path to begin with.
-#[cfg(not(any(target_os = "windows", target_os = "ios")))]
+#[cfg(not(any(target_os = "windows", target_os = "ios", target_os = "android")))]
 fn open_checked_url(url: &str) -> Result<(), LaunchError> {
     let result = if cfg!(target_os = "macos") {
         Command::new("open").arg(url).spawn()
@@ -286,6 +293,14 @@ pub fn notify(title: &str, body: &str, app_name: &str, granted: bool) -> Result<
     #[cfg(target_os = "ios")]
     {
         return krate_adapter_ios::uikit_native::notify(app_name, title, body)
+            .map_err(NotifyError::Unavailable);
+    }
+
+    // Android: the system's notifications, the app's consented name as the
+    // sender line, the phone asked first on Android 13 and up (IC-918).
+    #[cfg(target_os = "android")]
+    {
+        return krate_adapter_android::phone::notify(app_name, title, body)
             .map_err(NotifyError::Unavailable);
     }
 

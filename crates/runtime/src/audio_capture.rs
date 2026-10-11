@@ -73,6 +73,20 @@ fn ios_microphone() -> Result<(), CaptureError> {
     Ok(())
 }
 
+/// Android's own microphone question, asked and waited for before the
+/// first recording (IC-918): without RECORD_AUDIO the input opens and
+/// delivers silence, or fails, with nothing to say why.
+#[cfg(target_os = "android")]
+fn android_microphone() -> Result<(), CaptureError> {
+    match krate_adapter_android::phone::ask_microphone() {
+        krate_adapter_android::phone::Asked::Granted => Ok(()),
+        krate_adapter_android::phone::Asked::Refused => Err(CaptureError::Platform(
+            "the microphone was not allowed for Krate: Settings > Apps > Krate > Permissions"
+                .to_string(),
+        )),
+    }
+}
+
 const MIN_SAMPLE_RATE: u32 = 8_000;
 const MAX_SAMPLE_RATE: u32 = 192_000;
 const MAX_CHANNELS: u16 = 8;
@@ -140,6 +154,8 @@ impl AudioCaptureRuntime {
         validate_config(config)?;
         #[cfg(target_os = "ios")]
         ios_microphone()?;
+        #[cfg(target_os = "android")]
+        android_microphone()?;
         let host = cpal::default_host();
         let device = host
             .default_input_device()
