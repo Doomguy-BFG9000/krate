@@ -831,6 +831,16 @@ arrives once; `message(text|binary)` are the server's messages in order; \
 `closed`/`failed` retire the handle. `ws::send(handle, message)` queues \
 and returns. Reconnect on `failed` with a short backoff, and keep \
 rendering the last known state meanwhile, exactly like rule 5.\n\n\
+7. **A protocol of your own is still the same grant.** For a game server, \
+QUIC, or any TCP or UDP protocol, `krate:net/sockets` connects \
+(`tcp-connect`), sends datagrams (`udp-send`) and looks names up \
+(`lookup`), each judged against `net.connect:<host>:<port>` before a \
+socket exists. Nothing blocks: ask `tcp-status`, `tcp-read` and \
+`udp-receive` from the loop. `std::net` cannot open sockets in an app; in \
+Rust use the `net-krate` crate's `TcpStream`, `UdpSocket` and \
+`lookup_host`, which have std's shape (and tokio and quinn adapters). A \
+UDP socket hears only addresses it sent to, and an app cannot listen for \
+incoming connections yet.\n\n\
 # 2d. Sharing data between people: the shared store\n\n\
 For \"my wife and I see the same list\", \"a meal plan the family edits\", \
 \"share this with my roommate\" -- declare `store.shared` and use \

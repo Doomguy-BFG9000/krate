@@ -667,6 +667,60 @@ impl<'a> UapiDispatcher<'a> {
         Ok(())
     }
 
+    /// The permission half of a socket (IC-935): a TCP connection to, or a
+    /// datagram sent to, `host:port`. The same `net.connect` judgment a fetch
+    /// gets. `names` are the names an address stands for, from the app's own
+    /// lookups: a grant for any of them covers the address, and only those.
+    pub fn check_socket(
+        &self,
+        host: &str,
+        port: u16,
+        names: &[String],
+    ) -> std::result::Result<(), NetDispatchError> {
+        if host.is_empty() || port == 0 {
+            return Err(NetDispatchError::InvalidUrl);
+        }
+        let judge = |host: &str| {
+            self.guard.check(&UapiCall::Net(NetCall::Connect {
+                host: host.to_string(),
+                port,
+            }))
+        };
+        let first = judge(host);
+        if first.is_ok() || names.iter().any(|name| judge(name).is_ok()) {
+            return Ok(());
+        }
+        first.map(|_| ()).map_err(map_net_policy)
+    }
+
+    /// The permission half of a lookup: some `net.connect` grant names this
+    /// host, on any port. Asking where a host is says no more than the app's
+    /// grants already allow it to reach.
+    pub fn check_lookup(&self, host: &str) -> std::result::Result<(), NetDispatchError> {
+        if host.is_empty() {
+            return Err(NetDispatchError::InvalidUrl);
+        }
+        let ports: Vec<u16> = self
+            .guard
+            .policy()
+            .grants()
+            .iter()
+            .filter_map(|grant| {
+                let text = grant.to_string();
+                let resource = text.strip_prefix("net.connect:")?;
+                let (_, port) = resource.rsplit_once(':')?;
+                Some(port.parse::<u16>().unwrap_or(443))
+            })
+            .collect();
+        if ports
+            .iter()
+            .any(|port| self.check_socket(host, *port, &[]).is_ok())
+        {
+            return Ok(());
+        }
+        Err(NetDispatchError::PermissionDenied)
+    }
+
     pub fn now_millis(&self) -> DispatchResult<u64> {
         self.check(&UapiCall::Time(TimeCall::Clock))?;
         self.adapter.time().now_millis().map_err(Into::into)
@@ -1519,6 +1573,40 @@ mod tests {
 
         assert!(matches!(err, FsDispatchError::PermissionDenied));
         assert_eq!(adapter.calls.borrow().fs_stat_handle, 0);
+    }
+
+    /// IC-935: a socket is judged as a fetch is, and an address stands only
+    /// for the names the app's own lookups resolved to it.
+    #[test]
+    fn a_socket_is_judged_by_its_host_and_port_and_an_address_by_its_names() {
+        let adapter = RecordingAdapter::default();
+        let policy =
+            SessionPolicy::from_cli_grants(&["net.connect:play.example.com:14004".to_string()])
+                .expect("policy");
+        let guard = UapiGuard::new(policy);
+        let dispatcher = UapiDispatcher::new(&guard, &adapter);
+        let named = ["play.example.com".to_string()];
+        assert!(dispatcher
+            .check_socket("play.example.com", 14004, &[])
+            .is_ok());
+        assert!(matches!(
+            dispatcher.check_socket("10.0.0.5", 14004, &[]),
+            Err(NetDispatchError::PermissionDenied)
+        ));
+        assert!(dispatcher.check_socket("10.0.0.5", 14004, &named).is_ok());
+        assert!(matches!(
+            dispatcher.check_socket("10.0.0.5", 14005, &named),
+            Err(NetDispatchError::PermissionDenied)
+        ));
+        assert!(matches!(
+            dispatcher.check_socket("other.example.com", 14004, &[]),
+            Err(NetDispatchError::PermissionDenied)
+        ));
+        assert!(dispatcher.check_lookup("play.example.com").is_ok());
+        assert!(matches!(
+            dispatcher.check_lookup("other.example.com"),
+            Err(NetDispatchError::PermissionDenied)
+        ));
     }
 
     #[test]

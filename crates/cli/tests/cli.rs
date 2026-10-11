@@ -11132,6 +11132,96 @@ fn a_threaded_app_runs_its_threads_and_rayon_pool_on_real_cores() {
     );
 }
 
+/// Raw sockets inside a Krate app (IC-935): `sockets-probe.wasm` is
+/// apps/krate-sockets-probe built. Its TCP, UDP, lookup and tokio jobs reach
+/// echo servers this test runs, under a `net.connect` grant; without the
+/// grant every one is refused before a socket exists.
+#[test]
+fn an_app_reaches_tcp_and_udp_servers_it_was_granted_and_no_others() {
+    use std::io::{Read, Write};
+    let tcp = std::net::TcpListener::bind("127.0.0.1:0").expect("tcp");
+    let tcp_port = tcp.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        for stream in tcp.incoming().flatten() {
+            let mut s = stream;
+            let mut buf = [0u8; 11];
+            if s.read_exact(&mut buf).is_ok() {
+                let _ = s.write_all(&buf);
+            }
+        }
+    });
+    let udp = std::net::UdpSocket::bind("127.0.0.1:0").expect("udp");
+    let udp_port = udp.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        let mut buf = [0u8; 64];
+        while let Ok((n, from)) = udp.recv_from(&mut buf) {
+            let mut out = b"pong:".to_vec();
+            out.extend_from_slice(&buf[..n]);
+            let _ = udp.send_to(&out, from);
+        }
+    });
+    let dir = tempfile::tempdir().expect("tempdir");
+    let wasm = dir.path().join("app.wasm");
+    std::fs::write(&wasm, include_bytes!("fixtures/sockets-probe.wasm")).expect("probe");
+    let manifest = |grant: &str| {
+        let path = dir.path().join("manifest.toml");
+        std::fs::write(
+            &path,
+            format!(
+                "[app]\nid = \"com.acme.sockets\"\nname = \"sockets\"\nversion = \"1.0.0\"\n\
+                 entry = \"app.wasm\"\nworld = \"krate:app/cli@0.1.0\"\n\n\
+                 [[capabilities]]\ncap = \"io.stdout\"\nrationale = \"print\"\nrequired = true\n\n\
+                 [[capabilities]]\ncap = \"random.bytes\"\nrationale = \"seed\"\nrequired = true\n\n\
+                 [[capabilities]]\ncap = \"{grant}\"\nrationale = \"the echo servers\"\nrequired = true\n"
+            ),
+        )
+        .expect("manifest");
+        path
+    };
+    let run = |manifest: &std::path::Path, job: &[String]| {
+        let out = krate()
+            .arg("run")
+            .arg(&wasm)
+            .arg("--manifest")
+            .arg(manifest)
+            .arg("--auto-grant")
+            .arg("--")
+            .args(job)
+            .output()
+            .expect("run");
+        format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        )
+    };
+    let job = |words: &str| words.split(' ').map(String::from).collect::<Vec<_>>();
+    let granted = manifest("net.connect:localhost:*");
+    let out = run(&granted, &job("lookup localhost"));
+    assert!(out.contains("127.0.0.1"), "{out}");
+    let out = run(&granted, &job(&format!("tcp localhost {tcp_port}")));
+    assert!(out.contains("got back \"hello krate\""), "{out}");
+    let out = run(&granted, &job(&format!("udp localhost {udp_port}")));
+    assert!(out.contains("got \"pong:ping\""), "{out}");
+    let out = run(&granted, &job(&format!("tokio localhost {tcp_port}")));
+    assert!(out.contains("got back \"hello krate\""), "{out}");
+
+    // A grant for another host covers none of it: refused, no socket made.
+    let other = manifest("net.connect:play.example.com:*");
+    for words in [
+        "lookup localhost".to_string(),
+        format!("tcp localhost {tcp_port}"),
+        format!("udp localhost {udp_port}"),
+        format!("tcp 127.0.0.1 {tcp_port}"),
+    ] {
+        let out = run(&other, &job(&words));
+        assert!(
+            out.contains("refused or failed: permission denied"),
+            "{words}: {out}"
+        );
+    }
+}
+
 /// A tokio multi-thread runtime inside a Krate app (IC-929): tasks spread over
 /// worker threads, a channel between tasks, a timer and spawn_blocking.
 #[test]

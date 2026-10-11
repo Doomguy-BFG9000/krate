@@ -1,0 +1,31 @@
+[app]
+id = "dev.krate.sockets-probe"
+name = "Sockets probe"
+version = "0.1.0"
+entry = "app.wasm"
+world = "krate:app/cli@0.1.0"
+
+[[capabilities]]
+cap = "io.stdout"
+rationale = "Print what came back"
+required = true
+
+[[capabilities]]
+cap = "io.args"
+rationale = "Which host and port to reach"
+required = true
+
+[[capabilities]]
+cap = "random.bytes"
+rationale = "QUIC's keys and connection ids"
+required = true
+
+[[capabilities]]
+cap = "net.connect:localhost:*"
+rationale = "The echo servers it talks to, on this machine"
+required = true
+
+[[capabilities]]
+cap = "fs.read:cert.der"
+rationale = "The QUIC server's certificate, to trust it"
+required = false

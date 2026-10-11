@@ -1135,6 +1135,31 @@ fn inspect_content(path: &str, text: &str, analysis: &mut Analysis) {
         "Krate's `krate:net/ws` covers this: a WebSocket under the same `net.connect` grant HTTP uses. `open` returns a handle; the event loop polls it, so a stalled server never freezes a frame.",
         Some("net.connect"),
     );
+    // A protocol of the app's own over TCP or UDP: a game's server, QUIC, a
+    // database driver. Krate serves it through krate:net/sockets under the
+    // same net.connect grant (IC-935); the std-like types are in net-krate.
+    detect_pattern(
+        analysis,
+        "raw-socket",
+        &[
+            "tcpstream::connect",
+            "udpsocket::bind",
+            "tokio::net::tcpstream",
+            "tokio::net::udpsocket",
+            "socket2::",
+            "quinn::endpoint",
+            "socket.socket(",
+            "net.dial(",
+            "new net.socket",
+            "dgram.createsocket",
+        ],
+        path,
+        text,
+        Severity::Change,
+        "A protocol over TCP or UDP",
+        "Krate's `krate:net/sockets` covers this: TCP connections and UDP datagrams judged against the same `net.connect:<host>:<port>` grant a fetch uses. In Rust use net-krate's std-like `TcpStream`/`UdpSocket` (and its tokio and quinn adapters) in place of std::net, which wasm32-wasip1 cannot open. Listening for incoming connections is not offered yet.",
+        Some("net.connect"),
+    );
     // Files dragged onto the window. Worth naming because it is the one way an
     // app receives a file without a dialog, and people do not think of a drop
     // as a permission at all.

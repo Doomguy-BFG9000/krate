@@ -33,6 +33,8 @@ pub mod uapi;
 pub mod uapi_dispatch;
 
 mod async_fetch;
+#[cfg(not(target_arch = "wasm32"))]
+mod async_sockets;
 mod async_ws;
 mod audio_capture;
 mod audio_playback;
@@ -1393,6 +1395,7 @@ impl Runtime {
         link_phase2!(net::types);
         link_phase2!(net::http_client);
         link_phase2!(net::ws);
+        link_phase2!(net::sockets);
         link_phase2!(time::clock);
         link_phase2!(time::sleep);
         link_phase2!(locale::info);
@@ -1480,6 +1483,7 @@ impl Runtime {
         link_phase2!(net::types);
         link_phase2!(net::http_client);
         link_phase2!(net::ws);
+        link_phase2!(net::sockets);
         link_phase2!(time::clock);
         link_phase2!(time::sleep);
         link_phase2!(locale::info);

@@ -12,6 +12,7 @@ world cli {
   import krate:fs/watch@0.1.0;
   import krate:net/http-client@0.1.0;
   import krate:net/ws@0.1.0;
+  import krate:net/sockets@0.1.0;
   import krate:time/clock@0.1.0;
   import krate:time/sleep@0.1.0;
   import krate:locale/info@0.1.0;

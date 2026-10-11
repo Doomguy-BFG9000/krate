@@ -210,3 +210,111 @@ interface ws {
   /// final `closed` event still arrives through `poll`.
   close: func(handle: u64);
 }
+
+/// TCP and UDP for an app that speaks its own protocol (IC-935): a game's
+/// client and server, QUIC, a chat protocol, a database driver.
+///
+/// The permission story is `net.connect`'s, exactly: a connection to a host
+/// and port, and every datagram sent to one, is judged against the person's
+/// `net.connect:<host>:<port>` grants before any socket exists, the same
+/// judgment a fetch gets. There is no separate capability to declare. An
+/// address an app looked up here stands for the name it looked up, so a grant
+/// for `play.example.com:14004` covers the address that name resolved to and
+/// no other. A UDP socket hears datagrams only from addresses it has sent to:
+/// binding one is not an open door.
+///
+/// Everything here returns immediately. Connections and lookups run on host
+/// threads; the app asks how they are doing from its own loop, as it does a
+/// WebSocket, so a stalled server can never freeze a frame. Listening for
+/// incoming connections is not here yet.
+interface sockets {
+  use types.{net-error};
+
+  /// What became of a lookup started with `lookup`.
+  variant lookup-status {
+    /// Still asking.
+    pending,
+    /// The addresses the name stands for, IPv4 and IPv6, as text.
+    ready(list<string>),
+    /// The name could not be resolved. Retires the handle.
+    failed(net-error),
+    /// Never issued, or already answered.
+    unknown-handle,
+  }
+
+  /// What became of a TCP connection started with `tcp-connect`.
+  variant connect-status {
+    /// Still dialling.
+    pending,
+    /// Connected, to this address ("ip:port").
+    connected(string),
+    /// It could not connect, or the connection broke. The handle stays until
+    /// `close`.
+    failed(net-error),
+    /// Never issued, or already closed.
+    unknown-handle,
+  }
+
+  /// What `tcp-read` found.
+  variant read-result {
+    /// Bytes that arrived, in order. Never empty.
+    data(list<u8>),
+    /// Nothing new; the connection is open. Ask again later.
+    pending,
+    /// The other end finished sending; nothing more will arrive.
+    closed,
+    /// The connection broke, with the reason.
+    failed(net-error),
+  }
+
+  /// One datagram that arrived on a UDP socket.
+  record datagram {
+    /// The sender's address, as an IP.
+    host: string,
+    /// The sender's port.
+    port: u16,
+    /// The payload.
+    data: list<u8>,
+  }
+
+  /// Start looking a name up. Allowed when some `net.connect` grant names
+  /// this host, on any port. Returns at once; ask `poll-lookup`.
+  lookup: func(host: string) -> result<u64, net-error>;
+
+  /// How a lookup is doing. A terminal answer retires the handle.
+  poll-lookup: func(handle: u64) -> lookup-status;
+
+  /// Start a TCP connection to a host (a name or an IP) and port. The grant
+  /// is checked here, before anything dials. Returns a handle at once.
+  tcp-connect: func(host: string, port: u16) -> result<u64, net-error>;
+
+  /// How a connection is doing.
+  tcp-status: func(handle: u64) -> connect-status;
+
+  /// Queue bytes to send. Returns how many were taken, which is fewer than
+  /// given (even 0) when the connection's queue is full: send the rest later.
+  /// Bytes written while still connecting are sent once connected.
+  tcp-write: func(handle: u64, bytes: list<u8>) -> result<u32, net-error>;
+
+  /// Take up to `max-bytes` of what has arrived. Never blocks.
+  tcp-read: func(handle: u64, max-bytes: u32) -> read-result;
+
+  /// Open a UDP socket on a port the host picks. Sending is what the grants
+  /// judge, so binding needs none. `ipv6` asks for an IPv6 socket.
+  udp-bind: func(ipv6: bool) -> result<u64, net-error>;
+
+  /// The local port a UDP socket was given.
+  udp-local-port: func(handle: u64) -> result<u16, net-error>;
+
+  /// Send one datagram to a host (a name or an IP) and port, judged against
+  /// the grants like a connection. Datagrams are best effort: a full send
+  /// queue drops this one and says so.
+  udp-send: func(handle: u64, host: string, port: u16, data: list<u8>) -> result<_, net-error>;
+
+  /// The next datagram that arrived from an address this socket has sent
+  /// to, or none. Never blocks.
+  udp-receive: func(handle: u64) -> option<datagram>;
+
+  /// Close a TCP connection or UDP socket. Safe on a handle already closed.
+  close: func(handle: u64);
+}
