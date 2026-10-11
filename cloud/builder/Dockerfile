@@ -103,6 +103,40 @@ RUN set -eux; \
     krate --version; \
     cargo-component --version
 
+# The C compiler for WebAssembly (IC-941, K-1072). An app whose crates
+# compile C -- ring for TLS and QUIC, rusqlite bundled, zstd -- needs a
+# clang that targets WASI and the WASI libc beside it; the image's own cc
+# has neither and fails with "'stdio.h' file not found". The same wasi-sdk
+# release `krate setup wasi-sdk` pins, verified before it is unpacked.
+#
+# WASI_SDK_SHA256 has no default on purpose: the digest is recorded once,
+# by scripts/wasi-sdk-checksums.py, and passed with
+# `--build-arg WASI_SDK_SHA256=...`. An image built without it stops here
+# rather than trusting a download.
+ARG WASI_SDK_VERSION=34.0
+ARG WASI_SDK_TAG=wasi-sdk-34
+ARG WASI_SDK_SHA256
+RUN set -eux; \
+    test -n "${WASI_SDK_SHA256}" || { echo "set --build-arg WASI_SDK_SHA256 (scripts/wasi-sdk-checksums.py)"; exit 1; }; \
+    file="wasi-sdk-${WASI_SDK_VERSION}-x86_64-linux.tar.gz"; \
+    cd /tmp; \
+    curl -fsSL -O "https://github.com/WebAssembly/wasi-sdk/releases/download/${WASI_SDK_TAG}/${file}"; \
+    echo "${WASI_SDK_SHA256}  ${file}" | sha256sum -c -; \
+    tar -xzf "${file}"; \
+    mv "wasi-sdk-${WASI_SDK_VERSION}-x86_64-linux" /opt/wasi-sdk; \
+    rm -f "/tmp/${file}"; \
+    /opt/wasi-sdk/bin/clang --version
+
+# Krate engines from IC-941 on find it through WASI_SDK_PATH. The released
+# engine this image pins may predate that, so cc-rs is also told directly;
+# a build passes these through to cargo either way.
+ENV WASI_SDK_PATH=/opt/wasi-sdk \
+    CC_wasm32_wasip1=/opt/wasi-sdk/bin/clang \
+    CXX_wasm32_wasip1=/opt/wasi-sdk/bin/clang++ \
+    AR_wasm32_wasip1=/opt/wasi-sdk/bin/llvm-ar \
+    CFLAGS_wasm32_wasip1="--target=wasm32-wasip1 --sysroot=/opt/wasi-sdk/share/wasi-sysroot" \
+    CXXFLAGS_wasm32_wasip1="--target=wasm32-wasip1 --sysroot=/opt/wasi-sdk/share/wasi-sysroot"
+
 WORKDIR /srv
 COPY package.json ./
 COPY src ./src
