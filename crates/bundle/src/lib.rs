@@ -4342,6 +4342,12 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
 
 #[cfg(feature = "fetch")]
 fn check_address(final_url: &str, bytes: &[u8]) -> Result<Option<String>> {
+    check_address_digest(final_url, &sha256_hex(bytes))
+}
+
+/// [`check_address`] against a digest already taken -- a big download is
+/// hashed as it streams to disk and never held whole (IC-945).
+fn check_address_digest(final_url: &str, actual: &str) -> Result<Option<String>> {
     let path = final_url.split(['?', '#']).next().unwrap_or(final_url);
     let segment = path.rsplit('/').next().unwrap_or("");
     let is_address = (8..=64).contains(&segment.len())
@@ -4351,7 +4357,6 @@ fn check_address(final_url: &str, bytes: &[u8]) -> Result<Option<String>> {
     if !is_address {
         return Ok(None);
     }
-    let actual = sha256_hex(bytes);
     if !actual.starts_with(segment) {
         return Err(BundleError::Fetch {
             url: final_url.to_string(),
@@ -4392,15 +4397,164 @@ fn fetch_resolved_here(url: &str, allow_insecure_http: bool) -> Result<Fetched> 
     // a number this small is safe: a slow 256 MB download over a poor link
     // keeps resetting it and is never cut off, while a silent server trips
     // it once.
+    let response = fetch_get(url)?;
+    fetch_small(url, response)
+}
+
+#[cfg(feature = "fetch")]
+fn fetch_get(url: &str) -> Result<ureq::Response> {
     let agent = ureq::AgentBuilder::new()
         .timeout_connect(FETCH_CONNECT_TIMEOUT)
         .timeout_read(FETCH_SILENCE_TIMEOUT)
         .build();
-    let response = agent.get(url).call().map_err(|err| BundleError::Fetch {
+    agent.get(url).call().map_err(|err| BundleError::Fetch {
         url: url.to_string(),
         message: map_fetch_error(url, err),
-    })?;
+    })
+}
 
+/// What a link to run turned out to be (IC-945).
+#[cfg(feature = "fetch")]
+pub enum FetchedForRun {
+    /// An ordinary app, read into memory and opened by the hub's limits.
+    Small(Box<Fetched>),
+    /// A big-tier app (the hub says `x-krate-tier: big`): saved to a file,
+    /// its digest held to the address, for the caller to open as a file on
+    /// this desktop.
+    Big {
+        path: PathBuf,
+        url: String,
+        address: Option<String>,
+    },
+}
+
+/// Fetch a link for `krate run`: an ordinary app as [`fetch_resolved`]
+/// does, a big-tier app saved under `big_dir` as `<sha256>.krate` with
+/// `progress(done, total)` as it arrives. A big app already saved there
+/// under its full address is not fetched again.
+#[cfg(feature = "fetch")]
+pub fn fetch_for_run(
+    url: &str,
+    allow_insecure_http: bool,
+    big_dir: &Path,
+    progress: &mut dyn FnMut(u64, Option<u64>),
+) -> Result<FetchedForRun> {
+    with_limits(HUB_LIMITS, || {
+        if url.starts_with("http://") && !allow_insecure_http {
+            return Err(BundleError::InsecureUrl {
+                url: url.to_string(),
+            });
+        }
+        let response = fetch_get(url)?;
+        if response.header("x-krate-tier") == Some("big") {
+            return fetch_big(url, response, big_dir, progress);
+        }
+        fetch_small(url, response).map(|fetched| FetchedForRun::Small(Box::new(fetched)))
+    })
+}
+
+#[cfg(feature = "fetch")]
+fn fetch_big(
+    url: &str,
+    response: ureq::Response,
+    big_dir: &Path,
+    progress: &mut dyn FnMut(u64, Option<u64>),
+) -> Result<FetchedForRun> {
+    use sha2::{Digest, Sha256};
+    let final_url = response.get_url().to_string();
+    let total: Option<u64> = response
+        .header("content-length")
+        .and_then(|n| n.parse().ok());
+    let ceiling = HUB_BIG_LIMITS.bundle_bytes;
+    if let Some(total) = total.filter(|total| *total > ceiling) {
+        return Err(BundleError::TooLarge {
+            size: total,
+            limit: ceiling,
+        });
+    }
+    fs::create_dir_all(big_dir).map_err(|err| io_err(big_dir, err))?;
+    // Saved under its full address before: the same bytes, so not again.
+    let path = final_url.split(['?', '#']).next().unwrap_or(&final_url);
+    let segment = path.rsplit('/').next().unwrap_or("");
+    if segment.len() == 64 && segment.bytes().all(|b| b.is_ascii_hexdigit()) {
+        let saved = big_dir.join(format!("{segment}.krate"));
+        let same_size = fs::metadata(&saved)
+            .map(|meta| Some(meta.len()) == total)
+            .unwrap_or(false);
+        if same_size {
+            return Ok(FetchedForRun::Big {
+                path: saved,
+                url: final_url.clone(),
+                address: Some(segment.to_string()),
+            });
+        }
+    }
+    let partial = big_dir.join(format!(".download-{}.part", std::process::id()));
+    let fail = |message: String| BundleError::Fetch {
+        url: url.to_string(),
+        message,
+    };
+    let mut out = File::create(&partial).map_err(|err| io_err(&partial, err))?;
+    let mut reader = response.into_reader().take(ceiling + 1);
+    let mut hasher = Sha256::new();
+    let mut done = 0u64;
+    let mut buffer = vec![0u8; 1 << 20];
+    let mut said = 0u64;
+    loop {
+        let n = reader
+            .read(&mut buffer)
+            .map_err(|err| fail(format!("the download stopped: {err}. Try again.")))?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buffer[..n]);
+        out.write_all(&buffer[..n])
+            .map_err(|err| io_err(&partial, err))?;
+        done += n as u64;
+        if done > ceiling {
+            let _ = fs::remove_file(&partial);
+            return Err(BundleError::TooLarge {
+                size: done,
+                limit: ceiling,
+            });
+        }
+        if done - said >= 8 * 1024 * 1024 {
+            said = done;
+            progress(done, total);
+        }
+    }
+    progress(done, total);
+    drop(out);
+    if total.is_some_and(|total| total != done) {
+        let _ = fs::remove_file(&partial);
+        return Err(fail(format!(
+            "the download did not finish ({done} of {} bytes). Try again.",
+            total.unwrap_or(0)
+        )));
+    }
+    let actual: String = hasher
+        .finalize()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    let address = match check_address_digest(&final_url, &actual) {
+        Ok(address) => address,
+        Err(err) => {
+            let _ = fs::remove_file(&partial);
+            return Err(err);
+        }
+    };
+    let saved = big_dir.join(format!("{actual}.krate"));
+    fs::rename(&partial, &saved).map_err(|err| io_err(&saved, err))?;
+    Ok(FetchedForRun::Big {
+        path: saved,
+        url: final_url,
+        address,
+    })
+}
+
+#[cfg(feature = "fetch")]
+fn fetch_small(url: &str, response: ureq::Response) -> Result<Fetched> {
     // Where the bytes finally came from: a channel link redirects to the
     // fixed address it currently points at, and that is the address the
     // bytes are held to.

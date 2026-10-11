@@ -1000,6 +1000,15 @@ enum Command {
         /// Small square PNG logo for the listing (under 512 KiB).
         #[arg(long)]
         icon: Option<PathBuf>,
+
+        /// The app's exact source, as a .tar.zst, offered beside the listing
+        /// at /a/<id>/source -- what a GPL app must offer (IC-945).
+        #[arg(long)]
+        source: Option<PathBuf>,
+
+        /// A plain-text file of credits and licences, shown at /a/<id>/notices.
+        #[arg(long)]
+        notices: Option<PathBuf>,
     },
 
     /// Author a small app from a request and package it as one shareable
@@ -2102,6 +2111,8 @@ fn run() -> Result<u8> {
             name,
             shot,
             icon,
+            source,
+            notices,
         } => publish_bundle(
             &bundle,
             hub.as_deref(),
@@ -2110,6 +2121,10 @@ fn run() -> Result<u8> {
             shot.as_deref(),
             icon.as_deref(),
             unlisted,
+            Attachments {
+                source: source.as_deref(),
+                notices: notices.as_deref(),
+            },
         ),
         Command::Create {
             request,
@@ -7739,7 +7754,16 @@ fn card_bundle(
 }
 
 pub(crate) fn publish_bundle_for_tui(bundle: &Path, description: Option<&str>) -> Result<()> {
-    let code = publish_bundle(bundle, None, description, None, None, None, false)?;
+    let code = publish_bundle(
+        bundle,
+        None,
+        description,
+        None,
+        None,
+        None,
+        false,
+        Attachments::default(),
+    )?;
     if code == 0 {
         Ok(())
     } else {
@@ -7747,6 +7771,18 @@ pub(crate) fn publish_bundle_for_tui(bundle: &Path, description: Option<&str>) -
     }
 }
 
+/// Files offered beside a listing through the big-file path (IC-945).
+#[derive(Default, Clone, Copy)]
+struct Attachments<'a> {
+    source: Option<&'a Path>,
+    notices: Option<&'a Path>,
+}
+
+/// The publish door takes one request of at most this; a bigger app goes
+/// through the big-file path (cloud/worker MAX_UPLOAD_BYTES, IC-945).
+const PUBLISH_DOOR_BYTES: usize = 5 * 1024 * 1024;
+
+#[allow(clippy::too_many_arguments)]
 fn publish_bundle(
     bundle: &Path,
     hub_override: Option<&str>,
@@ -7755,6 +7791,7 @@ fn publish_bundle(
     shot_override: Option<&Path>,
     icon: Option<&Path>,
     unlisted: bool,
+    attachments: Attachments,
 ) -> Result<u8> {
     // Only upload something that is actually a bundle. Catching it here means a
     // wrong path fails locally with a clear message instead of round-tripping
@@ -7887,9 +7924,36 @@ fn publish_bundle(
         request = request.set("Authorization", &format!("Bearer {}", identity.token));
     }
 
-    let response = match request.send_bytes(&bytes) {
-        Ok(response) => response,
-        Err(ureq::Error::Status(code, response)) => {
+    // Over the door's one request: the big-file path, in parts (IC-945).
+    let big_body = if bytes.len() > PUBLISH_DOOR_BYTES {
+        let Some(identity) = &identity else {
+            anyhow::bail!("not signed in. Sign in first, then publish again.");
+        };
+        let fields = serde_json::json!({
+            "name": app_name,
+            "description": description.unwrap_or(""),
+            "category": classify_app(&app_name, description.unwrap_or("")),
+            "unlisted": unlisted,
+        });
+        Some(publish_big(
+            &hub,
+            &identity.token,
+            &bytes,
+            "bundle",
+            None,
+            fields,
+        )?)
+    } else {
+        None
+    };
+    let response = match big_body {
+        Some(_) => None,
+        None => Some(request.send_bytes(&bytes)),
+    };
+    let response = match response {
+        None => None,
+        Some(Ok(response)) => Some(response),
+        Some(Err(ureq::Error::Status(code, response))) => {
             let detail = response
                 .into_string()
                 .unwrap_or_else(|_| "(no detail)".to_string());
@@ -7898,7 +7962,7 @@ fn publish_bundle(
                 detail.trim()
             );
         }
-        Err(ureq::Error::Transport(err)) => {
+        Some(Err(ureq::Error::Transport(err))) => {
             anyhow::bail!(
                 "could not reach the hub at {hub}: {err}\n\
                  Is a hub running? Start one locally with `krate-hub`, or point \
@@ -7907,9 +7971,13 @@ fn publish_bundle(
         }
     };
 
-    let body = response
-        .into_string()
-        .context("could not read the hub's response")?;
+    let body = match (response, big_body) {
+        (Some(response), _) => response
+            .into_string()
+            .context("could not read the hub's response")?,
+        (None, Some(body)) => body,
+        (None, None) => unreachable!("one of the two doors answered"),
+    };
     // The response is a small JSON object { "url", "id" }. Rather than pull in a
     // parser for two fields, pluck the url out; if the shape is unexpected, show
     // the raw body so it is still debuggable.
@@ -7971,6 +8039,31 @@ fn publish_bundle(
             }
         }
     }
+    // The app's source and notices, offered beside the listing (IC-945).
+    if attachments.source.is_some() || attachments.notices.is_some() {
+        let (Some(id), Some(identity)) = (shot_id.as_deref(), &identity) else {
+            anyhow::bail!("published, but the hub gave no id to attach the source to");
+        };
+        for (kind, path) in [
+            ("source", attachments.source),
+            ("notices", attachments.notices),
+        ] {
+            let Some(path) = path else { continue };
+            let file = fs::read(path).with_context(|| format!("reading {}", path.display()))?;
+            let answer = publish_big(
+                &hub,
+                &identity.token,
+                &file,
+                kind,
+                Some(id),
+                serde_json::json!({}),
+            )?;
+            if let Some(at) = extract_json_string(&answer, "url") {
+                println!("{kind}: {at}");
+            }
+        }
+    }
+
     // The hub degrades rather than dies when a metadata write cannot land
     // (a KV quota day): the app is live at its URL but the gallery row is
     // deferred, and it says so in a `note`. Swallowing that note showed a
@@ -8002,6 +8095,190 @@ fn publish_bundle(
         }
     }
     Ok(0)
+}
+
+/// Upload `bytes` through Krate Cloud's big-file path (IC-945) and wait for
+/// the hub's judgement. `kind` is `bundle`, `source` or `notices`; the last
+/// two attach to the listing `for_hash`. Answers JSON with the listing's
+/// `url` and, for a bundle, `id` (its content hash).
+///
+/// Resumable: the upload's token and every part's etag are kept in
+/// ~/.krate/uploads/<sha256>-<kind>.json, so running the same publish again
+/// after a dropped connection sends only the parts still missing.
+fn publish_big(
+    hub: &str,
+    token: &str,
+    bytes: &[u8],
+    kind: &str,
+    for_hash: Option<&str>,
+    fields: serde_json::Value,
+) -> Result<String> {
+    let hub = hub.trim_end_matches('/');
+    let sha256 = krate_bundle::sha256_hex(bytes);
+    let agent = ureq::AgentBuilder::new()
+        .timeout_connect(std::time::Duration::from_secs(20))
+        .timeout_read(std::time::Duration::from_secs(600))
+        .timeout_write(std::time::Duration::from_secs(600))
+        .build();
+    let state_path = krate_home()
+        .join("uploads")
+        .join(format!("{sha256}-{kind}.json"));
+    let json_of = |response: ureq::Response| -> serde_json::Value {
+        response
+            .into_string()
+            .ok()
+            .and_then(|text| serde_json::from_str(&text).ok())
+            .unwrap_or_default()
+    };
+    let hub_error = |what: &str, err: ureq::Error| -> anyhow::Error {
+        match err {
+            ureq::Error::Status(code, response) => anyhow::anyhow!(
+                "the hub refused {what} (HTTP {code}): {}",
+                response.into_string().unwrap_or_default().trim()
+            ),
+            ureq::Error::Transport(err) => {
+                anyhow::anyhow!("could not reach the hub at {hub} for {what}: {err}")
+            }
+        }
+    };
+
+    // Resume, or start.
+    let mut state: serde_json::Value = fs::read(&state_path)
+        .ok()
+        .and_then(|raw| serde_json::from_slice(&raw).ok())
+        .filter(|state: &serde_json::Value| state["hub"] == hub)
+        .unwrap_or(serde_json::Value::Null);
+    if state.is_null() {
+        let mut ask = serde_json::json!({ "kind": kind, "size": bytes.len(), "sha256": sha256 });
+        if let (Some(map), Some(extra)) = (ask.as_object_mut(), fields.as_object()) {
+            for (k, v) in extra {
+                map.insert(k.clone(), v.clone());
+            }
+            if let Some(for_hash) = for_hash {
+                map.insert("for".into(), serde_json::json!(for_hash));
+            }
+        }
+        let started = agent
+            .post(&format!("{hub}/publish/big/start"))
+            .set("Authorization", &format!("Bearer {token}"))
+            .set("Content-Type", "application/json")
+            .send_string(&ask.to_string())
+            .map_err(|err| hub_error("the upload", err))
+            .map(json_of)?;
+        if started["already"] == true {
+            println!("these exact bytes are already on Krate Cloud");
+            return Ok(serde_json::json!({ "url": started["url"], "id": sha256 }).to_string());
+        }
+        state = serde_json::json!({
+            "hub": hub,
+            "id": started["id"],
+            "token": started["token"],
+            "parts": started["parts"],
+            "part_size": started["part_size"],
+            "etags": {},
+        });
+        if let Some(parent) = state_path.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+        let _ = fs::write(&state_path, state.to_string());
+    }
+    let id = state["id"].as_str().unwrap_or_default().to_string();
+    let upload_token = state["token"].as_str().unwrap_or_default().to_string();
+    let parts = state["parts"].as_u64().unwrap_or(0) as usize;
+    let part_size = state["part_size"].as_u64().unwrap_or(0) as usize;
+    if id.is_empty() || parts == 0 || part_size == 0 {
+        let _ = fs::remove_file(&state_path);
+        anyhow::bail!(
+            "the hub's answer to starting an upload was missing its parts; publish again"
+        );
+    }
+
+    // The parts not yet sent, each tried three times.
+    let total_mb = bytes.len() / 1_000_000;
+    for n in 1..=parts {
+        if state["etags"][n.to_string()].is_string() {
+            continue;
+        }
+        let start = (n - 1) * part_size;
+        let end = (n * part_size).min(bytes.len());
+        let mut last = None;
+        for _attempt in 0..3 {
+            match agent
+                .put(&format!("{hub}/publish/big/{id}/part/{n}"))
+                .set("X-Krate-Upload", &upload_token)
+                .set("Content-Type", "application/octet-stream")
+                .send_bytes(&bytes[start..end])
+            {
+                Ok(response) => {
+                    let answer = json_of(response);
+                    if let Some(etag) = answer["etag"].as_str() {
+                        state["etags"][n.to_string()] = serde_json::json!(etag);
+                        let _ = fs::write(&state_path, state.to_string());
+                        last = None;
+                        break;
+                    }
+                    last = Some(anyhow::anyhow!("the hub took part {n} but gave no etag"));
+                }
+                Err(ureq::Error::Status(401, _)) => {
+                    // The token expired: the next publish starts afresh.
+                    let _ = fs::remove_file(&state_path);
+                    anyhow::bail!("this upload's token expired; publish again to start over");
+                }
+                Err(err) => last = Some(hub_error(&format!("part {n}"), err)),
+            }
+        }
+        if let Some(err) = last {
+            return Err(err.context(format!(
+                "part {n} of {parts} did not go; publish again to send the rest"
+            )));
+        }
+        println!("  sent {} of {total_mb} MB", end / 1_000_000);
+    }
+
+    // Finish, then wait for the hub's judgement.
+    let parts_list: Vec<serde_json::Value> = (1..=parts)
+        .map(|n| serde_json::json!({ "part": n, "etag": state["etags"][n.to_string()] }))
+        .collect();
+    let finished = agent
+        .post(&format!("{hub}/publish/big/{id}/finish"))
+        .set("X-Krate-Upload", &upload_token)
+        .set("Content-Type", "application/json")
+        .send_string(&serde_json::json!({ "parts": parts_list }).to_string());
+    let mut status: serde_json::Value = match finished {
+        Ok(response) => json_of(response),
+        Err(ureq::Error::Status(422, response)) => json_of(response),
+        Err(err) => return Err(hub_error("finishing the upload", err)),
+    };
+    println!("  uploaded; Krate Cloud is checking it");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20 * 60);
+    while status["status"] == "judging" || status["status"] == "uploading" {
+        if std::time::Instant::now() > deadline {
+            anyhow::bail!(
+                "Krate Cloud is still checking it; it will be listed when the check passes                  (run the same publish again to ask)"
+            );
+        }
+        std::thread::sleep(std::time::Duration::from_secs(3));
+        status = agent
+            .get(&format!("{hub}/publish/big/{id}"))
+            .set("X-Krate-Upload", &upload_token)
+            .call()
+            .map_err(|err| hub_error("the upload's status", err))
+            .map(json_of)?;
+    }
+    let _ = fs::remove_file(&state_path);
+    match status["status"].as_str() {
+        Some("listed") => {
+            let mut out = serde_json::json!({ "url": status["url"] });
+            if kind == "bundle" {
+                out["id"] = serde_json::json!(sha256);
+            }
+            Ok(out.to_string())
+        }
+        _ => anyhow::bail!(
+            "Krate Cloud did not take it: {}",
+            status["problem"].as_str().unwrap_or("no reason was given")
+        ),
+    }
 }
 
 /// Which shelf an app belongs on, from its own words. A fixed list on
@@ -14531,15 +14808,7 @@ fn resolve_run_target(
     insecure_http: bool,
 ) -> Result<(PathBuf, Option<PathBuf>, Option<krate_bundle::OpenBundle>)> {
     if krate_bundle::is_url(target) {
-        let fetched = krate_bundle::fetch_resolved(target, insecure_http)
-            .with_context(|| format!("could not open bundle from {target}"))?;
-        report_resolution(target, &fetched);
-        let bundle = fetched.bundle;
-        return Ok((
-            bundle.component_path().to_path_buf(),
-            Some(bundle.manifest_path().to_path_buf()),
-            Some(bundle),
-        ));
+        return run_target_from_link(target, target, insecure_http);
     }
 
     let path = PathBuf::from(target);
@@ -14550,15 +14819,7 @@ fn resolve_run_target(
     // A real file always wins; this can never shadow one.
     if !path.exists() {
         if let Some(url) = krate_bundle::implied_url(target) {
-            let fetched = krate_bundle::fetch_resolved(&url, insecure_http)
-                .with_context(|| format!("could not open bundle from {url} (from `{target}`)"))?;
-            report_resolution(&url, &fetched);
-            let bundle = fetched.bundle;
-            return Ok((
-                bundle.component_path().to_path_buf(),
-                Some(bundle.manifest_path().to_path_buf()),
-                Some(bundle),
-            ));
+            return run_target_from_link(&url, target, insecure_http);
         }
     }
 
@@ -14642,6 +14903,76 @@ fn opened_cache_root() -> Option<PathBuf> {
         home_dir()?.join(".cache").join("krate")
     };
     Some(root.join("opened"))
+}
+
+/// A link's app, ready to run. An ordinary one is read and opened by the
+/// hub's limits; a big-tier one (IC-945) is saved to a file with its
+/// progress shown, held to its address, and opened as a file on this
+/// desktop -- where a 370 MB game opens, and where it is kept for next time.
+#[allow(clippy::type_complexity)]
+fn run_target_from_link(
+    url: &str,
+    asked: &str,
+    insecure_http: bool,
+) -> Result<(PathBuf, Option<PathBuf>, Option<krate_bundle::OpenBundle>)> {
+    let context = || {
+        if url == asked {
+            format!("could not open bundle from {url}")
+        } else {
+            format!("could not open bundle from {url} (from `{asked}`)")
+        }
+    };
+    let downloads = opened_cache_root()
+        .and_then(|root| root.parent().map(|parent| parent.join("downloads")))
+        .unwrap_or_else(|| std::env::temp_dir().join("krate-downloads"));
+    // A line every tenth of the way, not every few megabytes.
+    let mut shown = u64::MAX;
+    let mut progress = |done: u64, total: Option<u64>| {
+        let step = match total {
+            Some(total) if total > 0 => done * 10 / total,
+            _ => done / 50_000_000,
+        };
+        if step == shown {
+            return;
+        }
+        shown = step;
+        match total {
+            Some(total) if total > 0 => eprintln!(
+                "downloading: {} of {} MB ({}%)",
+                done / 1_000_000,
+                total / 1_000_000,
+                done * 100 / total
+            ),
+            _ => eprintln!("downloading: {} MB", done / 1_000_000),
+        }
+    };
+    let bundle = match krate_bundle::fetch_for_run(url, insecure_http, &downloads, &mut progress)
+        .with_context(context)?
+    {
+        krate_bundle::FetchedForRun::Small(fetched) => {
+            report_resolution(url, &fetched);
+            fetched.bundle
+        }
+        krate_bundle::FetchedForRun::Big { path, address, .. } => {
+            if let Some(address) = address {
+                eprintln!(
+                    "fixed address: the bytes match {}...",
+                    &address[..address.len().min(12)]
+                );
+            }
+            eprintln!("saved to {}", path.display());
+            opened_cache_root()
+                .and_then(|root| krate_bundle::open_cached(&path, &root).ok())
+                .map(Ok)
+                .unwrap_or_else(|| krate_bundle::open(&path))
+                .with_context(context)?
+        }
+    };
+    Ok((
+        bundle.component_path().to_path_buf(),
+        Some(bundle.manifest_path().to_path_buf()),
+        Some(bundle),
+    ))
 }
 
 /// Read a task file (`krate-check.toml`): the app's primary task as steps

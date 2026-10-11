@@ -7184,6 +7184,369 @@ fn a_grant_the_manifest_never_declared_is_refused_on_the_command_line() {
     assert_eq!(String::from_utf8_lossy(&fine.stdout).trim(), "held=10");
 }
 
+/// A tiny HTTP server for the big-file path's tests (IC-945): every request
+/// goes to `handle(method, path, headers, body)`, which answers
+/// `(status, extra headers, body)`. One request per connection.
+#[allow(clippy::type_complexity)]
+fn spawn_fake_hub(
+    handle: std::sync::Arc<
+        dyn Fn(&str, &str, &[(String, String)], &[u8]) -> (u16, Vec<(String, String)>, Vec<u8>)
+            + Send
+            + Sync,
+    >,
+) -> Option<(SocketAddr, std::sync::Arc<std::sync::atomic::AtomicBool>)> {
+    let listener = bind_local_fixture_listener("fake hub")?;
+    let addr = listener.local_addr().expect("addr");
+    let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let stopping = stop.clone();
+    listener.set_nonblocking(true).expect("nonblocking");
+    thread::spawn(move || {
+        while !stopping.load(std::sync::atomic::Ordering::SeqCst) {
+            let stream = match listener.accept() {
+                Ok((stream, _)) => stream,
+                Err(err) if err.kind() == ErrorKind::WouldBlock => {
+                    thread::sleep(Duration::from_millis(5));
+                    continue;
+                }
+                Err(_) => break,
+            };
+            let handle = handle.clone();
+            thread::spawn(move || {
+                let mut stream = stream;
+                stream.set_nonblocking(false).ok();
+                let mut head = Vec::new();
+                let mut byte = [0u8; 1];
+                while !head.ends_with(b"\r\n\r\n") {
+                    if stream.read(&mut byte).unwrap_or(0) == 0 {
+                        return;
+                    }
+                    head.push(byte[0]);
+                }
+                let head = String::from_utf8_lossy(&head).to_string();
+                let mut lines = head.split("\r\n");
+                let mut first = lines.next().unwrap_or("").split(' ');
+                let method = first.next().unwrap_or("").to_string();
+                let path = first.next().unwrap_or("").to_string();
+                let headers: Vec<(String, String)> = lines
+                    .filter_map(|l| l.split_once(':'))
+                    .map(|(k, v)| (k.trim().to_ascii_lowercase(), v.trim().to_string()))
+                    .collect();
+                let length: usize = headers
+                    .iter()
+                    .find(|(k, _)| k == "content-length")
+                    .and_then(|(_, v)| v.parse().ok())
+                    .unwrap_or(0);
+                let mut body = vec![0u8; length];
+                if stream.read_exact(&mut body).is_err() {
+                    return;
+                }
+                let (status, extra, out) = handle(&method, &path, &headers, &body);
+                let mut response = format!(
+                    "HTTP/1.1 {status} X\r\nContent-Length: {}\r\nConnection: close\r\n",
+                    out.len()
+                );
+                for (k, v) in extra {
+                    response.push_str(&format!("{k}: {v}\r\n"));
+                }
+                response.push_str("\r\n");
+                let _ = stream.write_all(response.as_bytes());
+                let _ = stream.write_all(&out);
+            });
+        }
+    });
+    Some((addr, stop))
+}
+
+/// A bundle with `noise_bytes` of incompressible asset, packed by the CLI.
+fn noisy_bundle(dir: &std::path::Path, noise_bytes: usize, seed: u64) -> PathBuf {
+    let wasm = dir.join("code.wasm");
+    std::fs::write(
+        &wasm,
+        include_bytes!("../../bundle/tests/fixtures/minimal-run.wasm"),
+    )
+    .expect("component");
+    let manifest = dir.join("manifest.toml");
+    std::fs::write(
+        &manifest,
+        "[app]\nid = \"dev.krate.bigpub\"\nname = \"Big Pub\"\nversion = \"1.0.0\"\n\
+         entry = \"code.wasm\"\nworld = \"krate:app/cli@0.1.0\"\n",
+    )
+    .expect("manifest");
+    let assets = dir.join("assets");
+    std::fs::create_dir_all(&assets).expect("assets");
+    let mut x = seed | 1;
+    let noise: Vec<u8> = (0..noise_bytes)
+        .map(|_| {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            (x >> 24) as u8
+        })
+        .collect();
+    std::fs::write(assets.join("noise.bin"), noise).expect("noise");
+    let bundle = dir.join("bigpub.krate");
+    let packed = krate()
+        .arg("pack")
+        .arg(&wasm)
+        .arg("--manifest")
+        .arg(&manifest)
+        .arg("-o")
+        .arg(&bundle)
+        .output()
+        .expect("pack");
+    assert!(
+        packed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&packed.stderr)
+    );
+    bundle
+}
+
+/// `krate publish` sends an app over the publish door's 5 MiB through the
+/// big-file path (IC-945): started, sent in parts, finished, and the hub's
+/// verdict waited for -- and a publish cut off part way resumes, sending
+/// only the parts still missing.
+#[test]
+fn a_big_app_is_published_in_parts_and_a_cut_off_publish_resumes() {
+    use std::sync::{Arc, Mutex};
+    let dir = tempfile::tempdir().expect("tempdir");
+    let home = tempfile::tempdir().expect("home");
+    std::fs::create_dir_all(home.path().join(".krate")).expect("krate home");
+    std::fs::write(
+        home.path().join(".krate/github.json"),
+        r#"{"login":"alice","name":"Alice","avatar_url":null,"token":"krs_alice"}"#,
+    )
+    .expect("sign-in");
+    let bundle = noisy_bundle(dir.path(), 12 * 1024 * 1024, 7);
+    let bytes = std::fs::read(&bundle).expect("bundle");
+    let sha = format!("{:x}", Sha256::digest(&bytes));
+    let part_size = 5 * 1024 * 1024usize;
+    let parts = bytes.len().div_ceil(part_size);
+
+    #[derive(Default)]
+    struct Hub {
+        starts: usize,
+        door: usize,
+        sent: Vec<usize>,
+        stored: std::collections::BTreeMap<usize, Vec<u8>>,
+        fail_part: Option<usize>,
+        finished: bool,
+    }
+    let hub = Arc::new(Mutex::new(Hub {
+        fail_part: Some(2),
+        ..Default::default()
+    }));
+    let state = hub.clone();
+    let sha_for_hub = sha.clone();
+    let Some((addr, stop)) = spawn_fake_hub(Arc::new(move |method, path, headers, body| {
+        let mut hub = state.lock().unwrap();
+        let header = |name: &str| {
+            headers
+                .iter()
+                .find(|(k, _)| k == name)
+                .map(|(_, v)| v.clone())
+                .unwrap_or_default()
+        };
+        let ok = |json: serde_json::Value| (200, vec![], json.to_string().into_bytes());
+        match (method, path) {
+            ("POST", "/publish") => {
+                hub.door += 1;
+                (413, vec![], b"bundle too large".to_vec())
+            }
+            ("POST", "/publish/big/start") => {
+                hub.starts += 1;
+                assert_eq!(header("authorization"), "Bearer krs_alice");
+                let ask: serde_json::Value = serde_json::from_slice(body).unwrap();
+                assert_eq!(ask["sha256"], sha_for_hub.as_str());
+                assert_eq!(ask["kind"], "bundle");
+                assert_eq!(ask["name"], "Big Pub");
+                ok(serde_json::json!({
+                    "id": "upload0001", "parts": parts, "part_size": part_size, "token": "tok"
+                }))
+            }
+            ("PUT", p) if p.starts_with("/publish/big/upload0001/part/") => {
+                assert_eq!(header("x-krate-upload"), "tok");
+                let n: usize = p.rsplit('/').next().unwrap().parse().unwrap();
+                hub.sent.push(n);
+                if hub.fail_part == Some(n) {
+                    return (503, vec![], b"busy".to_vec());
+                }
+                hub.stored.insert(n, body.to_vec());
+                ok(serde_json::json!({ "part": n, "etag": format!("e{n}") }))
+            }
+            ("POST", "/publish/big/upload0001/finish") => {
+                let ask: serde_json::Value = serde_json::from_slice(body).unwrap();
+                assert_eq!(ask["parts"].as_array().unwrap().len(), parts);
+                hub.finished = true;
+                (
+                    202,
+                    vec![],
+                    serde_json::json!({ "status": "judging" })
+                        .to_string()
+                        .into_bytes(),
+                )
+            }
+            ("GET", "/publish/big/upload0001") => ok(serde_json::json!({
+                "status": "listed", "url": format!("https://hub.example/a/{}", &sha_for_hub[..12])
+            })),
+            _ => (404, vec![], b"not found".to_vec()),
+        }
+    })) else {
+        return;
+    };
+    let publish = || {
+        krate()
+            .arg("publish")
+            .arg(&bundle)
+            .args(["--hub", &format!("http://{addr}")])
+            .args(["--shot", "/nonexistent.png"])
+            .env("HOME", home.path())
+            .output()
+            .expect("publish")
+    };
+
+    // Part 2 fails three times: the publish stops and says to run it again.
+    let first = publish();
+    let said = format!(
+        "{}{}",
+        String::from_utf8_lossy(&first.stdout),
+        String::from_utf8_lossy(&first.stderr)
+    );
+    assert!(!first.status.success(), "{said}");
+    assert!(said.contains("publish again"), "{said}");
+    {
+        let hub = hub.lock().unwrap();
+        assert_eq!(
+            hub.door, 0,
+            "an app over 5 MiB never goes to the one-request door"
+        );
+        assert_eq!(hub.sent, vec![1, 2, 2, 2]);
+    }
+
+    // Run again: no new start, only the missing parts, then listed.
+    hub.lock().unwrap().fail_part = None;
+    let second = publish();
+    let said = format!(
+        "{}{}",
+        String::from_utf8_lossy(&second.stdout),
+        String::from_utf8_lossy(&second.stderr)
+    );
+    assert!(second.status.success(), "{said}");
+    assert!(
+        said.contains(&format!("krate run https://hub.example/a/{}", &sha[..12])),
+        "{said}"
+    );
+    let hub = hub.lock().unwrap();
+    assert_eq!(hub.starts, 1, "the resumed publish did not start over");
+    assert_eq!(
+        &hub.sent[4..],
+        &(2..=parts).collect::<Vec<_>>()[..],
+        "only the missing parts"
+    );
+    assert!(hub.finished);
+    let assembled: Vec<u8> = hub.stored.values().flatten().copied().collect();
+    assert_eq!(assembled, bytes, "the parts are the bundle, in order");
+    assert!(
+        !home
+            .path()
+            .join(format!(".krate/uploads/{sha}-bundle.json"))
+            .exists(),
+        "a finished upload forgets its resume file"
+    );
+    stop.store(true, std::sync::atomic::Ordering::SeqCst);
+}
+
+/// `krate run <link>` to a big-tier app (IC-945): the hub says
+/// `x-krate-tier: big`, so the app is saved to a file with its progress
+/// shown, held to its address, and opened as a file on this desktop -- and
+/// a second run does not download it again.
+#[test]
+fn a_big_tier_link_is_saved_to_a_file_and_run_from_it() {
+    use std::sync::{atomic::AtomicUsize, Arc};
+    let dir = tempfile::tempdir().expect("tempdir");
+    let cache = tempfile::tempdir().expect("cache");
+    let bundle = noisy_bundle(dir.path(), 64 * 1024, 3);
+    let bytes = Arc::new(std::fs::read(&bundle).expect("bundle"));
+    let sha = format!("{:x}", Sha256::digest(&bytes[..]));
+    let gets = Arc::new(AtomicUsize::new(0));
+    let (served, counted, path_sha) = (bytes.clone(), gets.clone(), sha.clone());
+    let Some((addr, stop)) = spawn_fake_hub(Arc::new(move |_method, path, _headers, _body| {
+        if path == format!("/a/{path_sha}") {
+            counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            (
+                200,
+                vec![("x-krate-tier".into(), "big".into())],
+                served.to_vec(),
+            )
+        } else if path == "/a/0000000000000000" {
+            (
+                200,
+                vec![("x-krate-tier".into(), "big".into())],
+                served.to_vec(),
+            )
+        } else {
+            (404, vec![], b"not found".to_vec())
+        }
+    })) else {
+        return;
+    };
+    let run = |path: &str| {
+        krate()
+            .arg("run")
+            .arg(format!("http://{addr}{path}"))
+            .args(["--insecure-http", "--auto-grant"])
+            .env("KRATE_CACHE_DIR", cache.path())
+            .output()
+            .expect("run")
+    };
+    let first = run(&format!("/a/{sha}"));
+    let said = String::from_utf8_lossy(&first.stderr).to_string();
+    assert!(
+        first.status.success(),
+        "{said}{}",
+        String::from_utf8_lossy(&first.stdout)
+    );
+    assert!(said.contains("downloading:"), "progress is shown: {said}");
+    let saved = cache.path().join("downloads").join(format!("{sha}.krate"));
+    assert_eq!(
+        std::fs::read(&saved).expect("saved"),
+        *bytes,
+        "saved under its address"
+    );
+    assert!(
+        said.contains(&saved.display().to_string()),
+        "says where it is: {said}"
+    );
+
+    let written = std::fs::metadata(&saved)
+        .and_then(|m| m.modified())
+        .expect("mtime");
+    std::thread::sleep(Duration::from_millis(20));
+    let second = run(&format!("/a/{sha}"));
+    assert!(second.status.success());
+    assert_eq!(
+        std::fs::metadata(&saved)
+            .and_then(|m| m.modified())
+            .expect("mtime"),
+        written,
+        "the saved copy was used, not downloaded again"
+    );
+    // The second run asked (one request), and read the saved file rather
+    // than a second download: the fake answers in full either way, so the
+    // proof is that nothing was written again.
+    assert_eq!(gets.load(std::sync::atomic::Ordering::SeqCst), 2);
+
+    // Bytes that are not the ones the address names do not run.
+    let bad = run("/a/0000000000000000");
+    assert!(!bad.status.success());
+    assert!(
+        String::from_utf8_lossy(&bad.stderr).contains("not the ones it names"),
+        "{}",
+        String::from_utf8_lossy(&bad.stderr)
+    );
+    stop.store(true, std::sync::atomic::Ordering::SeqCst);
+}
+
 /// `krate judge` gives the hub's own answer (IC-945): for the publish
 /// door, exactly what the wasm validator in the Worker answers (the same
 /// function builds both); for the big tier, the same checks at its own
