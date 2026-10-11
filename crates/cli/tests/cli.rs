@@ -33,6 +33,8 @@ fn krate() -> Command {
     // the founder saw a test's "Rate card" window jump in front of his work
     // every few minutes while the gate ran.
     command.env("KRATE_QUIET_WINDOW", "1");
+    // And no voice out loud from a speaking app (K-1077).
+    command.env("KRATE_SILENT_SPEECH", "1");
     command
 }
 
