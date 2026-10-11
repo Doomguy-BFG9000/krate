@@ -123,15 +123,13 @@ fn home(iface: &str) -> (&'static str, &'static str) {
 ///
 /// Audio is not among them: a sound engine feeds its stream from a thread of
 /// its own (cpal's Krate host, IC-932), and the host's streams are device
-/// handles that any thread may start, stop and write to.
-fn main_thread_only(iface: &str, func: &str) -> bool {
+/// handles that any thread may start, stop and write to. Nor is the GPU, its
+/// surface included: an engine renders and presents from a worker (Bevy's
+/// multi-threaded executor), and a frame presented there is lowered to the
+/// window by the main thread on its next turn (`WorkerScreen`).
+fn main_thread_only(iface: &str, _func: &str) -> bool {
     let pkg = iface.split('/').next().unwrap_or("");
     matches!(pkg, "ui" | "gfx" | "camera" | "speech")
-        || (iface == "gpu/gpu"
-            && matches!(
-                func,
-                "create-surface" | "present" | "surface-pixel-size" | "current-texture"
-            ))
 }
 
 fn fam_tag(fam: &str) -> &'static str {
@@ -830,12 +828,18 @@ impl<'a> Gen<'a> {
         } else {
             format!(", {}", args.join(", "))
         };
+        // A GPU present's frame pacing is waited out once the host is let go.
+        let paced = if iface == "gpu/gpu" && func.name == "present" {
+            "crate::core_app::paced(); "
+        } else {
+            ""
+        };
         let _ = writeln!(
             self.funcs,
             "{{ let st = st.clone(); linker.func_new({key:?}, {name:?}, wasmtime::FuncType::new(&engine, [{p}], [{res}]), \
              move |mut caller, args, rets| {{ let cx = st.cx(); {lifts} \
              let r = {{ let mut h = st.host({only_main}, \"{iface}\")?; {path}::{trait_}::{method}(h.{accessor}(){call_args})? }}; \
-             {lower} Ok(()) }})?; }}",
+             {paced}{lower} Ok(()) }})?; }}",
             name = func.name,
             p = params.join(", "),
             res = results.join(", "),

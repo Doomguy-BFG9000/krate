@@ -1659,6 +1659,15 @@ struct HostState {
 }
 
 impl HostState {
+    /// The main thread's turn at a threaded app's host: what workers left for
+    /// the window (IC-929).
+    pub(crate) fn main_turn(&self) {
+        #[cfg(feature = "phase2-bindings")]
+        if let Some(gui) = self.phase3_gui.as_ref() {
+            gui.main_turn();
+        }
+    }
+
     fn new(config: &Config, output: OutputMode) -> Result<Self> {
         let memory_bytes = usize::try_from(config.memory_bytes)
             .map_err(|_| RuntimeError::EngineInit("memory limit is too large".to_string()))?;

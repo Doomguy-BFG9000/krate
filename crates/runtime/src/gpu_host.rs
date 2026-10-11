@@ -2473,12 +2473,18 @@ impl g::Host for Phase3GuiHost {
         self.images
             .borrow_mut()
             .insert((window, widget), Arc::new(image));
-        let result = self
-            .sync_native_widgets(window)
-            .map_err(|error| t::GpuError::Internal(error.to_string()));
-        if result.is_ok() && worth_shooting {
-            self.maybe_take_screenshot();
-        }
+        let result = if self.screen.on_main() {
+            let result = self
+                .sync_native_widgets(window)
+                .map_err(|error| t::GpuError::Internal(error.to_string()));
+            if result.is_ok() && worth_shooting {
+                self.maybe_take_screenshot();
+            }
+            result
+        } else {
+            self.hand_frame_to_main(window, worth_shooting);
+            Ok(())
+        };
         self.frame_ended.set(true);
         self.end_stepped_frame();
         Ok(result)

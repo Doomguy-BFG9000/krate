@@ -269,10 +269,67 @@ pub struct Phase3GuiHost {
     /// Set when a frame was presented, so the next draw op starts a fresh
     /// recording rather than appending to the frame just measured.
     frame_ended: std::cell::Cell<bool>,
+    /// The screen as the app's other threads see it (IC-929): the thread that
+    /// made this host owns the window (AppKit keeps it in that thread's
+    /// state), so a frame another thread presents waits here for it.
+    pub(crate) screen: WorkerScreen,
     /// The usability script, when this run is a driven one. `None` on every
     /// ordinary run, which is what keeps this whole mechanism off the path a
     /// person's app takes.
     usability: Option<UsabilityDriver>,
+}
+
+/// Wait until `due`. Sleep short, then close the gap by yielding: every OS
+/// rounds a sleep UP to its timer granularity, and on Windows that is ~15.6
+/// ms, so asking for the exact remainder overshoots by a whole frame.
+pub(crate) fn sleep_until(due: std::time::Instant) {
+    const SPIN_MARGIN: std::time::Duration = std::time::Duration::from_micros(1_200);
+    let remainder = due.saturating_duration_since(std::time::Instant::now());
+    if remainder > SPIN_MARGIN {
+        std::thread::sleep(remainder - SPIN_MARGIN);
+    }
+    while std::time::Instant::now() < due {
+        std::thread::yield_now();
+    }
+}
+
+/// What a threaded app's worker threads know of the screen (IC-929).
+///
+/// A window lives in the state of the thread that made it -- AppKit's on a
+/// Mac -- so a worker cannot lower a frame to it or ask its pixel density.
+/// Bevy's multi-threaded executor presents from whichever thread runs its
+/// render system; the frame is kept here and the main thread lowers it the
+/// next time it takes the host, and a worker reads the density the main
+/// thread last saw.
+pub(crate) struct WorkerScreen {
+    main: std::thread::ThreadId,
+    /// Windows a worker presented to, not yet lowered, and whether a
+    /// `--shoot` picture may be taken of them.
+    pub(crate) unsynced: std::cell::RefCell<Vec<(WindowId, bool)>>,
+    /// Each window's pixel density, as the main thread last saw it.
+    scales: std::cell::RefCell<std::collections::HashMap<WindowId, f32>>,
+    /// Whether a worker has touched the screen at all: until one does the
+    /// main thread's turn costs nothing.
+    pub(crate) used: std::cell::Cell<bool>,
+    /// A threaded app: a GPU present's frame pacing waits after the host is
+    /// let go (`core_app::paced`), not while holding it.
+    pub(crate) pace_outside: std::cell::Cell<bool>,
+}
+
+impl WorkerScreen {
+    fn new() -> Self {
+        Self {
+            main: std::thread::current().id(),
+            unsynced: Default::default(),
+            scales: Default::default(),
+            used: std::cell::Cell::new(false),
+            pace_outside: std::cell::Cell::new(false),
+        }
+    }
+
+    pub(crate) fn on_main(&self) -> bool {
+        std::thread::current().id() == self.main
+    }
 }
 
 /// The scripted half of a driven run: which step is next, and what each one saw.
@@ -523,6 +580,7 @@ impl Phase3GuiHost {
             inspected_ops: std::cell::RefCell::new(Vec::new()),
             inspected_canvas_size: std::cell::Cell::new(None),
             frame_ended: std::cell::Cell::new(false),
+            screen: WorkerScreen::new(),
             usability: None,
         })
     }
@@ -621,6 +679,38 @@ impl Phase3GuiHost {
     /// tree is fully built: an app constructs its whole window, then waits for
     /// input. Capturing mid-construction (on every tree sync) grabbed a
     /// half-built frame -- a checklist with its title but not its rows.
+    /// The main thread's turn at the host, in a threaded app (IC-929): lower
+    /// the frames workers presented since, and note each window's density
+    /// for them. Free until a worker first touches the screen.
+    pub(crate) fn main_turn(&self) {
+        if !self.screen.used.get() || !self.screen.on_main() {
+            return;
+        }
+        let presented = std::mem::take(&mut *self.screen.unsynced.borrow_mut());
+        for (window, worth_shooting) in presented {
+            if let Err(error) = self.sync_native_widgets(window) {
+                tracing::debug!(?error, "a frame a worker presented could not be lowered");
+            } else if worth_shooting {
+                self.maybe_take_screenshot();
+            }
+        }
+        for window in self.windows.iter().copied() {
+            let scale = self.dispatcher().window_scale(window);
+            self.screen.scales.borrow_mut().insert(window, scale);
+        }
+    }
+
+    /// A worker presented to `window`: its own thread lowers the frame on
+    /// its next turn (WorkerScreen).
+    pub(crate) fn hand_frame_to_main(&self, window: WindowId, worth_shooting: bool) {
+        self.screen.used.set(true);
+        let mut unsynced = self.screen.unsynced.borrow_mut();
+        match unsynced.iter_mut().find(|(w, _)| *w == window) {
+            Some(entry) => entry.1 |= worth_shooting,
+            None => unsynced.push((window, worth_shooting)),
+        }
+    }
+
     fn maybe_take_screenshot(&self) {
         let Some(window) = self.windows.first().copied() else {
             return;
@@ -2681,22 +2771,25 @@ impl Phase3GuiHost {
             self.last_present.set(Some(std::time::Instant::now()));
             return;
         }
-        if let Some(previous) = self.last_present.get() {
-            let elapsed = previous.elapsed();
-            if elapsed < FRAME_BUDGET {
-                // Sleep short, then close the gap by yielding: every OS rounds
-                // a sleep UP to its timer granularity, and on Windows that is
-                // ~15.6 ms, so asking for the exact remainder overshoots by a
-                // whole frame.
-                const SPIN_MARGIN: std::time::Duration = std::time::Duration::from_micros(1_200);
-                let remainder = FRAME_BUDGET - elapsed;
-                if remainder > SPIN_MARGIN {
-                    std::thread::sleep(remainder - SPIN_MARGIN);
-                }
-                while previous.elapsed() < FRAME_BUDGET {
-                    std::thread::yield_now();
-                }
+        let due = self
+            .last_present
+            .get()
+            .map(|previous| previous + FRAME_BUDGET)
+            .filter(|due| *due > std::time::Instant::now());
+        // A threaded app's host is one lock its threads take in turn: waiting
+        // here would hold every other thread out of the host for the rest of
+        // the frame. The wait happens after the call lets go of it instead.
+        #[cfg(not(any(target_os = "ios", target_arch = "wasm32")))]
+        if self.screen.pace_outside.get() {
+            if let Some(due) = due {
+                crate::core_app::pace_until(due);
             }
+            self.last_present
+                .set(Some(due.unwrap_or_else(std::time::Instant::now)));
+            return;
+        }
+        if let Some(due) = due {
+            sleep_until(due);
         }
         self.last_present.set(Some(std::time::Instant::now()));
     }
@@ -2768,10 +2861,25 @@ impl Phase3GuiHost {
 
     /// Density needed by both the display and an optional screenshot consumer.
     fn canvas_backing_scale(&self, window: WindowId) -> f32 {
+        // A worker thread reads the density the main thread last saw: only
+        // the window's own thread can ask it (WorkerScreen).
+        let native = if self.screen.on_main() {
+            let scale = self.dispatcher().window_scale(window);
+            self.screen.scales.borrow_mut().insert(window, scale);
+            scale
+        } else {
+            self.screen.used.set(true);
+            self.screen
+                .scales
+                .borrow()
+                .get(&window)
+                .copied()
+                .unwrap_or(1.0)
+        };
         // A headless adapter has no display and reports 1x. Raster at the
         // requested capture density as well, otherwise --shoot-scale 2 only
         // enlarges a 1x canvas image. Native runs without a shot are unchanged.
-        self.dispatcher().window_scale(window).max(
+        native.max(
             self.screenshot
                 .as_ref()
                 .map(|(_, scale)| *scale)
@@ -6993,6 +7101,67 @@ mod tests {
     /// pointer and ignored Enter, because the runtime delivered a raw key
     /// and nothing else. The app receives the key first, then a press and a
     /// release aimed at the button, exactly as a pointer would deliver them.
+    /// A threaded app's worker presents (IC-929): the frame waits for the
+    /// window's own thread, which lowers it on its next turn; a worker asks
+    /// nothing of the window itself and reads the density the main thread saw.
+    #[test]
+    fn a_frame_a_worker_presents_is_lowered_on_the_main_threads_turn() {
+        let mut host = headless_host();
+        ui::window::Host::create(
+            &mut host,
+            "app".to_string(),
+            ui::types::WindowSize {
+                width: 200,
+                height: 100,
+            },
+        )
+        .expect("create call")
+        .expect("a window");
+        let window = *host.windows.first().expect("window id");
+        // Nothing has come from a worker: the main thread's turn is free.
+        host.main_turn();
+        assert!(!host.screen.used.get());
+
+        struct Across<'a>(&'a Phase3GuiHost);
+        // SAFETY: the test thread waits for the worker; the two never touch
+        // the host at once, as core_app's host lock guarantees in a real run.
+        unsafe impl Send for Across<'_> {}
+        unsafe impl Sync for Across<'_> {}
+        impl<'a> Across<'a> {
+            fn host(&self) -> &'a Phase3GuiHost {
+                self.0
+            }
+        }
+        host.screen.scales.borrow_mut().insert(window, 2.0);
+        let across = Across(&host);
+        let worker_scale = std::thread::scope(|s| {
+            s.spawn(|| {
+                let host = across.host();
+                assert!(!host.screen.on_main());
+                host.hand_frame_to_main(window, true);
+                host.hand_frame_to_main(window, false);
+                // A worker's turn lowers nothing: only the window's thread can.
+                host.main_turn();
+                host.canvas_backing_scale(window)
+            })
+            .join()
+            .expect("worker")
+        });
+        assert_eq!(worker_scale, 2.0, "the density the main thread last saw");
+        assert_eq!(
+            *host.screen.unsynced.borrow(),
+            vec![(window, true)],
+            "one frame waits for the window, still worth a shot"
+        );
+        host.main_turn();
+        assert!(host.screen.unsynced.borrow().is_empty());
+        assert_eq!(
+            host.screen.scales.borrow().get(&window).copied(),
+            Some(host.dispatcher().window_scale(window)),
+            "the main thread's turn noted the window's own density"
+        );
+    }
+
     #[test]
     fn enter_on_a_focused_button_arrives_as_a_press_and_a_release() {
         let mut host = headless_host();

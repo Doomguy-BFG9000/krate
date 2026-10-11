@@ -397,6 +397,26 @@ pub(crate) mod abi {
 
 include!(concat!(env!("OUT_DIR"), "/core_glue.rs"));
 
+thread_local! {
+    /// When this thread's GPU present may return: its frame pacing, waited
+    /// out after the host is let go so the app's other threads keep their
+    /// turns (`Phase3GuiHost::pace_frame`).
+    static PACE_UNTIL: std::cell::Cell<Option<std::time::Instant>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// Ask this thread to wait until `due` once it lets go of the host.
+pub(crate) fn pace_until(due: std::time::Instant) {
+    PACE_UNTIL.with(|p| p.set(Some(due)));
+}
+
+/// Wait out the pacing a present asked for, outside the host.
+pub(crate) fn paced() {
+    if let Some(due) = PACE_UNTIL.with(|p| p.take()) {
+        crate::phase3_gui_host::sleep_until(due);
+    }
+}
+
 /// The app called `exit(code)`.
 #[derive(Debug)]
 pub(crate) struct AppExit(pub(crate) i32);
@@ -464,8 +484,9 @@ impl Shared {
         abi::Cx::new(&self.memory)
     }
 
-    /// The host, for a call into `iface`. The window and the GPU surface
-    /// answer the main thread only.
+    /// The host, for a call into `iface`. The window answers the main thread
+    /// only; the main thread's every turn first lowers the frames workers
+    /// presented (`Phase3GuiHost::main_turn`).
     pub(crate) fn host(
         &self,
         main_only: bool,
@@ -477,8 +498,13 @@ impl Shared {
                  the screen live there"
             )));
         }
+        let on_main = std::thread::current().id() == self.main;
         if !lock_trace() {
-            return Ok(self.host.lock());
+            let guard = self.host.lock();
+            if on_main {
+                guard.main_turn();
+            }
+            return Ok(guard);
         }
         // KRATE_HOST_LOCK_TRACE=1: say who waits long for the host, and
         // which call last took it -- the picture of a stall.
@@ -495,6 +521,9 @@ impl Shared {
             }
         };
         *self.last_holder.lock() = Some((iface, me));
+        if on_main {
+            guard.main_turn();
+        }
         Ok(guard)
     }
 
@@ -721,6 +750,7 @@ impl super::Runtime {
         .with_chosen_files(state.chosen.clone())
         .with_stepped_clock(state.stepped_clock.clone())
         .with_app_name(config.app_name.clone());
+        gui_host.screen.pace_outside.set(true);
         state.phase3_gui = Some(gui_host);
 
         let shared = Arc::new(Shared {
