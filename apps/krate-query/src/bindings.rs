@@ -10256,6 +10256,1024 @@ pub mod krate {
                 }
             }
         }
+        /// Videos an app plays inside its own layout (IC-922).
+        ///
+        /// The platform decodes -- AVFoundation on a Mac and an iPhone -- with its
+        /// hardware, and plays the sound itself. The app never touches a frame's
+        /// bytes: it draws the video into a canvas by handle, each frame, the way it
+        /// draws a kept picture, so a film costs the app no more than a rectangle.
+        /// Its own controls (play, pause, a scrubber) are ordinary widgets or canvas
+        /// drawing that call the functions below.
+        #[allow(dead_code, async_fn_in_trait, unused_imports, clippy::all)]
+        pub mod video {
+            #[used]
+            #[doc(hidden)]
+            static __FORCE_SECTION_REF: fn() = super::super::super::__link_custom_section_describing_imports;
+            use super::super::super::_rt;
+            pub type Rect = super::super::super::krate::gfx::types::Rect;
+            pub type CornerRadii = super::super::super::krate::gfx::types::CornerRadii;
+            pub type GfxError = super::super::super::krate::gfx::types::GfxError;
+            /// Where a video is and what it is doing, read as often as the app likes.
+            #[derive(Clone)]
+            pub struct VideoState {
+                /// Where playback is, in milliseconds from the start.
+                pub position_millis: u64,
+                /// How long the video runs, in milliseconds; 0 until it has loaded, and
+                /// 0 for a live stream that has no end.
+                pub duration_millis: u64,
+                /// The picture's own width in pixels; 0 until it has loaded.
+                pub width: u32,
+                /// The picture's own height in pixels; 0 until it has loaded.
+                pub height: u32,
+                /// True once the first frame can be shown.
+                pub ready: bool,
+                /// True while it is playing.
+                pub playing: bool,
+                /// True when it reached the end and is not looping.
+                pub ended: bool,
+                /// Why it cannot play, when it cannot: a file that is not a video, a
+                /// stream that went away. Empty while all is well.
+                pub problem: _rt::String,
+            }
+            impl ::core::fmt::Debug for VideoState {
+                fn fmt(
+                    &self,
+                    f: &mut ::core::fmt::Formatter<'_>,
+                ) -> ::core::fmt::Result {
+                    f.debug_struct("VideoState")
+                        .field("position-millis", &self.position_millis)
+                        .field("duration-millis", &self.duration_millis)
+                        .field("width", &self.width)
+                        .field("height", &self.height)
+                        .field("ready", &self.ready)
+                        .field("playing", &self.playing)
+                        .field("ended", &self.ended)
+                        .field("problem", &self.problem)
+                        .finish()
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Open a video, paused at the start. `source` is a path inside the app's
+            /// bundled assets ("clips/intro.mp4") or an `https://` address the app
+            /// was granted `net.connect` to. Loading continues after this returns:
+            /// read `state` for `ready`.
+            pub fn open(source: &str) -> Result<u64, GfxError> {
+                unsafe {
+                    #[repr(align(8))]
+                    struct RetArea(
+                        [::core::mem::MaybeUninit<
+                            u8,
+                        >; 16 + 2 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let mut ret_area = RetArea(
+                        [::core::mem::MaybeUninit::uninit(); 16
+                            + 2 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let vec0 = source;
+                    let ptr0 = vec0.as_ptr().cast::<u8>();
+                    let len0 = vec0.len();
+                    let ptr1 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:gfx/video@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "open"]
+                        fn wit_import2(_: *mut u8, _: usize, _: *mut u8);
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import2(_: *mut u8, _: usize, _: *mut u8) {
+                        unreachable!()
+                    }
+                    unsafe { wit_import2(ptr0.cast_mut(), len0, ptr1) };
+                    let l3 = i32::from(*ptr1.add(0).cast::<u8>());
+                    let result13 = match l3 {
+                        0 => {
+                            let e = {
+                                let l4 = *ptr1.add(8).cast::<i64>();
+                                l4 as u64
+                            };
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l5 = i32::from(*ptr1.add(8).cast::<u8>());
+                                use super::super::super::krate::gfx::types::GfxError as V12;
+                                let v12 = match l5 {
+                                    0 => V12::PermissionDenied,
+                                    1 => V12::InvalidTarget,
+                                    2 => {
+                                        let e12 = {
+                                            let l6 = *ptr1
+                                                .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l7 = *ptr1
+                                                .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len8 = l7;
+                                            let bytes8 = _rt::Vec::from_raw_parts(
+                                                l6.cast(),
+                                                len8,
+                                                len8,
+                                            );
+                                            _rt::string_lift(bytes8)
+                                        };
+                                        V12::Unsupported(e12)
+                                    }
+                                    n => {
+                                        debug_assert_eq!(n, 3, "invalid enum discriminant");
+                                        let e12 = {
+                                            let l9 = *ptr1
+                                                .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l10 = *ptr1
+                                                .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len11 = l10;
+                                            let bytes11 = _rt::Vec::from_raw_parts(
+                                                l9.cast(),
+                                                len11,
+                                                len11,
+                                            );
+                                            _rt::string_lift(bytes11)
+                                        };
+                                        V12::Platform(e12)
+                                    }
+                                };
+                                v12
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    };
+                    result13
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Start or carry on playing.
+            pub fn play(video: u64) -> Result<(), GfxError> {
+                unsafe {
+                    #[cfg_attr(target_pointer_width = "64", repr(align(8)))]
+                    #[cfg_attr(target_pointer_width = "32", repr(align(4)))]
+                    struct RetArea(
+                        [::core::mem::MaybeUninit<
+                            u8,
+                        >; 4 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let mut ret_area = RetArea(
+                        [::core::mem::MaybeUninit::uninit(); 4
+                            * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:gfx/video@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "play"]
+                        fn wit_import1(_: i64, _: *mut u8);
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import1(_: i64, _: *mut u8) {
+                        unreachable!()
+                    }
+                    unsafe { wit_import1(_rt::as_i64(&video), ptr0) };
+                    let l2 = i32::from(*ptr0.add(0).cast::<u8>());
+                    let result11 = match l2 {
+                        0 => {
+                            let e = ();
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l3 = i32::from(
+                                    *ptr0.add(::core::mem::size_of::<*const u8>()).cast::<u8>(),
+                                );
+                                use super::super::super::krate::gfx::types::GfxError as V10;
+                                let v10 = match l3 {
+                                    0 => V10::PermissionDenied,
+                                    1 => V10::InvalidTarget,
+                                    2 => {
+                                        let e10 = {
+                                            let l4 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l5 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len6 = l5;
+                                            let bytes6 = _rt::Vec::from_raw_parts(
+                                                l4.cast(),
+                                                len6,
+                                                len6,
+                                            );
+                                            _rt::string_lift(bytes6)
+                                        };
+                                        V10::Unsupported(e10)
+                                    }
+                                    n => {
+                                        debug_assert_eq!(n, 3, "invalid enum discriminant");
+                                        let e10 = {
+                                            let l7 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l8 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len9 = l8;
+                                            let bytes9 = _rt::Vec::from_raw_parts(
+                                                l7.cast(),
+                                                len9,
+                                                len9,
+                                            );
+                                            _rt::string_lift(bytes9)
+                                        };
+                                        V10::Platform(e10)
+                                    }
+                                };
+                                v10
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    };
+                    result11
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Stop where it is.
+            pub fn pause(video: u64) -> Result<(), GfxError> {
+                unsafe {
+                    #[cfg_attr(target_pointer_width = "64", repr(align(8)))]
+                    #[cfg_attr(target_pointer_width = "32", repr(align(4)))]
+                    struct RetArea(
+                        [::core::mem::MaybeUninit<
+                            u8,
+                        >; 4 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let mut ret_area = RetArea(
+                        [::core::mem::MaybeUninit::uninit(); 4
+                            * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:gfx/video@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "pause"]
+                        fn wit_import1(_: i64, _: *mut u8);
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import1(_: i64, _: *mut u8) {
+                        unreachable!()
+                    }
+                    unsafe { wit_import1(_rt::as_i64(&video), ptr0) };
+                    let l2 = i32::from(*ptr0.add(0).cast::<u8>());
+                    let result11 = match l2 {
+                        0 => {
+                            let e = ();
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l3 = i32::from(
+                                    *ptr0.add(::core::mem::size_of::<*const u8>()).cast::<u8>(),
+                                );
+                                use super::super::super::krate::gfx::types::GfxError as V10;
+                                let v10 = match l3 {
+                                    0 => V10::PermissionDenied,
+                                    1 => V10::InvalidTarget,
+                                    2 => {
+                                        let e10 = {
+                                            let l4 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l5 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len6 = l5;
+                                            let bytes6 = _rt::Vec::from_raw_parts(
+                                                l4.cast(),
+                                                len6,
+                                                len6,
+                                            );
+                                            _rt::string_lift(bytes6)
+                                        };
+                                        V10::Unsupported(e10)
+                                    }
+                                    n => {
+                                        debug_assert_eq!(n, 3, "invalid enum discriminant");
+                                        let e10 = {
+                                            let l7 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l8 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len9 = l8;
+                                            let bytes9 = _rt::Vec::from_raw_parts(
+                                                l7.cast(),
+                                                len9,
+                                                len9,
+                                            );
+                                            _rt::string_lift(bytes9)
+                                        };
+                                        V10::Platform(e10)
+                                    }
+                                };
+                                v10
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    };
+                    result11
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Jump to `millis` from the start, exactly, playing or paused.
+            pub fn seek(video: u64, millis: u64) -> Result<(), GfxError> {
+                unsafe {
+                    #[cfg_attr(target_pointer_width = "64", repr(align(8)))]
+                    #[cfg_attr(target_pointer_width = "32", repr(align(4)))]
+                    struct RetArea(
+                        [::core::mem::MaybeUninit<
+                            u8,
+                        >; 4 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let mut ret_area = RetArea(
+                        [::core::mem::MaybeUninit::uninit(); 4
+                            * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:gfx/video@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "seek"]
+                        fn wit_import1(_: i64, _: i64, _: *mut u8);
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import1(_: i64, _: i64, _: *mut u8) {
+                        unreachable!()
+                    }
+                    unsafe {
+                        wit_import1(_rt::as_i64(&video), _rt::as_i64(&millis), ptr0)
+                    };
+                    let l2 = i32::from(*ptr0.add(0).cast::<u8>());
+                    let result11 = match l2 {
+                        0 => {
+                            let e = ();
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l3 = i32::from(
+                                    *ptr0.add(::core::mem::size_of::<*const u8>()).cast::<u8>(),
+                                );
+                                use super::super::super::krate::gfx::types::GfxError as V10;
+                                let v10 = match l3 {
+                                    0 => V10::PermissionDenied,
+                                    1 => V10::InvalidTarget,
+                                    2 => {
+                                        let e10 = {
+                                            let l4 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l5 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len6 = l5;
+                                            let bytes6 = _rt::Vec::from_raw_parts(
+                                                l4.cast(),
+                                                len6,
+                                                len6,
+                                            );
+                                            _rt::string_lift(bytes6)
+                                        };
+                                        V10::Unsupported(e10)
+                                    }
+                                    n => {
+                                        debug_assert_eq!(n, 3, "invalid enum discriminant");
+                                        let e10 = {
+                                            let l7 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l8 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len9 = l8;
+                                            let bytes9 = _rt::Vec::from_raw_parts(
+                                                l7.cast(),
+                                                len9,
+                                                len9,
+                                            );
+                                            _rt::string_lift(bytes9)
+                                        };
+                                        V10::Platform(e10)
+                                    }
+                                };
+                                v10
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    };
+                    result11
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Start again from the beginning on reaching the end.
+            pub fn set_looping(video: u64, looping: bool) -> Result<(), GfxError> {
+                unsafe {
+                    #[cfg_attr(target_pointer_width = "64", repr(align(8)))]
+                    #[cfg_attr(target_pointer_width = "32", repr(align(4)))]
+                    struct RetArea(
+                        [::core::mem::MaybeUninit<
+                            u8,
+                        >; 4 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let mut ret_area = RetArea(
+                        [::core::mem::MaybeUninit::uninit(); 4
+                            * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:gfx/video@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "set-looping"]
+                        fn wit_import1(_: i64, _: i32, _: *mut u8);
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import1(_: i64, _: i32, _: *mut u8) {
+                        unreachable!()
+                    }
+                    unsafe {
+                        wit_import1(
+                            _rt::as_i64(&video),
+                            match &looping {
+                                true => 1,
+                                false => 0,
+                            },
+                            ptr0,
+                        )
+                    };
+                    let l2 = i32::from(*ptr0.add(0).cast::<u8>());
+                    let result11 = match l2 {
+                        0 => {
+                            let e = ();
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l3 = i32::from(
+                                    *ptr0.add(::core::mem::size_of::<*const u8>()).cast::<u8>(),
+                                );
+                                use super::super::super::krate::gfx::types::GfxError as V10;
+                                let v10 = match l3 {
+                                    0 => V10::PermissionDenied,
+                                    1 => V10::InvalidTarget,
+                                    2 => {
+                                        let e10 = {
+                                            let l4 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l5 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len6 = l5;
+                                            let bytes6 = _rt::Vec::from_raw_parts(
+                                                l4.cast(),
+                                                len6,
+                                                len6,
+                                            );
+                                            _rt::string_lift(bytes6)
+                                        };
+                                        V10::Unsupported(e10)
+                                    }
+                                    n => {
+                                        debug_assert_eq!(n, 3, "invalid enum discriminant");
+                                        let e10 = {
+                                            let l7 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l8 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len9 = l8;
+                                            let bytes9 = _rt::Vec::from_raw_parts(
+                                                l7.cast(),
+                                                len9,
+                                                len9,
+                                            );
+                                            _rt::string_lift(bytes9)
+                                        };
+                                        V10::Platform(e10)
+                                    }
+                                };
+                                v10
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    };
+                    result11
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Silence it, or let it be heard.
+            pub fn set_muted(video: u64, muted: bool) -> Result<(), GfxError> {
+                unsafe {
+                    #[cfg_attr(target_pointer_width = "64", repr(align(8)))]
+                    #[cfg_attr(target_pointer_width = "32", repr(align(4)))]
+                    struct RetArea(
+                        [::core::mem::MaybeUninit<
+                            u8,
+                        >; 4 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let mut ret_area = RetArea(
+                        [::core::mem::MaybeUninit::uninit(); 4
+                            * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:gfx/video@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "set-muted"]
+                        fn wit_import1(_: i64, _: i32, _: *mut u8);
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import1(_: i64, _: i32, _: *mut u8) {
+                        unreachable!()
+                    }
+                    unsafe {
+                        wit_import1(
+                            _rt::as_i64(&video),
+                            match &muted {
+                                true => 1,
+                                false => 0,
+                            },
+                            ptr0,
+                        )
+                    };
+                    let l2 = i32::from(*ptr0.add(0).cast::<u8>());
+                    let result11 = match l2 {
+                        0 => {
+                            let e = ();
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l3 = i32::from(
+                                    *ptr0.add(::core::mem::size_of::<*const u8>()).cast::<u8>(),
+                                );
+                                use super::super::super::krate::gfx::types::GfxError as V10;
+                                let v10 = match l3 {
+                                    0 => V10::PermissionDenied,
+                                    1 => V10::InvalidTarget,
+                                    2 => {
+                                        let e10 = {
+                                            let l4 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l5 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len6 = l5;
+                                            let bytes6 = _rt::Vec::from_raw_parts(
+                                                l4.cast(),
+                                                len6,
+                                                len6,
+                                            );
+                                            _rt::string_lift(bytes6)
+                                        };
+                                        V10::Unsupported(e10)
+                                    }
+                                    n => {
+                                        debug_assert_eq!(n, 3, "invalid enum discriminant");
+                                        let e10 = {
+                                            let l7 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l8 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len9 = l8;
+                                            let bytes9 = _rt::Vec::from_raw_parts(
+                                                l7.cast(),
+                                                len9,
+                                                len9,
+                                            );
+                                            _rt::string_lift(bytes9)
+                                        };
+                                        V10::Platform(e10)
+                                    }
+                                };
+                                v10
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    };
+                    result11
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Where it is and what it is doing.
+            pub fn state(video: u64) -> Result<VideoState, GfxError> {
+                unsafe {
+                    #[repr(align(8))]
+                    struct RetArea(
+                        [::core::mem::MaybeUninit<
+                            u8,
+                        >; 40 + 2 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let mut ret_area = RetArea(
+                        [::core::mem::MaybeUninit::uninit(); 40
+                            + 2 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:gfx/video@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "state"]
+                        fn wit_import1(_: i64, _: *mut u8);
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import1(_: i64, _: *mut u8) {
+                        unreachable!()
+                    }
+                    unsafe { wit_import1(_rt::as_i64(&video), ptr0) };
+                    let l2 = i32::from(*ptr0.add(0).cast::<u8>());
+                    let result21 = match l2 {
+                        0 => {
+                            let e = {
+                                let l3 = *ptr0.add(8).cast::<i64>();
+                                let l4 = *ptr0.add(16).cast::<i64>();
+                                let l5 = *ptr0.add(24).cast::<i32>();
+                                let l6 = *ptr0.add(28).cast::<i32>();
+                                let l7 = i32::from(*ptr0.add(32).cast::<u8>());
+                                let l8 = i32::from(*ptr0.add(33).cast::<u8>());
+                                let l9 = i32::from(*ptr0.add(34).cast::<u8>());
+                                let l10 = *ptr0
+                                    .add(32 + 1 * ::core::mem::size_of::<*const u8>())
+                                    .cast::<*mut u8>();
+                                let l11 = *ptr0
+                                    .add(32 + 2 * ::core::mem::size_of::<*const u8>())
+                                    .cast::<usize>();
+                                let len12 = l11;
+                                let bytes12 = _rt::Vec::from_raw_parts(
+                                    l10.cast(),
+                                    len12,
+                                    len12,
+                                );
+                                VideoState {
+                                    position_millis: l3 as u64,
+                                    duration_millis: l4 as u64,
+                                    width: l5 as u32,
+                                    height: l6 as u32,
+                                    ready: _rt::bool_lift(l7 as u8),
+                                    playing: _rt::bool_lift(l8 as u8),
+                                    ended: _rt::bool_lift(l9 as u8),
+                                    problem: _rt::string_lift(bytes12),
+                                }
+                            };
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l13 = i32::from(*ptr0.add(8).cast::<u8>());
+                                use super::super::super::krate::gfx::types::GfxError as V20;
+                                let v20 = match l13 {
+                                    0 => V20::PermissionDenied,
+                                    1 => V20::InvalidTarget,
+                                    2 => {
+                                        let e20 = {
+                                            let l14 = *ptr0
+                                                .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l15 = *ptr0
+                                                .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len16 = l15;
+                                            let bytes16 = _rt::Vec::from_raw_parts(
+                                                l14.cast(),
+                                                len16,
+                                                len16,
+                                            );
+                                            _rt::string_lift(bytes16)
+                                        };
+                                        V20::Unsupported(e20)
+                                    }
+                                    n => {
+                                        debug_assert_eq!(n, 3, "invalid enum discriminant");
+                                        let e20 = {
+                                            let l17 = *ptr0
+                                                .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l18 = *ptr0
+                                                .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len19 = l18;
+                                            let bytes19 = _rt::Vec::from_raw_parts(
+                                                l17.cast(),
+                                                len19,
+                                                len19,
+                                            );
+                                            _rt::string_lift(bytes19)
+                                        };
+                                        V20::Platform(e20)
+                                    }
+                                };
+                                v20
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    };
+                    result21
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Draw the current frame into `area` of a canvas, stretched to fill it.
+            /// Draws nothing until the first frame is ready. Call it every frame the
+            /// canvas is drawn; keep `area` to the video's shape (`width`/`height`)
+            /// to avoid stretching it.
+            pub fn draw(canvas: u64, video: u64, area: Rect) -> Result<(), GfxError> {
+                unsafe {
+                    #[cfg_attr(target_pointer_width = "64", repr(align(8)))]
+                    #[cfg_attr(target_pointer_width = "32", repr(align(4)))]
+                    struct RetArea(
+                        [::core::mem::MaybeUninit<
+                            u8,
+                        >; 4 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let mut ret_area = RetArea(
+                        [::core::mem::MaybeUninit::uninit(); 4
+                            * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let super::super::super::krate::gfx::types::Rect {
+                        x: x0,
+                        y: y0,
+                        width: width0,
+                        height: height0,
+                    } = area;
+                    let ptr1 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:gfx/video@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "draw"]
+                        fn wit_import2(
+                            _: i64,
+                            _: i64,
+                            _: f32,
+                            _: f32,
+                            _: f32,
+                            _: f32,
+                            _: *mut u8,
+                        );
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import2(
+                        _: i64,
+                        _: i64,
+                        _: f32,
+                        _: f32,
+                        _: f32,
+                        _: f32,
+                        _: *mut u8,
+                    ) {
+                        unreachable!()
+                    }
+                    unsafe {
+                        wit_import2(
+                            _rt::as_i64(&canvas),
+                            _rt::as_i64(&video),
+                            _rt::as_f32(x0),
+                            _rt::as_f32(y0),
+                            _rt::as_f32(width0),
+                            _rt::as_f32(height0),
+                            ptr1,
+                        )
+                    };
+                    let l3 = i32::from(*ptr1.add(0).cast::<u8>());
+                    let result12 = match l3 {
+                        0 => {
+                            let e = ();
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l4 = i32::from(
+                                    *ptr1.add(::core::mem::size_of::<*const u8>()).cast::<u8>(),
+                                );
+                                use super::super::super::krate::gfx::types::GfxError as V11;
+                                let v11 = match l4 {
+                                    0 => V11::PermissionDenied,
+                                    1 => V11::InvalidTarget,
+                                    2 => {
+                                        let e11 = {
+                                            let l5 = *ptr1
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l6 = *ptr1
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len7 = l6;
+                                            let bytes7 = _rt::Vec::from_raw_parts(
+                                                l5.cast(),
+                                                len7,
+                                                len7,
+                                            );
+                                            _rt::string_lift(bytes7)
+                                        };
+                                        V11::Unsupported(e11)
+                                    }
+                                    n => {
+                                        debug_assert_eq!(n, 3, "invalid enum discriminant");
+                                        let e11 = {
+                                            let l8 = *ptr1
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l9 = *ptr1
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len10 = l9;
+                                            let bytes10 = _rt::Vec::from_raw_parts(
+                                                l8.cast(),
+                                                len10,
+                                                len10,
+                                            );
+                                            _rt::string_lift(bytes10)
+                                        };
+                                        V11::Platform(e11)
+                                    }
+                                };
+                                v11
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    };
+                    result12
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// The same, with rounded corners.
+            pub fn draw_round(
+                canvas: u64,
+                video: u64,
+                area: Rect,
+                radii: CornerRadii,
+            ) -> Result<(), GfxError> {
+                unsafe {
+                    #[cfg_attr(target_pointer_width = "64", repr(align(8)))]
+                    #[cfg_attr(target_pointer_width = "32", repr(align(4)))]
+                    struct RetArea(
+                        [::core::mem::MaybeUninit<
+                            u8,
+                        >; 4 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let mut ret_area = RetArea(
+                        [::core::mem::MaybeUninit::uninit(); 4
+                            * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let super::super::super::krate::gfx::types::Rect {
+                        x: x0,
+                        y: y0,
+                        width: width0,
+                        height: height0,
+                    } = area;
+                    let super::super::super::krate::gfx::types::CornerRadii {
+                        top_left: top_left1,
+                        top_right: top_right1,
+                        bottom_right: bottom_right1,
+                        bottom_left: bottom_left1,
+                    } = radii;
+                    let ptr2 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:gfx/video@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "draw-round"]
+                        fn wit_import3(
+                            _: i64,
+                            _: i64,
+                            _: f32,
+                            _: f32,
+                            _: f32,
+                            _: f32,
+                            _: f32,
+                            _: f32,
+                            _: f32,
+                            _: f32,
+                            _: *mut u8,
+                        );
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import3(
+                        _: i64,
+                        _: i64,
+                        _: f32,
+                        _: f32,
+                        _: f32,
+                        _: f32,
+                        _: f32,
+                        _: f32,
+                        _: f32,
+                        _: f32,
+                        _: *mut u8,
+                    ) {
+                        unreachable!()
+                    }
+                    unsafe {
+                        wit_import3(
+                            _rt::as_i64(&canvas),
+                            _rt::as_i64(&video),
+                            _rt::as_f32(x0),
+                            _rt::as_f32(y0),
+                            _rt::as_f32(width0),
+                            _rt::as_f32(height0),
+                            _rt::as_f32(top_left1),
+                            _rt::as_f32(top_right1),
+                            _rt::as_f32(bottom_right1),
+                            _rt::as_f32(bottom_left1),
+                            ptr2,
+                        )
+                    };
+                    let l4 = i32::from(*ptr2.add(0).cast::<u8>());
+                    let result13 = match l4 {
+                        0 => {
+                            let e = ();
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l5 = i32::from(
+                                    *ptr2.add(::core::mem::size_of::<*const u8>()).cast::<u8>(),
+                                );
+                                use super::super::super::krate::gfx::types::GfxError as V12;
+                                let v12 = match l5 {
+                                    0 => V12::PermissionDenied,
+                                    1 => V12::InvalidTarget,
+                                    2 => {
+                                        let e12 = {
+                                            let l6 = *ptr2
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l7 = *ptr2
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len8 = l7;
+                                            let bytes8 = _rt::Vec::from_raw_parts(
+                                                l6.cast(),
+                                                len8,
+                                                len8,
+                                            );
+                                            _rt::string_lift(bytes8)
+                                        };
+                                        V12::Unsupported(e12)
+                                    }
+                                    n => {
+                                        debug_assert_eq!(n, 3, "invalid enum discriminant");
+                                        let e12 = {
+                                            let l9 = *ptr2
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l10 = *ptr2
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len11 = l10;
+                                            let bytes11 = _rt::Vec::from_raw_parts(
+                                                l9.cast(),
+                                                len11,
+                                                len11,
+                                            );
+                                            _rt::string_lift(bytes11)
+                                        };
+                                        V12::Platform(e12)
+                                    }
+                                };
+                                v12
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    };
+                    result13
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Stop it and let it go.
+            pub fn close(video: u64) -> () {
+                unsafe {
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:gfx/video@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "close"]
+                        fn wit_import0(_: i64);
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import0(_: i64) {
+                        unreachable!()
+                    }
+                    unsafe { wit_import0(_rt::as_i64(&video)) };
+                }
+            }
+        }
     }
     pub mod gpu {
         /// The GPU as a programmable surface (IC-540, IC-916): WebGPU's object model,
@@ -40958,6 +41976,3274 @@ pub mod krate {
                 }
             }
         }
+        /// The phone tapping back under the finger: a button pressed, a picker's
+        /// tick, a game's hit (IC-917).
+        ///
+        /// No permission, as on the phones themselves: any app on screen may tap
+        /// back. A computer has nothing to tap with, so `available` answers false
+        /// there and every call does nothing -- call it everywhere, and never make
+        /// a tap the only sign that something happened.
+        #[allow(dead_code, async_fn_in_trait, unused_imports, clippy::all)]
+        pub mod haptics {
+            #[used]
+            #[doc(hidden)]
+            static __FORCE_SECTION_REF: fn() = super::super::super::__link_custom_section_describing_imports;
+            use super::super::super::_rt;
+            /// What a tap means. The phone plays its own feel for each, the one its
+            /// own apps use.
+            #[repr(u8)]
+            #[derive(Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
+            pub enum Feel {
+                /// A light tap: a button pressed, a card set down.
+                Light,
+                /// A firmer tap: a switch flipped, a piece placed.
+                Medium,
+                /// A heavy thud: a landing, a collision.
+                Heavy,
+                /// A tick each time a choice changes: a picker wheel, a slider's step.
+                Selection,
+                /// Something worked: saved, solved, sent.
+                Success,
+                /// Something needs a look.
+                Warning,
+                /// Something failed.
+                Error,
+            }
+            impl ::core::fmt::Debug for Feel {
+                fn fmt(
+                    &self,
+                    f: &mut ::core::fmt::Formatter<'_>,
+                ) -> ::core::fmt::Result {
+                    match self {
+                        Feel::Light => f.debug_tuple("Feel::Light").finish(),
+                        Feel::Medium => f.debug_tuple("Feel::Medium").finish(),
+                        Feel::Heavy => f.debug_tuple("Feel::Heavy").finish(),
+                        Feel::Selection => f.debug_tuple("Feel::Selection").finish(),
+                        Feel::Success => f.debug_tuple("Feel::Success").finish(),
+                        Feel::Warning => f.debug_tuple("Feel::Warning").finish(),
+                        Feel::Error => f.debug_tuple("Feel::Error").finish(),
+                    }
+                }
+            }
+            impl Feel {
+                #[doc(hidden)]
+                pub unsafe fn _lift(val: u8) -> Feel {
+                    if !cfg!(debug_assertions) {
+                        return ::core::mem::transmute(val);
+                    }
+                    match val {
+                        0 => Feel::Light,
+                        1 => Feel::Medium,
+                        2 => Feel::Heavy,
+                        3 => Feel::Selection,
+                        4 => Feel::Success,
+                        5 => Feel::Warning,
+                        6 => Feel::Error,
+                        _ => panic!("invalid enum discriminant"),
+                    }
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Whether this device can tap back at all.
+            pub fn available() -> bool {
+                unsafe {
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:ui/haptics@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "available"]
+                        fn wit_import0() -> i32;
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import0() -> i32 {
+                        unreachable!()
+                    }
+                    let ret = unsafe { wit_import0() };
+                    _rt::bool_lift(ret as u8)
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Tap back now. Taps closer together than the phone can play are
+            /// dropped, so a game may call this every frame something is hit.
+            pub fn play(feel: Feel) -> () {
+                unsafe {
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:ui/haptics@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "play"]
+                        fn wit_import0(_: i32);
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import0(_: i32) {
+                        unreachable!()
+                    }
+                    unsafe { wit_import0(feel.clone() as i32) };
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// A game's impact at `strength`, from 0 (barely felt) to 1 (as hard as
+            /// the phone can); outside that range is held to it.
+            pub fn impact(strength: f32) -> () {
+                unsafe {
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:ui/haptics@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "impact"]
+                        fn wit_import0(_: f32);
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import0(_: f32) {
+                        unreachable!()
+                    }
+                    unsafe { wit_import0(_rt::as_f32(&strength)) };
+                }
+            }
+        }
+        /// Which way the phone is held and how it moves: a level, a compass, a game
+        /// steered by tilting (IC-917).
+        ///
+        /// Every vector is in the screen's own frame, however the phone is turned:
+        /// x to the right of the screen, y down it, z out of the glass toward the
+        /// person. So a game in landscape steers with `gravity.x` exactly as one
+        /// held upright does. Sensors start on the first `read` and stop when the
+        /// app closes. A computer has none: `available` is false and `read` none.
+        #[allow(dead_code, async_fn_in_trait, unused_imports, clippy::all)]
+        pub mod motion {
+            #[used]
+            #[doc(hidden)]
+            static __FORCE_SECTION_REF: fn() = super::super::super::__link_custom_section_describing_imports;
+            use super::super::super::_rt;
+            /// Three numbers along the screen's x, y and z.
+            #[repr(C)]
+            #[derive(Clone, Copy)]
+            pub struct Vector {
+                /// Along the screen, to the right.
+                pub x: f32,
+                /// Along the screen, down.
+                pub y: f32,
+                /// Out of the screen, toward the person.
+                pub z: f32,
+            }
+            impl ::core::fmt::Debug for Vector {
+                fn fmt(
+                    &self,
+                    f: &mut ::core::fmt::Formatter<'_>,
+                ) -> ::core::fmt::Result {
+                    f.debug_struct("Vector")
+                        .field("x", &self.x)
+                        .field("y", &self.y)
+                        .field("z", &self.z)
+                        .finish()
+                }
+            }
+            /// One reading of the phone's sensors.
+            #[repr(C)]
+            #[derive(Clone, Copy)]
+            pub struct Reading {
+                /// Which way is down, in g: (0, 1, 0) held upright, (0, 0, -1) lying
+                /// face up on a table. Steer with x; a level is zero in x and y.
+                pub gravity: Vector,
+                /// The push the person gives the phone, gravity taken out, in g: a
+                /// shake, a swing, a step.
+                pub acceleration: Vector,
+                /// How fast the phone turns, in degrees a second: x above zero tips
+                /// the screen's top edge toward the person, y above zero swings its
+                /// right edge toward the person, z above zero turns the phone
+                /// anticlockwise as the person sees it.
+                pub rotation: Vector,
+                /// Degrees clockwise from magnetic north that the top of the screen
+                /// faces, when the compass knows; none until it settles or without one.
+                pub heading: Option<f32>,
+            }
+            impl ::core::fmt::Debug for Reading {
+                fn fmt(
+                    &self,
+                    f: &mut ::core::fmt::Formatter<'_>,
+                ) -> ::core::fmt::Result {
+                    f.debug_struct("Reading")
+                        .field("gravity", &self.gravity)
+                        .field("acceleration", &self.acceleration)
+                        .field("rotation", &self.rotation)
+                        .field("heading", &self.heading)
+                        .finish()
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Whether this device can tell how it is held.
+            pub fn available() -> bool {
+                unsafe {
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:ui/motion@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "available"]
+                        fn wit_import0() -> i32;
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import0() -> i32 {
+                        unreachable!()
+                    }
+                    let ret = unsafe { wit_import0() };
+                    _rt::bool_lift(ret as u8)
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// The latest reading, up to sixty a second; none on a device without
+            /// sensors, and for the first moment after the first ask.
+            pub fn read() -> Option<Reading> {
+                unsafe {
+                    #[repr(align(4))]
+                    struct RetArea([::core::mem::MaybeUninit<u8>; 48]);
+                    let mut ret_area = RetArea([::core::mem::MaybeUninit::uninit(); 48]);
+                    let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:ui/motion@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "read"]
+                        fn wit_import1(_: *mut u8);
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import1(_: *mut u8) {
+                        unreachable!()
+                    }
+                    unsafe { wit_import1(ptr0) };
+                    let l2 = i32::from(*ptr0.add(0).cast::<u8>());
+                    let result14 = match l2 {
+                        0 => None,
+                        1 => {
+                            let e = {
+                                let l3 = *ptr0.add(4).cast::<f32>();
+                                let l4 = *ptr0.add(8).cast::<f32>();
+                                let l5 = *ptr0.add(12).cast::<f32>();
+                                let l6 = *ptr0.add(16).cast::<f32>();
+                                let l7 = *ptr0.add(20).cast::<f32>();
+                                let l8 = *ptr0.add(24).cast::<f32>();
+                                let l9 = *ptr0.add(28).cast::<f32>();
+                                let l10 = *ptr0.add(32).cast::<f32>();
+                                let l11 = *ptr0.add(36).cast::<f32>();
+                                let l12 = i32::from(*ptr0.add(40).cast::<u8>());
+                                Reading {
+                                    gravity: Vector { x: l3, y: l4, z: l5 },
+                                    acceleration: Vector { x: l6, y: l7, z: l8 },
+                                    rotation: Vector { x: l9, y: l10, z: l11 },
+                                    heading: match l12 {
+                                        0 => None,
+                                        1 => {
+                                            let e = {
+                                                let l13 = *ptr0.add(44).cast::<f32>();
+                                                l13
+                                            };
+                                            Some(e)
+                                        }
+                                        _ => _rt::invalid_enum_discriminant(),
+                                    },
+                                }
+                            };
+                            Some(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    };
+                    result14
+                }
+            }
+        }
+        /// Where the phone is: a map's dot, a run's distance, a "near me" (IC-917).
+        ///
+        /// Behind `location.read`, which the person is asked about on Krate's sheet
+        /// and then by the phone itself. Ask with `current` each time a fix is
+        /// wanted: the first ask starts the phone looking and answers `finding`;
+        /// a moment later it answers the position. Reading stops when the app
+        /// closes.
+        #[allow(dead_code, async_fn_in_trait, unused_imports, clippy::all)]
+        pub mod location {
+            #[used]
+            #[doc(hidden)]
+            static __FORCE_SECTION_REF: fn() = super::super::super::__link_custom_section_describing_imports;
+            use super::super::super::_rt;
+            /// One fix.
+            #[repr(C)]
+            #[derive(Clone, Copy)]
+            pub struct Position {
+                /// Degrees north of the equator; south is negative.
+                pub latitude: f64,
+                /// Degrees east of Greenwich; west is negative.
+                pub longitude: f64,
+                /// How far off the fix may be, in metres: the radius of the circle the
+                /// phone is somewhere in.
+                pub accuracy: f32,
+                /// Metres above sea level, when the phone knows.
+                pub altitude: Option<f32>,
+                /// Metres a second, when moving and the phone knows.
+                pub speed: Option<f32>,
+                /// Degrees clockwise from true north it is heading, when moving.
+                pub course: Option<f32>,
+                /// How old the fix is, in milliseconds.
+                pub age_ms: u64,
+            }
+            impl ::core::fmt::Debug for Position {
+                fn fmt(
+                    &self,
+                    f: &mut ::core::fmt::Formatter<'_>,
+                ) -> ::core::fmt::Result {
+                    f.debug_struct("Position")
+                        .field("latitude", &self.latitude)
+                        .field("longitude", &self.longitude)
+                        .field("accuracy", &self.accuracy)
+                        .field("altitude", &self.altitude)
+                        .field("speed", &self.speed)
+                        .field("course", &self.course)
+                        .field("age-ms", &self.age_ms)
+                        .finish()
+                }
+            }
+            /// Why there is no position.
+            #[derive(Clone, Copy)]
+            pub enum LocationError {
+                /// The person said no, on Krate's sheet or the phone's own prompt, or
+                /// the app did not declare `location.read`.
+                NotAllowed,
+                /// This device cannot tell where it is, or location is switched off.
+                Unavailable,
+                /// Still looking: ask again in a moment.
+                Finding,
+            }
+            impl ::core::fmt::Debug for LocationError {
+                fn fmt(
+                    &self,
+                    f: &mut ::core::fmt::Formatter<'_>,
+                ) -> ::core::fmt::Result {
+                    match self {
+                        LocationError::NotAllowed => {
+                            f.debug_tuple("LocationError::NotAllowed").finish()
+                        }
+                        LocationError::Unavailable => {
+                            f.debug_tuple("LocationError::Unavailable").finish()
+                        }
+                        LocationError::Finding => {
+                            f.debug_tuple("LocationError::Finding").finish()
+                        }
+                    }
+                }
+            }
+            impl ::core::fmt::Display for LocationError {
+                fn fmt(
+                    &self,
+                    f: &mut ::core::fmt::Formatter<'_>,
+                ) -> ::core::fmt::Result {
+                    write!(f, "{:?}", self)
+                }
+            }
+            #[cfg(feature = "std")]
+            impl std::error::Error for LocationError {}
+            #[allow(unused_unsafe, clippy::all)]
+            /// Whether this device can tell where it is at all.
+            pub fn available() -> bool {
+                unsafe {
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:ui/location@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "available"]
+                        fn wit_import0() -> i32;
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import0() -> i32 {
+                        unreachable!()
+                    }
+                    let ret = unsafe { wit_import0() };
+                    _rt::bool_lift(ret as u8)
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// The latest fix.
+            pub fn current() -> Result<Position, LocationError> {
+                unsafe {
+                    #[repr(align(8))]
+                    struct RetArea([::core::mem::MaybeUninit<u8>; 64]);
+                    let mut ret_area = RetArea([::core::mem::MaybeUninit::uninit(); 64]);
+                    let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:ui/location@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "current"]
+                        fn wit_import1(_: *mut u8);
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import1(_: *mut u8) {
+                        unreachable!()
+                    }
+                    unsafe { wit_import1(ptr0) };
+                    let l2 = i32::from(*ptr0.add(0).cast::<u8>());
+                    let result15 = match l2 {
+                        0 => {
+                            let e = {
+                                let l3 = *ptr0.add(8).cast::<f64>();
+                                let l4 = *ptr0.add(16).cast::<f64>();
+                                let l5 = *ptr0.add(24).cast::<f32>();
+                                let l6 = i32::from(*ptr0.add(28).cast::<u8>());
+                                let l8 = i32::from(*ptr0.add(36).cast::<u8>());
+                                let l10 = i32::from(*ptr0.add(44).cast::<u8>());
+                                let l12 = *ptr0.add(56).cast::<i64>();
+                                Position {
+                                    latitude: l3,
+                                    longitude: l4,
+                                    accuracy: l5,
+                                    altitude: match l6 {
+                                        0 => None,
+                                        1 => {
+                                            let e = {
+                                                let l7 = *ptr0.add(32).cast::<f32>();
+                                                l7
+                                            };
+                                            Some(e)
+                                        }
+                                        _ => _rt::invalid_enum_discriminant(),
+                                    },
+                                    speed: match l8 {
+                                        0 => None,
+                                        1 => {
+                                            let e = {
+                                                let l9 = *ptr0.add(40).cast::<f32>();
+                                                l9
+                                            };
+                                            Some(e)
+                                        }
+                                        _ => _rt::invalid_enum_discriminant(),
+                                    },
+                                    course: match l10 {
+                                        0 => None,
+                                        1 => {
+                                            let e = {
+                                                let l11 = *ptr0.add(48).cast::<f32>();
+                                                l11
+                                            };
+                                            Some(e)
+                                        }
+                                        _ => _rt::invalid_enum_discriminant(),
+                                    },
+                                    age_ms: l12 as u64,
+                                }
+                            };
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l13 = i32::from(*ptr0.add(8).cast::<u8>());
+                                let v14 = match l13 {
+                                    0 => LocationError::NotAllowed,
+                                    1 => LocationError::Unavailable,
+                                    n => {
+                                        debug_assert_eq!(n, 2, "invalid enum discriminant");
+                                        LocationError::Finding
+                                    }
+                                };
+                                v14
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    };
+                    result15
+                }
+            }
+        }
+        /// A Bluetooth device the person picks: a heart-rate strap, a sensor, a
+        /// light, a toy (IC-917). Bluetooth Low Energy, its services and
+        /// characteristics named by their UUIDs ("180D", or the full form).
+        ///
+        /// Behind `bluetooth.connect`. An app never scans: `choose` shows Krate's
+        /// own list of nearby devices offering a service, the person taps one, and
+        /// that one device -- only it, only for this run -- is the app's. The pick
+        /// is the grant, as with a file.
+        #[allow(dead_code, async_fn_in_trait, unused_imports, clippy::all)]
+        pub mod bluetooth {
+            #[used]
+            #[doc(hidden)]
+            static __FORCE_SECTION_REF: fn() = super::super::super::__link_custom_section_describing_imports;
+            use super::super::super::_rt;
+            /// A device the person picked.
+            #[derive(Clone)]
+            pub struct Device {
+                /// The handle to pass to the calls below; good for this run only.
+                pub id: u64,
+                /// The name it gives itself, or "Unnamed device".
+                pub name: _rt::String,
+            }
+            impl ::core::fmt::Debug for Device {
+                fn fmt(
+                    &self,
+                    f: &mut ::core::fmt::Formatter<'_>,
+                ) -> ::core::fmt::Result {
+                    f.debug_struct("Device")
+                        .field("id", &self.id)
+                        .field("name", &self.name)
+                        .finish()
+                }
+            }
+            /// A value a device sent on its own, after `subscribe`.
+            #[derive(Clone)]
+            pub struct Notification {
+                /// The service it came from, as the app named it.
+                pub service: _rt::String,
+                /// The characteristic that changed, as the app named it.
+                pub characteristic: _rt::String,
+                /// Its new value.
+                pub data: _rt::Vec<u8>,
+            }
+            impl ::core::fmt::Debug for Notification {
+                fn fmt(
+                    &self,
+                    f: &mut ::core::fmt::Formatter<'_>,
+                ) -> ::core::fmt::Result {
+                    f.debug_struct("Notification")
+                        .field("service", &self.service)
+                        .field("characteristic", &self.characteristic)
+                        .field("data", &self.data)
+                        .finish()
+                }
+            }
+            /// Why a Bluetooth call did not work.
+            #[derive(Clone)]
+            pub enum BluetoothError {
+                /// The person said no on Krate's sheet or the phone's prompt, or the
+                /// app did not declare `bluetooth.connect`.
+                NotAllowed,
+                /// No Bluetooth here, or it is switched off.
+                Unavailable,
+                /// No such device nearby, or the device has no such service or
+                /// characteristic.
+                NotFound,
+                /// The device went out of range or was switched off: choose it again.
+                Disconnected,
+                /// The device refused, in its own words.
+                Failed(_rt::String),
+            }
+            impl ::core::fmt::Debug for BluetoothError {
+                fn fmt(
+                    &self,
+                    f: &mut ::core::fmt::Formatter<'_>,
+                ) -> ::core::fmt::Result {
+                    match self {
+                        BluetoothError::NotAllowed => {
+                            f.debug_tuple("BluetoothError::NotAllowed").finish()
+                        }
+                        BluetoothError::Unavailable => {
+                            f.debug_tuple("BluetoothError::Unavailable").finish()
+                        }
+                        BluetoothError::NotFound => {
+                            f.debug_tuple("BluetoothError::NotFound").finish()
+                        }
+                        BluetoothError::Disconnected => {
+                            f.debug_tuple("BluetoothError::Disconnected").finish()
+                        }
+                        BluetoothError::Failed(e) => {
+                            f.debug_tuple("BluetoothError::Failed").field(e).finish()
+                        }
+                    }
+                }
+            }
+            impl ::core::fmt::Display for BluetoothError {
+                fn fmt(
+                    &self,
+                    f: &mut ::core::fmt::Formatter<'_>,
+                ) -> ::core::fmt::Result {
+                    write!(f, "{:?}", self)
+                }
+            }
+            #[cfg(feature = "std")]
+            impl std::error::Error for BluetoothError {}
+            #[allow(unused_unsafe, clippy::all)]
+            /// Whether this device has Bluetooth at all.
+            pub fn available() -> bool {
+                unsafe {
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:ui/bluetooth@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "available"]
+                        fn wit_import0() -> i32;
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import0() -> i32 {
+                        unreachable!()
+                    }
+                    let ret = unsafe { wit_import0() };
+                    _rt::bool_lift(ret as u8)
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Look for nearby devices offering `service`, show them in Krate's own
+            /// list under `title` ("Pick your heart-rate monitor"), and connect to
+            /// the one the person taps. None when they cancel.
+            pub fn choose(
+                window: u64,
+                service: &str,
+                title: &str,
+            ) -> Result<Option<Device>, BluetoothError> {
+                unsafe {
+                    #[repr(align(8))]
+                    struct RetArea(
+                        [::core::mem::MaybeUninit<
+                            u8,
+                        >; 24 + 2 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let mut ret_area = RetArea(
+                        [::core::mem::MaybeUninit::uninit(); 24
+                            + 2 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let vec0 = service;
+                    let ptr0 = vec0.as_ptr().cast::<u8>();
+                    let len0 = vec0.len();
+                    let vec1 = title;
+                    let ptr1 = vec1.as_ptr().cast::<u8>();
+                    let len1 = vec1.len();
+                    let ptr2 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:ui/bluetooth@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "choose"]
+                        fn wit_import3(
+                            _: i64,
+                            _: *mut u8,
+                            _: usize,
+                            _: *mut u8,
+                            _: usize,
+                            _: *mut u8,
+                        );
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import3(
+                        _: i64,
+                        _: *mut u8,
+                        _: usize,
+                        _: *mut u8,
+                        _: usize,
+                        _: *mut u8,
+                    ) {
+                        unreachable!()
+                    }
+                    unsafe {
+                        wit_import3(
+                            _rt::as_i64(&window),
+                            ptr0.cast_mut(),
+                            len0,
+                            ptr1.cast_mut(),
+                            len1,
+                            ptr2,
+                        )
+                    };
+                    let l4 = i32::from(*ptr2.add(0).cast::<u8>());
+                    let result15 = match l4 {
+                        0 => {
+                            let e = {
+                                let l5 = i32::from(*ptr2.add(8).cast::<u8>());
+                                match l5 {
+                                    0 => None,
+                                    1 => {
+                                        let e = {
+                                            let l6 = *ptr2.add(16).cast::<i64>();
+                                            let l7 = *ptr2.add(24).cast::<*mut u8>();
+                                            let l8 = *ptr2
+                                                .add(24 + 1 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len9 = l8;
+                                            let bytes9 = _rt::Vec::from_raw_parts(
+                                                l7.cast(),
+                                                len9,
+                                                len9,
+                                            );
+                                            Device {
+                                                id: l6 as u64,
+                                                name: _rt::string_lift(bytes9),
+                                            }
+                                        };
+                                        Some(e)
+                                    }
+                                    _ => _rt::invalid_enum_discriminant(),
+                                }
+                            };
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l10 = i32::from(*ptr2.add(8).cast::<u8>());
+                                let v14 = match l10 {
+                                    0 => BluetoothError::NotAllowed,
+                                    1 => BluetoothError::Unavailable,
+                                    2 => BluetoothError::NotFound,
+                                    3 => BluetoothError::Disconnected,
+                                    n => {
+                                        debug_assert_eq!(n, 4, "invalid enum discriminant");
+                                        let e14 = {
+                                            let l11 = *ptr2
+                                                .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l12 = *ptr2
+                                                .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len13 = l12;
+                                            let bytes13 = _rt::Vec::from_raw_parts(
+                                                l11.cast(),
+                                                len13,
+                                                len13,
+                                            );
+                                            _rt::string_lift(bytes13)
+                                        };
+                                        BluetoothError::Failed(e14)
+                                    }
+                                };
+                                v14
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    };
+                    result15
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Read a characteristic's value once.
+            pub fn read(
+                device: u64,
+                service: &str,
+                characteristic: &str,
+            ) -> Result<_rt::Vec<u8>, BluetoothError> {
+                unsafe {
+                    #[cfg_attr(target_pointer_width = "64", repr(align(8)))]
+                    #[cfg_attr(target_pointer_width = "32", repr(align(4)))]
+                    struct RetArea(
+                        [::core::mem::MaybeUninit<
+                            u8,
+                        >; 4 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let mut ret_area = RetArea(
+                        [::core::mem::MaybeUninit::uninit(); 4
+                            * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let vec0 = service;
+                    let ptr0 = vec0.as_ptr().cast::<u8>();
+                    let len0 = vec0.len();
+                    let vec1 = characteristic;
+                    let ptr1 = vec1.as_ptr().cast::<u8>();
+                    let len1 = vec1.len();
+                    let ptr2 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:ui/bluetooth@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "read"]
+                        fn wit_import3(
+                            _: i64,
+                            _: *mut u8,
+                            _: usize,
+                            _: *mut u8,
+                            _: usize,
+                            _: *mut u8,
+                        );
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import3(
+                        _: i64,
+                        _: *mut u8,
+                        _: usize,
+                        _: *mut u8,
+                        _: usize,
+                        _: *mut u8,
+                    ) {
+                        unreachable!()
+                    }
+                    unsafe {
+                        wit_import3(
+                            _rt::as_i64(&device),
+                            ptr0.cast_mut(),
+                            len0,
+                            ptr1.cast_mut(),
+                            len1,
+                            ptr2,
+                        )
+                    };
+                    let l4 = i32::from(*ptr2.add(0).cast::<u8>());
+                    let result13 = match l4 {
+                        0 => {
+                            let e = {
+                                let l5 = *ptr2
+                                    .add(::core::mem::size_of::<*const u8>())
+                                    .cast::<*mut u8>();
+                                let l6 = *ptr2
+                                    .add(2 * ::core::mem::size_of::<*const u8>())
+                                    .cast::<usize>();
+                                let len7 = l6;
+                                _rt::Vec::from_raw_parts(l5.cast(), len7, len7)
+                            };
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l8 = i32::from(
+                                    *ptr2.add(::core::mem::size_of::<*const u8>()).cast::<u8>(),
+                                );
+                                let v12 = match l8 {
+                                    0 => BluetoothError::NotAllowed,
+                                    1 => BluetoothError::Unavailable,
+                                    2 => BluetoothError::NotFound,
+                                    3 => BluetoothError::Disconnected,
+                                    n => {
+                                        debug_assert_eq!(n, 4, "invalid enum discriminant");
+                                        let e12 = {
+                                            let l9 = *ptr2
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l10 = *ptr2
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len11 = l10;
+                                            let bytes11 = _rt::Vec::from_raw_parts(
+                                                l9.cast(),
+                                                len11,
+                                                len11,
+                                            );
+                                            _rt::string_lift(bytes11)
+                                        };
+                                        BluetoothError::Failed(e12)
+                                    }
+                                };
+                                v12
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    };
+                    result13
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Write a characteristic's value; `with-response` waits for the device
+            /// to say it took it.
+            pub fn write(
+                device: u64,
+                service: &str,
+                characteristic: &str,
+                data: &[u8],
+                with_response: bool,
+            ) -> Result<(), BluetoothError> {
+                unsafe {
+                    #[cfg_attr(target_pointer_width = "64", repr(align(8)))]
+                    #[cfg_attr(target_pointer_width = "32", repr(align(4)))]
+                    struct RetArea(
+                        [::core::mem::MaybeUninit<
+                            u8,
+                        >; 4 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let mut ret_area = RetArea(
+                        [::core::mem::MaybeUninit::uninit(); 4
+                            * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let vec0 = service;
+                    let ptr0 = vec0.as_ptr().cast::<u8>();
+                    let len0 = vec0.len();
+                    let vec1 = characteristic;
+                    let ptr1 = vec1.as_ptr().cast::<u8>();
+                    let len1 = vec1.len();
+                    let vec2 = data;
+                    let ptr2 = vec2.as_ptr().cast::<u8>();
+                    let len2 = vec2.len();
+                    let ptr3 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:ui/bluetooth@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "write"]
+                        fn wit_import4(
+                            _: i64,
+                            _: *mut u8,
+                            _: usize,
+                            _: *mut u8,
+                            _: usize,
+                            _: *mut u8,
+                            _: usize,
+                            _: i32,
+                            _: *mut u8,
+                        );
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import4(
+                        _: i64,
+                        _: *mut u8,
+                        _: usize,
+                        _: *mut u8,
+                        _: usize,
+                        _: *mut u8,
+                        _: usize,
+                        _: i32,
+                        _: *mut u8,
+                    ) {
+                        unreachable!()
+                    }
+                    unsafe {
+                        wit_import4(
+                            _rt::as_i64(&device),
+                            ptr0.cast_mut(),
+                            len0,
+                            ptr1.cast_mut(),
+                            len1,
+                            ptr2.cast_mut(),
+                            len2,
+                            match &with_response {
+                                true => 1,
+                                false => 0,
+                            },
+                            ptr3,
+                        )
+                    };
+                    let l5 = i32::from(*ptr3.add(0).cast::<u8>());
+                    let result11 = match l5 {
+                        0 => {
+                            let e = ();
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l6 = i32::from(
+                                    *ptr3.add(::core::mem::size_of::<*const u8>()).cast::<u8>(),
+                                );
+                                let v10 = match l6 {
+                                    0 => BluetoothError::NotAllowed,
+                                    1 => BluetoothError::Unavailable,
+                                    2 => BluetoothError::NotFound,
+                                    3 => BluetoothError::Disconnected,
+                                    n => {
+                                        debug_assert_eq!(n, 4, "invalid enum discriminant");
+                                        let e10 = {
+                                            let l7 = *ptr3
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l8 = *ptr3
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len9 = l8;
+                                            let bytes9 = _rt::Vec::from_raw_parts(
+                                                l7.cast(),
+                                                len9,
+                                                len9,
+                                            );
+                                            _rt::string_lift(bytes9)
+                                        };
+                                        BluetoothError::Failed(e10)
+                                    }
+                                };
+                                v10
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    };
+                    result11
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Be sent a characteristic's value each time it changes (a heartbeat,
+            /// a reading); collect them with `notifications`.
+            pub fn subscribe(
+                device: u64,
+                service: &str,
+                characteristic: &str,
+            ) -> Result<(), BluetoothError> {
+                unsafe {
+                    #[cfg_attr(target_pointer_width = "64", repr(align(8)))]
+                    #[cfg_attr(target_pointer_width = "32", repr(align(4)))]
+                    struct RetArea(
+                        [::core::mem::MaybeUninit<
+                            u8,
+                        >; 4 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let mut ret_area = RetArea(
+                        [::core::mem::MaybeUninit::uninit(); 4
+                            * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let vec0 = service;
+                    let ptr0 = vec0.as_ptr().cast::<u8>();
+                    let len0 = vec0.len();
+                    let vec1 = characteristic;
+                    let ptr1 = vec1.as_ptr().cast::<u8>();
+                    let len1 = vec1.len();
+                    let ptr2 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:ui/bluetooth@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "subscribe"]
+                        fn wit_import3(
+                            _: i64,
+                            _: *mut u8,
+                            _: usize,
+                            _: *mut u8,
+                            _: usize,
+                            _: *mut u8,
+                        );
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import3(
+                        _: i64,
+                        _: *mut u8,
+                        _: usize,
+                        _: *mut u8,
+                        _: usize,
+                        _: *mut u8,
+                    ) {
+                        unreachable!()
+                    }
+                    unsafe {
+                        wit_import3(
+                            _rt::as_i64(&device),
+                            ptr0.cast_mut(),
+                            len0,
+                            ptr1.cast_mut(),
+                            len1,
+                            ptr2,
+                        )
+                    };
+                    let l4 = i32::from(*ptr2.add(0).cast::<u8>());
+                    let result10 = match l4 {
+                        0 => {
+                            let e = ();
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l5 = i32::from(
+                                    *ptr2.add(::core::mem::size_of::<*const u8>()).cast::<u8>(),
+                                );
+                                let v9 = match l5 {
+                                    0 => BluetoothError::NotAllowed,
+                                    1 => BluetoothError::Unavailable,
+                                    2 => BluetoothError::NotFound,
+                                    3 => BluetoothError::Disconnected,
+                                    n => {
+                                        debug_assert_eq!(n, 4, "invalid enum discriminant");
+                                        let e9 = {
+                                            let l6 = *ptr2
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l7 = *ptr2
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len8 = l7;
+                                            let bytes8 = _rt::Vec::from_raw_parts(
+                                                l6.cast(),
+                                                len8,
+                                                len8,
+                                            );
+                                            _rt::string_lift(bytes8)
+                                        };
+                                        BluetoothError::Failed(e9)
+                                    }
+                                };
+                                v9
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    };
+                    result10
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Every value sent since the last ask, oldest first.
+            pub fn notifications(device: u64) -> _rt::Vec<Notification> {
+                unsafe {
+                    #[cfg_attr(target_pointer_width = "64", repr(align(8)))]
+                    #[cfg_attr(target_pointer_width = "32", repr(align(4)))]
+                    struct RetArea(
+                        [::core::mem::MaybeUninit<
+                            u8,
+                        >; 2 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let mut ret_area = RetArea(
+                        [::core::mem::MaybeUninit::uninit(); 2
+                            * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:ui/bluetooth@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "notifications"]
+                        fn wit_import1(_: i64, _: *mut u8);
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import1(_: i64, _: *mut u8) {
+                        unreachable!()
+                    }
+                    unsafe { wit_import1(_rt::as_i64(&device), ptr0) };
+                    let l2 = *ptr0.add(0).cast::<*mut u8>();
+                    let l3 = *ptr0
+                        .add(::core::mem::size_of::<*const u8>())
+                        .cast::<usize>();
+                    let base13 = l2;
+                    let len13 = l3;
+                    let mut result13 = _rt::Vec::with_capacity(len13);
+                    for i in 0..len13 {
+                        let base = base13
+                            .add(i * (6 * ::core::mem::size_of::<*const u8>()));
+                        let e13 = {
+                            let l4 = *base.add(0).cast::<*mut u8>();
+                            let l5 = *base
+                                .add(::core::mem::size_of::<*const u8>())
+                                .cast::<usize>();
+                            let len6 = l5;
+                            let bytes6 = _rt::Vec::from_raw_parts(l4.cast(), len6, len6);
+                            let l7 = *base
+                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                .cast::<*mut u8>();
+                            let l8 = *base
+                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                .cast::<usize>();
+                            let len9 = l8;
+                            let bytes9 = _rt::Vec::from_raw_parts(l7.cast(), len9, len9);
+                            let l10 = *base
+                                .add(4 * ::core::mem::size_of::<*const u8>())
+                                .cast::<*mut u8>();
+                            let l11 = *base
+                                .add(5 * ::core::mem::size_of::<*const u8>())
+                                .cast::<usize>();
+                            let len12 = l11;
+                            Notification {
+                                service: _rt::string_lift(bytes6),
+                                characteristic: _rt::string_lift(bytes9),
+                                data: _rt::Vec::from_raw_parts(l10.cast(), len12, len12),
+                            }
+                        };
+                        result13.push(e13);
+                    }
+                    _rt::cabi_dealloc(
+                        base13,
+                        len13 * (6 * ::core::mem::size_of::<*const u8>()),
+                        ::core::mem::size_of::<*const u8>(),
+                    );
+                    let result14 = result13;
+                    result14
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Whether the device is still connected.
+            pub fn connected(device: u64) -> bool {
+                unsafe {
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:ui/bluetooth@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "connected"]
+                        fn wit_import0(_: i64) -> i32;
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import0(_: i64) -> i32 {
+                        unreachable!()
+                    }
+                    let ret = unsafe { wit_import0(_rt::as_i64(&device)) };
+                    _rt::bool_lift(ret as u8)
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Let the device go. Closing the app does this too.
+            pub fn disconnect(device: u64) -> () {
+                unsafe {
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:ui/bluetooth@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "disconnect"]
+                        fn wit_import0(_: i64);
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import0(_: i64) {
+                        unreachable!()
+                    }
+                    unsafe { wit_import0(_rt::as_i64(&device)) };
+                }
+            }
+        }
+        /// Hand something to another app: a note to Messages, a picture to Photos
+        /// or AirDrop, a file to Mail (IC-919).
+        ///
+        /// The system's own share sheet opens with what the app gives it, and the
+        /// person picks where it goes -- or cancels. The pick is the grant, so no
+        /// capability: the app gives only what it already holds, and learns only
+        /// whether it was sent.
+        #[allow(dead_code, async_fn_in_trait, unused_imports, clippy::all)]
+        pub mod share {
+            #[used]
+            #[doc(hidden)]
+            static __FORCE_SECTION_REF: fn() = super::super::super::__link_custom_section_describing_imports;
+            use super::super::super::_rt;
+            /// A file to share: its name and its bytes.
+            #[derive(Clone)]
+            pub struct SharedFile {
+                /// The name the other app sees ("sketch.png"), extension included.
+                pub name: _rt::String,
+                /// The file's bytes.
+                pub data: _rt::Vec<u8>,
+            }
+            impl ::core::fmt::Debug for SharedFile {
+                fn fmt(
+                    &self,
+                    f: &mut ::core::fmt::Formatter<'_>,
+                ) -> ::core::fmt::Result {
+                    f.debug_struct("SharedFile")
+                        .field("name", &self.name)
+                        .field("data", &self.data)
+                        .finish()
+                }
+            }
+            /// Why the sheet did not open.
+            #[derive(Clone)]
+            pub enum ShareError {
+                /// This device has no share sheet (computers, for now).
+                Unavailable(_rt::String),
+                /// Nothing to share, a name with a path in it, or more than 64 MB.
+                Invalid(_rt::String),
+            }
+            impl ::core::fmt::Debug for ShareError {
+                fn fmt(
+                    &self,
+                    f: &mut ::core::fmt::Formatter<'_>,
+                ) -> ::core::fmt::Result {
+                    match self {
+                        ShareError::Unavailable(e) => {
+                            f.debug_tuple("ShareError::Unavailable").field(e).finish()
+                        }
+                        ShareError::Invalid(e) => {
+                            f.debug_tuple("ShareError::Invalid").field(e).finish()
+                        }
+                    }
+                }
+            }
+            impl ::core::fmt::Display for ShareError {
+                fn fmt(
+                    &self,
+                    f: &mut ::core::fmt::Formatter<'_>,
+                ) -> ::core::fmt::Result {
+                    write!(f, "{:?}", self)
+                }
+            }
+            #[cfg(feature = "std")]
+            impl std::error::Error for ShareError {}
+            #[allow(unused_unsafe, clippy::all)]
+            /// Open the share sheet with any of a text, a link and files. True when
+            /// the person sent it somewhere, false when they cancelled.
+            pub fn share(
+                window: u64,
+                text: Option<&str>,
+                url: Option<&str>,
+                files: &[SharedFile],
+            ) -> Result<bool, ShareError> {
+                unsafe {
+                    #[cfg_attr(target_pointer_width = "64", repr(align(8)))]
+                    #[cfg_attr(target_pointer_width = "32", repr(align(4)))]
+                    struct RetArea(
+                        [::core::mem::MaybeUninit<
+                            u8,
+                        >; 4 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let mut ret_area = RetArea(
+                        [::core::mem::MaybeUninit::uninit(); 4
+                            * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let (result1_0, result1_1, result1_2) = match text {
+                        Some(e) => {
+                            let vec0 = e;
+                            let ptr0 = vec0.as_ptr().cast::<u8>();
+                            let len0 = vec0.len();
+                            (1i32, ptr0.cast_mut(), len0)
+                        }
+                        None => (0i32, ::core::ptr::null_mut(), 0usize),
+                    };
+                    let (result3_0, result3_1, result3_2) = match url {
+                        Some(e) => {
+                            let vec2 = e;
+                            let ptr2 = vec2.as_ptr().cast::<u8>();
+                            let len2 = vec2.len();
+                            (1i32, ptr2.cast_mut(), len2)
+                        }
+                        None => (0i32, ::core::ptr::null_mut(), 0usize),
+                    };
+                    let vec7 = files;
+                    let len7 = vec7.len();
+                    let layout7 = _rt::alloc::Layout::from_size_align_unchecked(
+                        vec7.len() * (4 * ::core::mem::size_of::<*const u8>()),
+                        ::core::mem::size_of::<*const u8>(),
+                    );
+                    let result7 = if layout7.size() != 0 {
+                        let ptr = _rt::alloc::alloc(layout7).cast::<u8>();
+                        if ptr.is_null() {
+                            _rt::alloc::handle_alloc_error(layout7);
+                        }
+                        ptr
+                    } else {
+                        ::core::ptr::null_mut()
+                    };
+                    for (i, e) in vec7.into_iter().enumerate() {
+                        let base = result7
+                            .add(i * (4 * ::core::mem::size_of::<*const u8>()));
+                        {
+                            let SharedFile { name: name4, data: data4 } = e;
+                            let vec5 = name4;
+                            let ptr5 = vec5.as_ptr().cast::<u8>();
+                            let len5 = vec5.len();
+                            *base
+                                .add(::core::mem::size_of::<*const u8>())
+                                .cast::<usize>() = len5;
+                            *base.add(0).cast::<*mut u8>() = ptr5.cast_mut();
+                            let vec6 = data4;
+                            let ptr6 = vec6.as_ptr().cast::<u8>();
+                            let len6 = vec6.len();
+                            *base
+                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                .cast::<usize>() = len6;
+                            *base
+                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                .cast::<*mut u8>() = ptr6.cast_mut();
+                        }
+                    }
+                    let ptr8 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:ui/share@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "share"]
+                        fn wit_import9(
+                            _: i64,
+                            _: i32,
+                            _: *mut u8,
+                            _: usize,
+                            _: i32,
+                            _: *mut u8,
+                            _: usize,
+                            _: *mut u8,
+                            _: usize,
+                            _: *mut u8,
+                        );
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import9(
+                        _: i64,
+                        _: i32,
+                        _: *mut u8,
+                        _: usize,
+                        _: i32,
+                        _: *mut u8,
+                        _: usize,
+                        _: *mut u8,
+                        _: usize,
+                        _: *mut u8,
+                    ) {
+                        unreachable!()
+                    }
+                    unsafe {
+                        wit_import9(
+                            _rt::as_i64(&window),
+                            result1_0,
+                            result1_1,
+                            result1_2,
+                            result3_0,
+                            result3_1,
+                            result3_2,
+                            result7,
+                            len7,
+                            ptr8,
+                        )
+                    };
+                    let l10 = i32::from(*ptr8.add(0).cast::<u8>());
+                    let result20 = match l10 {
+                        0 => {
+                            let e = {
+                                let l11 = i32::from(
+                                    *ptr8.add(::core::mem::size_of::<*const u8>()).cast::<u8>(),
+                                );
+                                _rt::bool_lift(l11 as u8)
+                            };
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l12 = i32::from(
+                                    *ptr8.add(::core::mem::size_of::<*const u8>()).cast::<u8>(),
+                                );
+                                let v19 = match l12 {
+                                    0 => {
+                                        let e19 = {
+                                            let l13 = *ptr8
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l14 = *ptr8
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len15 = l14;
+                                            let bytes15 = _rt::Vec::from_raw_parts(
+                                                l13.cast(),
+                                                len15,
+                                                len15,
+                                            );
+                                            _rt::string_lift(bytes15)
+                                        };
+                                        ShareError::Unavailable(e19)
+                                    }
+                                    n => {
+                                        debug_assert_eq!(n, 1, "invalid enum discriminant");
+                                        let e19 = {
+                                            let l16 = *ptr8
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l17 = *ptr8
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len18 = l17;
+                                            let bytes18 = _rt::Vec::from_raw_parts(
+                                                l16.cast(),
+                                                len18,
+                                                len18,
+                                            );
+                                            _rt::string_lift(bytes18)
+                                        };
+                                        ShareError::Invalid(e19)
+                                    }
+                                };
+                                v19
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    };
+                    if layout7.size() != 0 {
+                        _rt::alloc::dealloc(result7.cast(), layout7);
+                    }
+                    result20
+                }
+            }
+        }
+        /// The person's photo library: pick photos from it, add a picture to it
+        /// (IC-920).
+        ///
+        /// Picking shows the system's own photo picker; the photos picked come back
+        /// as files to read with `fs.files.open-chosen`, and the pick is the grant,
+        /// as with `dialog.open-file` -- the app never sees the rest of the
+        /// library. Adding is behind `photos.add`, and the phone asks too, for
+        /// add-only access: the app can add, never look.
+        #[allow(dead_code, async_fn_in_trait, unused_imports, clippy::all)]
+        pub mod photos {
+            #[used]
+            #[doc(hidden)]
+            static __FORCE_SECTION_REF: fn() = super::super::super::__link_custom_section_describing_imports;
+            use super::super::super::_rt;
+            pub type ChosenFile = super::super::super::krate::ui::types::ChosenFile;
+            /// Why a photos call did not work.
+            #[derive(Clone)]
+            pub enum PhotosError {
+                /// The app did not declare `photos.add`, or the person said no.
+                NotAllowed,
+                /// No photo library here, or it would not answer.
+                Unavailable(_rt::String),
+                /// The picture's bytes are not a PNG or a JPEG, or are over 64 MB.
+                Invalid(_rt::String),
+            }
+            impl ::core::fmt::Debug for PhotosError {
+                fn fmt(
+                    &self,
+                    f: &mut ::core::fmt::Formatter<'_>,
+                ) -> ::core::fmt::Result {
+                    match self {
+                        PhotosError::NotAllowed => {
+                            f.debug_tuple("PhotosError::NotAllowed").finish()
+                        }
+                        PhotosError::Unavailable(e) => {
+                            f.debug_tuple("PhotosError::Unavailable").field(e).finish()
+                        }
+                        PhotosError::Invalid(e) => {
+                            f.debug_tuple("PhotosError::Invalid").field(e).finish()
+                        }
+                    }
+                }
+            }
+            impl ::core::fmt::Display for PhotosError {
+                fn fmt(
+                    &self,
+                    f: &mut ::core::fmt::Formatter<'_>,
+                ) -> ::core::fmt::Result {
+                    write!(f, "{:?}", self)
+                }
+            }
+            #[cfg(feature = "std")]
+            impl std::error::Error for PhotosError {}
+            #[allow(unused_unsafe, clippy::all)]
+            /// Show the photo picker for up to `limit` photos (1 to 20). The photos
+            /// picked, as JPEG files; empty when the person cancelled. On a computer,
+            /// the system's file picker for pictures.
+            pub fn pick(
+                window: u64,
+                limit: u32,
+            ) -> Result<_rt::Vec<ChosenFile>, PhotosError> {
+                unsafe {
+                    #[cfg_attr(target_pointer_width = "64", repr(align(8)))]
+                    #[cfg_attr(target_pointer_width = "32", repr(align(4)))]
+                    struct RetArea(
+                        [::core::mem::MaybeUninit<
+                            u8,
+                        >; 4 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let mut ret_area = RetArea(
+                        [::core::mem::MaybeUninit::uninit(); 4
+                            * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:ui/photos@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "pick"]
+                        fn wit_import1(_: i64, _: i32, _: *mut u8);
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import1(_: i64, _: i32, _: *mut u8) {
+                        unreachable!()
+                    }
+                    unsafe {
+                        wit_import1(_rt::as_i64(&window), _rt::as_i32(&limit), ptr0)
+                    };
+                    let l2 = i32::from(*ptr0.add(0).cast::<u8>());
+                    let result20 = match l2 {
+                        0 => {
+                            let e = {
+                                let l3 = *ptr0
+                                    .add(::core::mem::size_of::<*const u8>())
+                                    .cast::<*mut u8>();
+                                let l4 = *ptr0
+                                    .add(2 * ::core::mem::size_of::<*const u8>())
+                                    .cast::<usize>();
+                                let base11 = l3;
+                                let len11 = l4;
+                                let mut result11 = _rt::Vec::with_capacity(len11);
+                                for i in 0..len11 {
+                                    let base = base11
+                                        .add(i * (4 * ::core::mem::size_of::<*const u8>()));
+                                    let e11 = {
+                                        let l5 = *base.add(0).cast::<*mut u8>();
+                                        let l6 = *base
+                                            .add(::core::mem::size_of::<*const u8>())
+                                            .cast::<usize>();
+                                        let len7 = l6;
+                                        let bytes7 = _rt::Vec::from_raw_parts(
+                                            l5.cast(),
+                                            len7,
+                                            len7,
+                                        );
+                                        let l8 = *base
+                                            .add(2 * ::core::mem::size_of::<*const u8>())
+                                            .cast::<*mut u8>();
+                                        let l9 = *base
+                                            .add(3 * ::core::mem::size_of::<*const u8>())
+                                            .cast::<usize>();
+                                        let len10 = l9;
+                                        let bytes10 = _rt::Vec::from_raw_parts(
+                                            l8.cast(),
+                                            len10,
+                                            len10,
+                                        );
+                                        super::super::super::krate::ui::types::ChosenFile {
+                                            name: _rt::string_lift(bytes7),
+                                            token: _rt::string_lift(bytes10),
+                                        }
+                                    };
+                                    result11.push(e11);
+                                }
+                                _rt::cabi_dealloc(
+                                    base11,
+                                    len11 * (4 * ::core::mem::size_of::<*const u8>()),
+                                    ::core::mem::size_of::<*const u8>(),
+                                );
+                                result11
+                            };
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l12 = i32::from(
+                                    *ptr0.add(::core::mem::size_of::<*const u8>()).cast::<u8>(),
+                                );
+                                let v19 = match l12 {
+                                    0 => PhotosError::NotAllowed,
+                                    1 => {
+                                        let e19 = {
+                                            let l13 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l14 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len15 = l14;
+                                            let bytes15 = _rt::Vec::from_raw_parts(
+                                                l13.cast(),
+                                                len15,
+                                                len15,
+                                            );
+                                            _rt::string_lift(bytes15)
+                                        };
+                                        PhotosError::Unavailable(e19)
+                                    }
+                                    n => {
+                                        debug_assert_eq!(n, 2, "invalid enum discriminant");
+                                        let e19 = {
+                                            let l16 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l17 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len18 = l17;
+                                            let bytes18 = _rt::Vec::from_raw_parts(
+                                                l16.cast(),
+                                                len18,
+                                                len18,
+                                            );
+                                            _rt::string_lift(bytes18)
+                                        };
+                                        PhotosError::Invalid(e19)
+                                    }
+                                };
+                                v19
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    };
+                    result20
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Add a picture -- PNG or JPEG bytes -- to the photo library.
+            pub fn save(window: u64, data: &[u8]) -> Result<(), PhotosError> {
+                unsafe {
+                    #[cfg_attr(target_pointer_width = "64", repr(align(8)))]
+                    #[cfg_attr(target_pointer_width = "32", repr(align(4)))]
+                    struct RetArea(
+                        [::core::mem::MaybeUninit<
+                            u8,
+                        >; 4 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let mut ret_area = RetArea(
+                        [::core::mem::MaybeUninit::uninit(); 4
+                            * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let vec0 = data;
+                    let ptr0 = vec0.as_ptr().cast::<u8>();
+                    let len0 = vec0.len();
+                    let ptr1 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:ui/photos@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "save"]
+                        fn wit_import2(_: i64, _: *mut u8, _: usize, _: *mut u8);
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import2(
+                        _: i64,
+                        _: *mut u8,
+                        _: usize,
+                        _: *mut u8,
+                    ) {
+                        unreachable!()
+                    }
+                    unsafe {
+                        wit_import2(_rt::as_i64(&window), ptr0.cast_mut(), len0, ptr1)
+                    };
+                    let l3 = i32::from(*ptr1.add(0).cast::<u8>());
+                    let result12 = match l3 {
+                        0 => {
+                            let e = ();
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l4 = i32::from(
+                                    *ptr1.add(::core::mem::size_of::<*const u8>()).cast::<u8>(),
+                                );
+                                let v11 = match l4 {
+                                    0 => PhotosError::NotAllowed,
+                                    1 => {
+                                        let e11 = {
+                                            let l5 = *ptr1
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l6 = *ptr1
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len7 = l6;
+                                            let bytes7 = _rt::Vec::from_raw_parts(
+                                                l5.cast(),
+                                                len7,
+                                                len7,
+                                            );
+                                            _rt::string_lift(bytes7)
+                                        };
+                                        PhotosError::Unavailable(e11)
+                                    }
+                                    n => {
+                                        debug_assert_eq!(n, 2, "invalid enum discriminant");
+                                        let e11 = {
+                                            let l8 = *ptr1
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l9 = *ptr1
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len10 = l9;
+                                            let bytes10 = _rt::Vec::from_raw_parts(
+                                                l8.cast(),
+                                                len10,
+                                                len10,
+                                            );
+                                            _rt::string_lift(bytes10)
+                                        };
+                                        PhotosError::Invalid(e11)
+                                    }
+                                };
+                                v11
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    };
+                    result12
+                }
+            }
+        }
+        /// Reminders that arrive when the app is closed: a timer that rings, a
+        /// habit nudged each evening, a meeting about to start (IC-921).
+        ///
+        /// Behind `ui.notify`, and the phone asks the person once. The system
+        /// delivers them; tapping one opens the app that set it. Each app sees and
+        /// cancels only its own.
+        #[allow(dead_code, async_fn_in_trait, unused_imports, clippy::all)]
+        pub mod reminders {
+            #[used]
+            #[doc(hidden)]
+            static __FORCE_SECTION_REF: fn() = super::super::super::__link_custom_section_describing_imports;
+            use super::super::super::_rt;
+            pub type NotifyError = super::super::super::krate::ui::notify::NotifyError;
+            #[allow(unused_unsafe, clippy::all)]
+            /// Set reminder `id` (letters, digits, `-` and `_`, up to 64) to arrive
+            /// `after-seconds` from now (1 second to a year), replacing one with the
+            /// same id. With `daily`, it comes back at that time of day every day.
+            pub fn schedule(
+                id: &str,
+                title: &str,
+                body: &str,
+                after_seconds: u64,
+                daily: bool,
+            ) -> Result<(), NotifyError> {
+                unsafe {
+                    #[cfg_attr(target_pointer_width = "64", repr(align(8)))]
+                    #[cfg_attr(target_pointer_width = "32", repr(align(4)))]
+                    struct RetArea(
+                        [::core::mem::MaybeUninit<
+                            u8,
+                        >; 4 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let mut ret_area = RetArea(
+                        [::core::mem::MaybeUninit::uninit(); 4
+                            * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let vec0 = id;
+                    let ptr0 = vec0.as_ptr().cast::<u8>();
+                    let len0 = vec0.len();
+                    let vec1 = title;
+                    let ptr1 = vec1.as_ptr().cast::<u8>();
+                    let len1 = vec1.len();
+                    let vec2 = body;
+                    let ptr2 = vec2.as_ptr().cast::<u8>();
+                    let len2 = vec2.len();
+                    let ptr3 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:ui/reminders@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "schedule"]
+                        fn wit_import4(
+                            _: *mut u8,
+                            _: usize,
+                            _: *mut u8,
+                            _: usize,
+                            _: *mut u8,
+                            _: usize,
+                            _: i64,
+                            _: i32,
+                            _: *mut u8,
+                        );
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import4(
+                        _: *mut u8,
+                        _: usize,
+                        _: *mut u8,
+                        _: usize,
+                        _: *mut u8,
+                        _: usize,
+                        _: i64,
+                        _: i32,
+                        _: *mut u8,
+                    ) {
+                        unreachable!()
+                    }
+                    unsafe {
+                        wit_import4(
+                            ptr0.cast_mut(),
+                            len0,
+                            ptr1.cast_mut(),
+                            len1,
+                            ptr2.cast_mut(),
+                            len2,
+                            _rt::as_i64(&after_seconds),
+                            match &daily {
+                                true => 1,
+                                false => 0,
+                            },
+                            ptr3,
+                        )
+                    };
+                    let l5 = i32::from(*ptr3.add(0).cast::<u8>());
+                    let result14 = match l5 {
+                        0 => {
+                            let e = ();
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l6 = i32::from(
+                                    *ptr3.add(::core::mem::size_of::<*const u8>()).cast::<u8>(),
+                                );
+                                use super::super::super::krate::ui::notify::NotifyError as V13;
+                                let v13 = match l6 {
+                                    0 => V13::Denied,
+                                    1 => {
+                                        let e13 = {
+                                            let l7 = *ptr3
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l8 = *ptr3
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len9 = l8;
+                                            let bytes9 = _rt::Vec::from_raw_parts(
+                                                l7.cast(),
+                                                len9,
+                                                len9,
+                                            );
+                                            _rt::string_lift(bytes9)
+                                        };
+                                        V13::InvalidContent(e13)
+                                    }
+                                    n => {
+                                        debug_assert_eq!(n, 2, "invalid enum discriminant");
+                                        let e13 = {
+                                            let l10 = *ptr3
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l11 = *ptr3
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len12 = l11;
+                                            let bytes12 = _rt::Vec::from_raw_parts(
+                                                l10.cast(),
+                                                len12,
+                                                len12,
+                                            );
+                                            _rt::string_lift(bytes12)
+                                        };
+                                        V13::Unavailable(e13)
+                                    }
+                                };
+                                v13
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    };
+                    result14
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Take back a reminder not yet delivered. Unknown ids are ignored.
+            pub fn cancel(id: &str) -> () {
+                unsafe {
+                    let vec0 = id;
+                    let ptr0 = vec0.as_ptr().cast::<u8>();
+                    let len0 = vec0.len();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:ui/reminders@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "cancel"]
+                        fn wit_import1(_: *mut u8, _: usize);
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import1(_: *mut u8, _: usize) {
+                        unreachable!()
+                    }
+                    unsafe { wit_import1(ptr0.cast_mut(), len0) };
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// The ids of this app's reminders still to come.
+            pub fn pending() -> _rt::Vec<_rt::String> {
+                unsafe {
+                    #[cfg_attr(target_pointer_width = "64", repr(align(8)))]
+                    #[cfg_attr(target_pointer_width = "32", repr(align(4)))]
+                    struct RetArea(
+                        [::core::mem::MaybeUninit<
+                            u8,
+                        >; 2 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let mut ret_area = RetArea(
+                        [::core::mem::MaybeUninit::uninit(); 2
+                            * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:ui/reminders@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "pending"]
+                        fn wit_import1(_: *mut u8);
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import1(_: *mut u8) {
+                        unreachable!()
+                    }
+                    unsafe { wit_import1(ptr0) };
+                    let l2 = *ptr0.add(0).cast::<*mut u8>();
+                    let l3 = *ptr0
+                        .add(::core::mem::size_of::<*const u8>())
+                        .cast::<usize>();
+                    let base7 = l2;
+                    let len7 = l3;
+                    let mut result7 = _rt::Vec::with_capacity(len7);
+                    for i in 0..len7 {
+                        let base = base7
+                            .add(i * (2 * ::core::mem::size_of::<*const u8>()));
+                        let e7 = {
+                            let l4 = *base.add(0).cast::<*mut u8>();
+                            let l5 = *base
+                                .add(::core::mem::size_of::<*const u8>())
+                                .cast::<usize>();
+                            let len6 = l5;
+                            let bytes6 = _rt::Vec::from_raw_parts(l4.cast(), len6, len6);
+                            _rt::string_lift(bytes6)
+                        };
+                        result7.push(e7);
+                    }
+                    _rt::cabi_dealloc(
+                        base7,
+                        len7 * (2 * ::core::mem::size_of::<*const u8>()),
+                        ::core::mem::size_of::<*const u8>(),
+                    );
+                    let result8 = result7;
+                    result8
+                }
+            }
+        }
+        /// Signing the person in to a service the app talks to (IC-923): GitHub,
+        /// Google, the developer's own backend.
+        ///
+        /// OAuth 2 with PKCE, through the platform's own sign-in sheet
+        /// (ASWebAuthenticationSession on a Mac and an iPhone). The person types
+        /// their password into the service's real page in the system browser,
+        /// never into the app; the app only learns the address the service sends
+        /// them back to, which carries the one-time code. It then trades that code
+        /// for a token with an ordinary fetch to the service's token address
+        /// (`net.connect` to that host), sending the PKCE verifier, and keeps the
+        /// token in `store.secret`.
+        #[allow(dead_code, async_fn_in_trait, unused_imports, clippy::all)]
+        pub mod sign_in {
+            #[used]
+            #[doc(hidden)]
+            static __FORCE_SECTION_REF: fn() = super::super::super::__link_custom_section_describing_imports;
+            use super::super::super::_rt;
+            /// Why there is no code.
+            #[derive(Clone)]
+            pub enum SignInError {
+                /// The person closed the sheet.
+                Cancelled,
+                /// This device has no sign-in sheet (computers other than a Mac, for
+                /// now), or it would not open.
+                Unavailable(_rt::String),
+                /// The address is not https, or the callback scheme is not one an app
+                /// may use.
+                Invalid(_rt::String),
+            }
+            impl ::core::fmt::Debug for SignInError {
+                fn fmt(
+                    &self,
+                    f: &mut ::core::fmt::Formatter<'_>,
+                ) -> ::core::fmt::Result {
+                    match self {
+                        SignInError::Cancelled => {
+                            f.debug_tuple("SignInError::Cancelled").finish()
+                        }
+                        SignInError::Unavailable(e) => {
+                            f.debug_tuple("SignInError::Unavailable").field(e).finish()
+                        }
+                        SignInError::Invalid(e) => {
+                            f.debug_tuple("SignInError::Invalid").field(e).finish()
+                        }
+                    }
+                }
+            }
+            impl ::core::fmt::Display for SignInError {
+                fn fmt(
+                    &self,
+                    f: &mut ::core::fmt::Formatter<'_>,
+                ) -> ::core::fmt::Result {
+                    write!(f, "{:?}", self)
+                }
+            }
+            #[cfg(feature = "std")]
+            impl std::error::Error for SignInError {}
+            #[allow(unused_unsafe, clippy::all)]
+            /// A fresh PKCE pair: the verifier the app keeps for the token request,
+            /// and its S256 challenge for the authorize address
+            /// (`code_challenge=...&code_challenge_method=S256`).
+            pub fn pkce() -> (_rt::String, _rt::String) {
+                unsafe {
+                    #[cfg_attr(target_pointer_width = "64", repr(align(8)))]
+                    #[cfg_attr(target_pointer_width = "32", repr(align(4)))]
+                    struct RetArea(
+                        [::core::mem::MaybeUninit<
+                            u8,
+                        >; 4 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let mut ret_area = RetArea(
+                        [::core::mem::MaybeUninit::uninit(); 4
+                            * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:ui/sign-in@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "pkce"]
+                        fn wit_import1(_: *mut u8);
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import1(_: *mut u8) {
+                        unreachable!()
+                    }
+                    unsafe { wit_import1(ptr0) };
+                    let l2 = *ptr0.add(0).cast::<*mut u8>();
+                    let l3 = *ptr0
+                        .add(::core::mem::size_of::<*const u8>())
+                        .cast::<usize>();
+                    let len4 = l3;
+                    let bytes4 = _rt::Vec::from_raw_parts(l2.cast(), len4, len4);
+                    let l5 = *ptr0
+                        .add(2 * ::core::mem::size_of::<*const u8>())
+                        .cast::<*mut u8>();
+                    let l6 = *ptr0
+                        .add(3 * ::core::mem::size_of::<*const u8>())
+                        .cast::<usize>();
+                    let len7 = l6;
+                    let bytes7 = _rt::Vec::from_raw_parts(l5.cast(), len7, len7);
+                    let result8 = (_rt::string_lift(bytes4), _rt::string_lift(bytes7));
+                    result8
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Open the sign-in sheet at `authorize-url` (https, carrying the app's
+            /// client id, its redirect address, a `state` and the PKCE challenge)
+            /// and wait for the service to send the person back to an address that
+            /// starts with `callback-scheme:` -- the one registered with the service
+            /// ("myapp" for `myapp://signed-in`). Returns that whole address: read
+            /// `code` from it, and check its `state` is the one you sent.
+            pub fn start(
+                window: u64,
+                authorize_url: &str,
+                callback_scheme: &str,
+            ) -> Result<_rt::String, SignInError> {
+                unsafe {
+                    #[cfg_attr(target_pointer_width = "64", repr(align(8)))]
+                    #[cfg_attr(target_pointer_width = "32", repr(align(4)))]
+                    struct RetArea(
+                        [::core::mem::MaybeUninit<
+                            u8,
+                        >; 4 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let mut ret_area = RetArea(
+                        [::core::mem::MaybeUninit::uninit(); 4
+                            * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let vec0 = authorize_url;
+                    let ptr0 = vec0.as_ptr().cast::<u8>();
+                    let len0 = vec0.len();
+                    let vec1 = callback_scheme;
+                    let ptr1 = vec1.as_ptr().cast::<u8>();
+                    let len1 = vec1.len();
+                    let ptr2 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:ui/sign-in@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "start"]
+                        fn wit_import3(
+                            _: i64,
+                            _: *mut u8,
+                            _: usize,
+                            _: *mut u8,
+                            _: usize,
+                            _: *mut u8,
+                        );
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import3(
+                        _: i64,
+                        _: *mut u8,
+                        _: usize,
+                        _: *mut u8,
+                        _: usize,
+                        _: *mut u8,
+                    ) {
+                        unreachable!()
+                    }
+                    unsafe {
+                        wit_import3(
+                            _rt::as_i64(&window),
+                            ptr0.cast_mut(),
+                            len0,
+                            ptr1.cast_mut(),
+                            len1,
+                            ptr2,
+                        )
+                    };
+                    let l4 = i32::from(*ptr2.add(0).cast::<u8>());
+                    let result16 = match l4 {
+                        0 => {
+                            let e = {
+                                let l5 = *ptr2
+                                    .add(::core::mem::size_of::<*const u8>())
+                                    .cast::<*mut u8>();
+                                let l6 = *ptr2
+                                    .add(2 * ::core::mem::size_of::<*const u8>())
+                                    .cast::<usize>();
+                                let len7 = l6;
+                                let bytes7 = _rt::Vec::from_raw_parts(
+                                    l5.cast(),
+                                    len7,
+                                    len7,
+                                );
+                                _rt::string_lift(bytes7)
+                            };
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l8 = i32::from(
+                                    *ptr2.add(::core::mem::size_of::<*const u8>()).cast::<u8>(),
+                                );
+                                let v15 = match l8 {
+                                    0 => SignInError::Cancelled,
+                                    1 => {
+                                        let e15 = {
+                                            let l9 = *ptr2
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l10 = *ptr2
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len11 = l10;
+                                            let bytes11 = _rt::Vec::from_raw_parts(
+                                                l9.cast(),
+                                                len11,
+                                                len11,
+                                            );
+                                            _rt::string_lift(bytes11)
+                                        };
+                                        SignInError::Unavailable(e15)
+                                    }
+                                    n => {
+                                        debug_assert_eq!(n, 2, "invalid enum discriminant");
+                                        let e15 = {
+                                            let l12 = *ptr2
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l13 = *ptr2
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len14 = l13;
+                                            let bytes14 = _rt::Vec::from_raw_parts(
+                                                l12.cast(),
+                                                len14,
+                                                len14,
+                                            );
+                                            _rt::string_lift(bytes14)
+                                        };
+                                        SignInError::Invalid(e15)
+                                    }
+                                };
+                                v15
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    };
+                    result16
+                }
+            }
+        }
+        /// Asking the person to prove it is them before the app shows something
+        /// private (IC-924): Face ID or the passcode on an iPhone, Touch ID or the
+        /// password on a Mac.
+        ///
+        /// The check is the system's own; the app never sees a face, a finger or a
+        /// passcode, only whether the person passed. Use it in front of what
+        /// `store.secret` keeps: unlock the vault, then read it.
+        #[allow(dead_code, async_fn_in_trait, unused_imports, clippy::all)]
+        pub mod unlock {
+            #[used]
+            #[doc(hidden)]
+            static __FORCE_SECTION_REF: fn() = super::super::super::__link_custom_section_describing_imports;
+            use super::super::super::_rt;
+            /// How the check went.
+            #[derive(Clone)]
+            pub enum UnlockAnswer {
+                /// It is them.
+                Yes,
+                /// They cancelled or failed it: keep it locked.
+                No,
+                /// This device cannot check (no passcode set, no biometrics, a
+                /// computer without them), and why. Offer the app's own way or say so.
+                Unavailable(_rt::String),
+            }
+            impl ::core::fmt::Debug for UnlockAnswer {
+                fn fmt(
+                    &self,
+                    f: &mut ::core::fmt::Formatter<'_>,
+                ) -> ::core::fmt::Result {
+                    match self {
+                        UnlockAnswer::Yes => f.debug_tuple("UnlockAnswer::Yes").finish(),
+                        UnlockAnswer::No => f.debug_tuple("UnlockAnswer::No").finish(),
+                        UnlockAnswer::Unavailable(e) => {
+                            f.debug_tuple("UnlockAnswer::Unavailable").field(e).finish()
+                        }
+                    }
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Whether this device can check it is the person.
+            pub fn available() -> bool {
+                unsafe {
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:ui/unlock@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "available"]
+                        fn wit_import0() -> i32;
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import0() -> i32 {
+                        unreachable!()
+                    }
+                    let ret = unsafe { wit_import0() };
+                    _rt::bool_lift(ret as u8)
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Ask, with the app's reason in the system's own sheet ("Unlock your
+            /// vault"). Waits while the person looks or types their passcode.
+            pub fn check(reason: &str) -> UnlockAnswer {
+                unsafe {
+                    #[cfg_attr(target_pointer_width = "64", repr(align(8)))]
+                    #[cfg_attr(target_pointer_width = "32", repr(align(4)))]
+                    struct RetArea(
+                        [::core::mem::MaybeUninit<
+                            u8,
+                        >; 3 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let mut ret_area = RetArea(
+                        [::core::mem::MaybeUninit::uninit(); 3
+                            * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let vec0 = reason;
+                    let ptr0 = vec0.as_ptr().cast::<u8>();
+                    let len0 = vec0.len();
+                    let ptr1 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:ui/unlock@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "check"]
+                        fn wit_import2(_: *mut u8, _: usize, _: *mut u8);
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import2(_: *mut u8, _: usize, _: *mut u8) {
+                        unreachable!()
+                    }
+                    unsafe { wit_import2(ptr0.cast_mut(), len0, ptr1) };
+                    let l3 = i32::from(*ptr1.add(0).cast::<u8>());
+                    let v7 = match l3 {
+                        0 => UnlockAnswer::Yes,
+                        1 => UnlockAnswer::No,
+                        n => {
+                            debug_assert_eq!(n, 2, "invalid enum discriminant");
+                            let e7 = {
+                                let l4 = *ptr1
+                                    .add(::core::mem::size_of::<*const u8>())
+                                    .cast::<*mut u8>();
+                                let l5 = *ptr1
+                                    .add(2 * ::core::mem::size_of::<*const u8>())
+                                    .cast::<usize>();
+                                let len6 = l5;
+                                let bytes6 = _rt::Vec::from_raw_parts(
+                                    l4.cast(),
+                                    len6,
+                                    len6,
+                                );
+                                _rt::string_lift(bytes6)
+                            };
+                            UnlockAnswer::Unavailable(e7)
+                        }
+                    };
+                    let result8 = v7;
+                    result8
+                }
+            }
+        }
+        /// How the person asked things to look (IC-925): dark mode, more
+        /// contrast, larger text.
+        ///
+        /// Read it every frame -- it is cheap, and the person can change it in
+        /// Settings while the app is open -- and draw from it: dark colours when
+        /// `dark`, every text size times `text-scale`. The layout kit's `Look` does
+        /// both. An app that stays bright white in a dark room, or keeps its text
+        /// small for someone who asked for it large, fails check-app.
+        #[allow(dead_code, async_fn_in_trait, unused_imports, clippy::all)]
+        pub mod appearance {
+            #[used]
+            #[doc(hidden)]
+            static __FORCE_SECTION_REF: fn() = super::super::super::__link_custom_section_describing_imports;
+            use super::super::super::_rt;
+            /// The person's choices, now.
+            #[repr(C)]
+            #[derive(Clone, Copy)]
+            pub struct Look {
+                /// The system is in dark mode.
+                pub dark: bool,
+                /// The person asked for more contrast: stronger borders, no faint grey
+                /// text.
+                pub high_contrast: bool,
+                /// How much larger (or smaller) the person wants text than the
+                /// default: 1.0 by default, up to about 3 on a phone at the largest
+                /// accessibility size. Multiply every font size by it.
+                pub text_scale: f32,
+            }
+            impl ::core::fmt::Debug for Look {
+                fn fmt(
+                    &self,
+                    f: &mut ::core::fmt::Formatter<'_>,
+                ) -> ::core::fmt::Result {
+                    f.debug_struct("Look")
+                        .field("dark", &self.dark)
+                        .field("high-contrast", &self.high_contrast)
+                        .field("text-scale", &self.text_scale)
+                        .finish()
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// How things should look right now.
+            pub fn current() -> Look {
+                unsafe {
+                    #[repr(align(4))]
+                    struct RetArea([::core::mem::MaybeUninit<u8>; 8]);
+                    let mut ret_area = RetArea([::core::mem::MaybeUninit::uninit(); 8]);
+                    let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:ui/appearance@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "current"]
+                        fn wit_import1(_: *mut u8);
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import1(_: *mut u8) {
+                        unreachable!()
+                    }
+                    unsafe { wit_import1(ptr0) };
+                    let l2 = i32::from(*ptr0.add(0).cast::<u8>());
+                    let l3 = i32::from(*ptr0.add(1).cast::<u8>());
+                    let l4 = *ptr0.add(4).cast::<f32>();
+                    let result5 = Look {
+                        dark: _rt::bool_lift(l2 as u8),
+                        high_contrast: _rt::bool_lift(l3 as u8),
+                        text_scale: l4,
+                    };
+                    result5
+                }
+            }
+        }
+        /// What a screen reader says about an app that draws itself (IC-926):
+        /// VoiceOver on a Mac and an iPhone, TalkBack on Android.
+        ///
+        /// A canvas is one picture to a screen reader: without this, a person who
+        /// cannot see the screen hears nothing and can do nothing. The app lists
+        /// what it drew -- each button, heading, line of text, switch -- with where
+        /// it is and what it says, and Krate hands that to the platform. When the
+        /// person double-taps an element, the app receives an ordinary tap at its
+        /// centre, so the controls it already has work unchanged. Widget apps need
+        /// none of this: Krate describes their widgets itself.
+        #[allow(dead_code, async_fn_in_trait, unused_imports, clippy::all)]
+        pub mod accessibility {
+            #[used]
+            #[doc(hidden)]
+            static __FORCE_SECTION_REF: fn() = super::super::super::__link_custom_section_describing_imports;
+            use super::super::super::_rt;
+            pub type UiError = super::super::super::krate::ui::types::UiError;
+            /// What kind of thing an element is; the screen reader says it after the
+            /// label ("Save, button").
+            #[repr(u8)]
+            #[derive(Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
+            pub enum Role {
+                /// Something to press.
+                Button,
+                /// A link to somewhere else.
+                Link,
+                /// A title over a part of the screen; the person can jump between them.
+                Heading,
+                /// Text to read.
+                Text,
+                /// A picture; give it a label that says what it shows.
+                Image,
+                /// An on/off switch or a checkbox: put its state in `checked`.
+                Toggle,
+                /// A value that goes up and down (volume, a slider): put it in `value`.
+                Adjustable,
+                /// A field to type into.
+                Field,
+            }
+            impl ::core::fmt::Debug for Role {
+                fn fmt(
+                    &self,
+                    f: &mut ::core::fmt::Formatter<'_>,
+                ) -> ::core::fmt::Result {
+                    match self {
+                        Role::Button => f.debug_tuple("Role::Button").finish(),
+                        Role::Link => f.debug_tuple("Role::Link").finish(),
+                        Role::Heading => f.debug_tuple("Role::Heading").finish(),
+                        Role::Text => f.debug_tuple("Role::Text").finish(),
+                        Role::Image => f.debug_tuple("Role::Image").finish(),
+                        Role::Toggle => f.debug_tuple("Role::Toggle").finish(),
+                        Role::Adjustable => f.debug_tuple("Role::Adjustable").finish(),
+                        Role::Field => f.debug_tuple("Role::Field").finish(),
+                    }
+                }
+            }
+            impl Role {
+                #[doc(hidden)]
+                pub unsafe fn _lift(val: u8) -> Role {
+                    if !cfg!(debug_assertions) {
+                        return ::core::mem::transmute(val);
+                    }
+                    match val {
+                        0 => Role::Button,
+                        1 => Role::Link,
+                        2 => Role::Heading,
+                        3 => Role::Text,
+                        4 => Role::Image,
+                        5 => Role::Toggle,
+                        6 => Role::Adjustable,
+                        7 => Role::Field,
+                        _ => panic!("invalid enum discriminant"),
+                    }
+                }
+            }
+            /// One thing on screen.
+            #[derive(Clone)]
+            pub struct Element {
+                /// Left edge in points, as drawn.
+                pub x: f32,
+                /// Top edge in points.
+                pub y: f32,
+                /// Width in points.
+                pub width: f32,
+                /// Height in points.
+                pub height: f32,
+                /// What it is.
+                pub role: Role,
+                /// What it says ("Start timer", "Inbox", "Photo of a red bicycle").
+                pub label: _rt::String,
+                /// Its current value, when it has one ("24:37", "60%"); empty if not.
+                pub value: _rt::String,
+                /// On or off, for a toggle; none for anything else.
+                pub checked: Option<bool>,
+                /// False for something that cannot be used right now.
+                pub enabled: bool,
+            }
+            impl ::core::fmt::Debug for Element {
+                fn fmt(
+                    &self,
+                    f: &mut ::core::fmt::Formatter<'_>,
+                ) -> ::core::fmt::Result {
+                    f.debug_struct("Element")
+                        .field("x", &self.x)
+                        .field("y", &self.y)
+                        .field("width", &self.width)
+                        .field("height", &self.height)
+                        .field("role", &self.role)
+                        .field("label", &self.label)
+                        .field("value", &self.value)
+                        .field("checked", &self.checked)
+                        .field("enabled", &self.enabled)
+                        .finish()
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Say what the window shows now, in reading order (top to bottom, then
+            /// left to right, as the person would read it). Replaces what was said
+            /// before; call it again whenever the screen changes. An empty list says
+            /// the window shows nothing to read.
+            pub fn describe(window: u64, elements: &[Element]) -> Result<(), UiError> {
+                unsafe {
+                    #[cfg_attr(target_pointer_width = "64", repr(align(8)))]
+                    #[cfg_attr(target_pointer_width = "32", repr(align(4)))]
+                    struct RetArea(
+                        [::core::mem::MaybeUninit<
+                            u8,
+                        >; 4 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let mut ret_area = RetArea(
+                        [::core::mem::MaybeUninit::uninit(); 4
+                            * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let vec3 = elements;
+                    let len3 = vec3.len();
+                    let layout3 = _rt::alloc::Layout::from_size_align_unchecked(
+                        vec3.len() * (16 + 6 * ::core::mem::size_of::<*const u8>()),
+                        ::core::mem::size_of::<*const u8>(),
+                    );
+                    let result3 = if layout3.size() != 0 {
+                        let ptr = _rt::alloc::alloc(layout3).cast::<u8>();
+                        if ptr.is_null() {
+                            _rt::alloc::handle_alloc_error(layout3);
+                        }
+                        ptr
+                    } else {
+                        ::core::ptr::null_mut()
+                    };
+                    for (i, e) in vec3.into_iter().enumerate() {
+                        let base = result3
+                            .add(i * (16 + 6 * ::core::mem::size_of::<*const u8>()));
+                        {
+                            let Element {
+                                x: x0,
+                                y: y0,
+                                width: width0,
+                                height: height0,
+                                role: role0,
+                                label: label0,
+                                value: value0,
+                                checked: checked0,
+                                enabled: enabled0,
+                            } = e;
+                            *base.add(0).cast::<f32>() = _rt::as_f32(x0);
+                            *base.add(4).cast::<f32>() = _rt::as_f32(y0);
+                            *base.add(8).cast::<f32>() = _rt::as_f32(width0);
+                            *base.add(12).cast::<f32>() = _rt::as_f32(height0);
+                            *base.add(16).cast::<u8>() = (role0.clone() as i32) as u8;
+                            let vec1 = label0;
+                            let ptr1 = vec1.as_ptr().cast::<u8>();
+                            let len1 = vec1.len();
+                            *base
+                                .add(16 + 2 * ::core::mem::size_of::<*const u8>())
+                                .cast::<usize>() = len1;
+                            *base
+                                .add(16 + 1 * ::core::mem::size_of::<*const u8>())
+                                .cast::<*mut u8>() = ptr1.cast_mut();
+                            let vec2 = value0;
+                            let ptr2 = vec2.as_ptr().cast::<u8>();
+                            let len2 = vec2.len();
+                            *base
+                                .add(16 + 4 * ::core::mem::size_of::<*const u8>())
+                                .cast::<usize>() = len2;
+                            *base
+                                .add(16 + 3 * ::core::mem::size_of::<*const u8>())
+                                .cast::<*mut u8>() = ptr2.cast_mut();
+                            match checked0 {
+                                Some(e) => {
+                                    *base
+                                        .add(16 + 5 * ::core::mem::size_of::<*const u8>())
+                                        .cast::<u8>() = (1i32) as u8;
+                                    *base
+                                        .add(17 + 5 * ::core::mem::size_of::<*const u8>())
+                                        .cast::<u8>() = (match e {
+                                        true => 1,
+                                        false => 0,
+                                    }) as u8;
+                                }
+                                None => {
+                                    *base
+                                        .add(16 + 5 * ::core::mem::size_of::<*const u8>())
+                                        .cast::<u8>() = (0i32) as u8;
+                                }
+                            };
+                            *base
+                                .add(18 + 5 * ::core::mem::size_of::<*const u8>())
+                                .cast::<u8>() = (match enabled0 {
+                                true => 1,
+                                false => 0,
+                            }) as u8;
+                        }
+                    }
+                    let ptr4 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:ui/accessibility@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "describe"]
+                        fn wit_import5(_: i64, _: *mut u8, _: usize, _: *mut u8);
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import5(
+                        _: i64,
+                        _: *mut u8,
+                        _: usize,
+                        _: *mut u8,
+                    ) {
+                        unreachable!()
+                    }
+                    unsafe { wit_import5(_rt::as_i64(&window), result3, len3, ptr4) };
+                    let l6 = i32::from(*ptr4.add(0).cast::<u8>());
+                    let result15 = match l6 {
+                        0 => {
+                            let e = ();
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l7 = i32::from(
+                                    *ptr4.add(::core::mem::size_of::<*const u8>()).cast::<u8>(),
+                                );
+                                use super::super::super::krate::ui::types::UiError as V14;
+                                let v14 = match l7 {
+                                    0 => V14::PermissionDenied,
+                                    1 => V14::InvalidWindow,
+                                    2 => V14::InvalidWidget,
+                                    3 => {
+                                        let e14 = {
+                                            let l8 = *ptr4
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l9 = *ptr4
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len10 = l9;
+                                            let bytes10 = _rt::Vec::from_raw_parts(
+                                                l8.cast(),
+                                                len10,
+                                                len10,
+                                            );
+                                            _rt::string_lift(bytes10)
+                                        };
+                                        V14::Unsupported(e14)
+                                    }
+                                    n => {
+                                        debug_assert_eq!(n, 4, "invalid enum discriminant");
+                                        let e14 = {
+                                            let l11 = *ptr4
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l12 = *ptr4
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len13 = l12;
+                                            let bytes13 = _rt::Vec::from_raw_parts(
+                                                l11.cast(),
+                                                len13,
+                                                len13,
+                                            );
+                                            _rt::string_lift(bytes13)
+                                        };
+                                        V14::Platform(e14)
+                                    }
+                                };
+                                v14
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    };
+                    if layout3.size() != 0 {
+                        _rt::alloc::dealloc(result3.cast(), layout3);
+                    }
+                    result15
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Whether a screen reader is on right now, so an app can skip work that
+            /// only matters to one (it must still describe its screen either way).
+            pub fn screen_reader_on() -> bool {
+                unsafe {
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:ui/accessibility@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "screen-reader-on"]
+                        fn wit_import0() -> i32;
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import0() -> i32 {
+                        unreachable!()
+                    }
+                    let ret = unsafe { wit_import0() };
+                    _rt::bool_lift(ret as u8)
+                }
+            }
+        }
+        /// A web page shown inside the app (IC-927): a help page, a checkout, a
+        /// document, in a box of the app's window, in the system's own web view.
+        ///
+        /// The page goes only where the app may go: its first address and every
+        /// link it follows must be https on a host the person granted the app
+        /// `net.connect` to; anything else is refused and said in `problem`. The
+        /// page keeps no cookies or storage between openings and sees nothing of
+        /// the app's own data, and its scripts have no way to reach the app.
+        #[allow(dead_code, async_fn_in_trait, unused_imports, clippy::all)]
+        pub mod web_page {
+            #[used]
+            #[doc(hidden)]
+            static __FORCE_SECTION_REF: fn() = super::super::super::__link_custom_section_describing_imports;
+            use super::super::super::_rt;
+            pub type UiError = super::super::super::krate::ui::types::UiError;
+            /// Where a page is and what it is doing.
+            #[derive(Clone)]
+            pub struct PageState {
+                /// The address it shows now.
+                pub address: _rt::String,
+                /// The page's title, once it has one.
+                pub title: _rt::String,
+                /// True while it loads.
+                pub loading: bool,
+                /// Why the last address was not shown -- a host the app may not open,
+                /// a page that failed to load -- or empty.
+                pub problem: _rt::String,
+            }
+            impl ::core::fmt::Debug for PageState {
+                fn fmt(
+                    &self,
+                    f: &mut ::core::fmt::Formatter<'_>,
+                ) -> ::core::fmt::Result {
+                    f.debug_struct("PageState")
+                        .field("address", &self.address)
+                        .field("title", &self.title)
+                        .field("loading", &self.loading)
+                        .field("problem", &self.problem)
+                        .finish()
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Show `address` in a box of the window: `x`, `y`, `width` and `height`
+            /// in points, as the app lays it out. Refused when the address is not
+            /// https on a host the app was granted `net.connect` to.
+            pub fn open(
+                window: u64,
+                address: &str,
+                x: f32,
+                y: f32,
+                width: f32,
+                height: f32,
+            ) -> Result<u64, UiError> {
+                unsafe {
+                    #[repr(align(8))]
+                    struct RetArea(
+                        [::core::mem::MaybeUninit<
+                            u8,
+                        >; 16 + 2 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let mut ret_area = RetArea(
+                        [::core::mem::MaybeUninit::uninit(); 16
+                            + 2 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let vec0 = address;
+                    let ptr0 = vec0.as_ptr().cast::<u8>();
+                    let len0 = vec0.len();
+                    let ptr1 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:ui/web-page@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "open"]
+                        fn wit_import2(
+                            _: i64,
+                            _: *mut u8,
+                            _: usize,
+                            _: f32,
+                            _: f32,
+                            _: f32,
+                            _: f32,
+                            _: *mut u8,
+                        );
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import2(
+                        _: i64,
+                        _: *mut u8,
+                        _: usize,
+                        _: f32,
+                        _: f32,
+                        _: f32,
+                        _: f32,
+                        _: *mut u8,
+                    ) {
+                        unreachable!()
+                    }
+                    unsafe {
+                        wit_import2(
+                            _rt::as_i64(&window),
+                            ptr0.cast_mut(),
+                            len0,
+                            _rt::as_f32(&x),
+                            _rt::as_f32(&y),
+                            _rt::as_f32(&width),
+                            _rt::as_f32(&height),
+                            ptr1,
+                        )
+                    };
+                    let l3 = i32::from(*ptr1.add(0).cast::<u8>());
+                    let result13 = match l3 {
+                        0 => {
+                            let e = {
+                                let l4 = *ptr1.add(8).cast::<i64>();
+                                l4 as u64
+                            };
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l5 = i32::from(*ptr1.add(8).cast::<u8>());
+                                use super::super::super::krate::ui::types::UiError as V12;
+                                let v12 = match l5 {
+                                    0 => V12::PermissionDenied,
+                                    1 => V12::InvalidWindow,
+                                    2 => V12::InvalidWidget,
+                                    3 => {
+                                        let e12 = {
+                                            let l6 = *ptr1
+                                                .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l7 = *ptr1
+                                                .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len8 = l7;
+                                            let bytes8 = _rt::Vec::from_raw_parts(
+                                                l6.cast(),
+                                                len8,
+                                                len8,
+                                            );
+                                            _rt::string_lift(bytes8)
+                                        };
+                                        V12::Unsupported(e12)
+                                    }
+                                    n => {
+                                        debug_assert_eq!(n, 4, "invalid enum discriminant");
+                                        let e12 = {
+                                            let l9 = *ptr1
+                                                .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l10 = *ptr1
+                                                .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len11 = l10;
+                                            let bytes11 = _rt::Vec::from_raw_parts(
+                                                l9.cast(),
+                                                len11,
+                                                len11,
+                                            );
+                                            _rt::string_lift(bytes11)
+                                        };
+                                        V12::Platform(e12)
+                                    }
+                                };
+                                v12
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    };
+                    result13
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Move or resize its box (the screen turned, the layout changed).
+            pub fn place(
+                page: u64,
+                x: f32,
+                y: f32,
+                width: f32,
+                height: f32,
+            ) -> Result<(), UiError> {
+                unsafe {
+                    #[cfg_attr(target_pointer_width = "64", repr(align(8)))]
+                    #[cfg_attr(target_pointer_width = "32", repr(align(4)))]
+                    struct RetArea(
+                        [::core::mem::MaybeUninit<
+                            u8,
+                        >; 4 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let mut ret_area = RetArea(
+                        [::core::mem::MaybeUninit::uninit(); 4
+                            * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:ui/web-page@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "place"]
+                        fn wit_import1(
+                            _: i64,
+                            _: f32,
+                            _: f32,
+                            _: f32,
+                            _: f32,
+                            _: *mut u8,
+                        );
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import1(
+                        _: i64,
+                        _: f32,
+                        _: f32,
+                        _: f32,
+                        _: f32,
+                        _: *mut u8,
+                    ) {
+                        unreachable!()
+                    }
+                    unsafe {
+                        wit_import1(
+                            _rt::as_i64(&page),
+                            _rt::as_f32(&x),
+                            _rt::as_f32(&y),
+                            _rt::as_f32(&width),
+                            _rt::as_f32(&height),
+                            ptr0,
+                        )
+                    };
+                    let l2 = i32::from(*ptr0.add(0).cast::<u8>());
+                    let result11 = match l2 {
+                        0 => {
+                            let e = ();
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l3 = i32::from(
+                                    *ptr0.add(::core::mem::size_of::<*const u8>()).cast::<u8>(),
+                                );
+                                use super::super::super::krate::ui::types::UiError as V10;
+                                let v10 = match l3 {
+                                    0 => V10::PermissionDenied,
+                                    1 => V10::InvalidWindow,
+                                    2 => V10::InvalidWidget,
+                                    3 => {
+                                        let e10 = {
+                                            let l4 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l5 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len6 = l5;
+                                            let bytes6 = _rt::Vec::from_raw_parts(
+                                                l4.cast(),
+                                                len6,
+                                                len6,
+                                            );
+                                            _rt::string_lift(bytes6)
+                                        };
+                                        V10::Unsupported(e10)
+                                    }
+                                    n => {
+                                        debug_assert_eq!(n, 4, "invalid enum discriminant");
+                                        let e10 = {
+                                            let l7 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l8 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len9 = l8;
+                                            let bytes9 = _rt::Vec::from_raw_parts(
+                                                l7.cast(),
+                                                len9,
+                                                len9,
+                                            );
+                                            _rt::string_lift(bytes9)
+                                        };
+                                        V10::Platform(e10)
+                                    }
+                                };
+                                v10
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    };
+                    result11
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Go to another address, judged as `open` judges the first.
+            pub fn go(page: u64, address: &str) -> Result<(), UiError> {
+                unsafe {
+                    #[cfg_attr(target_pointer_width = "64", repr(align(8)))]
+                    #[cfg_attr(target_pointer_width = "32", repr(align(4)))]
+                    struct RetArea(
+                        [::core::mem::MaybeUninit<
+                            u8,
+                        >; 4 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let mut ret_area = RetArea(
+                        [::core::mem::MaybeUninit::uninit(); 4
+                            * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let vec0 = address;
+                    let ptr0 = vec0.as_ptr().cast::<u8>();
+                    let len0 = vec0.len();
+                    let ptr1 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:ui/web-page@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "go"]
+                        fn wit_import2(_: i64, _: *mut u8, _: usize, _: *mut u8);
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import2(
+                        _: i64,
+                        _: *mut u8,
+                        _: usize,
+                        _: *mut u8,
+                    ) {
+                        unreachable!()
+                    }
+                    unsafe {
+                        wit_import2(_rt::as_i64(&page), ptr0.cast_mut(), len0, ptr1)
+                    };
+                    let l3 = i32::from(*ptr1.add(0).cast::<u8>());
+                    let result12 = match l3 {
+                        0 => {
+                            let e = ();
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l4 = i32::from(
+                                    *ptr1.add(::core::mem::size_of::<*const u8>()).cast::<u8>(),
+                                );
+                                use super::super::super::krate::ui::types::UiError as V11;
+                                let v11 = match l4 {
+                                    0 => V11::PermissionDenied,
+                                    1 => V11::InvalidWindow,
+                                    2 => V11::InvalidWidget,
+                                    3 => {
+                                        let e11 = {
+                                            let l5 = *ptr1
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l6 = *ptr1
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len7 = l6;
+                                            let bytes7 = _rt::Vec::from_raw_parts(
+                                                l5.cast(),
+                                                len7,
+                                                len7,
+                                            );
+                                            _rt::string_lift(bytes7)
+                                        };
+                                        V11::Unsupported(e11)
+                                    }
+                                    n => {
+                                        debug_assert_eq!(n, 4, "invalid enum discriminant");
+                                        let e11 = {
+                                            let l8 = *ptr1
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l9 = *ptr1
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len10 = l9;
+                                            let bytes10 = _rt::Vec::from_raw_parts(
+                                                l8.cast(),
+                                                len10,
+                                                len10,
+                                            );
+                                            _rt::string_lift(bytes10)
+                                        };
+                                        V11::Platform(e11)
+                                    }
+                                };
+                                v11
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    };
+                    result12
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Back to the page before, when there is one.
+            pub fn back(page: u64) -> () {
+                unsafe {
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:ui/web-page@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "back"]
+                        fn wit_import0(_: i64);
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import0(_: i64) {
+                        unreachable!()
+                    }
+                    unsafe { wit_import0(_rt::as_i64(&page)) };
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Where it is and what it is doing.
+            pub fn state(page: u64) -> Result<PageState, UiError> {
+                unsafe {
+                    #[cfg_attr(target_pointer_width = "64", repr(align(8)))]
+                    #[cfg_attr(target_pointer_width = "32", repr(align(4)))]
+                    struct RetArea(
+                        [::core::mem::MaybeUninit<
+                            u8,
+                        >; 8 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let mut ret_area = RetArea(
+                        [::core::mem::MaybeUninit::uninit(); 8
+                            * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:ui/web-page@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "state"]
+                        fn wit_import1(_: i64, _: *mut u8);
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import1(_: i64, _: *mut u8) {
+                        unreachable!()
+                    }
+                    unsafe { wit_import1(_rt::as_i64(&page), ptr0) };
+                    let l2 = i32::from(*ptr0.add(0).cast::<u8>());
+                    let result21 = match l2 {
+                        0 => {
+                            let e = {
+                                let l3 = *ptr0
+                                    .add(::core::mem::size_of::<*const u8>())
+                                    .cast::<*mut u8>();
+                                let l4 = *ptr0
+                                    .add(2 * ::core::mem::size_of::<*const u8>())
+                                    .cast::<usize>();
+                                let len5 = l4;
+                                let bytes5 = _rt::Vec::from_raw_parts(
+                                    l3.cast(),
+                                    len5,
+                                    len5,
+                                );
+                                let l6 = *ptr0
+                                    .add(3 * ::core::mem::size_of::<*const u8>())
+                                    .cast::<*mut u8>();
+                                let l7 = *ptr0
+                                    .add(4 * ::core::mem::size_of::<*const u8>())
+                                    .cast::<usize>();
+                                let len8 = l7;
+                                let bytes8 = _rt::Vec::from_raw_parts(
+                                    l6.cast(),
+                                    len8,
+                                    len8,
+                                );
+                                let l9 = i32::from(
+                                    *ptr0
+                                        .add(5 * ::core::mem::size_of::<*const u8>())
+                                        .cast::<u8>(),
+                                );
+                                let l10 = *ptr0
+                                    .add(6 * ::core::mem::size_of::<*const u8>())
+                                    .cast::<*mut u8>();
+                                let l11 = *ptr0
+                                    .add(7 * ::core::mem::size_of::<*const u8>())
+                                    .cast::<usize>();
+                                let len12 = l11;
+                                let bytes12 = _rt::Vec::from_raw_parts(
+                                    l10.cast(),
+                                    len12,
+                                    len12,
+                                );
+                                PageState {
+                                    address: _rt::string_lift(bytes5),
+                                    title: _rt::string_lift(bytes8),
+                                    loading: _rt::bool_lift(l9 as u8),
+                                    problem: _rt::string_lift(bytes12),
+                                }
+                            };
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l13 = i32::from(
+                                    *ptr0.add(::core::mem::size_of::<*const u8>()).cast::<u8>(),
+                                );
+                                use super::super::super::krate::ui::types::UiError as V20;
+                                let v20 = match l13 {
+                                    0 => V20::PermissionDenied,
+                                    1 => V20::InvalidWindow,
+                                    2 => V20::InvalidWidget,
+                                    3 => {
+                                        let e20 = {
+                                            let l14 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l15 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len16 = l15;
+                                            let bytes16 = _rt::Vec::from_raw_parts(
+                                                l14.cast(),
+                                                len16,
+                                                len16,
+                                            );
+                                            _rt::string_lift(bytes16)
+                                        };
+                                        V20::Unsupported(e20)
+                                    }
+                                    n => {
+                                        debug_assert_eq!(n, 4, "invalid enum discriminant");
+                                        let e20 = {
+                                            let l17 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l18 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len19 = l18;
+                                            let bytes19 = _rt::Vec::from_raw_parts(
+                                                l17.cast(),
+                                                len19,
+                                                len19,
+                                            );
+                                            _rt::string_lift(bytes19)
+                                        };
+                                        V20::Platform(e20)
+                                    }
+                                };
+                                v20
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    };
+                    result21
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Take it away.
+            pub fn close(page: u64) -> () {
+                unsafe {
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:ui/web-page@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "close"]
+                        fn wit_import0(_: i64);
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import0(_: i64) {
+                        unreachable!()
+                    }
+                    unsafe { wit_import0(_rt::as_i64(&page)) };
+                }
+            }
+        }
     }
 }
 #[rustfmt::skip]
@@ -41229,9 +45515,9 @@ pub(crate) use __export_gui_impl as export;
 )]
 #[doc(hidden)]
 #[allow(clippy::octal_escapes)]
-pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 28239] = *b"\
-\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\xd4\xdb\x01\x01A\x02\
-\x01A\xb4\x01\x01B\x04\x01m\x05\x05trace\x05debug\x04info\x04warn\x05error\x04\0\
+pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 31269] = *b"\
+\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\xaa\xf3\x01\x01A\x02\
+\x01A\xcf\x01\x01B\x04\x01m\x05\x05trace\x05debug\x04info\x04warn\x05error\x04\0\
 \x09log-level\x03\0\0\x01q\x05\x06closed\0\0\x0binterrupted\0\0\x0eunexpected-eo\
 f\0\0\x0cinvalid-utf8\0\0\x05other\x01s\0\x04\0\x08io-error\x03\0\x02\x03\0\x14k\
 rate:io/types@0.1.0\x05\0\x02\x03\0\0\x08io-error\x01B\x15\x02\x03\x02\x01\x01\x04\
@@ -41465,385 +45751,456 @@ nch-error\x03\0\0\x01j\0\x01\x01\x01@\x01\x03urls\0\x02\x04\0\x08open-url\x01\x0
 \x03\0\x17krate:ui/launcher@0.1.0\x05;\x01B\x05\x01q\x03\x06denied\0\0\x0finvali\
 d-content\x01s\0\x0bunavailable\x01s\0\x04\0\x0cnotify-error\x03\0\0\x01j\0\x01\x01\
 \x01@\x02\x05titles\x04bodys\0\x02\x04\0\x04show\x01\x03\x03\0\x15krate:ui/notif\
-y@0.1.0\x05<\x01B\x14\x01r\x04\x01rv\x01gv\x01bv\x01av\x04\0\x05color\x03\0\0\x01\
-r\x02\x01xv\x01yv\x04\0\x05point\x03\0\x02\x01r\x02\x05widthv\x06heightv\x04\0\x04\
-size\x03\0\x04\x01r\x04\x05widthv\x06heightv\x06ascentv\x07descentv\x04\0\x0ctex\
-t-metrics\x03\0\x06\x01r\x04\x01xv\x01yv\x05widthv\x06heightv\x04\0\x04rect\x03\0\
-\x08\x01r\x02\x06offsetv\x05color\x01\x04\0\x0dgradient-stop\x03\0\x0a\x01m\x03\x04\
-sans\x05serif\x04mono\x04\0\x0bfont-family\x03\0\x0c\x01r\x04\x06weight{\x06ital\
-ic\x7f\x0eletter-spacingv\x06family\x0d\x04\0\x0atext-style\x03\0\x0e\x01r\x04\x08\
-top-leftv\x09top-rightv\x0cbottom-rightv\x0bbottom-leftv\x04\0\x0ccorner-radii\x03\
-\0\x10\x01q\x04\x11permission-denied\0\0\x0einvalid-target\0\0\x0bunsupported\x01\
-s\0\x08platform\x01s\0\x04\0\x09gfx-error\x03\0\x12\x03\0\x15krate:gfx/types@0.1\
-.0\x05=\x02\x03\0'\x05color\x02\x03\0'\x05point\x02\x03\0'\x04rect\x02\x03\0'\x04\
-size\x02\x03\0'\x0ctext-metrics\x02\x03\0'\x09gfx-error\x02\x03\0'\x0dgradient-s\
-top\x02\x03\0'\x0ccorner-radii\x02\x03\0'\x0atext-style\x02\x03\0'\x0bfont-famil\
-y\x01BK\x02\x03\x02\x01>\x04\0\x05color\x03\0\0\x02\x03\x02\x01?\x04\0\x05point\x03\
-\0\x02\x02\x03\x02\x01@\x04\0\x04rect\x03\0\x04\x02\x03\x02\x01A\x04\0\x04size\x03\
-\0\x06\x02\x03\x02\x01B\x04\0\x0ctext-metrics\x03\0\x08\x02\x03\x02\x01C\x04\0\x09\
-gfx-error\x03\0\x0a\x02\x03\x02\x01D\x04\0\x0dgradient-stop\x03\0\x0c\x02\x03\x02\
-\x01E\x04\0\x0ccorner-radii\x03\0\x0e\x02\x03\x02\x01F\x04\0\x0atext-style\x03\0\
-\x10\x02\x03\x02\x01G\x04\0\x0bfont-family\x03\0\x12\x01j\x01w\x01\x0b\x01@\x02\x06\
-windoww\x06widgetw\0\x14\x04\0\x04bind\x01\x15\x01j\x01\x07\x01\x0b\x01@\x01\x06\
-canvasw\0\x16\x04\0\x0bcanvas-size\x01\x17\x01j\0\x01\x0b\x01@\x02\x06canvasw\x04\
-size\x07\0\x18\x04\0\x0fset-design-size\x01\x19\x01@\x05\x06canvasw\x01xv\x01yv\x01\
-wv\x01hv\0\x18\x04\0\x08set-clip\x01\x1a\x01@\x01\x06canvasw\0\x18\x04\0\x0aclea\
-r-clip\x01\x1b\x01@\x02\x06canvasw\x04fill\x01\0\x18\x04\0\x05clear\x01\x1c\x01@\
-\x03\x06canvasw\x04area\x05\x04fill\x01\0\x18\x04\0\x09fill-rect\x01\x1d\x01@\x04\
-\x06canvasw\x04area\x05\x06stroke\x01\x05widthv\0\x18\x04\0\x0bstroke-rect\x01\x1e\
-\x01@\x04\x06canvasw\x04area\x05\x05radii\x0f\x04fill\x01\0\x18\x04\0\x0ffill-ro\
-und-rect\x01\x1f\x01@\x05\x06canvasw\x04area\x05\x05radii\x0f\x05widthv\x06strok\
-e\x01\0\x18\x04\0\x11stroke-round-rect\x01\x20\x01@\x05\x06canvasw\x04area\x05\x05\
-radii\x0f\x04blurv\x06shadow\x01\0\x18\x04\0\x16drop-shadow-round-rect\x01!\x01p\
-\x0d\x01@\x04\x06canvasw\x04area\x05\x0dangle-degreesv\x05stops\"\0\x18\x04\0\x15\
-linear-gradient-stops\x01#\x01@\x06\x06canvasw\x04texts\x06origin\x03\x09font-si\
-zev\x03ink\x01\x05style\x11\0\x18\x04\0\x10draw-text-styled\x01$\x01j\x01\x09\x01\
-\x0b\x01@\x04\x06canvasw\x04texts\x09font-sizev\x05style\x11\0%\x04\0\x13measure\
--text-styled\x01&\x01@\x07\x06canvasw\x06center\x03\x06radiusv\x0dstart-degreesv\
-\x0dsweep-degreesv\x05widthv\x06stroke\x01\0\x18\x04\0\x0astroke-arc\x01'\x01p}\x01\
-@\x06\x06canvasw\x04area\x05\x05radii\x0f\x05widthy\x06heighty\x04rgba(\0\x18\x04\
-\0\x11draw-pixels-round\x01)\x01@\x04\x06canvasw\x06center\x03\x06radiusv\x04fil\
-l\x01\0\x18\x04\0\x0bfill-circle\x01*\x01@\x05\x06canvasw\x06center\x03\x06radiu\
-sv\x05widthv\x06stroke\x01\0\x18\x04\0\x0dstroke-circle\x01+\x01@\x05\x06canvasw\
-\x06center\x03\x06radiusv\x05inner\x01\x05outer\x01\0\x18\x04\0\x0fradial-gradie\
-nt\x01,\x01@\x04\x06canvasw\x04area\x05\x03top\x01\x06bottom\x01\0\x18\x04\0\x0f\
-linear-gradient\x01-\x01@\x05\x06canvasw\x04texts\x06origin\x03\x09font-sizev\x03\
-ink\x01\0\x18\x04\0\x09draw-text\x01.\x01@\x03\x06canvasw\x04texts\x09font-sizev\
-\0%\x04\0\x0cmeasure-text\x01/\x01@\x05\x06canvasw\x04area\x05\x05widthy\x06heig\
-hty\x04rgba(\0\x18\x04\0\x0bdraw-pixels\x010\x01@\x07\x06canvasw\x06center\x03\x03\
-dst\x07\x05anglev\x05widthy\x06heighty\x04rgba(\0\x18\x04\0\x0bdraw-sprite\x011\x04\
-\0\x07present\x01\x1b\x03\0\x18krate:gfx/canvas2d@0.1.0\x05H\x01B%\x02\x03\x02\x01\
->\x04\0\x05color\x03\0\0\x02\x03\x02\x01C\x04\0\x09gfx-error\x03\0\x02\x01pv\x01\
-r\x0a\x07ambientv\x08specularv\x09shininessv\x0bfog-densityv\x09fog-color\x01\x0e\
-fill-direction\x04\x0afill-color\x01\x0dshadow-radiusv\x0fshadow-softnessv\x08ex\
-posurev\x04\0\x08lighting\x03\0\x05\x01j\x01w\x01\x03\x01@\x02\x06windoww\x06wid\
-getw\0\x07\x04\0\x04bind\x01\x08\x01j\0\x01\x03\x01@\x02\x05scenew\x03sky\x01\0\x09\
-\x04\0\x05clear\x01\x0a\x01@\x04\x05scenew\x03eye\x04\x07look-at\x04\x0bfov-degr\
-eesv\0\x09\x04\0\x06camera\x01\x0b\x01@\x02\x05scenew\x09direction\x04\0\x09\x04\
-\0\x05light\x01\x0c\x01@\x03\x05scenew\x08vertices\x04\x04tint\x01\0\x09\x04\0\x09\
-triangles\x01\x0d\x01@\x06\x05scenew\x08vertices\x04\x09translate\x04\x0erotate-\
-degrees\x04\x05scalev\x04tint\x01\0\x09\x04\0\x05place\x01\x0e\x01p}\x01@\x04\x05\
-scenew\x05widthy\x06heighty\x04rgba\x0f\0\x07\x04\0\x0eupload-texture\x01\x10\x01\
-@\x05\x05scenew\x08vertices\x04\x03uvs\x04\x07texturew\x04tint\x01\0\x09\x04\0\x08\
-textured\x01\x11\x01@\x06\x05scenew\x08vertices\x04\x07normals\x04\x03uvs\x04\x07\
-texturew\x04tint\x01\0\x09\x04\0\x06smooth\x01\x12\x01@\x02\x05scenew\x08lightin\
-g\x06\0\x09\x04\0\x0cset-lighting\x01\x13\x01@\x08\x05scenew\x08vertices\x04\x07\
-normals\x04\x08tangents\x04\x03uvs\x04\x07texturew\x0enormal-texturew\x04tint\x01\
-\0\x09\x04\0\x0dnormal-mapped\x01\x14\x04\0\x05unlit\x01\x11\x01@\x02\x05scenew\x07\
-enabled\x7f\0\x09\x04\0\x0fcull-back-faces\x01\x15\x01@\x01\x05scenew\0\x09\x04\0\
-\x07present\x01\x16\x03\0\x17krate:gfx/scene3d@0.1.0\x05I\x01B\xf6\x01\x01w\x04\0\
-\x06handle\x03\0\0\x01q\x06\x0einvalid-handle\x01s\0\x0avalidation\x01s\0\x0dout\
--of-memory\0\0\x04lost\x01s\0\x0bunsupported\x01s\0\x08internal\x01s\0\x04\0\x09\
-gpu-error\x03\0\x02\x01r\x05\x07messages\x04liney\x06columny\x06offsety\x06lengt\
-hy\x04\0\x0cshader-error\x03\0\x04\x01r\x06\x07messages\x04kinds\x04liney\x06col\
-umny\x06offsety\x06lengthy\x04\0\x13compilation-message\x03\0\x06\x01r\x02\x04na\
-mes\x05valuew\x04\0\x05limit\x03\0\x08\x01m\x03\x04none\x09low-power\x10high-per\
-formance\x04\0\x10power-preference\x03\0\x0a\x01k\x01\x01r\x03\x10power-preferen\
-ce\x0b\x16force-fallback-adapter\x7f\x12compatible-surface\x0c\x04\0\x0fadapter-\
-options\x03\0\x0d\x01m\x05\x05other\x0eintegrated-gpu\x0cdiscrete-gpu\x0bvirtual\
--gpu\x03cpu\x04\0\x0bdevice-type\x03\0\x0f\x01r\x07\x04names\x06vendory\x06devic\
-ey\x0bdevice-type\x10\x07backends\x06drivers\x0bdriver-infos\x04\0\x0cadapter-in\
-fo\x03\0\x11\x01ks\x01ps\x01p\x09\x01r\x03\x05label\x13\x11required-features\x14\
-\x0frequired-limits\x15\x04\0\x11device-descriptor\x03\0\x16\x01n\x0a\x08map-rea\
-d\x09map-write\x08copy-src\x08copy-dst\x05index\x06vertex\x07uniform\x07storage\x08\
-indirect\x0dquery-resolve\x04\0\x0dbuffer-usages\x03\0\x18\x01r\x04\x05label\x13\
-\x04sizew\x05usage\x19\x12mapped-at-creation\x7f\x04\0\x11buffer-descriptor\x03\0\
-\x1a\x01n\x05\x08copy-src\x08copy-dst\x0ftexture-binding\x0fstorage-binding\x11r\
-ender-attachment\x04\0\x0etexture-usages\x03\0\x1c\x01r\x03\x05widthy\x06heighty\
-\x15depth-or-array-layersy\x04\0\x08extent3d\x03\0\x1e\x01r\x03\x01xy\x01yy\x01z\
-y\x04\0\x08origin3d\x03\0\x20\x01m\x03\x02d1\x02d2\x02d3\x04\0\x11texture-dimens\
-ion\x03\0\"\x01r\x08\x05label\x13\x04size\x1f\x0fmip-level-county\x0csample-coun\
-ty\x09dimension#\x06formats\x05usage\x1d\x0cview-formats\x14\x04\0\x12texture-de\
-scriptor\x03\0$\x01m\x06\x02d1\x02d2\x08d2-array\x04cube\x0acube-array\x02d3\x04\
-\0\x16texture-view-dimension\x03\0&\x01m\x03\x03all\x0cstencil-only\x0adepth-onl\
-y\x04\0\x0etexture-aspect\x03\0(\x01k'\x01k\x1d\x01ky\x01r\x09\x05label\x13\x06f\
-ormat\x13\x09dimension*\x05usage+\x06aspect)\x0ebase-mip-levely\x0fmip-level-cou\
-nt,\x10base-array-layery\x11array-layer-count,\x04\0\x17texture-view-descriptor\x03\
-\0-\x01m\x04\x0dclamp-to-edge\x06repeat\x0dmirror-repeat\x0fclamp-to-border\x04\0\
-\x0caddress-mode\x03\0/\x01m\x02\x07nearest\x06linear\x04\0\x0bfilter-mode\x03\0\
-1\x01m\x08\x05never\x04less\x05equal\x0aless-equal\x07greater\x09not-equal\x0dgr\
-eater-equal\x06always\x04\0\x10compare-function\x03\03\x01m\x04\x11transparent-b\
-lack\x0copaque-black\x0copaque-white\x04zero\x04\0\x0cborder-color\x03\05\x01k4\x01\
-k6\x01r\x0c\x05label\x13\x0eaddress-mode-u0\x0eaddress-mode-v0\x0eaddress-mode-w\
-0\x0amag-filter2\x0amin-filter2\x0dmipmap-filter2\x0dlod-min-clampv\x0dlod-max-c\
-lampv\x07compare7\x10anisotropy-clamp{\x0cborder-color8\x04\0\x12sampler-descrip\
-tor\x03\09\x01n\x03\x06vertex\x08fragment\x07compute\x04\0\x0dshader-stages\x03\0\
-;\x01q\x02\x07uniform\0\0\x07storage\x01\x7f\0\x04\0\x13buffer-binding-type\x03\0\
-=\x01r\x03\x04kind>\x12has-dynamic-offset\x7f\x10min-binding-sizew\x04\0\x15buff\
-er-binding-layout\x03\0?\x01m\x03\x09filtering\x0dnon-filtering\x0acomparison\x04\
-\0\x14sampler-binding-type\x03\0A\x01q\x04\x05float\x01\x7f\0\x05depth\0\0\x04si\
-nt\0\0\x04uint\0\0\x04\0\x13texture-sample-type\x03\0C\x01r\x03\x0bsample-type\xc4\
-\0\x0eview-dimension'\x0cmultisampled\x7f\x04\0\x16texture-binding-layout\x03\0E\
-\x01m\x03\x0awrite-only\x09read-only\x0aread-write\x04\0\x16storage-texture-acce\
-ss\x03\0G\x01r\x03\x06access\xc8\0\x06formats\x0eview-dimension'\x04\0\x1estorag\
-e-texture-binding-layout\x03\0I\x01q\x04\x06buffer\x01\xc0\0\0\x07sampler\x01\xc2\
-\0\0\x07texture\x01\xc6\0\0\x0fstorage-texture\x01\xca\0\0\x04\0\x0cbinding-type\
-\x03\0K\x01r\x04\x07bindingy\x0avisibility<\x04kind\xcc\0\x05count,\x04\0\x17bin\
-d-group-layout-entry\x03\0M\x01p\xce\0\x01r\x02\x05label\x13\x07entries\xcf\0\x04\
-\0\x1cbind-group-layout-descriptor\x03\0P\x01kw\x01r\x03\x06buffer\x01\x06offset\
-w\x04size\xd2\0\x04\0\x0ebuffer-binding\x03\0S\x01p\xd4\0\x01p\x01\x01q\x06\x06b\
-uffer\x01\xd4\0\0\x0cbuffer-array\x01\xd5\0\0\x07sampler\x01\x01\0\x0dsampler-ar\
-ray\x01\xd6\0\0\x0ctexture-view\x01\x01\0\x12texture-view-array\x01\xd6\0\0\x04\0\
-\x10binding-resource\x03\0W\x01r\x02\x07bindingy\x08resource\xd8\0\x04\0\x10bind\
--group-entry\x03\0Y\x01p\xda\0\x01r\x03\x05label\x13\x06layout\x01\x07entries\xdb\
-\0\x04\0\x15bind-group-descriptor\x03\0\\\x01p\x0c\x01r\x03\x05label\x13\x12bind\
--group-layouts\xde\0\x0eimmediate-sizey\x04\0\x1apipeline-layout-descriptor\x03\0\
-_\x01r\x02\x05label\x13\x04codes\x04\0\x18shader-module-descriptor\x03\0a\x01r\x02\
-\x04names\x05valueu\x04\0\x0econstant-entry\x03\0c\x01p\xe4\0\x01r\x03\x06module\
-\x01\x0bentry-point\x13\x09constants\xe5\0\x04\0\x12programmable-stage\x03\0f\x01\
-m\x02\x06vertex\x08instance\x04\0\x10vertex-step-mode\x03\0h\x01r\x03\x06formats\
-\x06offsetw\x0fshader-locationy\x04\0\x10vertex-attribute\x03\0j\x01p\xeb\0\x01r\
-\x03\x0carray-stridew\x09step-mode\xe9\0\x0aattributes\xec\0\x04\0\x14vertex-buf\
-fer-layout\x03\0m\x01p\xee\0\x01r\x02\x05stage\xe7\0\x07buffers\xef\0\x04\0\x0cv\
-ertex-state\x03\0p\x01m\x05\x0apoint-list\x09line-list\x0aline-strip\x0dtriangle\
--list\x0etriangle-strip\x04\0\x12primitive-topology\x03\0r\x01m\x02\x06uint16\x06\
-uint32\x04\0\x0cindex-format\x03\0t\x01m\x02\x03ccw\x02cw\x04\0\x0afront-face\x03\
-\0v\x01m\x03\x04none\x05front\x04back\x04\0\x09cull-mode\x03\0x\x01m\x03\x04fill\
-\x04line\x05point\x04\0\x0cpolygon-mode\x03\0z\x01k\xf5\0\x01r\x07\x08topology\xf3\
-\0\x12strip-index-format\xfc\0\x0afront-face\xf7\0\x09cull-mode\xf9\0\x0funclipp\
-ed-depth\x7f\x0cpolygon-mode\xfb\0\x0cconservative\x7f\x04\0\x0fprimitive-state\x03\
-\0}\x01m\x08\x04keep\x04zero\x07replace\x06invert\x0fincrement-clamp\x0fdecremen\
-t-clamp\x0eincrement-wrap\x0edecrement-wrap\x04\0\x11stencil-operation\x03\0\x7f\
-\x01r\x04\x07compare4\x07fail-op\x80\x01\x0ddepth-fail-op\x80\x01\x07pass-op\x80\
-\x01\x04\0\x12stencil-face-state\x03\0\x81\x01\x01r\x0a\x06formats\x13depth-writ\
-e-enabled\x7f\x0ddepth-compare4\x0dstencil-front\x82\x01\x0cstencil-back\x82\x01\
-\x11stencil-read-masky\x12stencil-write-masky\x0adepth-biasz\x16depth-bias-slope\
--scalev\x10depth-bias-clampv\x04\0\x13depth-stencil-state\x03\0\x83\x01\x01r\x03\
-\x05county\x04maskw\x19alpha-to-coverage-enabled\x7f\x04\0\x11multisample-state\x03\
-\0\x85\x01\x01m\x11\x04zero\x03one\x03src\x0done-minus-src\x09src-alpha\x13one-m\
-inus-src-alpha\x03dst\x0done-minus-dst\x09dst-alpha\x13one-minus-dst-alpha\x13sr\
-c-alpha-saturated\x08constant\x12one-minus-constant\x04src1\x0eone-minus-src1\x0a\
-src1-alpha\x14one-minus-src1-alpha\x04\0\x0cblend-factor\x03\0\x87\x01\x01m\x05\x03\
-add\x08subtract\x10reverse-subtract\x03min\x03max\x04\0\x0fblend-operation\x03\0\
-\x89\x01\x01r\x03\x0asrc-factor\x88\x01\x0adst-factor\x88\x01\x09operation\x8a\x01\
-\x04\0\x0fblend-component\x03\0\x8b\x01\x01r\x02\x05color\x8c\x01\x05alpha\x8c\x01\
-\x04\0\x0bblend-state\x03\0\x8d\x01\x01n\x04\x03red\x05green\x04blue\x05alpha\x04\
-\0\x0ccolor-writes\x03\0\x8f\x01\x01k\x8e\x01\x01r\x03\x06formats\x05blend\x91\x01\
-\x0awrite-mask\x90\x01\x04\0\x12color-target-state\x03\0\x92\x01\x01k\x93\x01\x01\
-p\x94\x01\x01r\x02\x05stage\xe7\0\x07targets\x95\x01\x04\0\x0efragment-state\x03\
-\0\x96\x01\x01k\x84\x01\x01k\x97\x01\x01r\x08\x05label\x13\x06layout\x0c\x06vert\
-ex\xf1\0\x09primitive\xfe\0\x0ddepth-stencil\x98\x01\x0bmultisample\x86\x01\x08f\
-ragment\x99\x01\x0emultiview-mask,\x04\0\x1arender-pipeline-descriptor\x03\0\x9a\
-\x01\x01r\x03\x05label\x13\x06layout\x0c\x05stage\xe7\0\x04\0\x1bcompute-pipelin\
-e-descriptor\x03\0\x9c\x01\x01m\x02\x09occlusion\x09timestamp\x04\0\x0aquery-typ\
-e\x03\0\x9e\x01\x01r\x03\x05label\x13\x04kind\x9f\x01\x05county\x04\0\x14query-s\
-et-descriptor\x03\0\xa0\x01\x01r\x04\x07texture\x01\x09mip-levely\x06origin!\x06\
-aspect)\x04\0\x17texel-copy-texture-info\x03\0\xa2\x01\x01r\x03\x06offsetw\x0dby\
-tes-per-row,\x0erows-per-image,\x04\0\x18texel-copy-buffer-layout\x03\0\xa4\x01\x01\
-r\x02\x06buffer\x01\x06layout\xa5\x01\x04\0\x16texel-copy-buffer-info\x03\0\xa6\x01\
-\x01r\x04\x01ru\x01gu\x01bu\x01au\x04\0\x05color\x03\0\xa8\x01\x01q\x02\x05clear\
-\x01\xa9\x01\0\x04load\0\0\x04\0\x0dcolor-load-op\x03\0\xaa\x01\x01m\x02\x05stor\
-e\x07discard\x04\0\x08store-op\x03\0\xac\x01\x01r\x05\x04view\x01\x0bdepth-slice\
-,\x0eresolve-target\x0c\x04load\xab\x01\x05store\xad\x01\x04\0\x1crender-pass-co\
-lor-attachment\x03\0\xae\x01\x01q\x02\x05clear\x01v\0\x04load\0\0\x04\0\x0ddepth\
--load-op\x03\0\xb0\x01\x01q\x02\x05clear\x01y\0\x04load\0\0\x04\0\x0fstencil-loa\
-d-op\x03\0\xb2\x01\x01r\x02\x04load\xb1\x01\x05store\xad\x01\x04\0\x09depth-ops\x03\
-\0\xb4\x01\x01r\x02\x04load\xb3\x01\x05store\xad\x01\x04\0\x0bstencil-ops\x03\0\xb6\
-\x01\x01k\xb5\x01\x01k\xb7\x01\x01r\x03\x04view\x01\x09depth-ops\xb8\x01\x0bsten\
-cil-ops\xb9\x01\x04\0$render-pass-depth-stencil-attachment\x03\0\xba\x01\x01r\x03\
-\x09query-set\x01\x1dbeginning-of-pass-write-index,\x17end-of-pass-write-index,\x04\
-\0\x15pass-timestamp-writes\x03\0\xbc\x01\x01k\xaf\x01\x01p\xbe\x01\x01k\xbb\x01\
-\x01k\xbd\x01\x01r\x06\x05label\x13\x11color-attachments\xbf\x01\x18depth-stenci\
-l-attachment\xc0\x01\x10timestamp-writes\xc1\x01\x13occlusion-query-set\x0c\x0em\
-ultiview-mask,\x04\0\x16render-pass-descriptor\x03\0\xc2\x01\x01r\x02\x05label\x13\
-\x10timestamp-writes\xc1\x01\x04\0\x17compute-pass-descriptor\x03\0\xc4\x01\x01p\
-y\x01r\x03\x05indexy\x05group\x0c\x07offsets\xc6\x01\x04\0\x0eset-bind-group\x03\
-\0\xc7\x01\x01r\x04\x04sloty\x06buffer\x01\x06offsetw\x04size\xd2\0\x04\0\x11set\
--vertex-buffer\x03\0\xc9\x01\x01r\x04\x06buffer\x01\x06format\xf5\0\x06offsetw\x04\
-size\xd2\0\x04\0\x10set-index-buffer\x03\0\xcb\x01\x01r\x06\x01xv\x01yv\x05width\
-v\x06heightv\x09min-depthv\x09max-depthv\x04\0\x08viewport\x03\0\xcd\x01\x01r\x04\
-\x01xy\x01yy\x05widthy\x06heighty\x04\0\x0cscissor-rect\x03\0\xcf\x01\x01p}\x01r\
-\x02\x06offsety\x04data\xd1\x01\x04\0\x0eset-immediates\x03\0\xd2\x01\x01r\x04\x0c\
-vertex-county\x0einstance-county\x0cfirst-vertexy\x0efirst-instancey\x04\0\x04dr\
-aw\x03\0\xd4\x01\x01r\x05\x0bindex-county\x0einstance-county\x0bfirst-indexy\x0b\
-base-vertexz\x0efirst-instancey\x04\0\x0cdraw-indexed\x03\0\xd6\x01\x01r\x02\x06\
-buffer\x01\x06offsetw\x04\0\x08indirect\x03\0\xd8\x01\x01r\x03\x06buffer\x01\x06\
-offsetw\x05county\x04\0\x0emulti-indirect\x03\0\xda\x01\x01r\x05\x06buffer\x01\x06\
-offsetw\x0ccount-buffer\x01\x0ccount-offsetw\x09max-county\x04\0\x14multi-indire\
-ct-count\x03\0\xdc\x01\x01r\x02\x09query-set\x01\x05indexy\x04\0\x0bquery-write\x03\
-\0\xde\x01\x01q\x17\x0cset-pipeline\x01\x01\0\x0eset-bind-group\x01\xc8\x01\0\x11\
-set-vertex-buffer\x01\xca\x01\0\x10set-index-buffer\x01\xcc\x01\0\x0cset-viewpor\
-t\x01\xce\x01\0\x10set-scissor-rect\x01\xd0\x01\0\x12set-blend-constant\x01\xa9\x01\
-\0\x15set-stencil-reference\x01y\0\x0eset-immediates\x01\xd3\x01\0\x04draw\x01\xd5\
-\x01\0\x0cdraw-indexed\x01\xd7\x01\0\x0ddraw-indirect\x01\xd9\x01\0\x15draw-inde\
-xed-indirect\x01\xd9\x01\0\x13multi-draw-indirect\x01\xdb\x01\0\x1bmulti-draw-in\
-dexed-indirect\x01\xdb\x01\0\x19multi-draw-indirect-count\x01\xdd\x01\0!multi-dr\
-aw-indexed-indirect-count\x01\xdd\x01\0\x15begin-occlusion-query\x01y\0\x13end-o\
-cclusion-query\0\0\x0fwrite-timestamp\x01\xdf\x01\0\x10push-debug-group\x01s\0\x0f\
-pop-debug-group\0\0\x13insert-debug-marker\x01s\0\x04\0\x0erender-command\x03\0\xe0\
-\x01\x01q\x09\x0cset-pipeline\x01\x01\0\x0eset-bind-group\x01\xc8\x01\0\x0eset-i\
-mmediates\x01\xd3\x01\0\x08dispatch\x01!\0\x11dispatch-indirect\x01\xd9\x01\0\x0f\
-write-timestamp\x01\xdf\x01\0\x10push-debug-group\x01s\0\x0fpop-debug-group\0\0\x13\
-insert-debug-marker\x01s\0\x04\0\x0fcompute-command\x03\0\xe2\x01\x01m\x02\x04re\
-ad\x05write\x04\0\x08map-mode\x03\0\xe4\x01\x01m\x04\x04fifo\x0cfifo-relaxed\x09\
-immediate\x07mailbox\x04\0\x0cpresent-mode\x03\0\xe6\x01\x01m\x04\x06opaque\x0ep\
-re-multiplied\x0fpost-multiplied\x07inherit\x04\0\x14composite-alpha-mode\x03\0\xe8\
-\x01\x01p\xe7\x01\x01p\xe9\x01\x01r\x04\x07formats\x14\x0dpresent-modes\xea\x01\x0b\
-alpha-modes\xeb\x01\x06usages\x1d\x04\0\x14surface-capabilities\x03\0\xec\x01\x01\
-r\x08\x05usage\x1d\x06formats\x05widthy\x06heighty\x0cpresent-mode\xe7\x01\x0aal\
-pha-mode\xe9\x01\x0cview-formats\x14\x1ddesired-maximum-frame-latencyy\x04\0\x15\
-surface-configuration\x03\0\xee\x01\x01r\x02\x07texture\x01\x0asuboptimal\x7f\x04\
-\0\x0dsurface-frame\x03\0\xf0\x01\x01q\x05\x0enot-configured\0\0\x08outdated\0\0\
-\x08occluded\0\0\x04lost\x01s\0\x05other\x01s\0\x04\0\x0dsurface-error\x03\0\xf2\
-\x01\x01r\x05\x0eallowed-usages\x1d\x0dsample-counts\xc6\x01\x0afilterable\x7f\x09\
-blendable\x7f\x12storage-read-write\x7f\x04\0\x0fformat-features\x03\0\xf4\x01\x03\
-\0\x15krate:gpu/types@0.1.0\x05J\x02\x03\0*\x06handle\x02\x03\0*\x09gpu-error\x02\
-\x03\0*\x0cshader-error\x02\x03\0*\x13compilation-message\x02\x03\0*\x05limit\x02\
-\x03\0*\x0fadapter-options\x02\x03\0*\x0cadapter-info\x02\x03\0*\x11device-descr\
-iptor\x02\x03\0*\x11buffer-descriptor\x02\x03\0*\x12texture-descriptor\x02\x03\0\
-*\x17texture-view-descriptor\x02\x03\0*\x12sampler-descriptor\x02\x03\0*\x1cbind\
--group-layout-descriptor\x02\x03\0*\x15bind-group-descriptor\x02\x03\0*\x1apipel\
-ine-layout-descriptor\x02\x03\0*\x18shader-module-descriptor\x02\x03\0*\x1arende\
-r-pipeline-descriptor\x02\x03\0*\x1bcompute-pipeline-descriptor\x02\x03\0*\x14qu\
-ery-set-descriptor\x02\x03\0*\x17texel-copy-texture-info\x02\x03\0*\x18texel-cop\
-y-buffer-layout\x02\x03\0*\x16texel-copy-buffer-info\x02\x03\0*\x08extent3d\x02\x03\
-\0*\x16render-pass-descriptor\x02\x03\0*\x0erender-command\x02\x03\0*\x17compute\
--pass-descriptor\x02\x03\0*\x0fcompute-command\x02\x03\0*\x08map-mode\x02\x03\0*\
-\x14surface-capabilities\x02\x03\0*\x15surface-configuration\x02\x03\0*\x0dsurfa\
-ce-frame\x02\x03\0*\x0dsurface-error\x02\x03\0*\x0fformat-features\x01B\xc5\x01\x02\
-\x03\x02\x01K\x04\0\x06handle\x03\0\0\x02\x03\x02\x01L\x04\0\x09gpu-error\x03\0\x02\
-\x02\x03\x02\x01M\x04\0\x0cshader-error\x03\0\x04\x02\x03\x02\x01N\x04\0\x13comp\
-ilation-message\x03\0\x06\x02\x03\x02\x01O\x04\0\x05limit\x03\0\x08\x02\x03\x02\x01\
-P\x04\0\x0fadapter-options\x03\0\x0a\x02\x03\x02\x01Q\x04\0\x0cadapter-info\x03\0\
-\x0c\x02\x03\x02\x01R\x04\0\x11device-descriptor\x03\0\x0e\x02\x03\x02\x01S\x04\0\
-\x11buffer-descriptor\x03\0\x10\x02\x03\x02\x01T\x04\0\x12texture-descriptor\x03\
-\0\x12\x02\x03\x02\x01U\x04\0\x17texture-view-descriptor\x03\0\x14\x02\x03\x02\x01\
-V\x04\0\x12sampler-descriptor\x03\0\x16\x02\x03\x02\x01W\x04\0\x1cbind-group-lay\
-out-descriptor\x03\0\x18\x02\x03\x02\x01X\x04\0\x15bind-group-descriptor\x03\0\x1a\
-\x02\x03\x02\x01Y\x04\0\x1apipeline-layout-descriptor\x03\0\x1c\x02\x03\x02\x01Z\
-\x04\0\x18shader-module-descriptor\x03\0\x1e\x02\x03\x02\x01[\x04\0\x1arender-pi\
-peline-descriptor\x03\0\x20\x02\x03\x02\x01\\\x04\0\x1bcompute-pipeline-descript\
-or\x03\0\"\x02\x03\x02\x01]\x04\0\x14query-set-descriptor\x03\0$\x02\x03\x02\x01\
-^\x04\0\x17texel-copy-texture-info\x03\0&\x02\x03\x02\x01_\x04\0\x18texel-copy-b\
-uffer-layout\x03\0(\x02\x03\x02\x01`\x04\0\x16texel-copy-buffer-info\x03\0*\x02\x03\
-\x02\x01a\x04\0\x08extent3d\x03\0,\x02\x03\x02\x01b\x04\0\x16render-pass-descrip\
-tor\x03\0.\x02\x03\x02\x01c\x04\0\x0erender-command\x03\00\x02\x03\x02\x01d\x04\0\
-\x17compute-pass-descriptor\x03\02\x02\x03\x02\x01e\x04\0\x0fcompute-command\x03\
-\04\x02\x03\x02\x01f\x04\0\x08map-mode\x03\06\x02\x03\x02\x01g\x04\0\x14surface-\
-capabilities\x03\08\x02\x03\x02\x01h\x04\0\x15surface-configuration\x03\0:\x02\x03\
-\x02\x01i\x04\0\x0dsurface-frame\x03\0<\x02\x03\x02\x01j\x04\0\x0dsurface-error\x03\
-\0>\x02\x03\x02\x01k\x04\0\x0fformat-features\x03\0@\x01j\x01\x01\x01\x03\x01@\x01\
-\x07options\x0b\0\xc2\0\x04\0\x0frequest-adapter\x01C\x01j\x01\x0d\x01\x03\x01@\x01\
-\x07adapter\x01\0\xc4\0\x04\0\x10describe-adapter\x01E\x01ps\x01j\x01\xc6\0\x01\x03\
-\x01@\x01\x07adapter\x01\0\xc7\0\x04\0\x10adapter-features\x01H\x01p\x09\x01j\x01\
-\xc9\0\x01\x03\x01@\x01\x07adapter\x01\0\xca\0\x04\0\x0eadapter-limits\x01K\x01j\
-\x01\xc1\0\x01\x03\x01@\x02\x07adapter\x01\x06formats\0\xcc\0\x04\0\x17adapter-f\
-ormat-features\x01M\x01@\x02\x07adapter\x01\x0adescriptor\x0f\0\xc2\0\x04\0\x0er\
-equest-device\x01N\x01@\x01\x06device\x01\0\xc7\0\x04\0\x0fdevice-features\x01O\x01\
-@\x01\x06device\x01\0\xca\0\x04\0\x0ddevice-limits\x01P\x01j\0\x01\x03\x01@\x01\x06\
-device\x01\0\xd1\0\x04\0\x0edestroy-device\x01R\x01ks\x01@\x01\x06device\x01\0\xd3\
-\0\x04\0\x12device-lost-reason\x01T\x01j\x01\x7f\x01\x03\x01@\x02\x06device\x01\x04\
-wait\x7f\0\xd5\0\x04\0\x04poll\x01V\x01@\x02\x06device\x01\x0adescriptor\x11\0\xc2\
-\0\x04\0\x0dcreate-buffer\x01W\x01@\x04\x06buffer\x01\x04mode7\x06offsetw\x04siz\
-ew\0\xd1\0\x04\0\x0amap-buffer\x01X\x04\0\x10begin-map-buffer\x01X\x01@\x02\x06b\
-uffer\x01\x04wait\x7f\0\xd5\0\x04\0\x10map-buffer-ready\x01Y\x01p}\x01j\x01\xda\0\
-\x01\x03\x01@\x03\x06buffer\x01\x06offsetw\x04sizew\0\xdb\0\x04\0\x0bread-mapped\
-\x01\\\x01@\x03\x06buffer\x01\x06offsetw\x04data\xda\0\0\xd1\0\x04\0\x0cwrite-ma\
-pped\x01]\x01@\x01\x06buffer\x01\0\xd1\0\x04\0\x0cunmap-buffer\x01^\x04\0\x0edes\
-troy-buffer\x01^\x01@\x02\x06device\x01\x0adescriptor\x13\0\xc2\0\x04\0\x0ecreat\
-e-texture\x01_\x01@\x01\x07texture\x01\0\xd1\0\x04\0\x0fdestroy-texture\x01`\x01\
-@\x02\x07texture\x01\x0adescriptor\x15\0\xc2\0\x04\0\x13create-texture-view\x01a\
-\x01@\x02\x06device\x01\x0adescriptor\x17\0\xc2\0\x04\0\x0ecreate-sampler\x01b\x01\
-@\x02\x06device\x01\x0adescriptor%\0\xc2\0\x04\0\x10create-query-set\x01c\x01@\x02\
-\x06device\x01\x0adescriptor\x19\0\xc2\0\x04\0\x18create-bind-group-layout\x01d\x01\
-@\x02\x06device\x01\x0adescriptor\x1b\0\xc2\0\x04\0\x11create-bind-group\x01e\x01\
-@\x02\x06device\x01\x0adescriptor\x1d\0\xc2\0\x04\0\x16create-pipeline-layout\x01\
-f\x01j\x01\x01\x01\x05\x01@\x02\x06device\x01\x0adescriptor\x1f\0\xe7\0\x04\0\x14\
-create-shader-module\x01h\x01p\x07\x01j\x01\xe9\0\x01\x03\x01@\x01\x06module\x01\
-\0\xea\0\x04\0\x17shader-compilation-info\x01k\x01@\x02\x06device\x01\x0adescrip\
-tor!\0\xc2\0\x04\0\x16create-render-pipeline\x01l\x01@\x02\x06device\x01\x0adesc\
-riptor#\0\xc2\0\x04\0\x17create-compute-pipeline\x01m\x01@\x02\x08pipeline\x01\x05\
-indexy\0\xc2\0\x04\0\x1apipeline-bind-group-layout\x01n\x01@\x02\x06device\x01\x05\
-label\xd3\0\0\xc2\0\x04\0\x16create-command-encoder\x01o\x01p1\x01@\x03\x07encod\
-er\x01\x0adescriptor/\x08commands\xf0\0\0\xd1\0\x04\0\x12encode-render-pass\x01q\
-\x01p5\x01@\x03\x07encoder\x01\x0adescriptor3\x08commands\xf2\0\0\xd1\0\x04\0\x13\
-encode-compute-pass\x01s\x01kw\x01@\x06\x07encoder\x01\x06source\x01\x0dsource-o\
-ffsetw\x0bdestination\x01\x12destination-offsetw\x04size\xf4\0\0\xd1\0\x04\0\x15\
-copy-buffer-to-buffer\x01u\x01@\x04\x07encoder\x01\x06source+\x0bdestination'\x04\
-size-\0\xd1\0\x04\0\x16copy-buffer-to-texture\x01v\x01@\x04\x07encoder\x01\x06so\
-urce'\x0bdestination+\x04size-\0\xd1\0\x04\0\x16copy-texture-to-buffer\x01w\x01@\
-\x04\x07encoder\x01\x06source'\x0bdestination'\x04size-\0\xd1\0\x04\0\x17copy-te\
-xture-to-texture\x01x\x01@\x04\x07encoder\x01\x06buffer\x01\x06offsetw\x04size\xf4\
-\0\0\xd1\0\x04\0\x0cclear-buffer\x01y\x01@\x06\x07encoder\x01\x09query-set\x01\x0b\
-first-queryy\x0bquery-county\x0bdestination\x01\x12destination-offsetw\0\xd1\0\x04\
-\0\x11resolve-query-set\x01z\x01@\x03\x07encoder\x01\x09query-set\x01\x05indexy\0\
-\xd1\0\x04\0\x0fwrite-timestamp\x01{\x01@\x02\x07encoder\x01\x05label\xd3\0\0\xc2\
-\0\x04\0\x0efinish-encoder\x01|\x01p\x01\x01j\x01w\x01\x03\x01@\x02\x06device\x01\
-\x0fcommand-buffers\xfd\0\0\xfe\0\x04\0\x06submit\x01\x7f\x01@\x04\x06device\x01\
-\x06buffer\x01\x06offsetw\x04data\xda\0\0\xd1\0\x04\0\x0cwrite-buffer\x01\x80\x01\
-\x01@\x05\x06device\x01\x0bdestination'\x04data\xda\0\x06layout)\x04size-\0\xd1\0\
-\x04\0\x0dwrite-texture\x01\x81\x01\x01j\x01v\x01\x03\x01@\x01\x06device\x01\0\x82\
-\x01\x04\0\x10timestamp-period\x01\x83\x01\x01@\x02\x06windoww\x06widgetw\0\xc2\0\
-\x04\0\x0ecreate-surface\x01\x84\x01\x01o\x02yy\x01j\x01\x85\x01\x01\x03\x01@\x01\
-\x07surface\x01\0\x86\x01\x04\0\x12surface-pixel-size\x01\x87\x01\x01j\x019\x01\x03\
-\x01@\x02\x07surface\x01\x07adapter\x01\0\x88\x01\x04\0\x18get-surface-capabilit\
-ies\x01\x89\x01\x01@\x03\x07surface\x01\x06device\x01\x0dconfiguration;\0\xd1\0\x04\
-\0\x11configure-surface\x01\x8a\x01\x01j\x01=\x01?\x01@\x01\x07surface\x01\0\x8b\
-\x01\x04\0\x0fcurrent-texture\x01\x8c\x01\x01@\x01\x07surface\x01\0\xd1\0\x04\0\x07\
-present\x01\x8d\x01\x01@\x01\x06object\x01\x01\0\x04\0\x07release\x01\x8e\x01\x03\
-\0\x13krate:gpu/gpu@0.1.0\x05l\x01B\x11\x02\x03\x02\x01@\x04\0\x04rect\x03\0\0\x02\
-\x03\x02\x01E\x04\0\x0ccorner-radii\x03\0\x02\x02\x03\x02\x01C\x04\0\x09gfx-erro\
-r\x03\0\x04\x01p}\x01j\x01w\x01\x05\x01@\x04\x06canvasw\x05widthy\x06heighty\x04\
-rgba\x06\0\x07\x04\0\x04keep\x01\x08\x01j\0\x01\x05\x01@\x03\x06canvasw\x05image\
-w\x04area\x01\0\x09\x04\0\x04draw\x01\x0a\x01@\x04\x06canvasw\x05imagew\x04area\x01\
-\x05radii\x03\0\x09\x04\0\x0adraw-round\x01\x0b\x01@\x02\x06canvasw\x05imagew\x01\
-\0\x04\0\x06forget\x01\x0c\x03\0\x1dkrate:gfx/canvas-images@0.1.0\x05m\x01B\x06\x01\
-m\x02\x07pcm-s16\x07float32\x04\0\x0dsample-format\x03\0\0\x01r\x04\x0bsample-ra\
-tey\x08channels{\x06format\x01\x0dbuffer-framesy\x04\0\x0dstream-config\x03\0\x02\
-\x01q\x05\x11permission-denied\0\0\x0einvalid-stream\0\0\x12device-unavailable\0\
-\0\x0bunsupported\x01s\0\x08platform\x01s\0\x04\0\x0baudio-error\x03\0\x04\x03\0\
-\x17krate:audio/types@0.1.0\x05n\x02\x03\0-\x0baudio-error\x02\x03\0-\x0dstream-\
-config\x01B\x15\x02\x03\x02\x01o\x04\0\x0baudio-error\x03\0\0\x02\x03\x02\x01p\x04\
-\0\x0dstream-config\x03\0\x02\x01j\x01w\x01\x01\x01@\x01\x06config\x03\0\x04\x04\
-\0\x04open\x01\x05\x01j\0\x01\x01\x01@\x01\x09stream-idw\0\x06\x04\0\x05start\x01\
-\x07\x04\0\x04stop\x01\x07\x01p}\x01j\x01y\x01\x01\x01@\x02\x09stream-idw\x05byt\
-es\x08\0\x09\x04\0\x05write\x01\x0a\x01@\x02\x09stream-idw\x05bytes\x08\0\x04\x04\
-\0\x0aload-sound\x01\x0b\x01@\x03\x09stream-idw\x05soundw\x04gainv\0\x06\x04\0\x0a\
-play-sound\x01\x0c\x01@\x02\x09stream-idw\x05soundw\0\x06\x04\0\x0astop-sound\x01\
-\x0d\x03\0\x1akrate:audio/playback@0.1.0\x05q\x01B\x05\x02\x03\x02\x01o\x04\0\x0b\
-audio-error\x03\0\0\x01j\x01y\x01\x01\x01@\x01\x09stream-idw\0\x02\x04\0\x06queu\
-ed\x01\x03\x03\0\x20krate:audio/playback-queue@0.1.0\x05r\x01B\x0f\x02\x03\x02\x01\
-o\x04\0\x0baudio-error\x03\0\0\x02\x03\x02\x01p\x04\0\x0dstream-config\x03\0\x02\
-\x01j\x01w\x01\x01\x01@\x01\x06config\x03\0\x04\x04\0\x04open\x01\x05\x01j\0\x01\
-\x01\x01@\x01\x09stream-idw\0\x06\x04\0\x05start\x01\x07\x04\0\x04stop\x01\x07\x01\
-p}\x01j\x01\x08\x01\x01\x01@\x02\x09stream-idw\x09max-bytesy\0\x09\x04\0\x04read\
-\x01\x0a\x03\0\x19krate:audio/capture@0.1.0\x05s\x01B\x0d\x01m\x01\x05rgba8\x04\0\
-\x0cframe-format\x03\0\0\x01r\x04\x05widthy\x06heighty\x03fpsy\x06format\x01\x04\
-\0\x0dstream-config\x03\0\x02\x01r\x04\x05widthy\x06heighty\x03fpsy\x06format\x01\
-\x04\0\x0aframe-info\x03\0\x04\x01r\x02\x02ids\x05labels\x04\0\x0bdevice-info\x03\
-\0\x06\x01p}\x01r\x04\x05bytes\x08\x05widthy\x06heighty\x0eelapsed-millisw\x04\0\
-\x05frame\x03\0\x09\x01q\x06\x11permission-denied\0\0\x0einvalid-stream\0\0\x12d\
-evice-unavailable\0\0\x0dsystem-denied\0\0\x0bunsupported\x01s\0\x08platform\x01\
-s\0\x04\0\x0ccamera-error\x03\0\x0b\x03\0\x18krate:camera/types@0.1.0\x05t\x02\x03\
-\01\x0ccamera-error\x02\x03\01\x0bdevice-info\x02\x03\01\x05frame\x02\x03\01\x0a\
-frame-info\x02\x03\01\x0dstream-config\x01B\x1d\x02\x03\x02\x01u\x04\0\x0ccamera\
--error\x03\0\0\x02\x03\x02\x01v\x04\0\x0bdevice-info\x03\0\x02\x02\x03\x02\x01w\x04\
-\0\x05frame\x03\0\x04\x02\x03\x02\x01x\x04\0\x0aframe-info\x03\0\x06\x02\x03\x02\
-\x01y\x04\0\x0dstream-config\x03\0\x08\x01p\x03\x01j\x01\x0a\x01\x01\x01@\0\0\x0b\
-\x04\0\x07devices\x01\x0c\x01j\x01w\x01\x01\x01@\x02\x06devices\x06config\x09\0\x0d\
-\x04\0\x04open\x01\x0e\x01j\x01\x07\x01\x01\x01@\x01\x09stream-idw\0\x0f\x04\0\x04\
-info\x01\x10\x01j\0\x01\x01\x01@\x01\x09stream-idw\0\x11\x04\0\x05start\x01\x12\x04\
-\0\x04stop\x01\x12\x01k\x05\x01j\x01\x13\x01\x01\x01@\x01\x09stream-idw\0\x14\x04\
-\0\x04read\x01\x15\x04\0\x05close\x01\x12\x03\0\x1akrate:camera/capture@0.1.0\x05\
-z\x01B\x12\x01r\x01\x04texts\x04\0\x0atranscript\x03\0\0\x01q\x05\x0finvalid-req\
-uest\x01s\0\x0fmodel-not-found\0\0\x0dmodel-invalid\x01s\0\x0bunsupported\x01s\0\
-\x09inference\x01s\0\x04\0\x0cspeech-error\x03\0\x02\x01m\x05\x0finvalid-request\
-\x0fmodel-not-found\x0dmodel-invalid\x0bunsupported\x09inference\x04\0\x0bmatch-\
-error\x03\0\x04\x01p}\x01ks\x01j\x01\x01\x01\x03\x01@\x04\x0bmodel-assets\x0apcm\
--s16-le\x06\x0bsample-ratey\x08language\x07\0\x08\x04\0\x0atranscribe\x01\x09\x01\
-j\x01}\x01\x05\x01@\x05\x0bmodel-assets\x0apcm-s16-le\x06\x0bsample-ratey\x08lan\
-guage\x07\x08expecteds\0\x0a\x04\0\x0amatch-line\x01\x0b\x01k}\x01j\x01\x0c\x01\x05\
-\x01@\x06\x0bmodel-assets\x0apcm-s16-le\x06\x0bsample-ratey\x08language\x07\x08e\
-xpecteds\x06finish\x7f\0\x0d\x04\0\x11match-line-stream\x01\x0e\x03\0\x20krate:s\
-peech/transcription@0.1.0\x05{\x01B\x12\x01r\x03\x02ids\x04names\x08languages\x04\
-\0\x05voice\x03\0\0\x01q\x04\x11permission-denied\0\0\x0finvalid-request\x01s\0\x0b\
-unsupported\x01s\0\x08platform\x01s\0\x04\0\x09say-error\x03\0\x02\x01p\x01\x01j\
-\x01\x04\x01\x03\x01@\0\0\x05\x04\0\x06voices\x01\x06\x01ks\x01kv\x01j\0\x01\x03\
-\x01@\x03\x04texts\x05voice\x07\x04rate\x08\0\x09\x04\0\x03say\x01\x0a\x01@\0\0\x09\
-\x04\0\x04stop\x01\x0b\x01j\x01\x7f\x01\x03\x01@\0\0\x0c\x04\0\x08speaking\x01\x0d\
-\x03\0\x1ckrate:speech/synthesis@0.1.0\x05|\x01@\0\0z\x04\0\x03run\x01}\x04\0\x13\
-krate:app/gui@0.2.0\x04\0\x0b\x09\x01\0\x03gui\x03\0\0\0G\x09producers\x01\x0cpr\
-ocessed-by\x02\x0dwit-component\x070.227.1\x10wit-bindgen-rust\x060.41.0";
+y@0.1.0\x05<\x01B\x08\x01m\x07\x05light\x06medium\x05heavy\x09selection\x07succe\
+ss\x07warning\x05error\x04\0\x04feel\x03\0\0\x01@\0\0\x7f\x04\0\x09available\x01\
+\x02\x01@\x01\x04feel\x01\x01\0\x04\0\x04play\x01\x03\x01@\x01\x08strengthv\x01\0\
+\x04\0\x06impact\x01\x04\x03\0\x16krate:ui/haptics@0.1.0\x05=\x01B\x0a\x01r\x03\x01\
+xv\x01yv\x01zv\x04\0\x06vector\x03\0\0\x01kv\x01r\x04\x07gravity\x01\x0caccelera\
+tion\x01\x08rotation\x01\x07heading\x02\x04\0\x07reading\x03\0\x03\x01@\0\0\x7f\x04\
+\0\x09available\x01\x05\x01k\x04\x01@\0\0\x06\x04\0\x04read\x01\x07\x03\0\x15kra\
+te:ui/motion@0.1.0\x05>\x01B\x0a\x01kv\x01r\x07\x08latitudeu\x09longitudeu\x08ac\
+curacyv\x08altitude\0\x05speed\0\x06course\0\x06age-msw\x04\0\x08position\x03\0\x01\
+\x01q\x03\x0bnot-allowed\0\0\x0bunavailable\0\0\x07finding\0\0\x04\0\x0elocation\
+-error\x03\0\x03\x01@\0\0\x7f\x04\0\x09available\x01\x05\x01j\x01\x02\x01\x04\x01\
+@\0\0\x06\x04\0\x07current\x01\x07\x03\0\x17krate:ui/location@0.1.0\x05?\x01B\x1c\
+\x01r\x02\x02idw\x04names\x04\0\x06device\x03\0\0\x01p}\x01r\x03\x07services\x0e\
+characteristics\x04data\x02\x04\0\x0cnotification\x03\0\x03\x01q\x05\x0bnot-allo\
+wed\0\0\x0bunavailable\0\0\x09not-found\0\0\x0cdisconnected\0\0\x06failed\x01s\0\
+\x04\0\x0fbluetooth-error\x03\0\x05\x01@\0\0\x7f\x04\0\x09available\x01\x07\x01k\
+\x01\x01j\x01\x08\x01\x06\x01@\x03\x06windoww\x07services\x05titles\0\x09\x04\0\x06\
+choose\x01\x0a\x01j\x01\x02\x01\x06\x01@\x03\x06devicew\x07services\x0echaracter\
+istics\0\x0b\x04\0\x04read\x01\x0c\x01j\0\x01\x06\x01@\x05\x06devicew\x07service\
+s\x0echaracteristics\x04data\x02\x0dwith-response\x7f\0\x0d\x04\0\x05write\x01\x0e\
+\x01@\x03\x06devicew\x07services\x0echaracteristics\0\x0d\x04\0\x09subscribe\x01\
+\x0f\x01p\x04\x01@\x01\x06devicew\0\x10\x04\0\x0dnotifications\x01\x11\x01@\x01\x06\
+devicew\0\x7f\x04\0\x09connected\x01\x12\x01@\x01\x06devicew\x01\0\x04\0\x0adisc\
+onnect\x01\x13\x03\0\x18krate:ui/bluetooth@0.1.0\x05@\x01B\x0a\x01p}\x01r\x02\x04\
+names\x04data\0\x04\0\x0bshared-file\x03\0\x01\x01q\x02\x0bunavailable\x01s\0\x07\
+invalid\x01s\0\x04\0\x0bshare-error\x03\0\x03\x01ks\x01p\x02\x01j\x01\x7f\x01\x04\
+\x01@\x04\x06windoww\x04text\x05\x03url\x05\x05files\x06\0\x07\x04\0\x05share\x01\
+\x08\x03\0\x14krate:ui/share@0.1.0\x05A\x01B\x0c\x02\x03\x02\x015\x04\0\x0bchose\
+n-file\x03\0\0\x01q\x03\x0bnot-allowed\0\0\x0bunavailable\x01s\0\x07invalid\x01s\
+\0\x04\0\x0cphotos-error\x03\0\x02\x01p\x01\x01j\x01\x04\x01\x03\x01@\x02\x06win\
+doww\x05limity\0\x05\x04\0\x04pick\x01\x06\x01p}\x01j\0\x01\x03\x01@\x02\x06wind\
+oww\x04data\x07\0\x08\x04\0\x04save\x01\x09\x03\0\x15krate:ui/photos@0.1.0\x05B\x02\
+\x03\0&\x0cnotify-error\x01B\x0a\x02\x03\x02\x01C\x04\0\x0cnotify-error\x03\0\0\x01\
+j\0\x01\x01\x01@\x05\x02ids\x05titles\x04bodys\x0dafter-secondsw\x05daily\x7f\0\x02\
+\x04\0\x08schedule\x01\x03\x01@\x01\x02ids\x01\0\x04\0\x06cancel\x01\x04\x01ps\x01\
+@\0\0\x05\x04\0\x07pending\x01\x06\x03\0\x18krate:ui/reminders@0.1.0\x05D\x01B\x08\
+\x01q\x03\x09cancelled\0\0\x0bunavailable\x01s\0\x07invalid\x01s\0\x04\0\x0dsign\
+-in-error\x03\0\0\x01o\x02ss\x01@\0\0\x02\x04\0\x04pkce\x01\x03\x01j\x01s\x01\x01\
+\x01@\x03\x06windoww\x0dauthorize-urls\x0fcallback-schemes\0\x04\x04\0\x05start\x01\
+\x05\x03\0\x16krate:ui/sign-in@0.1.0\x05E\x01B\x06\x01q\x03\x03yes\0\0\x02no\0\0\
+\x0bunavailable\x01s\0\x04\0\x0dunlock-answer\x03\0\0\x01@\0\0\x7f\x04\0\x09avai\
+lable\x01\x02\x01@\x01\x06reasons\0\x01\x04\0\x05check\x01\x03\x03\0\x15krate:ui\
+/unlock@0.1.0\x05F\x01B\x04\x01r\x03\x04dark\x7f\x0dhigh-contrast\x7f\x0atext-sc\
+alev\x04\0\x04look\x03\0\0\x01@\0\0\x01\x04\0\x07current\x01\x02\x03\0\x19krate:\
+ui/appearance@0.1.0\x05G\x01B\x0d\x02\x03\x02\x01'\x04\0\x08ui-error\x03\0\0\x01\
+m\x08\x06button\x04link\x07heading\x04text\x05image\x06toggle\x0aadjustable\x05f\
+ield\x04\0\x04role\x03\0\x02\x01k\x7f\x01r\x09\x01xv\x01yv\x05widthv\x06heightv\x04\
+role\x03\x05labels\x05values\x07checked\x04\x07enabled\x7f\x04\0\x07element\x03\0\
+\x05\x01p\x06\x01j\0\x01\x01\x01@\x02\x06windoww\x08elements\x07\0\x08\x04\0\x08\
+describe\x01\x09\x01@\0\0\x7f\x04\0\x10screen-reader-on\x01\x0a\x03\0\x1ckrate:u\
+i/accessibility@0.1.0\x05H\x01B\x12\x02\x03\x02\x01'\x04\0\x08ui-error\x03\0\0\x01\
+r\x04\x07addresss\x05titles\x07loading\x7f\x07problems\x04\0\x0apage-state\x03\0\
+\x02\x01j\x01w\x01\x01\x01@\x06\x06windoww\x07addresss\x01xv\x01yv\x05widthv\x06\
+heightv\0\x04\x04\0\x04open\x01\x05\x01j\0\x01\x01\x01@\x05\x04pagew\x01xv\x01yv\
+\x05widthv\x06heightv\0\x06\x04\0\x05place\x01\x07\x01@\x02\x04pagew\x07addresss\
+\0\x06\x04\0\x02go\x01\x08\x01@\x01\x04pagew\x01\0\x04\0\x04back\x01\x09\x01j\x01\
+\x03\x01\x01\x01@\x01\x04pagew\0\x0a\x04\0\x05state\x01\x0b\x04\0\x05close\x01\x09\
+\x03\0\x17krate:ui/web-page@0.1.0\x05I\x01B\x14\x01r\x04\x01rv\x01gv\x01bv\x01av\
+\x04\0\x05color\x03\0\0\x01r\x02\x01xv\x01yv\x04\0\x05point\x03\0\x02\x01r\x02\x05\
+widthv\x06heightv\x04\0\x04size\x03\0\x04\x01r\x04\x05widthv\x06heightv\x06ascen\
+tv\x07descentv\x04\0\x0ctext-metrics\x03\0\x06\x01r\x04\x01xv\x01yv\x05widthv\x06\
+heightv\x04\0\x04rect\x03\0\x08\x01r\x02\x06offsetv\x05color\x01\x04\0\x0dgradie\
+nt-stop\x03\0\x0a\x01m\x03\x04sans\x05serif\x04mono\x04\0\x0bfont-family\x03\0\x0c\
+\x01r\x04\x06weight{\x06italic\x7f\x0eletter-spacingv\x06family\x0d\x04\0\x0atex\
+t-style\x03\0\x0e\x01r\x04\x08top-leftv\x09top-rightv\x0cbottom-rightv\x0bbottom\
+-leftv\x04\0\x0ccorner-radii\x03\0\x10\x01q\x04\x11permission-denied\0\0\x0einva\
+lid-target\0\0\x0bunsupported\x01s\0\x08platform\x01s\0\x04\0\x09gfx-error\x03\0\
+\x12\x03\0\x15krate:gfx/types@0.1.0\x05J\x02\x03\03\x05color\x02\x03\03\x05point\
+\x02\x03\03\x04rect\x02\x03\03\x04size\x02\x03\03\x0ctext-metrics\x02\x03\03\x09\
+gfx-error\x02\x03\03\x0dgradient-stop\x02\x03\03\x0ccorner-radii\x02\x03\03\x0at\
+ext-style\x02\x03\03\x0bfont-family\x01BK\x02\x03\x02\x01K\x04\0\x05color\x03\0\0\
+\x02\x03\x02\x01L\x04\0\x05point\x03\0\x02\x02\x03\x02\x01M\x04\0\x04rect\x03\0\x04\
+\x02\x03\x02\x01N\x04\0\x04size\x03\0\x06\x02\x03\x02\x01O\x04\0\x0ctext-metrics\
+\x03\0\x08\x02\x03\x02\x01P\x04\0\x09gfx-error\x03\0\x0a\x02\x03\x02\x01Q\x04\0\x0d\
+gradient-stop\x03\0\x0c\x02\x03\x02\x01R\x04\0\x0ccorner-radii\x03\0\x0e\x02\x03\
+\x02\x01S\x04\0\x0atext-style\x03\0\x10\x02\x03\x02\x01T\x04\0\x0bfont-family\x03\
+\0\x12\x01j\x01w\x01\x0b\x01@\x02\x06windoww\x06widgetw\0\x14\x04\0\x04bind\x01\x15\
+\x01j\x01\x07\x01\x0b\x01@\x01\x06canvasw\0\x16\x04\0\x0bcanvas-size\x01\x17\x01\
+j\0\x01\x0b\x01@\x02\x06canvasw\x04size\x07\0\x18\x04\0\x0fset-design-size\x01\x19\
+\x01@\x05\x06canvasw\x01xv\x01yv\x01wv\x01hv\0\x18\x04\0\x08set-clip\x01\x1a\x01\
+@\x01\x06canvasw\0\x18\x04\0\x0aclear-clip\x01\x1b\x01@\x02\x06canvasw\x04fill\x01\
+\0\x18\x04\0\x05clear\x01\x1c\x01@\x03\x06canvasw\x04area\x05\x04fill\x01\0\x18\x04\
+\0\x09fill-rect\x01\x1d\x01@\x04\x06canvasw\x04area\x05\x06stroke\x01\x05widthv\0\
+\x18\x04\0\x0bstroke-rect\x01\x1e\x01@\x04\x06canvasw\x04area\x05\x05radii\x0f\x04\
+fill\x01\0\x18\x04\0\x0ffill-round-rect\x01\x1f\x01@\x05\x06canvasw\x04area\x05\x05\
+radii\x0f\x05widthv\x06stroke\x01\0\x18\x04\0\x11stroke-round-rect\x01\x20\x01@\x05\
+\x06canvasw\x04area\x05\x05radii\x0f\x04blurv\x06shadow\x01\0\x18\x04\0\x16drop-\
+shadow-round-rect\x01!\x01p\x0d\x01@\x04\x06canvasw\x04area\x05\x0dangle-degrees\
+v\x05stops\"\0\x18\x04\0\x15linear-gradient-stops\x01#\x01@\x06\x06canvasw\x04te\
+xts\x06origin\x03\x09font-sizev\x03ink\x01\x05style\x11\0\x18\x04\0\x10draw-text\
+-styled\x01$\x01j\x01\x09\x01\x0b\x01@\x04\x06canvasw\x04texts\x09font-sizev\x05\
+style\x11\0%\x04\0\x13measure-text-styled\x01&\x01@\x07\x06canvasw\x06center\x03\
+\x06radiusv\x0dstart-degreesv\x0dsweep-degreesv\x05widthv\x06stroke\x01\0\x18\x04\
+\0\x0astroke-arc\x01'\x01p}\x01@\x06\x06canvasw\x04area\x05\x05radii\x0f\x05widt\
+hy\x06heighty\x04rgba(\0\x18\x04\0\x11draw-pixels-round\x01)\x01@\x04\x06canvasw\
+\x06center\x03\x06radiusv\x04fill\x01\0\x18\x04\0\x0bfill-circle\x01*\x01@\x05\x06\
+canvasw\x06center\x03\x06radiusv\x05widthv\x06stroke\x01\0\x18\x04\0\x0dstroke-c\
+ircle\x01+\x01@\x05\x06canvasw\x06center\x03\x06radiusv\x05inner\x01\x05outer\x01\
+\0\x18\x04\0\x0fradial-gradient\x01,\x01@\x04\x06canvasw\x04area\x05\x03top\x01\x06\
+bottom\x01\0\x18\x04\0\x0flinear-gradient\x01-\x01@\x05\x06canvasw\x04texts\x06o\
+rigin\x03\x09font-sizev\x03ink\x01\0\x18\x04\0\x09draw-text\x01.\x01@\x03\x06can\
+vasw\x04texts\x09font-sizev\0%\x04\0\x0cmeasure-text\x01/\x01@\x05\x06canvasw\x04\
+area\x05\x05widthy\x06heighty\x04rgba(\0\x18\x04\0\x0bdraw-pixels\x010\x01@\x07\x06\
+canvasw\x06center\x03\x03dst\x07\x05anglev\x05widthy\x06heighty\x04rgba(\0\x18\x04\
+\0\x0bdraw-sprite\x011\x04\0\x07present\x01\x1b\x03\0\x18krate:gfx/canvas2d@0.1.\
+0\x05U\x01B%\x02\x03\x02\x01K\x04\0\x05color\x03\0\0\x02\x03\x02\x01P\x04\0\x09g\
+fx-error\x03\0\x02\x01pv\x01r\x0a\x07ambientv\x08specularv\x09shininessv\x0bfog-\
+densityv\x09fog-color\x01\x0efill-direction\x04\x0afill-color\x01\x0dshadow-radi\
+usv\x0fshadow-softnessv\x08exposurev\x04\0\x08lighting\x03\0\x05\x01j\x01w\x01\x03\
+\x01@\x02\x06windoww\x06widgetw\0\x07\x04\0\x04bind\x01\x08\x01j\0\x01\x03\x01@\x02\
+\x05scenew\x03sky\x01\0\x09\x04\0\x05clear\x01\x0a\x01@\x04\x05scenew\x03eye\x04\
+\x07look-at\x04\x0bfov-degreesv\0\x09\x04\0\x06camera\x01\x0b\x01@\x02\x05scenew\
+\x09direction\x04\0\x09\x04\0\x05light\x01\x0c\x01@\x03\x05scenew\x08vertices\x04\
+\x04tint\x01\0\x09\x04\0\x09triangles\x01\x0d\x01@\x06\x05scenew\x08vertices\x04\
+\x09translate\x04\x0erotate-degrees\x04\x05scalev\x04tint\x01\0\x09\x04\0\x05pla\
+ce\x01\x0e\x01p}\x01@\x04\x05scenew\x05widthy\x06heighty\x04rgba\x0f\0\x07\x04\0\
+\x0eupload-texture\x01\x10\x01@\x05\x05scenew\x08vertices\x04\x03uvs\x04\x07text\
+urew\x04tint\x01\0\x09\x04\0\x08textured\x01\x11\x01@\x06\x05scenew\x08vertices\x04\
+\x07normals\x04\x03uvs\x04\x07texturew\x04tint\x01\0\x09\x04\0\x06smooth\x01\x12\
+\x01@\x02\x05scenew\x08lighting\x06\0\x09\x04\0\x0cset-lighting\x01\x13\x01@\x08\
+\x05scenew\x08vertices\x04\x07normals\x04\x08tangents\x04\x03uvs\x04\x07texturew\
+\x0enormal-texturew\x04tint\x01\0\x09\x04\0\x0dnormal-mapped\x01\x14\x04\0\x05un\
+lit\x01\x11\x01@\x02\x05scenew\x07enabled\x7f\0\x09\x04\0\x0fcull-back-faces\x01\
+\x15\x01@\x01\x05scenew\0\x09\x04\0\x07present\x01\x16\x03\0\x17krate:gfx/scene3\
+d@0.1.0\x05V\x01B\xf6\x01\x01w\x04\0\x06handle\x03\0\0\x01q\x06\x0einvalid-handl\
+e\x01s\0\x0avalidation\x01s\0\x0dout-of-memory\0\0\x04lost\x01s\0\x0bunsupported\
+\x01s\0\x08internal\x01s\0\x04\0\x09gpu-error\x03\0\x02\x01r\x05\x07messages\x04\
+liney\x06columny\x06offsety\x06lengthy\x04\0\x0cshader-error\x03\0\x04\x01r\x06\x07\
+messages\x04kinds\x04liney\x06columny\x06offsety\x06lengthy\x04\0\x13compilation\
+-message\x03\0\x06\x01r\x02\x04names\x05valuew\x04\0\x05limit\x03\0\x08\x01m\x03\
+\x04none\x09low-power\x10high-performance\x04\0\x10power-preference\x03\0\x0a\x01\
+k\x01\x01r\x03\x10power-preference\x0b\x16force-fallback-adapter\x7f\x12compatib\
+le-surface\x0c\x04\0\x0fadapter-options\x03\0\x0d\x01m\x05\x05other\x0eintegrate\
+d-gpu\x0cdiscrete-gpu\x0bvirtual-gpu\x03cpu\x04\0\x0bdevice-type\x03\0\x0f\x01r\x07\
+\x04names\x06vendory\x06devicey\x0bdevice-type\x10\x07backends\x06drivers\x0bdri\
+ver-infos\x04\0\x0cadapter-info\x03\0\x11\x01ks\x01ps\x01p\x09\x01r\x03\x05label\
+\x13\x11required-features\x14\x0frequired-limits\x15\x04\0\x11device-descriptor\x03\
+\0\x16\x01n\x0a\x08map-read\x09map-write\x08copy-src\x08copy-dst\x05index\x06ver\
+tex\x07uniform\x07storage\x08indirect\x0dquery-resolve\x04\0\x0dbuffer-usages\x03\
+\0\x18\x01r\x04\x05label\x13\x04sizew\x05usage\x19\x12mapped-at-creation\x7f\x04\
+\0\x11buffer-descriptor\x03\0\x1a\x01n\x05\x08copy-src\x08copy-dst\x0ftexture-bi\
+nding\x0fstorage-binding\x11render-attachment\x04\0\x0etexture-usages\x03\0\x1c\x01\
+r\x03\x05widthy\x06heighty\x15depth-or-array-layersy\x04\0\x08extent3d\x03\0\x1e\
+\x01r\x03\x01xy\x01yy\x01zy\x04\0\x08origin3d\x03\0\x20\x01m\x03\x02d1\x02d2\x02\
+d3\x04\0\x11texture-dimension\x03\0\"\x01r\x08\x05label\x13\x04size\x1f\x0fmip-l\
+evel-county\x0csample-county\x09dimension#\x06formats\x05usage\x1d\x0cview-forma\
+ts\x14\x04\0\x12texture-descriptor\x03\0$\x01m\x06\x02d1\x02d2\x08d2-array\x04cu\
+be\x0acube-array\x02d3\x04\0\x16texture-view-dimension\x03\0&\x01m\x03\x03all\x0c\
+stencil-only\x0adepth-only\x04\0\x0etexture-aspect\x03\0(\x01k'\x01k\x1d\x01ky\x01\
+r\x09\x05label\x13\x06format\x13\x09dimension*\x05usage+\x06aspect)\x0ebase-mip-\
+levely\x0fmip-level-count,\x10base-array-layery\x11array-layer-count,\x04\0\x17t\
+exture-view-descriptor\x03\0-\x01m\x04\x0dclamp-to-edge\x06repeat\x0dmirror-repe\
+at\x0fclamp-to-border\x04\0\x0caddress-mode\x03\0/\x01m\x02\x07nearest\x06linear\
+\x04\0\x0bfilter-mode\x03\01\x01m\x08\x05never\x04less\x05equal\x0aless-equal\x07\
+greater\x09not-equal\x0dgreater-equal\x06always\x04\0\x10compare-function\x03\03\
+\x01m\x04\x11transparent-black\x0copaque-black\x0copaque-white\x04zero\x04\0\x0c\
+border-color\x03\05\x01k4\x01k6\x01r\x0c\x05label\x13\x0eaddress-mode-u0\x0eaddr\
+ess-mode-v0\x0eaddress-mode-w0\x0amag-filter2\x0amin-filter2\x0dmipmap-filter2\x0d\
+lod-min-clampv\x0dlod-max-clampv\x07compare7\x10anisotropy-clamp{\x0cborder-colo\
+r8\x04\0\x12sampler-descriptor\x03\09\x01n\x03\x06vertex\x08fragment\x07compute\x04\
+\0\x0dshader-stages\x03\0;\x01q\x02\x07uniform\0\0\x07storage\x01\x7f\0\x04\0\x13\
+buffer-binding-type\x03\0=\x01r\x03\x04kind>\x12has-dynamic-offset\x7f\x10min-bi\
+nding-sizew\x04\0\x15buffer-binding-layout\x03\0?\x01m\x03\x09filtering\x0dnon-f\
+iltering\x0acomparison\x04\0\x14sampler-binding-type\x03\0A\x01q\x04\x05float\x01\
+\x7f\0\x05depth\0\0\x04sint\0\0\x04uint\0\0\x04\0\x13texture-sample-type\x03\0C\x01\
+r\x03\x0bsample-type\xc4\0\x0eview-dimension'\x0cmultisampled\x7f\x04\0\x16textu\
+re-binding-layout\x03\0E\x01m\x03\x0awrite-only\x09read-only\x0aread-write\x04\0\
+\x16storage-texture-access\x03\0G\x01r\x03\x06access\xc8\0\x06formats\x0eview-di\
+mension'\x04\0\x1estorage-texture-binding-layout\x03\0I\x01q\x04\x06buffer\x01\xc0\
+\0\0\x07sampler\x01\xc2\0\0\x07texture\x01\xc6\0\0\x0fstorage-texture\x01\xca\0\0\
+\x04\0\x0cbinding-type\x03\0K\x01r\x04\x07bindingy\x0avisibility<\x04kind\xcc\0\x05\
+count,\x04\0\x17bind-group-layout-entry\x03\0M\x01p\xce\0\x01r\x02\x05label\x13\x07\
+entries\xcf\0\x04\0\x1cbind-group-layout-descriptor\x03\0P\x01kw\x01r\x03\x06buf\
+fer\x01\x06offsetw\x04size\xd2\0\x04\0\x0ebuffer-binding\x03\0S\x01p\xd4\0\x01p\x01\
+\x01q\x06\x06buffer\x01\xd4\0\0\x0cbuffer-array\x01\xd5\0\0\x07sampler\x01\x01\0\
+\x0dsampler-array\x01\xd6\0\0\x0ctexture-view\x01\x01\0\x12texture-view-array\x01\
+\xd6\0\0\x04\0\x10binding-resource\x03\0W\x01r\x02\x07bindingy\x08resource\xd8\0\
+\x04\0\x10bind-group-entry\x03\0Y\x01p\xda\0\x01r\x03\x05label\x13\x06layout\x01\
+\x07entries\xdb\0\x04\0\x15bind-group-descriptor\x03\0\\\x01p\x0c\x01r\x03\x05la\
+bel\x13\x12bind-group-layouts\xde\0\x0eimmediate-sizey\x04\0\x1apipeline-layout-\
+descriptor\x03\0_\x01r\x02\x05label\x13\x04codes\x04\0\x18shader-module-descript\
+or\x03\0a\x01r\x02\x04names\x05valueu\x04\0\x0econstant-entry\x03\0c\x01p\xe4\0\x01\
+r\x03\x06module\x01\x0bentry-point\x13\x09constants\xe5\0\x04\0\x12programmable-\
+stage\x03\0f\x01m\x02\x06vertex\x08instance\x04\0\x10vertex-step-mode\x03\0h\x01\
+r\x03\x06formats\x06offsetw\x0fshader-locationy\x04\0\x10vertex-attribute\x03\0j\
+\x01p\xeb\0\x01r\x03\x0carray-stridew\x09step-mode\xe9\0\x0aattributes\xec\0\x04\
+\0\x14vertex-buffer-layout\x03\0m\x01p\xee\0\x01r\x02\x05stage\xe7\0\x07buffers\xef\
+\0\x04\0\x0cvertex-state\x03\0p\x01m\x05\x0apoint-list\x09line-list\x0aline-stri\
+p\x0dtriangle-list\x0etriangle-strip\x04\0\x12primitive-topology\x03\0r\x01m\x02\
+\x06uint16\x06uint32\x04\0\x0cindex-format\x03\0t\x01m\x02\x03ccw\x02cw\x04\0\x0a\
+front-face\x03\0v\x01m\x03\x04none\x05front\x04back\x04\0\x09cull-mode\x03\0x\x01\
+m\x03\x04fill\x04line\x05point\x04\0\x0cpolygon-mode\x03\0z\x01k\xf5\0\x01r\x07\x08\
+topology\xf3\0\x12strip-index-format\xfc\0\x0afront-face\xf7\0\x09cull-mode\xf9\0\
+\x0funclipped-depth\x7f\x0cpolygon-mode\xfb\0\x0cconservative\x7f\x04\0\x0fprimi\
+tive-state\x03\0}\x01m\x08\x04keep\x04zero\x07replace\x06invert\x0fincrement-cla\
+mp\x0fdecrement-clamp\x0eincrement-wrap\x0edecrement-wrap\x04\0\x11stencil-opera\
+tion\x03\0\x7f\x01r\x04\x07compare4\x07fail-op\x80\x01\x0ddepth-fail-op\x80\x01\x07\
+pass-op\x80\x01\x04\0\x12stencil-face-state\x03\0\x81\x01\x01r\x0a\x06formats\x13\
+depth-write-enabled\x7f\x0ddepth-compare4\x0dstencil-front\x82\x01\x0cstencil-ba\
+ck\x82\x01\x11stencil-read-masky\x12stencil-write-masky\x0adepth-biasz\x16depth-\
+bias-slope-scalev\x10depth-bias-clampv\x04\0\x13depth-stencil-state\x03\0\x83\x01\
+\x01r\x03\x05county\x04maskw\x19alpha-to-coverage-enabled\x7f\x04\0\x11multisamp\
+le-state\x03\0\x85\x01\x01m\x11\x04zero\x03one\x03src\x0done-minus-src\x09src-al\
+pha\x13one-minus-src-alpha\x03dst\x0done-minus-dst\x09dst-alpha\x13one-minus-dst\
+-alpha\x13src-alpha-saturated\x08constant\x12one-minus-constant\x04src1\x0eone-m\
+inus-src1\x0asrc1-alpha\x14one-minus-src1-alpha\x04\0\x0cblend-factor\x03\0\x87\x01\
+\x01m\x05\x03add\x08subtract\x10reverse-subtract\x03min\x03max\x04\0\x0fblend-op\
+eration\x03\0\x89\x01\x01r\x03\x0asrc-factor\x88\x01\x0adst-factor\x88\x01\x09op\
+eration\x8a\x01\x04\0\x0fblend-component\x03\0\x8b\x01\x01r\x02\x05color\x8c\x01\
+\x05alpha\x8c\x01\x04\0\x0bblend-state\x03\0\x8d\x01\x01n\x04\x03red\x05green\x04\
+blue\x05alpha\x04\0\x0ccolor-writes\x03\0\x8f\x01\x01k\x8e\x01\x01r\x03\x06forma\
+ts\x05blend\x91\x01\x0awrite-mask\x90\x01\x04\0\x12color-target-state\x03\0\x92\x01\
+\x01k\x93\x01\x01p\x94\x01\x01r\x02\x05stage\xe7\0\x07targets\x95\x01\x04\0\x0ef\
+ragment-state\x03\0\x96\x01\x01k\x84\x01\x01k\x97\x01\x01r\x08\x05label\x13\x06l\
+ayout\x0c\x06vertex\xf1\0\x09primitive\xfe\0\x0ddepth-stencil\x98\x01\x0bmultisa\
+mple\x86\x01\x08fragment\x99\x01\x0emultiview-mask,\x04\0\x1arender-pipeline-des\
+criptor\x03\0\x9a\x01\x01r\x03\x05label\x13\x06layout\x0c\x05stage\xe7\0\x04\0\x1b\
+compute-pipeline-descriptor\x03\0\x9c\x01\x01m\x02\x09occlusion\x09timestamp\x04\
+\0\x0aquery-type\x03\0\x9e\x01\x01r\x03\x05label\x13\x04kind\x9f\x01\x05county\x04\
+\0\x14query-set-descriptor\x03\0\xa0\x01\x01r\x04\x07texture\x01\x09mip-levely\x06\
+origin!\x06aspect)\x04\0\x17texel-copy-texture-info\x03\0\xa2\x01\x01r\x03\x06of\
+fsetw\x0dbytes-per-row,\x0erows-per-image,\x04\0\x18texel-copy-buffer-layout\x03\
+\0\xa4\x01\x01r\x02\x06buffer\x01\x06layout\xa5\x01\x04\0\x16texel-copy-buffer-i\
+nfo\x03\0\xa6\x01\x01r\x04\x01ru\x01gu\x01bu\x01au\x04\0\x05color\x03\0\xa8\x01\x01\
+q\x02\x05clear\x01\xa9\x01\0\x04load\0\0\x04\0\x0dcolor-load-op\x03\0\xaa\x01\x01\
+m\x02\x05store\x07discard\x04\0\x08store-op\x03\0\xac\x01\x01r\x05\x04view\x01\x0b\
+depth-slice,\x0eresolve-target\x0c\x04load\xab\x01\x05store\xad\x01\x04\0\x1cren\
+der-pass-color-attachment\x03\0\xae\x01\x01q\x02\x05clear\x01v\0\x04load\0\0\x04\
+\0\x0ddepth-load-op\x03\0\xb0\x01\x01q\x02\x05clear\x01y\0\x04load\0\0\x04\0\x0f\
+stencil-load-op\x03\0\xb2\x01\x01r\x02\x04load\xb1\x01\x05store\xad\x01\x04\0\x09\
+depth-ops\x03\0\xb4\x01\x01r\x02\x04load\xb3\x01\x05store\xad\x01\x04\0\x0bstenc\
+il-ops\x03\0\xb6\x01\x01k\xb5\x01\x01k\xb7\x01\x01r\x03\x04view\x01\x09depth-ops\
+\xb8\x01\x0bstencil-ops\xb9\x01\x04\0$render-pass-depth-stencil-attachment\x03\0\
+\xba\x01\x01r\x03\x09query-set\x01\x1dbeginning-of-pass-write-index,\x17end-of-p\
+ass-write-index,\x04\0\x15pass-timestamp-writes\x03\0\xbc\x01\x01k\xaf\x01\x01p\xbe\
+\x01\x01k\xbb\x01\x01k\xbd\x01\x01r\x06\x05label\x13\x11color-attachments\xbf\x01\
+\x18depth-stencil-attachment\xc0\x01\x10timestamp-writes\xc1\x01\x13occlusion-qu\
+ery-set\x0c\x0emultiview-mask,\x04\0\x16render-pass-descriptor\x03\0\xc2\x01\x01\
+r\x02\x05label\x13\x10timestamp-writes\xc1\x01\x04\0\x17compute-pass-descriptor\x03\
+\0\xc4\x01\x01py\x01r\x03\x05indexy\x05group\x0c\x07offsets\xc6\x01\x04\0\x0eset\
+-bind-group\x03\0\xc7\x01\x01r\x04\x04sloty\x06buffer\x01\x06offsetw\x04size\xd2\
+\0\x04\0\x11set-vertex-buffer\x03\0\xc9\x01\x01r\x04\x06buffer\x01\x06format\xf5\
+\0\x06offsetw\x04size\xd2\0\x04\0\x10set-index-buffer\x03\0\xcb\x01\x01r\x06\x01\
+xv\x01yv\x05widthv\x06heightv\x09min-depthv\x09max-depthv\x04\0\x08viewport\x03\0\
+\xcd\x01\x01r\x04\x01xy\x01yy\x05widthy\x06heighty\x04\0\x0cscissor-rect\x03\0\xcf\
+\x01\x01p}\x01r\x02\x06offsety\x04data\xd1\x01\x04\0\x0eset-immediates\x03\0\xd2\
+\x01\x01r\x04\x0cvertex-county\x0einstance-county\x0cfirst-vertexy\x0efirst-inst\
+ancey\x04\0\x04draw\x03\0\xd4\x01\x01r\x05\x0bindex-county\x0einstance-county\x0b\
+first-indexy\x0bbase-vertexz\x0efirst-instancey\x04\0\x0cdraw-indexed\x03\0\xd6\x01\
+\x01r\x02\x06buffer\x01\x06offsetw\x04\0\x08indirect\x03\0\xd8\x01\x01r\x03\x06b\
+uffer\x01\x06offsetw\x05county\x04\0\x0emulti-indirect\x03\0\xda\x01\x01r\x05\x06\
+buffer\x01\x06offsetw\x0ccount-buffer\x01\x0ccount-offsetw\x09max-county\x04\0\x14\
+multi-indirect-count\x03\0\xdc\x01\x01r\x02\x09query-set\x01\x05indexy\x04\0\x0b\
+query-write\x03\0\xde\x01\x01q\x17\x0cset-pipeline\x01\x01\0\x0eset-bind-group\x01\
+\xc8\x01\0\x11set-vertex-buffer\x01\xca\x01\0\x10set-index-buffer\x01\xcc\x01\0\x0c\
+set-viewport\x01\xce\x01\0\x10set-scissor-rect\x01\xd0\x01\0\x12set-blend-consta\
+nt\x01\xa9\x01\0\x15set-stencil-reference\x01y\0\x0eset-immediates\x01\xd3\x01\0\
+\x04draw\x01\xd5\x01\0\x0cdraw-indexed\x01\xd7\x01\0\x0ddraw-indirect\x01\xd9\x01\
+\0\x15draw-indexed-indirect\x01\xd9\x01\0\x13multi-draw-indirect\x01\xdb\x01\0\x1b\
+multi-draw-indexed-indirect\x01\xdb\x01\0\x19multi-draw-indirect-count\x01\xdd\x01\
+\0!multi-draw-indexed-indirect-count\x01\xdd\x01\0\x15begin-occlusion-query\x01y\
+\0\x13end-occlusion-query\0\0\x0fwrite-timestamp\x01\xdf\x01\0\x10push-debug-gro\
+up\x01s\0\x0fpop-debug-group\0\0\x13insert-debug-marker\x01s\0\x04\0\x0erender-c\
+ommand\x03\0\xe0\x01\x01q\x09\x0cset-pipeline\x01\x01\0\x0eset-bind-group\x01\xc8\
+\x01\0\x0eset-immediates\x01\xd3\x01\0\x08dispatch\x01!\0\x11dispatch-indirect\x01\
+\xd9\x01\0\x0fwrite-timestamp\x01\xdf\x01\0\x10push-debug-group\x01s\0\x0fpop-de\
+bug-group\0\0\x13insert-debug-marker\x01s\0\x04\0\x0fcompute-command\x03\0\xe2\x01\
+\x01m\x02\x04read\x05write\x04\0\x08map-mode\x03\0\xe4\x01\x01m\x04\x04fifo\x0cf\
+ifo-relaxed\x09immediate\x07mailbox\x04\0\x0cpresent-mode\x03\0\xe6\x01\x01m\x04\
+\x06opaque\x0epre-multiplied\x0fpost-multiplied\x07inherit\x04\0\x14composite-al\
+pha-mode\x03\0\xe8\x01\x01p\xe7\x01\x01p\xe9\x01\x01r\x04\x07formats\x14\x0dpres\
+ent-modes\xea\x01\x0balpha-modes\xeb\x01\x06usages\x1d\x04\0\x14surface-capabili\
+ties\x03\0\xec\x01\x01r\x08\x05usage\x1d\x06formats\x05widthy\x06heighty\x0cpres\
+ent-mode\xe7\x01\x0aalpha-mode\xe9\x01\x0cview-formats\x14\x1ddesired-maximum-fr\
+ame-latencyy\x04\0\x15surface-configuration\x03\0\xee\x01\x01r\x02\x07texture\x01\
+\x0asuboptimal\x7f\x04\0\x0dsurface-frame\x03\0\xf0\x01\x01q\x05\x0enot-configur\
+ed\0\0\x08outdated\0\0\x08occluded\0\0\x04lost\x01s\0\x05other\x01s\0\x04\0\x0ds\
+urface-error\x03\0\xf2\x01\x01r\x05\x0eallowed-usages\x1d\x0dsample-counts\xc6\x01\
+\x0afilterable\x7f\x09blendable\x7f\x12storage-read-write\x7f\x04\0\x0fformat-fe\
+atures\x03\0\xf4\x01\x03\0\x15krate:gpu/types@0.1.0\x05W\x02\x03\06\x06handle\x02\
+\x03\06\x09gpu-error\x02\x03\06\x0cshader-error\x02\x03\06\x13compilation-messag\
+e\x02\x03\06\x05limit\x02\x03\06\x0fadapter-options\x02\x03\06\x0cadapter-info\x02\
+\x03\06\x11device-descriptor\x02\x03\06\x11buffer-descriptor\x02\x03\06\x12textu\
+re-descriptor\x02\x03\06\x17texture-view-descriptor\x02\x03\06\x12sampler-descri\
+ptor\x02\x03\06\x1cbind-group-layout-descriptor\x02\x03\06\x15bind-group-descrip\
+tor\x02\x03\06\x1apipeline-layout-descriptor\x02\x03\06\x18shader-module-descrip\
+tor\x02\x03\06\x1arender-pipeline-descriptor\x02\x03\06\x1bcompute-pipeline-desc\
+riptor\x02\x03\06\x14query-set-descriptor\x02\x03\06\x17texel-copy-texture-info\x02\
+\x03\06\x18texel-copy-buffer-layout\x02\x03\06\x16texel-copy-buffer-info\x02\x03\
+\06\x08extent3d\x02\x03\06\x16render-pass-descriptor\x02\x03\06\x0erender-comman\
+d\x02\x03\06\x17compute-pass-descriptor\x02\x03\06\x0fcompute-command\x02\x03\06\
+\x08map-mode\x02\x03\06\x14surface-capabilities\x02\x03\06\x15surface-configurat\
+ion\x02\x03\06\x0dsurface-frame\x02\x03\06\x0dsurface-error\x02\x03\06\x0fformat\
+-features\x01B\xc5\x01\x02\x03\x02\x01X\x04\0\x06handle\x03\0\0\x02\x03\x02\x01Y\
+\x04\0\x09gpu-error\x03\0\x02\x02\x03\x02\x01Z\x04\0\x0cshader-error\x03\0\x04\x02\
+\x03\x02\x01[\x04\0\x13compilation-message\x03\0\x06\x02\x03\x02\x01\\\x04\0\x05\
+limit\x03\0\x08\x02\x03\x02\x01]\x04\0\x0fadapter-options\x03\0\x0a\x02\x03\x02\x01\
+^\x04\0\x0cadapter-info\x03\0\x0c\x02\x03\x02\x01_\x04\0\x11device-descriptor\x03\
+\0\x0e\x02\x03\x02\x01`\x04\0\x11buffer-descriptor\x03\0\x10\x02\x03\x02\x01a\x04\
+\0\x12texture-descriptor\x03\0\x12\x02\x03\x02\x01b\x04\0\x17texture-view-descri\
+ptor\x03\0\x14\x02\x03\x02\x01c\x04\0\x12sampler-descriptor\x03\0\x16\x02\x03\x02\
+\x01d\x04\0\x1cbind-group-layout-descriptor\x03\0\x18\x02\x03\x02\x01e\x04\0\x15\
+bind-group-descriptor\x03\0\x1a\x02\x03\x02\x01f\x04\0\x1apipeline-layout-descri\
+ptor\x03\0\x1c\x02\x03\x02\x01g\x04\0\x18shader-module-descriptor\x03\0\x1e\x02\x03\
+\x02\x01h\x04\0\x1arender-pipeline-descriptor\x03\0\x20\x02\x03\x02\x01i\x04\0\x1b\
+compute-pipeline-descriptor\x03\0\"\x02\x03\x02\x01j\x04\0\x14query-set-descript\
+or\x03\0$\x02\x03\x02\x01k\x04\0\x17texel-copy-texture-info\x03\0&\x02\x03\x02\x01\
+l\x04\0\x18texel-copy-buffer-layout\x03\0(\x02\x03\x02\x01m\x04\0\x16texel-copy-\
+buffer-info\x03\0*\x02\x03\x02\x01n\x04\0\x08extent3d\x03\0,\x02\x03\x02\x01o\x04\
+\0\x16render-pass-descriptor\x03\0.\x02\x03\x02\x01p\x04\0\x0erender-command\x03\
+\00\x02\x03\x02\x01q\x04\0\x17compute-pass-descriptor\x03\02\x02\x03\x02\x01r\x04\
+\0\x0fcompute-command\x03\04\x02\x03\x02\x01s\x04\0\x08map-mode\x03\06\x02\x03\x02\
+\x01t\x04\0\x14surface-capabilities\x03\08\x02\x03\x02\x01u\x04\0\x15surface-con\
+figuration\x03\0:\x02\x03\x02\x01v\x04\0\x0dsurface-frame\x03\0<\x02\x03\x02\x01\
+w\x04\0\x0dsurface-error\x03\0>\x02\x03\x02\x01x\x04\0\x0fformat-features\x03\0@\
+\x01j\x01\x01\x01\x03\x01@\x01\x07options\x0b\0\xc2\0\x04\0\x0frequest-adapter\x01\
+C\x01j\x01\x0d\x01\x03\x01@\x01\x07adapter\x01\0\xc4\0\x04\0\x10describe-adapter\
+\x01E\x01ps\x01j\x01\xc6\0\x01\x03\x01@\x01\x07adapter\x01\0\xc7\0\x04\0\x10adap\
+ter-features\x01H\x01p\x09\x01j\x01\xc9\0\x01\x03\x01@\x01\x07adapter\x01\0\xca\0\
+\x04\0\x0eadapter-limits\x01K\x01j\x01\xc1\0\x01\x03\x01@\x02\x07adapter\x01\x06\
+formats\0\xcc\0\x04\0\x17adapter-format-features\x01M\x01@\x02\x07adapter\x01\x0a\
+descriptor\x0f\0\xc2\0\x04\0\x0erequest-device\x01N\x01@\x01\x06device\x01\0\xc7\
+\0\x04\0\x0fdevice-features\x01O\x01@\x01\x06device\x01\0\xca\0\x04\0\x0ddevice-\
+limits\x01P\x01j\0\x01\x03\x01@\x01\x06device\x01\0\xd1\0\x04\0\x0edestroy-devic\
+e\x01R\x01ks\x01@\x01\x06device\x01\0\xd3\0\x04\0\x12device-lost-reason\x01T\x01\
+j\x01\x7f\x01\x03\x01@\x02\x06device\x01\x04wait\x7f\0\xd5\0\x04\0\x04poll\x01V\x01\
+@\x02\x06device\x01\x0adescriptor\x11\0\xc2\0\x04\0\x0dcreate-buffer\x01W\x01@\x04\
+\x06buffer\x01\x04mode7\x06offsetw\x04sizew\0\xd1\0\x04\0\x0amap-buffer\x01X\x04\
+\0\x10begin-map-buffer\x01X\x01@\x02\x06buffer\x01\x04wait\x7f\0\xd5\0\x04\0\x10\
+map-buffer-ready\x01Y\x01p}\x01j\x01\xda\0\x01\x03\x01@\x03\x06buffer\x01\x06off\
+setw\x04sizew\0\xdb\0\x04\0\x0bread-mapped\x01\\\x01@\x03\x06buffer\x01\x06offse\
+tw\x04data\xda\0\0\xd1\0\x04\0\x0cwrite-mapped\x01]\x01@\x01\x06buffer\x01\0\xd1\
+\0\x04\0\x0cunmap-buffer\x01^\x04\0\x0edestroy-buffer\x01^\x01@\x02\x06device\x01\
+\x0adescriptor\x13\0\xc2\0\x04\0\x0ecreate-texture\x01_\x01@\x01\x07texture\x01\0\
+\xd1\0\x04\0\x0fdestroy-texture\x01`\x01@\x02\x07texture\x01\x0adescriptor\x15\0\
+\xc2\0\x04\0\x13create-texture-view\x01a\x01@\x02\x06device\x01\x0adescriptor\x17\
+\0\xc2\0\x04\0\x0ecreate-sampler\x01b\x01@\x02\x06device\x01\x0adescriptor%\0\xc2\
+\0\x04\0\x10create-query-set\x01c\x01@\x02\x06device\x01\x0adescriptor\x19\0\xc2\
+\0\x04\0\x18create-bind-group-layout\x01d\x01@\x02\x06device\x01\x0adescriptor\x1b\
+\0\xc2\0\x04\0\x11create-bind-group\x01e\x01@\x02\x06device\x01\x0adescriptor\x1d\
+\0\xc2\0\x04\0\x16create-pipeline-layout\x01f\x01j\x01\x01\x01\x05\x01@\x02\x06d\
+evice\x01\x0adescriptor\x1f\0\xe7\0\x04\0\x14create-shader-module\x01h\x01p\x07\x01\
+j\x01\xe9\0\x01\x03\x01@\x01\x06module\x01\0\xea\0\x04\0\x17shader-compilation-i\
+nfo\x01k\x01@\x02\x06device\x01\x0adescriptor!\0\xc2\0\x04\0\x16create-render-pi\
+peline\x01l\x01@\x02\x06device\x01\x0adescriptor#\0\xc2\0\x04\0\x17create-comput\
+e-pipeline\x01m\x01@\x02\x08pipeline\x01\x05indexy\0\xc2\0\x04\0\x1apipeline-bin\
+d-group-layout\x01n\x01@\x02\x06device\x01\x05label\xd3\0\0\xc2\0\x04\0\x16creat\
+e-command-encoder\x01o\x01p1\x01@\x03\x07encoder\x01\x0adescriptor/\x08commands\xf0\
+\0\0\xd1\0\x04\0\x12encode-render-pass\x01q\x01p5\x01@\x03\x07encoder\x01\x0ades\
+criptor3\x08commands\xf2\0\0\xd1\0\x04\0\x13encode-compute-pass\x01s\x01kw\x01@\x06\
+\x07encoder\x01\x06source\x01\x0dsource-offsetw\x0bdestination\x01\x12destinatio\
+n-offsetw\x04size\xf4\0\0\xd1\0\x04\0\x15copy-buffer-to-buffer\x01u\x01@\x04\x07\
+encoder\x01\x06source+\x0bdestination'\x04size-\0\xd1\0\x04\0\x16copy-buffer-to-\
+texture\x01v\x01@\x04\x07encoder\x01\x06source'\x0bdestination+\x04size-\0\xd1\0\
+\x04\0\x16copy-texture-to-buffer\x01w\x01@\x04\x07encoder\x01\x06source'\x0bdest\
+ination'\x04size-\0\xd1\0\x04\0\x17copy-texture-to-texture\x01x\x01@\x04\x07enco\
+der\x01\x06buffer\x01\x06offsetw\x04size\xf4\0\0\xd1\0\x04\0\x0cclear-buffer\x01\
+y\x01@\x06\x07encoder\x01\x09query-set\x01\x0bfirst-queryy\x0bquery-county\x0bde\
+stination\x01\x12destination-offsetw\0\xd1\0\x04\0\x11resolve-query-set\x01z\x01\
+@\x03\x07encoder\x01\x09query-set\x01\x05indexy\0\xd1\0\x04\0\x0fwrite-timestamp\
+\x01{\x01@\x02\x07encoder\x01\x05label\xd3\0\0\xc2\0\x04\0\x0efinish-encoder\x01\
+|\x01p\x01\x01j\x01w\x01\x03\x01@\x02\x06device\x01\x0fcommand-buffers\xfd\0\0\xfe\
+\0\x04\0\x06submit\x01\x7f\x01@\x04\x06device\x01\x06buffer\x01\x06offsetw\x04da\
+ta\xda\0\0\xd1\0\x04\0\x0cwrite-buffer\x01\x80\x01\x01@\x05\x06device\x01\x0bdes\
+tination'\x04data\xda\0\x06layout)\x04size-\0\xd1\0\x04\0\x0dwrite-texture\x01\x81\
+\x01\x01j\x01v\x01\x03\x01@\x01\x06device\x01\0\x82\x01\x04\0\x10timestamp-perio\
+d\x01\x83\x01\x01@\x02\x06windoww\x06widgetw\0\xc2\0\x04\0\x0ecreate-surface\x01\
+\x84\x01\x01o\x02yy\x01j\x01\x85\x01\x01\x03\x01@\x01\x07surface\x01\0\x86\x01\x04\
+\0\x12surface-pixel-size\x01\x87\x01\x01j\x019\x01\x03\x01@\x02\x07surface\x01\x07\
+adapter\x01\0\x88\x01\x04\0\x18get-surface-capabilities\x01\x89\x01\x01@\x03\x07\
+surface\x01\x06device\x01\x0dconfiguration;\0\xd1\0\x04\0\x11configure-surface\x01\
+\x8a\x01\x01j\x01=\x01?\x01@\x01\x07surface\x01\0\x8b\x01\x04\0\x0fcurrent-textu\
+re\x01\x8c\x01\x01@\x01\x07surface\x01\0\xd1\0\x04\0\x07present\x01\x8d\x01\x01@\
+\x01\x06object\x01\x01\0\x04\0\x07release\x01\x8e\x01\x03\0\x13krate:gpu/gpu@0.1\
+.0\x05y\x01B\x11\x02\x03\x02\x01M\x04\0\x04rect\x03\0\0\x02\x03\x02\x01R\x04\0\x0c\
+corner-radii\x03\0\x02\x02\x03\x02\x01P\x04\0\x09gfx-error\x03\0\x04\x01p}\x01j\x01\
+w\x01\x05\x01@\x04\x06canvasw\x05widthy\x06heighty\x04rgba\x06\0\x07\x04\0\x04ke\
+ep\x01\x08\x01j\0\x01\x05\x01@\x03\x06canvasw\x05imagew\x04area\x01\0\x09\x04\0\x04\
+draw\x01\x0a\x01@\x04\x06canvasw\x05imagew\x04area\x01\x05radii\x03\0\x09\x04\0\x0a\
+draw-round\x01\x0b\x01@\x02\x06canvasw\x05imagew\x01\0\x04\0\x06forget\x01\x0c\x03\
+\0\x1dkrate:gfx/canvas-images@0.1.0\x05z\x01B\x1e\x02\x03\x02\x01M\x04\0\x04rect\
+\x03\0\0\x02\x03\x02\x01R\x04\0\x0ccorner-radii\x03\0\x02\x02\x03\x02\x01P\x04\0\
+\x09gfx-error\x03\0\x04\x01r\x08\x0fposition-millisw\x0fduration-millisw\x05widt\
+hy\x06heighty\x05ready\x7f\x07playing\x7f\x05ended\x7f\x07problems\x04\0\x0bvide\
+o-state\x03\0\x06\x01j\x01w\x01\x05\x01@\x01\x06sources\0\x08\x04\0\x04open\x01\x09\
+\x01j\0\x01\x05\x01@\x01\x05videow\0\x0a\x04\0\x04play\x01\x0b\x04\0\x05pause\x01\
+\x0b\x01@\x02\x05videow\x06millisw\0\x0a\x04\0\x04seek\x01\x0c\x01@\x02\x05video\
+w\x07looping\x7f\0\x0a\x04\0\x0bset-looping\x01\x0d\x01@\x02\x05videow\x05muted\x7f\
+\0\x0a\x04\0\x09set-muted\x01\x0e\x01j\x01\x07\x01\x05\x01@\x01\x05videow\0\x0f\x04\
+\0\x05state\x01\x10\x01@\x03\x06canvasw\x05videow\x04area\x01\0\x0a\x04\0\x04dra\
+w\x01\x11\x01@\x04\x06canvasw\x05videow\x04area\x01\x05radii\x03\0\x0a\x04\0\x0a\
+draw-round\x01\x12\x01@\x01\x05videow\x01\0\x04\0\x05close\x01\x13\x03\0\x15krat\
+e:gfx/video@0.1.0\x05{\x01B\x06\x01m\x02\x07pcm-s16\x07float32\x04\0\x0dsample-f\
+ormat\x03\0\0\x01r\x04\x0bsample-ratey\x08channels{\x06format\x01\x0dbuffer-fram\
+esy\x04\0\x0dstream-config\x03\0\x02\x01q\x05\x11permission-denied\0\0\x0einvali\
+d-stream\0\0\x12device-unavailable\0\0\x0bunsupported\x01s\0\x08platform\x01s\0\x04\
+\0\x0baudio-error\x03\0\x04\x03\0\x17krate:audio/types@0.1.0\x05|\x02\x03\0:\x0b\
+audio-error\x02\x03\0:\x0dstream-config\x01B\x15\x02\x03\x02\x01}\x04\0\x0baudio\
+-error\x03\0\0\x02\x03\x02\x01~\x04\0\x0dstream-config\x03\0\x02\x01j\x01w\x01\x01\
+\x01@\x01\x06config\x03\0\x04\x04\0\x04open\x01\x05\x01j\0\x01\x01\x01@\x01\x09s\
+tream-idw\0\x06\x04\0\x05start\x01\x07\x04\0\x04stop\x01\x07\x01p}\x01j\x01y\x01\
+\x01\x01@\x02\x09stream-idw\x05bytes\x08\0\x09\x04\0\x05write\x01\x0a\x01@\x02\x09\
+stream-idw\x05bytes\x08\0\x04\x04\0\x0aload-sound\x01\x0b\x01@\x03\x09stream-idw\
+\x05soundw\x04gainv\0\x06\x04\0\x0aplay-sound\x01\x0c\x01@\x02\x09stream-idw\x05\
+soundw\0\x06\x04\0\x0astop-sound\x01\x0d\x03\0\x1akrate:audio/playback@0.1.0\x05\
+\x7f\x01B\x05\x02\x03\x02\x01}\x04\0\x0baudio-error\x03\0\0\x01j\x01y\x01\x01\x01\
+@\x01\x09stream-idw\0\x02\x04\0\x06queued\x01\x03\x03\0\x20krate:audio/playback-\
+queue@0.1.0\x05\x80\x01\x01B\x0f\x02\x03\x02\x01}\x04\0\x0baudio-error\x03\0\0\x02\
+\x03\x02\x01~\x04\0\x0dstream-config\x03\0\x02\x01j\x01w\x01\x01\x01@\x01\x06con\
+fig\x03\0\x04\x04\0\x04open\x01\x05\x01j\0\x01\x01\x01@\x01\x09stream-idw\0\x06\x04\
+\0\x05start\x01\x07\x04\0\x04stop\x01\x07\x01p}\x01j\x01\x08\x01\x01\x01@\x02\x09\
+stream-idw\x09max-bytesy\0\x09\x04\0\x04read\x01\x0a\x03\0\x19krate:audio/captur\
+e@0.1.0\x05\x81\x01\x01B\x0d\x01m\x01\x05rgba8\x04\0\x0cframe-format\x03\0\0\x01\
+r\x04\x05widthy\x06heighty\x03fpsy\x06format\x01\x04\0\x0dstream-config\x03\0\x02\
+\x01r\x04\x05widthy\x06heighty\x03fpsy\x06format\x01\x04\0\x0aframe-info\x03\0\x04\
+\x01r\x02\x02ids\x05labels\x04\0\x0bdevice-info\x03\0\x06\x01p}\x01r\x04\x05byte\
+s\x08\x05widthy\x06heighty\x0eelapsed-millisw\x04\0\x05frame\x03\0\x09\x01q\x06\x11\
+permission-denied\0\0\x0einvalid-stream\0\0\x12device-unavailable\0\0\x0dsystem-\
+denied\0\0\x0bunsupported\x01s\0\x08platform\x01s\0\x04\0\x0ccamera-error\x03\0\x0b\
+\x03\0\x18krate:camera/types@0.1.0\x05\x82\x01\x02\x03\0>\x0ccamera-error\x02\x03\
+\0>\x0bdevice-info\x02\x03\0>\x05frame\x02\x03\0>\x0aframe-info\x02\x03\0>\x0dst\
+ream-config\x01B\x1d\x02\x03\x02\x01\x83\x01\x04\0\x0ccamera-error\x03\0\0\x02\x03\
+\x02\x01\x84\x01\x04\0\x0bdevice-info\x03\0\x02\x02\x03\x02\x01\x85\x01\x04\0\x05\
+frame\x03\0\x04\x02\x03\x02\x01\x86\x01\x04\0\x0aframe-info\x03\0\x06\x02\x03\x02\
+\x01\x87\x01\x04\0\x0dstream-config\x03\0\x08\x01p\x03\x01j\x01\x0a\x01\x01\x01@\
+\0\0\x0b\x04\0\x07devices\x01\x0c\x01j\x01w\x01\x01\x01@\x02\x06devices\x06confi\
+g\x09\0\x0d\x04\0\x04open\x01\x0e\x01j\x01\x07\x01\x01\x01@\x01\x09stream-idw\0\x0f\
+\x04\0\x04info\x01\x10\x01j\0\x01\x01\x01@\x01\x09stream-idw\0\x11\x04\0\x05star\
+t\x01\x12\x04\0\x04stop\x01\x12\x01k\x05\x01j\x01\x13\x01\x01\x01@\x01\x09stream\
+-idw\0\x14\x04\0\x04read\x01\x15\x04\0\x05close\x01\x12\x03\0\x1akrate:camera/ca\
+pture@0.1.0\x05\x88\x01\x01B\x12\x01r\x01\x04texts\x04\0\x0atranscript\x03\0\0\x01\
+q\x05\x0finvalid-request\x01s\0\x0fmodel-not-found\0\0\x0dmodel-invalid\x01s\0\x0b\
+unsupported\x01s\0\x09inference\x01s\0\x04\0\x0cspeech-error\x03\0\x02\x01m\x05\x0f\
+invalid-request\x0fmodel-not-found\x0dmodel-invalid\x0bunsupported\x09inference\x04\
+\0\x0bmatch-error\x03\0\x04\x01p}\x01ks\x01j\x01\x01\x01\x03\x01@\x04\x0bmodel-a\
+ssets\x0apcm-s16-le\x06\x0bsample-ratey\x08language\x07\0\x08\x04\0\x0atranscrib\
+e\x01\x09\x01j\x01}\x01\x05\x01@\x05\x0bmodel-assets\x0apcm-s16-le\x06\x0bsample\
+-ratey\x08language\x07\x08expecteds\0\x0a\x04\0\x0amatch-line\x01\x0b\x01k}\x01j\
+\x01\x0c\x01\x05\x01@\x06\x0bmodel-assets\x0apcm-s16-le\x06\x0bsample-ratey\x08l\
+anguage\x07\x08expecteds\x06finish\x7f\0\x0d\x04\0\x11match-line-stream\x01\x0e\x03\
+\0\x20krate:speech/transcription@0.1.0\x05\x89\x01\x01B\x12\x01r\x03\x02ids\x04n\
+ames\x08languages\x04\0\x05voice\x03\0\0\x01q\x04\x11permission-denied\0\0\x0fin\
+valid-request\x01s\0\x0bunsupported\x01s\0\x08platform\x01s\0\x04\0\x09say-error\
+\x03\0\x02\x01p\x01\x01j\x01\x04\x01\x03\x01@\0\0\x05\x04\0\x06voices\x01\x06\x01\
+ks\x01kv\x01j\0\x01\x03\x01@\x03\x04texts\x05voice\x07\x04rate\x08\0\x09\x04\0\x03\
+say\x01\x0a\x01@\0\0\x09\x04\0\x04stop\x01\x0b\x01j\x01\x7f\x01\x03\x01@\0\0\x0c\
+\x04\0\x08speaking\x01\x0d\x03\0\x1ckrate:speech/synthesis@0.1.0\x05\x8a\x01\x01\
+@\0\0z\x04\0\x03run\x01\x8b\x01\x04\0\x13krate:app/gui@0.2.0\x04\0\x0b\x09\x01\0\
+\x03gui\x03\0\0\0G\x09producers\x01\x0cprocessed-by\x02\x0dwit-component\x070.22\
+7.1\x10wit-bindgen-rust\x060.41.0";
 #[inline(never)]
 #[doc(hidden)]
 pub fn __link_custom_section_describing_imports() {

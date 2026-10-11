@@ -745,6 +745,340 @@ interface screen {
   facts: func(window: u64) -> screen-facts;
 }
 
+/// A web page shown inside the app (IC-927): a help page, a checkout, a
+/// document, in a box of the app's window, in the system's own web view.
+///
+/// The page goes only where the app may go: its first address and every
+/// link it follows must be https on a host the person granted the app
+/// `net.connect` to; anything else is refused and said in `problem`. The
+/// page keeps no cookies or storage between openings and sees nothing of
+/// the app's own data, and its scripts have no way to reach the app.
+interface web-page {
+  use types.{ui-error};
+
+  /// Where a page is and what it is doing.
+  record page-state {
+    /// The address it shows now.
+    address: string,
+    /// The page's title, once it has one.
+    title: string,
+    /// True while it loads.
+    loading: bool,
+    /// Why the last address was not shown -- a host the app may not open,
+    /// a page that failed to load -- or empty.
+    problem: string,
+  }
+
+  /// Show `address` in a box of the window: `x`, `y`, `width` and `height`
+  /// in points, as the app lays it out. Refused when the address is not
+  /// https on a host the app was granted `net.connect` to.
+  open: func(window: u64, address: string, x: f32, y: f32, width: f32, height: f32) -> result<u64, ui-error>;
+  /// Move or resize its box (the screen turned, the layout changed).
+  place: func(page: u64, x: f32, y: f32, width: f32, height: f32) -> result<_, ui-error>;
+  /// Go to another address, judged as `open` judges the first.
+  go: func(page: u64, address: string) -> result<_, ui-error>;
+  /// Back to the page before, when there is one.
+  back: func(page: u64);
+  /// Where it is and what it is doing.
+  state: func(page: u64) -> result<page-state, ui-error>;
+  /// Take it away.
+  close: func(page: u64);
+}
+
+/// What a screen reader says about an app that draws itself (IC-926):
+/// VoiceOver on a Mac and an iPhone, TalkBack on Android.
+///
+/// A canvas is one picture to a screen reader: without this, a person who
+/// cannot see the screen hears nothing and can do nothing. The app lists
+/// what it drew -- each button, heading, line of text, switch -- with where
+/// it is and what it says, and Krate hands that to the platform. When the
+/// person double-taps an element, the app receives an ordinary tap at its
+/// centre, so the controls it already has work unchanged. Widget apps need
+/// none of this: Krate describes their widgets itself.
+interface accessibility {
+  use types.{ui-error};
+
+  /// What kind of thing an element is; the screen reader says it after the
+  /// label ("Save, button").
+  enum role {
+    /// Something to press.
+    button,
+    /// A link to somewhere else.
+    link,
+    /// A title over a part of the screen; the person can jump between them.
+    heading,
+    /// Text to read.
+    text,
+    /// A picture; give it a label that says what it shows.
+    image,
+    /// An on/off switch or a checkbox: put its state in `checked`.
+    toggle,
+    /// A value that goes up and down (volume, a slider): put it in `value`.
+    adjustable,
+    /// A field to type into.
+    field,
+  }
+
+  /// One thing on screen.
+  record element {
+    /// Left edge in points, as drawn.
+    x: f32,
+    /// Top edge in points.
+    y: f32,
+    /// Width in points.
+    width: f32,
+    /// Height in points.
+    height: f32,
+    /// What it is.
+    role: role,
+    /// What it says ("Start timer", "Inbox", "Photo of a red bicycle").
+    label: string,
+    /// Its current value, when it has one ("24:37", "60%"); empty if not.
+    value: string,
+    /// On or off, for a toggle; none for anything else.
+    checked: option<bool>,
+    /// False for something that cannot be used right now.
+    enabled: bool,
+  }
+
+  /// Say what the window shows now, in reading order (top to bottom, then
+  /// left to right, as the person would read it). Replaces what was said
+  /// before; call it again whenever the screen changes. An empty list says
+  /// the window shows nothing to read.
+  describe: func(window: u64, elements: list<element>) -> result<_, ui-error>;
+
+  /// Whether a screen reader is on right now, so an app can skip work that
+  /// only matters to one (it must still describe its screen either way).
+  screen-reader-on: func() -> bool;
+}
+
+/// How the person asked things to look (IC-925): dark mode, more
+/// contrast, larger text.
+///
+/// Read it every frame -- it is cheap, and the person can change it in
+/// Settings while the app is open -- and draw from it: dark colours when
+/// `dark`, every text size times `text-scale`. The layout kit's `Look` does
+/// both. An app that stays bright white in a dark room, or keeps its text
+/// small for someone who asked for it large, fails check-app.
+interface appearance {
+  /// The person's choices, now.
+  record look {
+    /// The system is in dark mode.
+    dark: bool,
+    /// The person asked for more contrast: stronger borders, no faint grey
+    /// text.
+    high-contrast: bool,
+    /// How much larger (or smaller) the person wants text than the
+    /// default: 1.0 by default, up to about 3 on a phone at the largest
+    /// accessibility size. Multiply every font size by it.
+    text-scale: f32,
+  }
+
+  /// How things should look right now.
+  current: func() -> look;
+}
+
+/// The phone tapping back under the finger: a button pressed, a picker's
+/// tick, a game's hit (IC-917).
+///
+/// No permission, as on the phones themselves: any app on screen may tap
+/// back. A computer has nothing to tap with, so `available` answers false
+/// there and every call does nothing -- call it everywhere, and never make
+/// a tap the only sign that something happened.
+interface haptics {
+  /// What a tap means. The phone plays its own feel for each, the one its
+  /// own apps use.
+  enum feel {
+    /// A light tap: a button pressed, a card set down.
+    light,
+    /// A firmer tap: a switch flipped, a piece placed.
+    medium,
+    /// A heavy thud: a landing, a collision.
+    heavy,
+    /// A tick each time a choice changes: a picker wheel, a slider's step.
+    selection,
+    /// Something worked: saved, solved, sent.
+    success,
+    /// Something needs a look.
+    warning,
+    /// Something failed.
+    error,
+  }
+
+  /// Whether this device can tap back at all.
+  available: func() -> bool;
+
+  /// Tap back now. Taps closer together than the phone can play are
+  /// dropped, so a game may call this every frame something is hit.
+  play: func(feel: feel);
+
+  /// A game's impact at `strength`, from 0 (barely felt) to 1 (as hard as
+  /// the phone can); outside that range is held to it.
+  impact: func(strength: f32);
+}
+
+/// Which way the phone is held and how it moves: a level, a compass, a game
+/// steered by tilting (IC-917).
+///
+/// Every vector is in the screen's own frame, however the phone is turned:
+/// x to the right of the screen, y down it, z out of the glass toward the
+/// person. So a game in landscape steers with `gravity.x` exactly as one
+/// held upright does. Sensors start on the first `read` and stop when the
+/// app closes. A computer has none: `available` is false and `read` none.
+interface motion {
+  /// Three numbers along the screen's x, y and z.
+  record vector {
+    /// Along the screen, to the right.
+    x: f32,
+    /// Along the screen, down.
+    y: f32,
+    /// Out of the screen, toward the person.
+    z: f32,
+  }
+
+  /// One reading of the phone's sensors.
+  record reading {
+    /// Which way is down, in g: (0, 1, 0) held upright, (0, 0, -1) lying
+    /// face up on a table. Steer with x; a level is zero in x and y.
+    gravity: vector,
+    /// The push the person gives the phone, gravity taken out, in g: a
+    /// shake, a swing, a step.
+    acceleration: vector,
+    /// How fast the phone turns, in degrees a second: x above zero tips
+    /// the screen's top edge toward the person, y above zero swings its
+    /// right edge toward the person, z above zero turns the phone
+    /// anticlockwise as the person sees it.
+    rotation: vector,
+    /// Degrees clockwise from magnetic north that the top of the screen
+    /// faces, when the compass knows; none until it settles or without one.
+    heading: option<f32>,
+  }
+
+  /// Whether this device can tell how it is held.
+  available: func() -> bool;
+
+  /// The latest reading, up to sixty a second; none on a device without
+  /// sensors, and for the first moment after the first ask.
+  read: func() -> option<reading>;
+}
+
+/// Where the phone is: a map's dot, a run's distance, a "near me" (IC-917).
+///
+/// Behind `location.read`, which the person is asked about on Krate's sheet
+/// and then by the phone itself. Ask with `current` each time a fix is
+/// wanted: the first ask starts the phone looking and answers `finding`;
+/// a moment later it answers the position. Reading stops when the app
+/// closes.
+interface location {
+  /// One fix.
+  record position {
+    /// Degrees north of the equator; south is negative.
+    latitude: f64,
+    /// Degrees east of Greenwich; west is negative.
+    longitude: f64,
+    /// How far off the fix may be, in metres: the radius of the circle the
+    /// phone is somewhere in.
+    accuracy: f32,
+    /// Metres above sea level, when the phone knows.
+    altitude: option<f32>,
+    /// Metres a second, when moving and the phone knows.
+    speed: option<f32>,
+    /// Degrees clockwise from true north it is heading, when moving.
+    course: option<f32>,
+    /// How old the fix is, in milliseconds.
+    age-ms: u64,
+  }
+
+  /// Why there is no position.
+  variant location-error {
+    /// The person said no, on Krate's sheet or the phone's own prompt, or
+    /// the app did not declare `location.read`.
+    not-allowed,
+    /// This device cannot tell where it is, or location is switched off.
+    unavailable,
+    /// Still looking: ask again in a moment.
+    finding,
+  }
+
+  /// Whether this device can tell where it is at all.
+  available: func() -> bool;
+
+  /// The latest fix.
+  current: func() -> result<position, location-error>;
+}
+
+/// A Bluetooth device the person picks: a heart-rate strap, a sensor, a
+/// light, a toy (IC-917). Bluetooth Low Energy, its services and
+/// characteristics named by their UUIDs ("180D", or the full form).
+///
+/// Behind `bluetooth.connect`. An app never scans: `choose` shows Krate's
+/// own list of nearby devices offering a service, the person taps one, and
+/// that one device -- only it, only for this run -- is the app's. The pick
+/// is the grant, as with a file.
+interface bluetooth {
+  /// A device the person picked.
+  record device {
+    /// The handle to pass to the calls below; good for this run only.
+    id: u64,
+    /// The name it gives itself, or "Unnamed device".
+    name: string,
+  }
+
+  /// A value a device sent on its own, after `subscribe`.
+  record notification {
+    /// The service it came from, as the app named it.
+    service: string,
+    /// The characteristic that changed, as the app named it.
+    characteristic: string,
+    /// Its new value.
+    data: list<u8>,
+  }
+
+  /// Why a Bluetooth call did not work.
+  variant bluetooth-error {
+    /// The person said no on Krate's sheet or the phone's prompt, or the
+    /// app did not declare `bluetooth.connect`.
+    not-allowed,
+    /// No Bluetooth here, or it is switched off.
+    unavailable,
+    /// No such device nearby, or the device has no such service or
+    /// characteristic.
+    not-found,
+    /// The device went out of range or was switched off: choose it again.
+    disconnected,
+    /// The device refused, in its own words.
+    failed(string),
+  }
+
+  /// Whether this device has Bluetooth at all.
+  available: func() -> bool;
+
+  /// Look for nearby devices offering `service`, show them in Krate's own
+  /// list under `title` ("Pick your heart-rate monitor"), and connect to
+  /// the one the person taps. None when they cancel.
+  choose: func(window: u64, service: string, title: string) -> result<option<device>, bluetooth-error>;
+
+  /// Read a characteristic's value once.
+  read: func(device: u64, service: string, characteristic: string) -> result<list<u8>, bluetooth-error>;
+
+  /// Write a characteristic's value; `with-response` waits for the device
+  /// to say it took it.
+  write: func(device: u64, service: string, characteristic: string, data: list<u8>, with-response: bool) -> result<_, bluetooth-error>;
+
+  /// Be sent a characteristic's value each time it changes (a heartbeat,
+  /// a reading); collect them with `notifications`.
+  subscribe: func(device: u64, service: string, characteristic: string) -> result<_, bluetooth-error>;
+
+  /// Every value sent since the last ask, oldest first.
+  notifications: func(device: u64) -> list<notification>;
+
+  /// Whether the device is still connected.
+  connected: func(device: u64) -> bool;
+
+  /// Let the device go. Closing the app does this too.
+  disconnect: func(device: u64);
+}
+
 /// The system's own text entry, for an app that draws its own text fields:
 /// a game's name box, an emulator, a canvas editor.
 ///
@@ -914,6 +1248,130 @@ interface launcher {
   open-url: func(url: string) -> result<_, launch-error>;
 }
 
+/// The person's photo library: pick photos from it, add a picture to it
+/// (IC-920).
+///
+/// Picking shows the system's own photo picker; the photos picked come back
+/// as files to read with `fs.files.open-chosen`, and the pick is the grant,
+/// as with `dialog.open-file` -- the app never sees the rest of the
+/// library. Adding is behind `photos.add`, and the phone asks too, for
+/// add-only access: the app can add, never look.
+interface photos {
+  use types.{chosen-file};
+
+  /// Why a photos call did not work.
+  variant photos-error {
+    /// The app did not declare `photos.add`, or the person said no.
+    not-allowed,
+    /// No photo library here, or it would not answer.
+    unavailable(string),
+    /// The picture's bytes are not a PNG or a JPEG, or are over 64 MB.
+    invalid(string),
+  }
+
+  /// Show the photo picker for up to `limit` photos (1 to 20). The photos
+  /// picked, as JPEG files; empty when the person cancelled. On a computer,
+  /// the system's file picker for pictures.
+  pick: func(window: u64, limit: u32) -> result<list<chosen-file>, photos-error>;
+
+  /// Add a picture -- PNG or JPEG bytes -- to the photo library.
+  save: func(window: u64, data: list<u8>) -> result<_, photos-error>;
+}
+
+/// Hand something to another app: a note to Messages, a picture to Photos
+/// or AirDrop, a file to Mail (IC-919).
+///
+/// The system's own share sheet opens with what the app gives it, and the
+/// person picks where it goes -- or cancels. The pick is the grant, so no
+/// capability: the app gives only what it already holds, and learns only
+/// whether it was sent.
+interface share {
+  /// A file to share: its name and its bytes.
+  record shared-file {
+    /// The name the other app sees ("sketch.png"), extension included.
+    name: string,
+    /// The file's bytes.
+    data: list<u8>,
+  }
+
+  /// Why the sheet did not open.
+  variant share-error {
+    /// This device has no share sheet (computers, for now).
+    unavailable(string),
+    /// Nothing to share, a name with a path in it, or more than 64 MB.
+    invalid(string),
+  }
+
+  /// Open the share sheet with any of a text, a link and files. True when
+  /// the person sent it somewhere, false when they cancelled.
+  share: func(window: u64, text: option<string>, url: option<string>, files: list<shared-file>) -> result<bool, share-error>;
+}
+
+/// Signing the person in to a service the app talks to (IC-923): GitHub,
+/// Google, the developer's own backend.
+///
+/// OAuth 2 with PKCE, through the platform's own sign-in sheet
+/// (ASWebAuthenticationSession on a Mac and an iPhone). The person types
+/// their password into the service's real page in the system browser,
+/// never into the app; the app only learns the address the service sends
+/// them back to, which carries the one-time code. It then trades that code
+/// for a token with an ordinary fetch to the service's token address
+/// (`net.connect` to that host), sending the PKCE verifier, and keeps the
+/// token in `store.secret`.
+interface sign-in {
+  /// Why there is no code.
+  variant sign-in-error {
+    /// The person closed the sheet.
+    cancelled,
+    /// This device has no sign-in sheet (computers other than a Mac, for
+    /// now), or it would not open.
+    unavailable(string),
+    /// The address is not https, or the callback scheme is not one an app
+    /// may use.
+    invalid(string),
+  }
+
+  /// A fresh PKCE pair: the verifier the app keeps for the token request,
+  /// and its S256 challenge for the authorize address
+  /// (`code_challenge=...&code_challenge_method=S256`).
+  pkce: func() -> tuple<string, string>;
+
+  /// Open the sign-in sheet at `authorize-url` (https, carrying the app's
+  /// client id, its redirect address, a `state` and the PKCE challenge)
+  /// and wait for the service to send the person back to an address that
+  /// starts with `callback-scheme:` -- the one registered with the service
+  /// ("myapp" for `myapp://signed-in`). Returns that whole address: read
+  /// `code` from it, and check its `state` is the one you sent.
+  start: func(window: u64, authorize-url: string, callback-scheme: string) -> result<string, sign-in-error>;
+}
+
+/// Asking the person to prove it is them before the app shows something
+/// private (IC-924): Face ID or the passcode on an iPhone, Touch ID or the
+/// password on a Mac.
+///
+/// The check is the system's own; the app never sees a face, a finger or a
+/// passcode, only whether the person passed. Use it in front of what
+/// `store.secret` keeps: unlock the vault, then read it.
+interface unlock {
+  /// How the check went.
+  variant unlock-answer {
+    /// It is them.
+    yes,
+    /// They cancelled or failed it: keep it locked.
+    no,
+    /// This device cannot check (no passcode set, no biometrics, a
+    /// computer without them), and why. Offer the app's own way or say so.
+    unavailable(string),
+  }
+
+  /// Whether this device can check it is the person.
+  available: func() -> bool;
+
+  /// Ask, with the app's reason in the system's own sheet ("Unlock your
+  /// vault"). Waits while the person looks or types their passcode.
+  check: func(reason: string) -> unlock-answer;
+}
+
 /// Desktop notifications.
 ///
 /// An app that finishes a long task, receives a message, or hits a timer needs
@@ -937,6 +1395,27 @@ interface notify {
   /// app learns nothing about whether the notification was seen or clicked,
   /// which keeps this from becoming a way to watch the person.
   show: func(title: string, body: string) -> result<_, notify-error>;
+}
+
+/// Reminders that arrive when the app is closed: a timer that rings, a
+/// habit nudged each evening, a meeting about to start (IC-921).
+///
+/// Behind `ui.notify`, and the phone asks the person once. The system
+/// delivers them; tapping one opens the app that set it. Each app sees and
+/// cancels only its own.
+interface reminders {
+  use notify.{notify-error};
+
+  /// Set reminder `id` (letters, digits, `-` and `_`, up to 64) to arrive
+  /// `after-seconds` from now (1 second to a year), replacing one with the
+  /// same id. With `daily`, it comes back at that time of day every day.
+  schedule: func(id: string, title: string, body: string, after-seconds: u64, daily: bool) -> result<_, notify-error>;
+
+  /// Take back a reminder not yet delivered. Unknown ids are ignored.
+  cancel: func(id: string);
+
+  /// The ids of this app's reminders still to come.
+  pending: func() -> list<string>;
 }
 
 /// Printing what the app's window shows.

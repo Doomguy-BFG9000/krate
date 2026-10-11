@@ -209,12 +209,19 @@ fn open_checked_url(url: &str) -> Result<(), LaunchError> {
     }
 }
 
+/// iOS: the link goes to the system, which opens Safari, Mail or the app
+/// that owns it (IC-918). No process to spawn on a phone.
+#[cfg(target_os = "ios")]
+fn open_checked_url(url: &str) -> Result<(), LaunchError> {
+    krate_adapter_ios::uikit_native::open_url(url).map_err(LaunchError::Unavailable)
+}
+
 /// The same handoff on macOS and Linux.
 ///
 /// `open` and `xdg-open` take the URL as one argument and are executed
 /// directly, not through a shell, so nothing in it can be read as a command.
 /// Unlike Windows there is no interpreter in the path to begin with.
-#[cfg(not(target_os = "windows"))]
+#[cfg(not(any(target_os = "windows", target_os = "ios")))]
 fn open_checked_url(url: &str) -> Result<(), LaunchError> {
     let result = if cfg!(target_os = "macos") {
         Command::new("open").arg(url).spawn()
@@ -274,6 +281,15 @@ pub fn notify(title: &str, body: &str, app_name: &str, granted: bool) -> Result<
     }
     check_notification(title, body)?;
 
+    // iOS: UserNotifications, the app's consented name as the sender
+    // (IC-918). No helper process exists on a phone.
+    #[cfg(target_os = "ios")]
+    {
+        return krate_adapter_ios::uikit_native::notify(app_name, title, body)
+            .map_err(NotifyError::Unavailable);
+    }
+
+    #[allow(unreachable_code)]
     let status = if cfg!(target_os = "macos") {
         // osascript rather than a crate: no new dependency, and the text is
         // escaped below so it cannot close the string and run more script.

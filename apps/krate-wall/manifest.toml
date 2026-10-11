@@ -24,3 +24,8 @@ required = true
 cap = "io.args"
 rationale = "Receive the app name and its capability lines"
 required = true
+
+[[capabilities]]
+cap = "fs.read:./behind.rgba"
+rationale = "Show the screen you came from, blurred, behind the sheet"
+required = true

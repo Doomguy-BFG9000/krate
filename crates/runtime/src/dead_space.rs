@@ -57,7 +57,7 @@ const MIN_REPORTABLE: f32 = 0.16;
 fn op_bounds(op: &CanvasOp) -> Option<(f32, f32, f32, f32)> {
     let r = match op {
         // Clear and clip say nothing about where content is.
-        CanvasOp::Clear(_) | CanvasOp::SetClip(_) => return None,
+        CanvasOp::Clear(_) | CanvasOp::SetClip(_) | CanvasOp::ScreenSpace(_) => return None,
         CanvasOp::FillRect { rect, .. }
         | CanvasOp::StrokeRect { rect, .. }
         | CanvasOp::FillRoundRect { rect, .. }

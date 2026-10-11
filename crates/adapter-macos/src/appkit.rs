@@ -2442,6 +2442,13 @@ mod platform {
         PENDING_POINTER_SAMPLES.with(|slot| slot.borrow_mut().drain(..).collect())
     }
 
+    /// A press from somewhere other than the mouse -- VoiceOver pressing an
+    /// element the app described (IC-926) -- queued as the mouse's would be.
+    /// Main thread.
+    pub fn push_raw_pointer_sample(sample: krate_adapter_common::ui::RawPointerSample) {
+        PENDING_POINTER_SAMPLES.with(|slot| slot.borrow_mut().push(sample));
+    }
+
     pub fn take_raw_wheel_samples() -> Vec<krate_adapter_common::ui::RawWheelSample> {
         PENDING_WHEEL_SAMPLES.with(|slot| slot.borrow_mut().drain(..).collect())
     }
@@ -3264,6 +3271,8 @@ mod platform {
         Vec::new()
     }
 
+    pub fn push_raw_pointer_sample(_sample: krate_adapter_common::ui::RawPointerSample) {}
+
     /// No pointer off macOS: nowhere, nothing held.
     pub fn pointer_state(_id: WindowId) -> krate_adapter_common::ui::PointerTracker {
         krate_adapter_common::ui::PointerTracker::default()
@@ -3487,6 +3496,7 @@ mod platform {
     }
 }
 
+pub use platform::push_raw_pointer_sample;
 pub use platform::take_raw_key_samples;
 pub use platform::take_raw_pointer_samples;
 pub use platform::take_raw_wheel_samples;

@@ -191,6 +191,7 @@ pub fn describe_op(op: &CanvasOp) -> String {
     match op {
         CanvasOp::Clear(c) => format!("clear                                        #{c:08x}"),
         CanvasOp::SetClip(r) => format!("clip      {r:?}"),
+        CanvasOp::ScreenSpace(on) => format!("screen-space {on}"),
         CanvasOp::FillRect { rect, color } => {
             format!(
                 "fillrect  {:8.1} {:8.1} {:8.1} {:8.1}  #{color:08x}",

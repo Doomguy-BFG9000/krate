@@ -6276,6 +6276,454 @@ fn a_cpp_program_runs_and_its_constructors_run_once() {
     }
 }
 
+/// The binary a person runs times an app the way a phone runs it (IC-915).
+///
+/// `KRATE_DRIVE_SCROLL` feeds the app scroll steps through its own wait and
+/// then closes it; `KRATE_COST_REPORT` says how long it took to reach its
+/// first frame and how long each answered step took. `shelf.wasm`
+/// (apps/krate-shelf) scrolls its Listen Now page, so every step down and
+/// back up is answered with a frame and timed. A drive that never ran, or a
+/// report without the first frame, would leave check-app's phone stage
+/// judging nothing.
+#[test]
+fn a_scroll_drive_times_the_app_and_closes_it() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let wasm = dir.path().join("code.wasm");
+    std::fs::write(&wasm, include_bytes!("fixtures/shelf.wasm")).expect("component");
+    let manifest = dir.path().join("manifest.toml");
+    std::fs::write(
+        &manifest,
+        "[app]\nid = \"com.acme.shelf\"\nname = \"shelf\"\nversion = \"1.0.0\"\n\
+         entry = \"code.wasm\"\nworld = \"krate:app/gui@0.2.0\"\n\n\
+         [[capabilities]]\ncap = \"ui.window:create\"\nrationale = \"window\"\nrequired = true\n\n\
+         [[capabilities]]\ncap = \"io.args\"\nrationale = \"args\"\nrequired = true\n\n\
+         [[capabilities]]\ncap = \"audio.playback\"\nrationale = \"play\"\nrequired = true\n",
+    )
+    .expect("manifest");
+    let report = dir.path().join("cost.json");
+    let started = std::time::Instant::now();
+    let out = krate()
+        .arg("run")
+        .arg(&wasm)
+        .arg("--manifest")
+        .arg(&manifest)
+        .args(["--auto-grant", "--headless"])
+        .env("KRATE_SCREEN", "390x844")
+        .env("KRATE_DRIVE_SCROLL", "12")
+        .env("KRATE_COST_REPORT", &report)
+        .output()
+        .expect("run");
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(20),
+        "the drive closes the app when its steps are done"
+    );
+    let cost: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&report).expect("a cost report"))
+            .expect("json");
+    assert_eq!(cost["steps"], serde_json::json!(12), "{cost}");
+    assert!(
+        cost["first_frame_ms"].as_f64().unwrap_or(0.0) > 0.0,
+        "{cost}"
+    );
+    assert_eq!(
+        cost["frames"],
+        serde_json::json!(12),
+        "each step down and back up is answered with a frame, and each is timed: {cost}"
+    );
+}
+
+/// An app can tap back on a phone, and a computer says plainly it cannot
+/// (krate:ui/haptics, IC-917).
+///
+/// `haptics-probe.wasm` is apps/krate-haptics-probe built. Its quick mode
+/// plays every feel and three impacts -- one in range, one far over, one
+/// NaN -- and reports `available`. On a computer every call must answer
+/// and do nothing, and `available` must be false: an app told a desktop
+/// can tap back would make a tap its only sign that something happened.
+#[test]
+fn an_app_taps_back_on_a_phone_and_a_computer_says_it_cannot() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let wasm = dir.path().join("code.wasm");
+    std::fs::write(&wasm, include_bytes!("fixtures/haptics-probe.wasm")).expect("probe");
+    let manifest = dir.path().join("manifest.toml");
+    std::fs::write(
+        &manifest,
+        "[app]\nid = \"dev.krate.haptics-probe\"\nname = \"Tap Back\"\nversion = \"1.0.0\"\n\
+         entry = \"code.wasm\"\nworld = \"krate:app/gui@0.2.0\"\n\n\
+         [[capabilities]]\ncap = \"ui.window:create\"\nrationale = \"window\"\nrequired = true\n\n\
+         [[capabilities]]\ncap = \"io.stdout\"\nrationale = \"print\"\nrequired = true\n\n\
+         [[capabilities]]\ncap = \"io.args\"\nrationale = \"args\"\nrequired = true\n",
+    )
+    .expect("manifest");
+    let out = krate()
+        .arg("run")
+        .arg("--headless")
+        .arg(&wasm)
+        .arg("--manifest")
+        .arg(&manifest)
+        .arg("--auto-grant")
+        .arg("--")
+        .arg("quick")
+        .output()
+        .expect("run");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success(),
+        "every haptics call answers on a computer: {stdout}\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        stdout.lines().any(|l| l == "haptics:available=no"),
+        "a computer has nothing to tap with and says so: {stdout}"
+    );
+}
+
+/// Photos: picking with no one there answers as cancelled, adding refuses
+/// what is not a picture, and adding needs photos.add (krate:ui/photos,
+/// IC-920).
+///
+/// `phone-check.wasm` is apps/krate-phone-check built; its quick-photos mode
+/// picks, then adds junk bytes and then a real PNG. Granted, the junk is
+/// invalid and the PNG finds no library on a computer; without photos.add
+/// the PNG is not-allowed -- the guard answers before the library is asked.
+#[test]
+fn photos_pick_and_add_answer_as_they_must() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let wasm = dir.path().join("code.wasm");
+    std::fs::write(&wasm, include_bytes!("fixtures/phone-check.wasm")).expect("probe");
+    let manifest = |with_photos: bool| {
+        let path = dir.path().join(if with_photos {
+            "with.toml"
+        } else {
+            "without.toml"
+        });
+        let photos = if with_photos {
+            "[[capabilities]]\ncap = \"photos.add\"\nrationale = \"add\"\nrequired = true\n\n"
+        } else {
+            ""
+        };
+        std::fs::write(
+            &path,
+            format!(
+                "[app]\nid = \"dev.krate.phone-check\"\nname = \"Phone Check\"\nversion = \"1.0.0\"\n\
+                 entry = \"code.wasm\"\nworld = \"krate:app/gui@0.2.0\"\n\n\
+                 [[capabilities]]\ncap = \"ui.window:create\"\nrationale = \"window\"\nrequired = true\n\n\
+                 {photos}\
+                 [[capabilities]]\ncap = \"io.stdout\"\nrationale = \"print\"\nrequired = true\n\n\
+                 [[capabilities]]\ncap = \"io.args\"\nrationale = \"args\"\nrequired = true\n"
+            ),
+        )
+        .expect("manifest");
+        path
+    };
+    let run = |manifest: &std::path::Path| -> String {
+        let out = krate()
+            .arg("run")
+            .arg("--headless")
+            .arg(&wasm)
+            .arg("--manifest")
+            .arg(manifest)
+            .arg("--auto-grant")
+            .arg("--")
+            .arg("quick-photos")
+            .output()
+            .expect("run");
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+    let granted = run(&manifest(true));
+    assert!(
+        granted
+            .lines()
+            .any(|l| l == "photos:pick=0 junk=invalid png=unavailable"),
+        "granted: no pick headless, junk refused, no library on a computer: {granted}"
+    );
+    let refused = run(&manifest(false));
+    assert!(
+        refused
+            .lines()
+            .any(|l| l == "photos:pick=0 junk=not-allowed png=not-allowed"),
+        "without photos.add, adding is not allowed before anything else: {refused}"
+    );
+}
+
+/// The share sheet refuses what it must before it opens, and a computer
+/// says plainly it has none (krate:ui/share, IC-919).
+///
+/// `phone-check.wasm` is apps/krate-phone-check built. Its quick-share mode
+/// asks to share nothing, a file named with a path, and a plain note. The
+/// first two are invalid wherever they run -- a path in a name would let an
+/// app write outside the staging folder -- and the note finds no sheet on a
+/// computer.
+#[test]
+fn the_share_sheet_refuses_nothing_and_paths_and_a_computer_has_none() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let wasm = dir.path().join("code.wasm");
+    std::fs::write(&wasm, include_bytes!("fixtures/phone-check.wasm")).expect("probe");
+    let manifest = dir.path().join("manifest.toml");
+    std::fs::write(
+        &manifest,
+        "[app]\nid = \"dev.krate.phone-check\"\nname = \"Phone Check\"\nversion = \"1.0.0\"\n\
+         entry = \"code.wasm\"\nworld = \"krate:app/gui@0.2.0\"\n\n\
+         [[capabilities]]\ncap = \"ui.window:create\"\nrationale = \"window\"\nrequired = true\n\n\
+         [[capabilities]]\ncap = \"io.stdout\"\nrationale = \"print\"\nrequired = true\n\n\
+         [[capabilities]]\ncap = \"io.args\"\nrationale = \"args\"\nrequired = true\n",
+    )
+    .expect("manifest");
+    let out = krate()
+        .arg("run")
+        .arg("--headless")
+        .arg(&wasm)
+        .arg("--manifest")
+        .arg(&manifest)
+        .arg("--auto-grant")
+        .arg("--")
+        .arg("quick-share")
+        .output()
+        .expect("run");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        stdout
+            .lines()
+            .any(|l| l == "share:empty=invalid path=invalid note=unavailable"),
+        "nothing and a path are refused; a computer has no sheet: {stdout}"
+    );
+}
+
+/// An app reaches a Bluetooth device only through the person's pick, and
+/// only when allowed (krate:ui/bluetooth behind bluetooth.connect, IC-917).
+///
+/// `bluetooth-probe.wasm` is apps/krate-bluetooth-probe built ("Heart").
+/// With KRATE_BLUETOOTH=heart a stand-in heart-rate strap is nearby: the
+/// app picks it, subscribes to its measurement, reads a beat and the
+/// battery. Not granted -- not even declared -- it hears not-allowed though
+/// the strap is there. A computer with no Bluetooth says unavailable.
+#[test]
+fn an_app_reaches_a_bluetooth_device_only_when_allowed() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let wasm = dir.path().join("code.wasm");
+    std::fs::write(&wasm, include_bytes!("fixtures/bluetooth-probe.wasm")).expect("probe");
+    let manifest = |with_bluetooth: bool| {
+        let path = dir.path().join(if with_bluetooth {
+            "with.toml"
+        } else {
+            "without.toml"
+        });
+        let bluetooth = if with_bluetooth {
+            "[[capabilities]]\ncap = \"bluetooth.connect\"\nrationale = \"heart rate\"\nrequired = true\n\n"
+        } else {
+            ""
+        };
+        std::fs::write(
+            &path,
+            format!(
+                "[app]\nid = \"dev.krate.bluetooth-probe\"\nname = \"Heart\"\nversion = \"1.0.0\"\n\
+                 entry = \"code.wasm\"\nworld = \"krate:app/gui@0.2.0\"\n\n\
+                 [[capabilities]]\ncap = \"ui.window:create\"\nrationale = \"window\"\nrequired = true\n\n\
+                 {bluetooth}\
+                 [[capabilities]]\ncap = \"io.stdout\"\nrationale = \"print\"\nrequired = true\n\n\
+                 [[capabilities]]\ncap = \"io.args\"\nrationale = \"args\"\nrequired = true\n"
+            ),
+        )
+        .expect("manifest");
+        path
+    };
+    let run = |manifest: &std::path::Path, strap: bool| -> String {
+        let mut cmd = krate();
+        cmd.arg("run")
+            .arg("--headless")
+            .arg(&wasm)
+            .arg("--manifest")
+            .arg(manifest)
+            .arg("--auto-grant")
+            .arg("--")
+            .arg("quick")
+            .env_remove("KRATE_BLUETOOTH");
+        if strap {
+            cmd.env("KRATE_BLUETOOTH", "heart");
+        }
+        let out = cmd.output().expect("run");
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+    let with = manifest(true);
+    let without = manifest(false);
+    let picked = run(&with, true);
+    assert!(
+        picked
+            .lines()
+            .any(|l| l == "bluetooth:Test Heart subscribed=yes bpm=72 battery=87"),
+        "a granted app picks the strap and reads it: {picked}"
+    );
+    let refused = run(&without, true);
+    assert!(
+        refused.lines().any(|l| l == "bluetooth:not-allowed"),
+        "an app never granted bluetooth.connect hears not-allowed, strap or no strap: {refused}"
+    );
+    let computer = run(&with, false);
+    assert!(
+        computer.lines().any(|l| l == "bluetooth:unavailable"),
+        "a computer with no Bluetooth says so: {computer}"
+    );
+}
+
+/// An app learns where the phone is only when the person allowed it
+/// (krate:ui/location behind location.read, IC-917).
+///
+/// `location-probe.wasm` is apps/krate-location-probe built ("Where Am I").
+/// Granted, with KRATE_LOCATION standing in for a fix, it reads that fix
+/// back. Not granted -- here, not even declared -- it hears not-allowed
+/// even though a fix is there: the guard, not the device, decides. And a
+/// computer without a fix says unavailable.
+#[test]
+fn an_app_learns_where_the_phone_is_only_when_allowed() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let wasm = dir.path().join("code.wasm");
+    std::fs::write(&wasm, include_bytes!("fixtures/location-probe.wasm")).expect("probe");
+    let manifest = |with_location: bool| {
+        let path = dir.path().join(if with_location {
+            "with.toml"
+        } else {
+            "without.toml"
+        });
+        let location = if with_location {
+            "[[capabilities]]\ncap = \"location.read\"\nrationale = \"position\"\nrequired = true\n\n"
+        } else {
+            ""
+        };
+        std::fs::write(
+            &path,
+            format!(
+                "[app]\nid = \"dev.krate.location-probe\"\nname = \"Where Am I\"\nversion = \"1.0.0\"\n\
+                 entry = \"code.wasm\"\nworld = \"krate:app/gui@0.2.0\"\n\n\
+                 [[capabilities]]\ncap = \"ui.window:create\"\nrationale = \"window\"\nrequired = true\n\n\
+                 {location}\
+                 [[capabilities]]\ncap = \"io.stdout\"\nrationale = \"print\"\nrequired = true\n\n\
+                 [[capabilities]]\ncap = \"io.args\"\nrationale = \"args\"\nrequired = true\n"
+            ),
+        )
+        .expect("manifest");
+        path
+    };
+    let run = |manifest: &std::path::Path, fix: Option<&str>| -> String {
+        let mut cmd = krate();
+        cmd.arg("run")
+            .arg("--headless")
+            .arg(&wasm)
+            .arg("--manifest")
+            .arg(manifest)
+            .arg("--auto-grant")
+            .arg("--")
+            .arg("quick")
+            .env_remove("KRATE_LOCATION");
+        if let Some(fix) = fix {
+            cmd.env("KRATE_LOCATION", fix);
+        }
+        let out = cmd.output().expect("run");
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+    let with = manifest(true);
+    let without = manifest(false);
+    let granted = run(&with, Some("1.29027,103.85196,12"));
+    assert!(
+        granted
+            .lines()
+            .any(|l| l == "location:1.29027,103.85196 within 12 m"),
+        "a granted app reads the fix: {granted}"
+    );
+    let refused = run(&without, Some("1.29027,103.85196,12"));
+    assert!(
+        refused.lines().any(|l| l == "location:not-allowed"),
+        "an app never granted location.read hears not-allowed, fix or no fix: {refused}"
+    );
+    let computer = run(&with, None);
+    assert!(
+        computer.lines().any(|l| l == "location:unavailable"),
+        "a computer with no fix says so: {computer}"
+    );
+}
+
+/// An app reads how the phone is held, and a computer says it cannot
+/// (krate:ui/motion, IC-917).
+///
+/// `motion-probe.wasm` is apps/krate-motion-probe built ("Level"). On a
+/// computer `available` is false. Headless with KRATE_MOTION standing in
+/// for a phone tilted so, the app reads back exactly that gravity: the
+/// reading reaches the app whole, axis for axis.
+#[test]
+fn an_app_reads_how_the_phone_is_held_and_a_computer_says_it_cannot() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let wasm = dir.path().join("code.wasm");
+    std::fs::write(&wasm, include_bytes!("fixtures/motion-probe.wasm")).expect("probe");
+    let manifest = dir.path().join("manifest.toml");
+    std::fs::write(
+        &manifest,
+        "[app]\nid = \"dev.krate.motion-probe\"\nname = \"Level\"\nversion = \"1.0.0\"\n\
+         entry = \"code.wasm\"\nworld = \"krate:app/gui@0.2.0\"\n\n\
+         [[capabilities]]\ncap = \"ui.window:create\"\nrationale = \"window\"\nrequired = true\n\n\
+         [[capabilities]]\ncap = \"io.stdout\"\nrationale = \"print\"\nrequired = true\n\n\
+         [[capabilities]]\ncap = \"io.args\"\nrationale = \"args\"\nrequired = true\n",
+    )
+    .expect("manifest");
+    let run = |motion: Option<&str>| -> String {
+        let mut cmd = krate();
+        cmd.arg("run")
+            .arg("--headless")
+            .arg(&wasm)
+            .arg("--manifest")
+            .arg(&manifest)
+            .arg("--auto-grant")
+            .arg("--")
+            .arg("quick")
+            .env_remove("KRATE_MOTION");
+        if let Some(motion) = motion {
+            cmd.env("KRATE_MOTION", motion);
+        }
+        let out = cmd.output().expect("run");
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+    let computer = run(None);
+    assert!(
+        computer.lines().any(|l| l == "motion:available=no"),
+        "a computer has no sensors and says so: {computer}"
+    );
+    let tilted = run(Some("0.25,-0.5,-0.83"));
+    assert!(
+        tilted
+            .lines()
+            .any(|l| l == "motion:gravity=0.25,-0.50,-0.83 heading=0"),
+        "the reading reaches the app axis for axis: {tilted}"
+    );
+}
+
 /// An app learns what kind of screen it is on (krate:ui/screen, IC-912).
 ///
 /// `pointer-probe.wasm` prints what `krate::layout::Screen::of` reads. A
@@ -11011,6 +11459,103 @@ fn sdk_reference_lists_functions_capabilities_and_leaks() {
     assert!(leaks.iter().any(|l| l["pattern"] == "std::fs"));
 }
 
+/// An app plays a video from its own assets and the platform decodes it
+/// (krate:gfx/video, IC-922).
+///
+/// `video-probe.wasm` is apps/krate-video-probe built ("Clip");
+/// `video-sample.mp4` is a 4 s, 320x180 H.264 clip with sound. Packed with
+/// the clip, a Mac plays it headless: it loads, reports its own length and
+/// size, and its clock moves while the app draws it. Packed without the
+/// clip, the app is told the file is not there instead of being shown
+/// black. Another system says it cannot play video yet.
+#[test]
+fn an_app_plays_a_video_from_its_assets() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let app = |name: &str, with_clip: bool| -> std::path::PathBuf {
+        let src = dir.path().join(name);
+        std::fs::create_dir_all(&src).expect("app dir");
+        std::fs::write(
+            src.join("code.wasm"),
+            include_bytes!("fixtures/video-probe.wasm"),
+        )
+        .expect("probe");
+        std::fs::write(
+            src.join("manifest.toml"),
+            "[app]\nid = \"dev.krate.video-probe\"\nname = \"Clip\"\nversion = \"1.0.0\"\n\
+             entry = \"code.wasm\"\nworld = \"krate:app/gui@0.2.0\"\n\n\
+             [[capabilities]]\ncap = \"ui.window:create\"\nrationale = \"window\"\nrequired = true\n\n\
+             [[capabilities]]\ncap = \"io.stdout\"\nrationale = \"print\"\nrequired = true\n\n\
+             [[capabilities]]\ncap = \"io.args\"\nrationale = \"args\"\nrequired = true\n",
+        )
+        .expect("manifest");
+        let clips = src.join("assets").join("clips");
+        std::fs::create_dir_all(&clips).expect("assets");
+        if with_clip {
+            std::fs::write(
+                clips.join("sample.mp4"),
+                include_bytes!("fixtures/video-sample.mp4"),
+            )
+            .expect("clip");
+        } else {
+            std::fs::write(clips.join("readme.txt"), "no clip here").expect("other asset");
+        }
+        let bundle = dir.path().join(format!("{name}.krate"));
+        let packed = krate()
+            .arg("pack")
+            .arg(src.join("code.wasm"))
+            .arg("--manifest")
+            .arg(src.join("manifest.toml"))
+            .arg("-o")
+            .arg(&bundle)
+            .output()
+            .expect("pack");
+        assert!(
+            packed.status.success(),
+            "{}",
+            String::from_utf8_lossy(&packed.stderr)
+        );
+        bundle
+    };
+    let run = |bundle: &std::path::Path| -> String {
+        let out = krate()
+            .arg("run")
+            .arg("--headless")
+            .arg(bundle)
+            .arg("--auto-grant")
+            .arg("--")
+            .arg("quick")
+            .output()
+            .expect("run");
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+
+    let missing = run(&app("without", false));
+    assert!(
+        missing.contains("video:problem=") && missing.contains("there is no clips/sample.mp4"),
+        "a clip the app does not carry is named, not shown black: {missing}"
+    );
+
+    let played = run(&app("with", true));
+    if cfg!(target_os = "macos") {
+        assert!(
+            played
+                .lines()
+                .any(|l| l.starts_with("video:ready=yes duration=4000 size=320x180 moved=yes")),
+            "a Mac loads the clip, knows its length and size, and plays it: {played}"
+        );
+    } else {
+        assert!(
+            played.contains("video playback is not on this system yet"),
+            "another system says it cannot play video yet: {played}"
+        );
+    }
+}
+
 /// An app reaches the GPU through the binary a person runs (krate:gpu,
 /// IC-540, IC-916).
 ///
@@ -11247,6 +11792,396 @@ fn a_gilrs_program_sees_a_stand_in_controller() {
             "{want:?} missing from: {stdout}{stderr}"
         );
     }
+}
+
+/// An app signs the person in through the system's sheet and checks what
+/// comes back (krate:ui/sign-in, IC-923).
+///
+/// `sign-in-probe.wasm` is apps/krate-sign-in-probe built ("Sign In").
+/// Headless, KRATE_SIGN_IN stands in for the person: the code the service
+/// sends back reaches the app with the app's own `state`, beside a 43-
+/// character PKCE verifier; `cancel` is the person closing the sheet; with
+/// no stand-in there is no sheet and the app is told so. An http address
+/// is refused before any sheet opens.
+#[test]
+fn an_app_signs_in_through_the_system_sheet() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let wasm = dir.path().join("code.wasm");
+    std::fs::write(&wasm, include_bytes!("fixtures/sign-in-probe.wasm")).expect("probe");
+    let manifest = dir.path().join("manifest.toml");
+    std::fs::write(
+        &manifest,
+        "[app]\nid = \"dev.krate.sign-in-probe\"\nname = \"Sign In\"\nversion = \"1.0.0\"\n\
+         entry = \"code.wasm\"\nworld = \"krate:app/gui@0.2.0\"\n\n\
+         [[capabilities]]\ncap = \"ui.window:create\"\nrationale = \"window\"\nrequired = true\n\n\
+         [[capabilities]]\ncap = \"random.bytes\"\nrationale = \"state\"\nrequired = true\n\n\
+         [[capabilities]]\ncap = \"io.stdout\"\nrationale = \"print\"\nrequired = true\n\n\
+         [[capabilities]]\ncap = \"io.args\"\nrationale = \"args\"\nrequired = true\n",
+    )
+    .expect("manifest");
+    let run = |answer: Option<&str>| -> String {
+        let mut cmd = krate();
+        cmd.arg("run")
+            .arg("--headless")
+            .arg(&wasm)
+            .arg("--manifest")
+            .arg(&manifest)
+            .arg("--auto-grant")
+            .arg("--")
+            .arg("quick")
+            .env_remove("KRATE_SIGN_IN");
+        if let Some(answer) = answer {
+            cmd.env("KRATE_SIGN_IN", answer);
+        }
+        let out = cmd.output().expect("run");
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+    let signed = run(Some("c0de42"));
+    assert!(
+        signed
+            .lines()
+            .any(|l| l == "sign-in:code=c0de42 state=ok pkce=43"),
+        "the code comes back with the app's own state, beside a full verifier: {signed}"
+    );
+    assert!(
+        signed.lines().any(|l| l == "sign-in:http-refused"),
+        "an http address never reaches the sheet: {signed}"
+    );
+    let closed = run(Some("cancel"));
+    assert!(
+        closed.lines().any(|l| l == "sign-in:cancelled"),
+        "closing the sheet is a cancel, not an error: {closed}"
+    );
+    let none = run(None);
+    assert!(
+        none.contains("sign-in:problem=SignInError::Unavailable"),
+        "with nothing on screen there is no sheet, and the app is told: {none}"
+    );
+}
+
+/// A vault opens only for its owner (krate:ui/unlock, IC-924).
+///
+/// `unlock-probe.wasm` is apps/krate-unlock-probe built ("Vault").
+/// Headless, KRATE_UNLOCK stands in for the person at the system's Face ID
+/// or Touch ID sheet: a yes opens the vault and its three entries are read
+/// from the secret store; a no keeps it locked; a device that cannot check
+/// says so and keeps it locked too.
+#[test]
+fn a_vault_opens_only_for_its_owner() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let wasm = dir.path().join("code.wasm");
+    std::fs::write(&wasm, include_bytes!("fixtures/unlock-probe.wasm")).expect("probe");
+    let manifest = dir.path().join("manifest.toml");
+    std::fs::write(
+        &manifest,
+        "[app]\nid = \"dev.krate.unlock-probe\"\nname = \"Vault\"\nversion = \"1.0.0\"\n\
+         entry = \"code.wasm\"\nworld = \"krate:app/gui@0.2.0\"\n\n\
+         [[capabilities]]\ncap = \"ui.window:create\"\nrationale = \"window\"\nrequired = true\n\n\
+         [[capabilities]]\ncap = \"store.secret\"\nrationale = \"vault\"\nrequired = true\n\n\
+         [[capabilities]]\ncap = \"io.stdout\"\nrationale = \"print\"\nrequired = true\n\n\
+         [[capabilities]]\ncap = \"io.args\"\nrationale = \"args\"\nrequired = true\n",
+    )
+    .expect("manifest");
+    let home = dir.path().join("home");
+    std::fs::create_dir_all(&home).expect("home");
+    let run = |answer: &str| -> String {
+        let out = krate()
+            .arg("run")
+            .arg("--headless")
+            .arg(&wasm)
+            .arg("--manifest")
+            .arg(&manifest)
+            .arg("--auto-grant")
+            .arg("--")
+            .arg("quick")
+            .env("HOME", &home)
+            .env("KRATE_UNLOCK", answer)
+            .output()
+            .expect("run");
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+    let owner = run("yes");
+    assert!(
+        owner
+            .lines()
+            .any(|l| l == "unlock:available=yes answer=yes entries=3"),
+        "the owner opens the vault and reads its entries: {owner}"
+    );
+    let stranger = run("no");
+    assert!(
+        stranger
+            .lines()
+            .any(|l| l == "unlock:available=yes answer=no entries=hidden"),
+        "a no keeps the vault locked: {stranger}"
+    );
+    let cannot = run("none");
+    assert!(
+        cannot
+            .lines()
+            .any(|l| l == "unlock:available=no answer=unavailable entries=hidden"),
+        "a device that cannot check keeps it locked and says so: {cannot}"
+    );
+}
+
+/// The person's dark mode, contrast and text size reach an app
+/// (krate:ui/appearance, IC-925).
+///
+/// `look-probe.wasm` is apps/krate-look-probe built ("Look"). Headless,
+/// KRATE_APPEARANCE stands in for the phone's settings; without it the
+/// look is the default: light, no extra contrast, text at 1.
+#[test]
+fn the_persons_look_reaches_the_app() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let wasm = dir.path().join("code.wasm");
+    std::fs::write(&wasm, include_bytes!("fixtures/look-probe.wasm")).expect("probe");
+    let manifest = dir.path().join("manifest.toml");
+    std::fs::write(
+        &manifest,
+        "[app]\nid = \"dev.krate.look-probe\"\nname = \"Look\"\nversion = \"1.0.0\"\n\
+         entry = \"code.wasm\"\nworld = \"krate:app/gui@0.2.0\"\n\n\
+         [[capabilities]]\ncap = \"ui.window:create\"\nrationale = \"window\"\nrequired = true\n\n\
+         [[capabilities]]\ncap = \"io.stdout\"\nrationale = \"print\"\nrequired = true\n\n\
+         [[capabilities]]\ncap = \"io.args\"\nrationale = \"args\"\nrequired = true\n",
+    )
+    .expect("manifest");
+    let run = |look: Option<&str>| -> String {
+        let mut cmd = krate();
+        cmd.arg("run")
+            .arg("--headless")
+            .arg(&wasm)
+            .arg("--manifest")
+            .arg(&manifest)
+            .arg("--auto-grant")
+            .arg("--")
+            .arg("quick")
+            .env_remove("KRATE_APPEARANCE");
+        if let Some(look) = look {
+            cmd.env("KRATE_APPEARANCE", look);
+        }
+        let out = cmd.output().expect("run");
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+    let plain = run(None);
+    assert!(
+        plain
+            .lines()
+            .any(|l| l == "look:dark=no contrast=no text=1.00"),
+        "{plain}"
+    );
+    let dark = run(Some("dark,contrast,text=1.35"));
+    assert!(
+        dark.lines()
+            .any(|l| l == "look:dark=yes contrast=yes text=1.35"),
+        "dark mode, contrast and text size reach the app whole: {dark}"
+    );
+}
+
+/// Krate draws a widget app's own widgets in the person's look (IC-925):
+/// in dark mode the window, fields and text go dark without the app doing
+/// anything, and at a larger text size its labels take more room.
+///
+/// `timer-widgets.wasm` is apps/krate-timer built: a title, a time, a
+/// progress bar and three buttons, with no colours of its own.
+#[test]
+fn a_widget_app_is_drawn_in_the_persons_look() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let wasm = dir.path().join("code.wasm");
+    std::fs::write(&wasm, include_bytes!("fixtures/timer-widgets.wasm")).expect("timer");
+    let manifest = dir.path().join("manifest.toml");
+    std::fs::copy(
+        concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../apps/krate-timer/manifest.toml"
+        ),
+        &manifest,
+    )
+    .expect("manifest");
+    let text = std::fs::read_to_string(&manifest).expect("read manifest");
+    let entry = text
+        .lines()
+        .find(|l| l.starts_with("entry"))
+        .expect("entry line")
+        .to_string();
+    std::fs::write(&manifest, text.replace(&entry, "entry = \"code.wasm\"")).expect("manifest");
+    let shoot = |look: &str| -> f64 {
+        let png = dir
+            .path()
+            .join(format!("{}.png", look.replace([',', '='], "-")));
+        let out = krate()
+            .arg("run")
+            .arg(&wasm)
+            .arg("--manifest")
+            .arg(&manifest)
+            .arg("--auto-grant")
+            .arg("--shoot")
+            .arg(&png)
+            .arg("--shoot-scale")
+            .arg("1")
+            .arg("--")
+            .arg("quick")
+            .env("KRATE_SCREEN", "390x844")
+            .env("KRATE_APPEARANCE", look)
+            .output()
+            .expect("run");
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let decoder = png::Decoder::new(std::io::BufReader::new(
+            std::fs::File::open(&png).expect("shot"),
+        ));
+        let mut reader = decoder.read_info().expect("png");
+        let mut buf = vec![0; reader.output_buffer_size().expect("size")];
+        let info = reader.next_frame(&mut buf).expect("frame");
+        let channels = info.color_type.samples();
+        let px = &buf[..info.buffer_size()];
+        let sum: f64 = px
+            .chunks_exact(channels)
+            .map(|p| (p[0] as f64 + p[1] as f64 + p[2] as f64) / (3.0 * 255.0))
+            .sum();
+        sum / (px.len() / channels) as f64
+    };
+    let light = shoot("light");
+    let dark = shoot("dark,text=1.35");
+    assert!(light > 0.8, "a light window by default: {light:.2}");
+    assert!(dark < 0.3, "the same app goes dark in dark mode: {dark:.2}");
+}
+
+/// An app that draws itself tells the screen reader what it drew
+/// (krate:ui/accessibility, IC-926).
+///
+/// `look-probe.wasm` describes its page with the layout kit's `Said`: the
+/// heading, the line saying the look, and each paragraph, with the rects it
+/// drew them in. Headless, `KRATE_ACCESS_DUMP` writes what the host was
+/// told, so this reads what VoiceOver and TalkBack would.
+#[test]
+fn an_app_tells_the_screen_reader_what_it_drew() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let wasm = dir.path().join("code.wasm");
+    std::fs::write(&wasm, include_bytes!("fixtures/look-probe.wasm")).expect("probe");
+    let manifest = dir.path().join("manifest.toml");
+    std::fs::write(
+        &manifest,
+        "[app]\nid = \"dev.krate.look-probe\"\nname = \"Look\"\nversion = \"1.0.0\"\n\
+         entry = \"code.wasm\"\nworld = \"krate:app/gui@0.2.0\"\n\n\
+         [[capabilities]]\ncap = \"ui.window:create\"\nrationale = \"window\"\nrequired = true\n\n\
+         [[capabilities]]\ncap = \"io.stdout\"\nrationale = \"print\"\nrequired = true\n\n\
+         [[capabilities]]\ncap = \"io.args\"\nrationale = \"args\"\nrequired = true\n",
+    )
+    .expect("manifest");
+    let dump = dir.path().join("said.json");
+    let out = krate()
+        .arg("run")
+        .arg("--headless")
+        .arg(&wasm)
+        .arg("--manifest")
+        .arg(&manifest)
+        .arg("--auto-grant")
+        .arg("--")
+        .arg("quick")
+        .env("KRATE_ACCESS_DUMP", &dump)
+        .output()
+        .expect("run");
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let said: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(&dump).expect("the app described its screen"),
+    )
+    .expect("json");
+    let said = said.as_array().expect("a list of elements");
+    assert_eq!(
+        said.len(),
+        5,
+        "a heading, the look line and three paragraphs: {said:?}"
+    );
+    assert_eq!(said[0]["role"], "heading");
+    assert_eq!(said[0]["label"], "Look");
+    assert!(said[1]["label"]
+        .as_str()
+        .unwrap_or("")
+        .starts_with("Light mode"));
+    assert!(said
+        .iter()
+        .skip(2)
+        .all(|e| e["role"] == "text" && e["frame"][2].as_f64().unwrap_or(0.0) > 100.0));
+}
+
+/// A web page inside an app goes only where the app may go
+/// (krate:ui/web-page, IC-927).
+///
+/// `web-probe.wasm` is apps/krate-web-probe built ("Help"), granted
+/// net.connect to krate.tech only. Its page opens on krate.tech; a `go` to
+/// example.com, an `open` of it, and a plain http address are all refused,
+/// and the refusal is said in the page's `problem`.
+#[test]
+fn a_web_page_inside_an_app_goes_only_where_the_app_may() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let wasm = dir.path().join("code.wasm");
+    std::fs::write(&wasm, include_bytes!("fixtures/web-probe.wasm")).expect("probe");
+    let manifest = dir.path().join("manifest.toml");
+    std::fs::write(
+        &manifest,
+        "[app]\nid = \"dev.krate.web-probe\"\nname = \"Help\"\nversion = \"1.0.0\"\n\
+         entry = \"code.wasm\"\nworld = \"krate:app/gui@0.2.0\"\n\n\
+         [[capabilities]]\ncap = \"ui.window:create\"\nrationale = \"window\"\nrequired = true\n\n\
+         [[capabilities]]\ncap = \"net.connect:krate.tech:443\"\nrationale = \"help\"\nrequired = true\n\n\
+         [[capabilities]]\ncap = \"io.stdout\"\nrationale = \"print\"\nrequired = true\n\n\
+         [[capabilities]]\ncap = \"io.args\"\nrationale = \"args\"\nrequired = true\n",
+    )
+    .expect("manifest");
+    let out = krate()
+        .arg("run")
+        .arg("--headless")
+        .arg(&wasm)
+        .arg("--manifest")
+        .arg(&manifest)
+        .arg("--auto-grant")
+        .arg("--")
+        .arg("quick")
+        .output()
+        .expect("run");
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let said = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        said.lines().any(|l| l == "web:open=ok"),
+        "a granted host opens: {said}"
+    );
+    assert!(
+        said.lines().any(|l| l
+            == "web:go-ungranted=refused problem=example.com is not a place this app may open"),
+        "a host it was never granted is refused, and said: {said}"
+    );
+    assert!(
+        said.lines().any(|l| l == "web:open-ungranted=refused"),
+        "{said}"
+    );
+    assert!(
+        said.lines().any(|l| l == "web:open-http=refused"),
+        "plain http never: {said}"
+    );
 }
 
 /// A tokio task woken from another thread runs promptly in a threaded app

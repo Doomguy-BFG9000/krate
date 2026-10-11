@@ -85,7 +85,7 @@ KRATE_ADMINS = "incyashraj"
 # records, without repairs; /health and /admin/scrub/last read the result
 # (IC-852). Repairs are a deliberate POST /admin/scrub by an admin.
 [triggers]
-crons = ["17 3 * * *"]
+crons = ["17 3 * * *", "*/10 * * * *"]
 
 [[analytics_engine_datasets]]
 binding = "USAGE"

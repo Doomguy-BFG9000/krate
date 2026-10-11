@@ -58,6 +58,24 @@ impl LocalSpeechRuntime {
         // is available -- not what counts as a valid request.
         validate_audio(pcm_s16_le, sample_rate)?;
         let language = validate_language(language)?;
+        // An iPhone: the phone's own on-device recognizer (IC-918). Whisper
+        // is not built for iOS, and the app's bundled model is not needed.
+        #[cfg(all(target_os = "ios", not(feature = "speech")))]
+        {
+            let _ = model_asset;
+            return krate_adapter_ios::uikit_native::transcribe(pcm_s16_le, sample_rate, language)
+                .map_err(SpeechError::Inference);
+        }
+        // A Mac app that carries no files of its own: Apple's recognizer, the
+        // same one the iPhone uses. An app that bundles a model uses it, and
+        // a model it names but does not carry is still its own mistake.
+        #[cfg(target_os = "macos")]
+        if self.asset_root.is_none() {
+            let _ = model_asset;
+            return crate::speech_apple::transcribe(pcm_s16_le, sample_rate, language)
+                .map_err(SpeechError::Inference);
+        }
+        #[allow(unreachable_code)]
         let model_path = self.model_path(model_asset)?;
 
         #[cfg(not(feature = "speech"))]

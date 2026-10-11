@@ -96,22 +96,29 @@ fn rgba_from_sample_buffer(sample: &CMSampleBuffer) -> Option<(Vec<u8>, u32, u32
     // SAFETY: called on AVFoundation's delivery queue with a live sample
     // buffer, which owns the image buffer for the duration of this call.
     let image = unsafe { sample.image_buffer() }?;
+    rgba_from_pixel_buffer(&image)
+}
 
+/// Convert one 32BGRA pixel buffer to straight-alpha RGBA: the camera's
+/// frames and a video's (IC-922) alike.
+pub(crate) fn rgba_from_pixel_buffer(
+    image: &objc2_core_video::CVPixelBuffer,
+) -> Option<(Vec<u8>, u32, u32)> {
     // SAFETY: the lock/unlock pair brackets every read below, which is what
     // makes the base address valid to dereference.
     unsafe {
-        if CVPixelBufferLockBaseAddress(&image, CVPixelBufferLockFlags::ReadOnly) != 0 {
+        if CVPixelBufferLockBaseAddress(image, CVPixelBufferLockFlags::ReadOnly) != 0 {
             return None;
         }
     }
     let result = (|| {
-        let width = CVPixelBufferGetWidth(&image) as u32;
-        let height = CVPixelBufferGetHeight(&image) as u32;
+        let width = CVPixelBufferGetWidth(image) as u32;
+        let height = CVPixelBufferGetHeight(image) as u32;
         if width == 0 || height == 0 {
             return None;
         }
-        let stride = CVPixelBufferGetBytesPerRow(&image);
-        let base = CVPixelBufferGetBaseAddress(&image) as *const u8;
+        let stride = CVPixelBufferGetBytesPerRow(image);
+        let base = CVPixelBufferGetBaseAddress(image) as *const u8;
         if base.is_null() {
             return None;
         }
@@ -139,7 +146,7 @@ fn rgba_from_sample_buffer(sample: &CMSampleBuffer) -> Option<(Vec<u8>, u32, u32
     })();
     // SAFETY: pairs with the lock above; runs on every path out.
     unsafe {
-        CVPixelBufferUnlockBaseAddress(&image, CVPixelBufferLockFlags::ReadOnly);
+        CVPixelBufferUnlockBaseAddress(image, CVPixelBufferLockFlags::ReadOnly);
     }
     result
 }
@@ -422,6 +429,35 @@ impl CameraBackend for MacosCameraBackend {
                 ));
             }
             session.addOutput(&output);
+        }
+        // A phone's camera sensor lies sideways: its frames are landscape
+        // whichever way the phone is held, so a portrait preview came out a
+        // quarter turn anticlockwise. Turn them to the screen (IC-918).
+        #[cfg(target_os = "ios")]
+        // SAFETY: the output's video connection and its rotation (iOS 17's
+        // videoRotationAngle, else the older videoOrientation).
+        unsafe {
+            let connection: Option<Retained<NSObject>> =
+                msg_send![&*output, connectionWithMediaType: AVMediaTypeVideo.unwrap()];
+            if let Some(connection) = connection {
+                let (angle, orientation): (f64, isize) =
+                    match krate_adapter_ios::uikit_native::interface_turn() {
+                        2 => (270.0, 2),
+                        3 => (0.0, 3),
+                        4 => (180.0, 4),
+                        _ => (90.0, 1),
+                    };
+                let modern: bool = msg_send![&*connection, respondsToSelector: objc2::sel!(setVideoRotationAngle:)];
+                if modern {
+                    let supported: bool =
+                        msg_send![&*connection, isVideoRotationAngleSupported: angle];
+                    if supported {
+                        let _: () = msg_send![&*connection, setVideoRotationAngle: angle];
+                    }
+                } else {
+                    let _: () = msg_send![&*connection, setVideoOrientation: orientation];
+                }
+            }
         }
 
         // What was asked for, until a frame proves otherwise. `info` is read

@@ -39,7 +39,8 @@ mod async_ws;
 mod audio_capture;
 mod audio_playback;
 pub mod camera_capture;
-#[cfg(target_os = "macos")]
+// AVFoundation's capture classes are the same on an iPhone (IC-918).
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 mod camera_macos;
 #[cfg(any(target_os = "windows", target_os = "linux"))]
 mod camera_nokhwa;
@@ -52,6 +53,11 @@ mod canvas_raster;
 mod core_app;
 #[cfg(target_os = "macos")]
 mod gamepad_macos;
+mod sign_in;
+mod unlock;
+mod video;
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+mod video_apple;
 pub use krate_adapter_common::canvas_list;
 pub mod chosen_files;
 pub mod dead_space;
@@ -77,11 +83,14 @@ pub mod scene3d;
 pub mod screen_fit;
 pub mod secret_host;
 pub mod shared_host;
+#[cfg(target_os = "macos")]
+mod speech_apple;
 mod speech_synthesis;
 mod speech_transcription;
 pub mod sql_host;
 pub mod store_host;
 pub mod text_overlap;
+pub mod touch_pad;
 pub mod usability;
 
 #[cfg(feature = "phase2-bindings")]
@@ -1525,8 +1534,33 @@ impl Runtime {
         link_gui!(ui4::text_entry);
         // Phase 4 only: what kind of screen a window is on (IC-912).
         link_gui!(ui4::screen);
+        // Phase 4 only: the phone tapping back (IC-917).
+        link_gui!(ui4::haptics);
+        // Phase 4 only: how the phone is held and moves (IC-917).
+        link_gui!(ui4::motion);
+        // Phase 4 only: where the phone is, behind location.read (IC-917).
+        link_gui!(ui4::location);
+        // Phase 4 only: Bluetooth devices the person picks (IC-917).
+        link_gui!(ui4::bluetooth);
+        // Phase 4 only: the system's share sheet (IC-919).
+        link_gui!(ui4::share);
+        // Phase 4 only: the photo library (IC-920).
+        link_gui!(ui4::photos);
+        // Phase 4 only: reminders delivered with the app closed (IC-921).
+        link_gui!(ui4::reminders);
+        // Phase 4 only: signing in through the system sheet (IC-923).
+        link_gui!(ui4::sign_in);
+        // Phase 4 only: Face ID, Touch ID or the passcode (IC-924).
+        link_gui!(ui4::unlock);
+        // Phase 4 only: dark mode and text size (IC-925).
+        link_gui!(ui4::appearance);
+        // Phase 4 only: a screen reader for apps that draw themselves (IC-926).
+        link_gui!(ui4::accessibility);
+        // Phase 4 only: a web page inside the app (IC-927).
+        link_gui!(ui4::web_page);
         // Phase 4 only: pictures a canvas keeps and draws by handle.
         link_gui!(phase4_gui_bindings::krate::gfx::canvas_images);
+        link_gui!(phase4_gui_bindings::krate::gfx::video);
         // Phase 4 only: the GPU as WebGPU shapes it (IC-540, IC-916).
         link_gui!(phase4_gui_bindings::krate::gpu::types);
         link_gui!(phase4_gui_bindings::krate::gpu::gpu);

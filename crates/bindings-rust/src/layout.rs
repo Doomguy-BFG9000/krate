@@ -196,6 +196,235 @@ pub struct Nav {
     pub content: Rect,
 }
 
+/// What a screen reader is told about a frame, built as the frame is drawn
+/// (IC-926): every button, heading and line of text, where it is and what
+/// it says. Send it once the frame is drawn; a person using VoiceOver or
+/// TalkBack then hears the screen and double-taps a button to press it,
+/// which reaches the app as an ordinary tap at its centre.
+///
+/// ```ignore
+/// let mut said = Said::new();
+/// said.heading(title_rect, "Inbox");
+/// said.button(compose_rect, "New message");
+/// said.text(row_rect, "Anna: lunch tomorrow?");
+/// said.send(win);
+/// ```
+#[cfg(feature = "gui")]
+#[derive(Default)]
+pub struct Said {
+    elements: Vec<crate::ui::accessibility::Element>,
+}
+
+#[cfg(feature = "gui")]
+impl Said {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    fn push(
+        &mut self,
+        at: Rect,
+        role: crate::ui::accessibility::Role,
+        label: &str,
+        value: &str,
+        checked: Option<bool>,
+    ) -> &mut Self {
+        self.elements.push(crate::ui::accessibility::Element {
+            x: at.x,
+            y: at.y,
+            width: at.w,
+            height: at.h,
+            role,
+            label: alloc::string::String::from(label),
+            value: alloc::string::String::from(value),
+            checked,
+            enabled: true,
+        });
+        self
+    }
+
+    /// Something to press.
+    pub fn button(&mut self, at: Rect, label: &str) -> &mut Self {
+        self.push(at, crate::ui::accessibility::Role::Button, label, "", None)
+    }
+
+    /// A link to somewhere else.
+    pub fn link(&mut self, at: Rect, label: &str) -> &mut Self {
+        self.push(at, crate::ui::accessibility::Role::Link, label, "", None)
+    }
+
+    /// A title over a part of the screen.
+    pub fn heading(&mut self, at: Rect, label: &str) -> &mut Self {
+        self.push(at, crate::ui::accessibility::Role::Heading, label, "", None)
+    }
+
+    /// Text to read.
+    pub fn text(&mut self, at: Rect, text: &str) -> &mut Self {
+        self.push(at, crate::ui::accessibility::Role::Text, text, "", None)
+    }
+
+    /// A picture, said as what it shows.
+    pub fn image(&mut self, at: Rect, says: &str) -> &mut Self {
+        self.push(at, crate::ui::accessibility::Role::Image, says, "", None)
+    }
+
+    /// An on/off switch.
+    pub fn toggle(&mut self, at: Rect, label: &str, on: bool) -> &mut Self {
+        self.push(
+            at,
+            crate::ui::accessibility::Role::Toggle,
+            label,
+            "",
+            Some(on),
+        )
+    }
+
+    /// A value that goes up and down, said with its value ("Volume", "60%").
+    pub fn adjustable(&mut self, at: Rect, label: &str, value: &str) -> &mut Self {
+        self.push(
+            at,
+            crate::ui::accessibility::Role::Adjustable,
+            label,
+            value,
+            None,
+        )
+    }
+
+    /// A field to type into, with what it holds.
+    pub fn field(&mut self, at: Rect, label: &str, value: &str) -> &mut Self {
+        self.push(
+            at,
+            crate::ui::accessibility::Role::Field,
+            label,
+            value,
+            None,
+        )
+    }
+
+    /// The last element, unusable right now (a greyed-out button).
+    pub fn disabled(&mut self) -> &mut Self {
+        if let Some(last) = self.elements.last_mut() {
+            last.enabled = false;
+        }
+        self
+    }
+
+    /// Tell the screen reader. Call it once per frame, after drawing.
+    pub fn send(&self, window: u64) {
+        let _ = crate::ui::accessibility::describe(window, &self.elements);
+    }
+}
+
+/// How the person asked things to look (IC-925): dark mode, more contrast,
+/// larger text. Read it every frame with `Look::now()` (or through
+/// `Screen::of`, which carries it) and draw from it:
+///
+/// ```ignore
+/// let look = screen.look;
+/// let colors = look.palette();                 // dark in a dark room
+/// canvas2d::clear(canvas, colors.background)?;
+/// canvas2d::draw_text_styled(canvas, "Inbox", at, look.text(28.0), colors.ink, bold)?;
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Look {
+    /// The system is in dark mode.
+    pub dark: bool,
+    /// The person asked for more contrast.
+    pub high_contrast: bool,
+    /// The person's text size against the default; 1.0 by default.
+    pub text_scale: f32,
+}
+
+impl Default for Look {
+    fn default() -> Self {
+        Self {
+            dark: false,
+            high_contrast: false,
+            text_scale: 1.0,
+        }
+    }
+}
+
+impl Look {
+    /// How things should look right now.
+    #[cfg(feature = "gui")]
+    pub fn now() -> Self {
+        let look = crate::ui::appearance::current();
+        Self {
+            dark: look.dark,
+            high_contrast: look.high_contrast,
+            text_scale: look.text_scale,
+        }
+    }
+
+    /// A font size for this person: `points` at their text size.
+    pub fn text(&self, points: f32) -> f32 {
+        points * self.text_scale
+    }
+
+    /// Colours that follow dark mode and contrast.
+    #[cfg(feature = "gui")]
+    pub fn palette(&self) -> Palette {
+        let c = |r: f32, g: f32, b: f32| crate::gfx::types::Color { r, g, b, a: 1.0 };
+        match (self.dark, self.high_contrast) {
+            (false, contrast) => Palette {
+                background: c(0.96, 0.96, 0.97),
+                surface: c(1.0, 1.0, 1.0),
+                ink: c(0.07, 0.07, 0.09),
+                muted: if contrast {
+                    c(0.22, 0.23, 0.26)
+                } else {
+                    c(0.43, 0.44, 0.48)
+                },
+                line: if contrast {
+                    c(0.35, 0.36, 0.40)
+                } else {
+                    c(0.85, 0.86, 0.89)
+                },
+                accent: c(0.07, 0.07, 0.09),
+                on_accent: c(1.0, 1.0, 1.0),
+            },
+            (true, contrast) => Palette {
+                background: c(0.07, 0.07, 0.08),
+                surface: c(0.13, 0.13, 0.15),
+                ink: c(0.95, 0.95, 0.97),
+                muted: if contrast {
+                    c(0.85, 0.86, 0.89)
+                } else {
+                    c(0.62, 0.63, 0.67)
+                },
+                line: if contrast {
+                    c(0.70, 0.71, 0.75)
+                } else {
+                    c(0.25, 0.26, 0.29)
+                },
+                accent: c(0.95, 0.95, 0.97),
+                on_accent: c(0.07, 0.07, 0.09),
+            },
+        }
+    }
+}
+
+/// An app's colours for the person's look: from `Look::palette`.
+#[cfg(feature = "gui")]
+#[derive(Debug, Clone, Copy)]
+pub struct Palette {
+    /// Behind everything.
+    pub background: crate::gfx::types::Color,
+    /// Cards, sheets and fields on the background.
+    pub surface: crate::gfx::types::Color,
+    /// Text a person must read.
+    pub ink: crate::gfx::types::Color,
+    /// Secondary text: dates, hints, captions.
+    pub muted: crate::gfx::types::Color,
+    /// Borders and dividers.
+    pub line: crate::gfx::types::Color,
+    /// The main button.
+    pub accent: crate::gfx::types::Color,
+    /// Text on the main button.
+    pub on_accent: crate::gfx::types::Color,
+}
+
 /// The screen a window is on, as numbers to lay out from.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Screen {
@@ -212,6 +441,8 @@ pub struct Screen {
     /// Covered space at the top, right, bottom and left edges: the notch,
     /// the home bar, the button Krate draws to close an app on a phone.
     pub safe: (f32, f32, f32, f32),
+    /// How the person asked things to look: dark mode, contrast, text size.
+    pub look: Look,
 }
 
 impl Screen {
@@ -235,6 +466,7 @@ impl Screen {
             height_class: class(height, 500.0, 900.0),
             touch,
             safe,
+            look: Look::default(),
         }
     }
 
@@ -244,12 +476,15 @@ impl Screen {
     pub fn of(window: u64) -> Self {
         use crate::ui::screen::{facts, InputKind};
         let f = facts(window);
-        Screen::new(
-            f.width,
-            f.height,
-            matches!(f.input, InputKind::Touch),
-            (f.safe.top, f.safe.right, f.safe.bottom, f.safe.left),
-        )
+        Screen {
+            look: Look::now(),
+            ..Screen::new(
+                f.width,
+                f.height,
+                matches!(f.input, InputKind::Touch),
+                (f.safe.top, f.safe.right, f.safe.bottom, f.safe.left),
+            )
+        }
     }
 
     /// A phone held upright: one column.
@@ -285,14 +520,11 @@ impl Screen {
     }
 
     /// Body text size: 17 points on a phone (the size a phone's own apps
-    /// use), 15 elsewhere. Headings scale from this, and nothing a person
-    /// must read goes below 13.
+    /// use), 15 elsewhere, at the person's text size. Headings scale from
+    /// this, and nothing a person must read goes below 13.
     pub fn body(&self) -> f32 {
-        if self.compact() {
-            17.0
-        } else {
-            15.0
-        }
+        let base = if self.compact() { 17.0 } else { 15.0 };
+        self.look.text(base)
     }
 
     /// Split `area` for an app with places to go between (Library and
@@ -334,6 +566,20 @@ mod tests {
 
     fn desktop() -> Screen {
         Screen::new(1280.0, 800.0, false, (0.0, 0.0, 0.0, 0.0))
+    }
+
+    #[test]
+    fn body_text_follows_the_persons_text_size() {
+        assert_eq!(phone().body(), 17.0);
+        let large = Screen {
+            look: Look {
+                text_scale: 1.35,
+                ..Look::default()
+            },
+            ..phone()
+        };
+        assert!((large.body() - 22.95).abs() < 0.01, "{}", large.body());
+        assert_eq!(Look::default().text(20.0), 20.0);
     }
 
     #[test]

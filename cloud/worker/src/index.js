@@ -234,7 +234,15 @@ export default {
   /// The nightly scrub (wrangler `[triggers] crons`): inventory and
   /// reconciliation without repairs, stored where /admin/scrub/last and
   /// /health read it (IC-852, tests 1886 and 1896).
-  async scheduled(_event, env) {
+  async scheduled(event, env) {
+    // Every ten minutes: the founder's welcome to people who signed up at
+    // least ten minutes ago. Nightly: the scrub.
+    if (event && event.cron === WELCOME_CRON) {
+      // Only while the automatic welcome is switched on; the founder writes
+      // them himself otherwise, from the desk.
+      if (env.WELCOME_AUTO === "1") await sendDueWelcomes(env);
+      return;
+    }
     await runScrub(env, { repair: false });
   },
   async fetch(request, env) {
@@ -2491,6 +2499,20 @@ async function ensureUser(env, provider, stableId, profile) {
       providers: [provider],
     };
     await env.APPS.put(`user:${userId}`, JSON.stringify(record));
+    // A new person: the founder hears at once, with his welcome ready to
+    // send from his own Gmail in one click (he writes each one himself:
+    // the automatic note landed in Promotions). Never in the way of the
+    // sign-in itself.
+    await notifyFounderOfSignup(env, record).catch((error) =>
+      console.error(`could not tell the founder about a new account: ${error}`),
+    );
+    // The automatic welcome, only when switched on (WELCOME_AUTO = "1"):
+    // ten to twenty minutes from now, from the next ten-minute run.
+    if (env.WELCOME_AUTO === "1" && record.email && (env.RESEND_API_KEY || env.GMAIL_APP_PASSWORD)) {
+      await env.APPS.put(`welcome-due:${userId}`, String(record.created), {
+        expirationTtl: 7 * 24 * 3600,
+      });
+    }
   } else {
     record = JSON.parse((await env.APPS.get(`user:${userId}`)) || "{}");
     const before = JSON.stringify(record);
@@ -2507,6 +2529,269 @@ async function ensureUser(env, provider, stableId, profile) {
   if (identHeld !== userId) await env.APPS.put(identKey, userId);
   if (emailKey && emailHeld !== userId) await env.APPS.put(emailKey, userId);
   return record;
+}
+
+// --------------------------------------------------------- founder welcome
+//
+// One plain-text note from the founder to each new person, ten to twenty
+// minutes after they sign up. Plain on purpose: a founder's note that looks
+// like a real email gets replies; a designed one reads as marketing.
+//
+// From Yashraj's own krate.tech address, which Resend can send for; replies
+// go to his Gmail. It cannot be sent "from" the Gmail address itself: Gmail
+// publishes a DMARC policy of reject, so mail claiming to be from gmail.com
+// that Gmail did not send is refused or binned.
+
+const WELCOME_CRON = "*/10 * * * *";
+const WELCOME_AFTER_MS = 10 * 60 * 1000;
+const WELCOME_FROM = "Yashraj Pardeshi <yashraj@krate.tech>";
+const WELCOME_REPLY_TO = "incyashraj@gmail.com";
+const WELCOME_SUBJECT = "You\u2019re in. One question from me";
+
+/// The note, in the founder's words. `name` is the first word of the name
+/// the provider gave; none (an email sign-in knows no name) is "there".
+function welcomeText(name) {
+  const first = (name || "").trim().split(/\s+/)[0] || "there";
+  return `Hi ${first},
+
+I\u2019m Yashraj, the person who builds Krate. Thanks for signing up.
+
+I\u2019ll keep this short. Krate exists for one reason: making an app and sharing it should be as easy as sending a document. If it doesn\u2019t feel that way to you yet, I want to know.
+
+So I have one question:
+
+What\u2019s the first thing you want to make with Krate?
+
+Just hit reply. It comes straight to me, not a support queue, and I read every reply myself.
+
+If something breaks, confuses you, or feels slower than it should, tell me that too. Even the small stuff. Krate is still early, and what you tell me now decides what I build next. Real changes have already come from people like you.
+
+If you\u2019d rather show me than write it, I\u2019m happy to jump on a quick call: https://calendly.com/incyashraj/30min
+
+Thanks for trying something new with me.
+
+Yashraj
+Founder, Krate
+krate.tech
+
+P.S. If you get stuck, here\u2019s a 3-minute demo of making an app from scratch: https://youtu.be/No0Cu8dAewg
+`;
+}
+
+/// Gmail's compose window, from the founder's own account, with the
+/// welcome to `user` written and the krate.tech copy in Cc: one click, read,
+/// change anything, Send.
+function welcomeComposeUrl(user) {
+  const q = new URLSearchParams({
+    view: "cm",
+    fs: "1",
+    authuser: WELCOME_GMAIL,
+    to: user.email || "",
+    cc: WELCOME_CC,
+    su: WELCOME_SUBJECT,
+    body: welcomeText(user.name),
+  });
+  return `https://mail.google.com/mail/?${q.toString()}`;
+}
+
+/// Who to tell when someone signs up: FOUNDER_NOTIFY (comma-separated),
+/// else both of the founder's inboxes.
+function founderInboxes(env) {
+  return (env.FOUNDER_NOTIFY || `${WELCOME_GMAIL},${WELCOME_CC}`)
+    .split(",")
+    .map((a) => a.trim())
+    .filter(Boolean);
+}
+
+/// The moment an account is made: who, how, when, and the welcome ready
+/// to send. Plain text so it reads at a glance on a phone.
+async function notifyFounderOfSignup(env, user) {
+  if (!env.RESEND_API_KEY) return;
+  const who = user.name || user.login || user.email || "Someone";
+  const how = (user.providers || []).join(", ") || "unknown";
+  const at = new Date(user.created || Date.now()).toLocaleString("en-GB", {
+    timeZone: "Asia/Singapore",
+    dateStyle: "medium",
+    timeStyle: "short",
+  });
+  const lines = [
+    `${who} just made a Krate account.`,
+    "",
+    `Name:   ${user.name || "(none given)"}`,
+    `Email:  ${user.email || "(none)"}`,
+    `Signed in with: ${how}`,
+    `When:   ${at} Singapore time`,
+    "",
+  ];
+  if (user.email) {
+    lines.push("Write them the welcome (opens Gmail, ready to send):", welcomeComposeUrl(user), "");
+  }
+  lines.push("Everyone, welcomed or not: https://hub.krate.tech/admin#welcome");
+  await fetch("https://api.resend.com/emails", {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${env.RESEND_API_KEY}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      from: "Krate <hello@krate.tech>",
+      to: founderInboxes(env),
+      subject: `New on Krate: ${who}`,
+      text: lines.join("\n"),
+    }),
+  });
+}
+
+/// Send one welcome; null when it went, else why not.
+///
+/// Through Gmail itself when the founder's app password is set
+/// (GMAIL_APP_PASSWORD): From his own Gmail, Cc his krate.tech address.
+/// Sent through Resend, the same note was filed under Promotions -- the
+/// founder's friend found it there -- because a bulk sender's servers sent
+/// it; Gmail's own servers sending a person's own mail land it in Primary.
+/// Otherwise through Resend, from his krate.tech address (it cannot claim
+/// the Gmail address: Gmail's DMARC policy is reject).
+async function sendWelcome(env, user) {
+  const text = welcomeText(user.name);
+  if (env.GMAIL_APP_PASSWORD) {
+    const connect = env.SMTP_CONNECT || (await import("cloudflare:sockets")).connect;
+    return smtpSend(connect, {
+      user: WELCOME_GMAIL,
+      password: env.GMAIL_APP_PASSWORD,
+      from: `Yashraj Pardeshi <${WELCOME_GMAIL}>`,
+      to: user.email,
+      cc: WELCOME_CC,
+      subject: WELCOME_SUBJECT,
+      text,
+    });
+  }
+  const res = await fetch("https://api.resend.com/emails", {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${env.RESEND_API_KEY}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      from: WELCOME_FROM,
+      to: [user.email],
+      reply_to: WELCOME_REPLY_TO,
+      subject: WELCOME_SUBJECT,
+      text,
+    }),
+  });
+  if (res.ok) return null;
+  return `resend ${res.status} ${await res.text().catch(() => "")}`;
+}
+
+const WELCOME_GMAIL = "incyashraj@gmail.com";
+const WELCOME_CC = "yashraj@krate.tech";
+
+/// One message through Gmail's SMTP server (smtp.gmail.com:465, TLS from
+/// the first byte), AUTH PLAIN with an app password; null when Gmail took
+/// it, else the step and Gmail's words. `connect` is cloudflare:sockets'
+/// (a test passes its own).
+async function smtpSend(connect, msg) {
+  const socket = connect({ hostname: "smtp.gmail.com", port: 465 }, { secureTransport: "on" });
+  const writer = socket.writable.getWriter();
+  const reader = socket.readable.getReader();
+  const encoder = new TextEncoder();
+  const decoder = new TextDecoder();
+  let buffered = "";
+  // One reply: lines until one whose fourth character is a space.
+  const reply = async () => {
+    for (;;) {
+      const lines = buffered.split("\r\n");
+      for (let i = 0; i < lines.length - 1; i++) {
+        if (/^\d{3} /.test(lines[i])) {
+          const code = Number(lines[i].slice(0, 3));
+          const said = lines.slice(0, i + 1).join(" ");
+          buffered = lines.slice(i + 1).join("\r\n");
+          return { code, said };
+        }
+      }
+      const { value, done } = await reader.read();
+      if (done) return { code: 0, said: "the connection closed" };
+      buffered += decoder.decode(value, { stream: true });
+    }
+  };
+  const say = (line) => writer.write(encoder.encode(`${line}\r\n`));
+  const step = async (line, want, name) => {
+    if (line !== null) await say(line);
+    const r = await reply();
+    if (r.code !== want) throw new Error(`${name}: ${r.said}`);
+  };
+  const b64 = (t) => btoa(String.fromCharCode(...encoder.encode(t)));
+  try {
+    await step(null, 220, "greeting");
+    await step("EHLO hub.krate.tech", 250, "hello");
+    await step(`AUTH PLAIN ${b64(`\0${msg.user}\0${msg.password}`)}`, 235, "sign-in");
+    await step(`MAIL FROM:<${msg.user}>`, 250, "sender");
+    await step(`RCPT TO:<${msg.to}>`, 250, "recipient");
+    if (msg.cc) await step(`RCPT TO:<${msg.cc}>`, 250, "copy");
+    await step("DATA", 354, "data");
+    // Base64 body lines of 76: the note has curly quotes, and 8-bit text
+    // over SMTP is not something to count on.
+    const body = b64(msg.text).replace(/.{1,76}/g, (m) => `${m}\r\n`);
+    const date = new Date().toUTCString().replace("GMT", "+0000");
+    const id = `<${crypto.randomUUID()}@hub.krate.tech>`;
+    const headers = [
+      `From: ${msg.from}`,
+      `To: <${msg.to}>`,
+      msg.cc ? `Cc: <${msg.cc}>` : null,
+      `Subject: =?UTF-8?B?${b64(msg.subject)}?=`,
+      `Date: ${date}`,
+      `Message-ID: ${id}`,
+      "MIME-Version: 1.0",
+      "Content-Type: text/plain; charset=UTF-8",
+      "Content-Transfer-Encoding: base64",
+    ].filter(Boolean);
+    await say(`${headers.join("\r\n")}\r\n\r\n${body}.`);
+    const accepted = await reply();
+    if (accepted.code !== 250) throw new Error(`send: ${accepted.said}`);
+    await say("QUIT");
+    return null;
+  } catch (error) {
+    return `gmail ${error.message}`;
+  } finally {
+    try {
+      await socket.close();
+    } catch {
+      // Already closed by the server.
+    }
+  }
+}
+
+// For scripts/send-welcome-test.mjs: the exact note, sent by hand.
+export { welcomeText, sendWelcome, WELCOME_FROM, WELCOME_REPLY_TO, WELCOME_SUBJECT };
+
+/// Send the welcomes that are due: each at most once (the account records
+/// that it was welcomed before the due mark is dropped), twenty a run.
+async function sendDueWelcomes(env, now = Date.now()) {
+  if (!env.RESEND_API_KEY && !env.GMAIL_APP_PASSWORD) return { sent: 0 };
+  const listed = await env.APPS.list({ prefix: "welcome-due:" });
+  let sent = 0;
+  for (const { name: key } of listed.keys || []) {
+    if (sent >= 20) break;
+    const created = Number((await env.APPS.get(key)) || "0");
+    if (!created || now - created < WELCOME_AFTER_MS) continue;
+    const userId = key.slice("welcome-due:".length);
+    const user = JSON.parse((await env.APPS.get(`user:${userId}`)) || "null");
+    if (!user || user.welcomed || !user.email) {
+      await env.APPS.delete(key);
+      continue;
+    }
+    const failed = await sendWelcome(env, user);
+    if (failed) {
+      // Left due: the next run tries again, until the mark expires in a week.
+      console.error(`the welcome to a new account did not go: ${failed}`);
+      continue;
+    }
+    user.welcomed = now;
+    await env.APPS.put(`user:${userId}`, JSON.stringify(user));
+    await env.APPS.delete(key);
+    sent++;
+  }
+  return { sent };
 }
 
 async function newSession(env, userId) {
@@ -5235,6 +5520,36 @@ async function adminApi(request, pathname, env) {
       billing_live: billingLive(env),
     });
   }
+  if (route === "welcomes") {
+    // Newest first, each with whether the founder has welcomed them and the
+    // one-click compose link.
+    const listing = await env.APPS.list({ prefix: "user:", limit: 1000 });
+    const out = [];
+    for (const k of listing.keys) {
+      const u = JSON.parse((await env.APPS.get(k.name)) || "null");
+      if (!u) continue;
+      out.push({
+        id: u.id,
+        name: u.name || "",
+        login: u.login || "",
+        email: u.email || "",
+        providers: u.providers || [],
+        created: u.created || 0,
+        welcomed: u.welcomed || 0,
+        compose: u.email ? welcomeComposeUrl(u) : null,
+      });
+    }
+    out.sort((a, b) => b.created - a.created);
+    return json({ people: out, waiting: out.filter((p) => !p.welcomed && p.email).length });
+  }
+  if (route === "welcomed" && request.method === "POST") {
+    const u = JSON.parse((await env.APPS.get(`user:${body.id}`)) || "null");
+    if (!u) return text("no such person", 404);
+    if (body.welcomed) u.welcomed = Date.now();
+    else delete u.welcomed;
+    await env.APPS.put(`user:${body.id}`, JSON.stringify(u));
+    return json({ ok: true, welcomed: u.welcomed || 0 });
+  }
   if (route === "people") {
     const days = Math.min(90, Math.max(1, parseInt(new URL(request.url).searchParams.get("days") || "30", 10) || 30));
     return json(await people(env, days));
@@ -5543,7 +5858,8 @@ textarea{min-height:70px;resize:vertical}
 </div>
 <div id="app" style="display:none">
 <nav>
-  <button data-t="people" class="on">People</button>
+  <button data-t="welcome" class="on">Welcome <span id="waiting" class="pill" style="margin-left:4px;display:none"></span></button>
+  <button data-t="people">People</button>
   <button data-t="tickets">Tickets</button>
   <button data-t="reports">Reports</button>
   <button data-t="users">Users</button>
@@ -5561,7 +5877,7 @@ const el=s=>document.querySelector(s);
 const esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const when=ms=>new Date(ms).toLocaleString();
 async function boot(){
-  try{const o=await api("overview");el("#who").textContent=\`\${o.users} users · \${o.tickets} tickets · \${o.reports||0} reports\`;el("#app").style.display="";show("people");}
+  try{const o=await api("overview");el("#who").textContent=\`\${o.users} users · \${o.tickets} tickets · \${o.reports||0} reports\`;el("#app").style.display="";const first=location.hash==="#people"?"people":"welcome";document.querySelectorAll("nav button").forEach(x=>x.classList.toggle("on",x.dataset.t===first));show(first);}
   catch(e){el("#who").textContent="not signed in, or not an admin";el("#login").style.display="";}
 }
 document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>{document.querySelectorAll("nav button").forEach(x=>x.classList.remove("on"));b.classList.add("on");show(b.dataset.t);});
@@ -5577,8 +5893,28 @@ async function sessionsInto(box,q,want){
       +msgs.map(m=>'<div class="msg '+(/you|user/i.test(m.who||m.role||"")?"user":"krate")+'">'+esc(m.body??m.text??m.content??JSON.stringify(m))+'<div class="mut">'+esc(m.who||m.role||"")+(m.when||m.at?' · '+when((m.when||m.at)*((m.when||m.at)>1e12?1:1000)):'')+'</div></div>').join("")
       +'</details>';}).join("");
 }
+// How long ago, in words a glance reads: "12 min ago", "3 h ago", "2 d ago".
+const ago=ms=>{const s=Math.max(0,(Date.now()-ms)/1000);if(s<90)return"just now";if(s<5400)return Math.round(s/60)+" min ago";if(s<129600)return Math.round(s/3600)+" h ago";return Math.round(s/86400)+" d ago";};
 async function show(tab){
   const v=el("#view");v.innerHTML='<p class="mut">loading…</p>';
+  if(tab==="welcome"){
+    const W=await api("welcomes");
+    const badge=el("#waiting");badge.textContent=W.waiting;badge.style.display=W.waiting?"":"none";
+    const waiting=W.people.filter(p=>!p.welcomed&&p.email),done=W.people.filter(p=>p.welcomed),none=W.people.filter(p=>!p.email);
+    const row=p=>'<div class="card row" data-id="'+esc(p.id)+'"><div class="grow"><b>'+esc(p.name||p.login||p.email)+'</b> <span class="mut">'+esc(p.email)+' · '+esc(p.providers.join(", "))+' · joined '+ago(p.created)+'</span>'
+      +(p.welcomed?'<div class="mut">welcomed '+ago(p.welcomed)+'</div>':'')+'</div>'
+      +(p.compose&&!p.welcomed?'<a class="act" style="text-decoration:none;padding:7px 13px;border-radius:8px;background:var(--acc);color:#fff;font-size:12.5px" target="_blank" rel="noopener" href="'+esc(p.compose)+'">Write the welcome</a>':'')
+      +(p.email?'<button class="ghost mark">'+(p.welcomed?"Not welcomed":"Mark welcomed")+'</button>':'')+'</div>';
+    v.innerHTML='<p class="mut" style="margin-bottom:10px">Everyone who made an account, newest first. "Write the welcome" opens Gmail as you, the note written; send it, then mark them welcomed. You also get an email the moment someone signs up.</p>'
+      +'<h3 style="margin:14px 0 8px">Waiting for a welcome ('+waiting.length+')</h3>'+(waiting.length?waiting.map(row).join(""):'<p class="mut">Nobody waiting.</p>')
+      +'<h3 style="margin:18px 0 8px">Welcomed ('+done.length+')</h3>'+(done.length?done.map(row).join(""):'<p class="mut">Nobody yet.</p>')
+      +(none.length?'<h3 style="margin:18px 0 8px">No email given ('+none.length+')</h3>'+none.map(row).join(""):'');
+    v.querySelectorAll(".card[data-id]").forEach(c=>{
+      const id=c.dataset.id,p=W.people.find(x=>x.id===id);
+      const link=c.querySelector("a.act");if(link)link.addEventListener("click",()=>setTimeout(()=>{c.querySelector(".mark").textContent="Mark welcomed";c.querySelector(".mark").classList.add("act");},500));
+      const m=c.querySelector(".mark");if(m)m.onclick=async()=>{await api("welcomed",{method:"POST",body:JSON.stringify({id,welcomed:!p.welcomed})});show("welcome");};
+    });
+  }
   if(tab==="people"){
     const P=await api("people?days=30");
     const D=P.days;

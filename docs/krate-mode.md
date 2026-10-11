@@ -559,6 +559,9 @@ to exactly what the app needs, e.g. `fs.read:notes/**`.
 | `audio.playback` | yes | play sound |
 | `audio.capture` | no | record from the microphone |
 | `camera.capture` | no | see through the camera |
+| `location.read` | no | where the phone is; the person is asked on Krate's sheet and by the phone itself |
+| `bluetooth.connect` | no | Bluetooth devices the person picks in Krate's own list; only the picked one is reachable |
+| `photos.add` | no | add pictures to the person's photo library (add-only: the app never sees the library) |
 
 Mark `required = true` on a capability the app cannot begin without -- the verification run withholds it and the app must refuse to start (exit 5). A saving app marks `fs.write` required. `ui.window:create` is declared `required = true` by convention, but withholding a window just closes the app, so it is not the withheld gate; a GUI app whose only non-default capability is its window has nothing to withhold, which is fine. Do not mark required a capability the `quick` verification path never reaches, or the app fails its own wall test after building cleanly.
 
@@ -643,6 +646,16 @@ takes this path, so any of them is a model for the wiring.
 - `scene3d::unlit: func(scene: u64, vertices: list<f32>, uvs: list<f32>, texture: u64, tint: color) -> result<_, gfx-error>`
 - `scene3d::cull-back-faces: func(scene: u64, enabled: bool) -> result<_, gfx-error>`
 - `scene3d::present: func(scene: u64) -> result<_, gfx-error>`
+- `video::open: func(source: string) -> result<u64, gfx-error>`
+- `video::play: func(video: u64) -> result<_, gfx-error>`
+- `video::pause: func(video: u64) -> result<_, gfx-error>`
+- `video::seek: func(video: u64, millis: u64) -> result<_, gfx-error>`
+- `video::set-looping: func(video: u64, looping: bool) -> result<_, gfx-error>`
+- `video::set-muted: func(video: u64, muted: bool) -> result<_, gfx-error>`
+- `video::state: func(video: u64) -> result<video-state, gfx-error>`
+- `video::draw: func(canvas: u64, video: u64, area: rect) -> result<_, gfx-error>`
+- `video::draw-round: func(canvas: u64, video: u64, area: rect, radii: corner-radii) -> result<_, gfx-error>`
+- `video::close: func(video: u64)`
 
 ## `ui`
 
@@ -674,6 +687,30 @@ takes this path, so any of them is a model for the wiring.
 - `pointer::release: func(window: u64)`
 - `pointer::captured: func(window: u64) -> bool`
 - `screen::facts: func(window: u64) -> screen-facts`
+- `web-page::open: func(window: u64, address: string, x: f32, y: f32, width: f32, height: f32) -> result<u64, ui-error>`
+- `web-page::place: func(page: u64, x: f32, y: f32, width: f32, height: f32) -> result<_, ui-error>`
+- `web-page::go: func(page: u64, address: string) -> result<_, ui-error>`
+- `web-page::back: func(page: u64)`
+- `web-page::state: func(page: u64) -> result<page-state, ui-error>`
+- `web-page::close: func(page: u64)`
+- `accessibility::describe: func(window: u64, elements: list<element>) -> result<_, ui-error>`
+- `accessibility::screen-reader-on: func() -> bool`
+- `appearance::current: func() -> look`
+- `haptics::available: func() -> bool`
+- `haptics::play: func(feel: feel)`
+- `haptics::impact: func(strength: f32)`
+- `motion::available: func() -> bool`
+- `motion::read: func() -> option<reading>`
+- `location::available: func() -> bool`
+- `location::current: func() -> result<position, location-error>`
+- `bluetooth::available: func() -> bool`
+- `bluetooth::choose: func(window: u64, service: string, title: string) -> result<option<device>, bluetooth-error>`
+- `bluetooth::read: func(device: u64, service: string, characteristic: string) -> result<list<u8>, bluetooth-error>`
+- `bluetooth::write: func(device: u64, service: string, characteristic: string, data: list<u8>, with-response: bool) -> result<_, bluetooth-error>`
+- `bluetooth::subscribe: func(device: u64, service: string, characteristic: string) -> result<_, bluetooth-error>`
+- `bluetooth::notifications: func(device: u64) -> list<notification>`
+- `bluetooth::connected: func(device: u64) -> bool`
+- `bluetooth::disconnect: func(device: u64)`
 - `text-entry::start: func(window: u64) -> bool`
 - `text-entry::stop: func(window: u64)`
 - `touch::touches: func(window: u64) -> list<touch-point>`
@@ -686,7 +723,17 @@ takes this path, so any of them is a model for the wiring.
 - `clipboard::write-text: func(text: string) -> result<_, ui-error>`
 - `menu::set-items: func(window: u64, items: list<menu-item>) -> result<_, ui-error>`
 - `launcher::open-url: func(url: string) -> result<_, launch-error>`
+- `photos::pick: func(window: u64, limit: u32) -> result<list<chosen-file>, photos-error>`
+- `photos::save: func(window: u64, data: list<u8>) -> result<_, photos-error>`
+- `share::share: func(window: u64, text: option<string>, url: option<string>, files: list<shared-file>) -> result<bool, share-error>`
+- `sign-in::pkce: func() -> tuple<string, string>`
+- `sign-in::start: func(window: u64, authorize-url: string, callback-scheme: string) -> result<string, sign-in-error>`
+- `unlock::available: func() -> bool`
+- `unlock::check: func(reason: string) -> unlock-answer`
 - `notify::show: func(title: string, body: string) -> result<_, notify-error>`
+- `reminders::schedule: func(id: string, title: string, body: string, after-seconds: u64, daily: bool) -> result<_, notify-error>`
+- `reminders::cancel: func(id: string)`
+- `reminders::pending: func() -> list<string>`
 - `print::window: func(window: u64, title: string) -> result<print-outcome, ui-error>`
 - `print::add-page: func(window: u64) -> result<u32, ui-error>`
 - `print::finish: func(window: u64, title: string) -> result<print-outcome, ui-error>`

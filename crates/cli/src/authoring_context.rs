@@ -342,11 +342,42 @@ let cards = nav.content.pad(16.0).grid(items.len(), 160.0, 200.0, 12.0);\n\
   points both ways, nothing that needs hover or a right click.\n\
 - `screen.safe_area()`: keep text and controls inside it; a background \
   fills `screen.area()`. On a phone Krate's close button sits at the top \
-  right inside the covered top edge.\n\
+  right inside the covered top edge, and while the on-screen keyboard is \
+  up its height is part of the covered bottom edge: the app gets a \
+  `Resized` when the keyboard comes or goes, asks `Screen::of` again, and \
+  keeps the field being typed into (and its Save button) above \
+  `safe_area().bottom()` -- scroll the form up, or move the field.\n\
 - Text: `screen.body()` (17 on a phone, 15 elsewhere) for what is read, 13 \
   the least for anything a person must read.\n\
 - A `Rect` is plain numbers: keep the rects you drew buttons in and hit-test \
   taps with `rect.contains(x, y)`, so the layout and the taps never drift.\n\n\
+Dark mode and large text are the person's, and check-app runs every app \
+once more on a phone in dark mode at the largest text size: a screen that \
+stays bright white there, or text that does not grow, fails it. Draw from \
+`screen.look` (or `krate::layout::Look::now()`) every frame:\n\n\
+```rust\n\
+let look = screen.look;                 // dark mode, contrast, text size\n\
+let colors = look.palette();            // background, surface, ink, muted, line, accent\n\
+canvas2d::clear(canvas, colors.background)?;\n\
+canvas2d::draw_text_styled(canvas, \"Today\", at, look.text(28.0), colors.ink, bold)?;\n\
+```\n\n\
+Size every font with `look.text(points)` (`screen.body()` already does), \
+then lay out from the sizes text really takes -- measure it -- so larger \
+text wraps or the row grows instead of being cut. Pick your own colours \
+if you like, but pick a dark set for `look.dark`; a brand colour can stay \
+the same in both.\n\n\
+A person who cannot see the screen uses VoiceOver or TalkBack, and a \
+canvas is one silent picture to it: describe each frame as you draw it, \
+with the rects you drew in. `let mut said = krate::layout::Said::new();` \
+then `said.heading(r, \"Inbox\")`, `said.button(r, \"New message\")`, \
+`said.text(r, &line)`, `said.toggle(r, \"Sound\", on)`, `said.image(r, \"A \
+red bicycle\")`, and `said.send(win)` after `present`. A double-tap on an \
+element reaches you as an ordinary tap at its centre, so your controls \
+work unchanged. A slider or a scrubber you draw: describe it with \
+`said.adjustable(rect, \"Volume\", \"60%\")` -- on a phone a finger that \
+moves is a scroll, except on something described as adjustable, where it \
+drags it. check-app fails a canvas app that draws text and \
+describes none of it. Widget apps need nothing: Krate describes widgets.\n\n\
 A game drawn at one fixed size (a design size) is the exception: it is \
 scaled to fit and judged on the phone the way Krate turns it -- landscape \
 for a wide design -- so draw its text big enough to survive the shrink, \
@@ -420,12 +451,96 @@ A window wider than tall plays in landscape on a phone. A text field \
 the app draws itself (a name box in a game, a canvas editor) calls \
 `krate::ui::text_entry::start(win)` when it takes focus and `stop(win)` \
 when it loses it: a phone shows its keyboard, and the typing arrives as \
-the usual `TextInput` and key events. A picture that does not change \
+the usual `TextInput` and key events. A game that reads keys and never \
+reads touch gets an on-screen pad on a phone by itself, built from the \
+keys it asks `key_held` about (Space or Enter is the big button): do not \
+draw one too. On a phone the game should also tap back: \
+`krate::ui::haptics::play(Feel::Light)` on a button press, `Selection` as \
+a choice changes, `Success`/`Warning`/`Error` for outcomes, and \
+`impact(strength)` (0 to 1) for a hit or a landing. No capability; a \
+computer answers `available()` false and ignores the calls, so call them \
+everywhere and never make a tap the only sign something happened. \
+Tilt, shake and compass: `krate::ui::motion::read()` gives `gravity`, \
+`acceleration` (g), `rotation` (degrees a second) and `heading` in the \
+SCREEN's frame however the phone is turned -- x right, y down, z toward \
+the person -- so steer with `gravity.x` in portrait and landscape alike; \
+a phone lying flat reads gravity (0, 0, -1). It is none on a computer \
+(`available()` false): keep keys or the pad as the way to play there. \
+Where the phone is: declare `location.read` (required if the app IS \
+about place), then call `krate::ui::location::current()` each time a fix \
+is wanted -- the first call answers `Err(Finding)` while the phone looks \
+and asks the person; keep calling (twice a second is plenty) and draw \
+\"Finding where you are\" meanwhile. `Err(NotAllowed)` means they said no: \
+say so plainly and keep the rest of the app working; `Err(Unavailable)` \
+is a computer or location switched off. A position carries `accuracy` in \
+metres -- show it, never pretend a fix is exact. \
+Bluetooth LE devices (a heart-rate strap, a sensor, a light): declare \
+`bluetooth.connect`, then `krate::ui::bluetooth::choose(win, \"180D\", \
+\"Pick your heart-rate monitor\")` from a button the person taps -- it \
+shows Krate's own list of nearby devices offering that service and \
+answers the one they pick (`None` if they cancel). The app never scans. \
+Then `read`, `write` and `subscribe` by service and characteristic UUID, \
+and drain `notifications(device)` each frame; on `Err(Disconnected)` or \
+`connected()` false, offer to choose again. `Err(NotFound)` from choose \
+means nothing nearby offers the service: say so. A Share button: \
+`krate::ui::share::share(win, Some(text), Some(url), &[SharedFile { name, \
+data }])` opens the system's share sheet (Messages, Mail, AirDrop, Notes) \
+and answers `Ok(true)` when sent, `Ok(false)` when cancelled; no \
+capability. A computer answers `Err(Unavailable)` for now: offer \
+save-file or Copy there instead. Photos: `krate::ui::photos::pick(win, \
+3)` opens the system's photo picker and returns the picks as chosen \
+files (read them with `fs::files::open_chosen(&f.token, Read)`); empty \
+means cancelled, no capability. To add a picture: declare `photos.add` \
+and call `photos::save(win, &png_or_jpeg_bytes)`. On a computer pick \
+opens the file dialog for pictures. A reminder that comes with the app \
+closed (a timer, a habit, a meeting): with `ui.notify`, \
+`krate::ui::reminders::schedule(\"tea\", \"Tea is ready\", \"Four minutes \
+are up.\", 240, false)` -- the same id replaces it, `true` repeats it \
+daily at that time, `cancel(id)` takes it back, `pending()` lists this \
+app's own; tapping it opens the app. A computer answers \
+`Err(Unavailable)` for now: keep an in-app timer there. Signing the \
+person in to a service (GitHub, Google, your own backend): never draw a \
+password field. `let (verifier, challenge) = krate::ui::sign_in::pkce();` \
+then `sign_in::start(win, &authorize_url, \"krate-signin\")` with the service's \
+https authorize address carrying `client_id`, \
+`redirect_uri=krate-signin://<your app id>/signed-in` (register that \
+address with the service: it is the one that returns on every phone), \
+a random `state`, `code_challenge` and `code_challenge_method=S256`. It opens \
+the system's sign-in sheet and answers the address the service sent the \
+person back to: check its `state`, read its `code`, then POST the code and \
+`code_verifier` to the token address with `net.connect` to that host, and \
+keep the token in `store.secret`. `Err(Cancelled)` means they closed the \
+sheet: offer the button again. A computer other than a Mac answers \
+`Err(Unavailable)` for now. A web page inside the app (a help page, a \
+checkout, a document): declare `net.connect:<host>:443` for each host it \
+shows, then `let page = krate::ui::web_page::open(win, \"https://docs.example.com/help\", \
+x, y, w, h)?` in a box of your layout, `place(page, ...)` when the layout \
+changes, `state(page)` for its title, `loading` and `problem`, `back`, \
+`go` and `close`. It goes only to the granted hosts (a link elsewhere is \
+refused and said in `problem`), keeps nothing between openings and \
+cannot reach the app. Something private (a vault, a diary, a \
+banking screen): show it only after `krate::ui::unlock::check(\"Unlock your \
+vault\")` answers `UnlockAnswer::Yes` -- Face ID or the passcode on an \
+iPhone, Touch ID or the password on a Mac, in the system's own sheet. \
+`No` keeps it locked; `Unavailable(why)` means this device cannot check: \
+say so rather than opening it. Keep what it guards in `store.secret`, and \
+lock again when the app goes to the background. No capability. A picture that does not change \
 between frames (a screenshot, an avatar, a sprite sheet) is kept once \
 with `krate::gfx::canvas_images::keep(canvas, w, h, &rgba)` and drawn \
 by handle with `draw`/`draw_round` each frame: `draw_pixels` sends \
 every byte every frame, which makes a scrolling list of pictures lag \
-on a phone.\n\n\
+on a phone. A video (a tutorial clip, a trailer, a recorded \
+workout): put the .mp4 in the app's `assets/` directory, then \
+`let v = krate::gfx::video::open(\"clips/intro.mp4\")?` -- or an \
+`https://` address with `net.connect` to its host -- and each frame \
+`video::draw(canvas, v, rect)`; the platform decodes it and plays its \
+sound, so never decode frames yourself. Build the controls as ordinary \
+buttons calling `play`, `pause`, `seek(v, ms)`, `set_looping`, \
+`set_muted`, and read `state(v)` each frame for `position_millis`, \
+`duration_millis`, `ready` (draw \"Loading\" until true), `ended` and \
+the picture's `width`/`height` -- fit the rect to that shape. A \
+non-empty `problem` says why it cannot play: show it. A computer other \
+than a Mac answers `Err(Platform)` for now: say so.\n\n\
 **3. Sprites.** Two ways, both real: `draw_pixels` blits a straight RGBA \
 buffer at a rect (fastest for tiles and unrotated sprites), and \
 `draw_sprite(canvas, center, dst, angle, w, h, rgba)` rotates one. For a \
@@ -779,6 +894,9 @@ fn capability_note(pattern: &str) -> &'static str {
         "memory.budget" => "more memory than the default, in MiB (up to 3584); the person sees it at consent",
         "store.group" => "share a key-value store with the same publisher's other apps, in a named group its signed list admits",
         "camera.capture" => "see through the camera",
+        "location.read" => "where the phone is; the person is asked on Krate's sheet and by the phone itself",
+        "bluetooth.connect" => "Bluetooth devices the person picks in Krate's own list; only the picked one is reachable",
+        "photos.add" => "add pictures to the person's photo library (add-only: the app never sees the library)",
         _ => "",
     }
 }

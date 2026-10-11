@@ -51,7 +51,18 @@ pub struct GpuCanvas {
     /// Uploaded images keyed by the source Arc's address: gram's photos
     /// are generated once and drawn every frame, and re-uploading 429 KB
     /// per photo per frame would waste the bus the GPU just freed.
-    images: HashMap<usize, ImageBrush>,
+    /// Pictures on the GPU, by the address of the picture they came from --
+    /// which the cache holds, so the address cannot be reused while the
+    /// entry exists. Without the hold, an app that replaced a picture each
+    /// frame (a camera preview) got its new frame at the old frame's freed
+    /// address and was shown the FIRST frame for ever.
+    images: HashMap<
+        usize,
+        (
+            std::sync::Arc<krate_adapter_common::ui::ImagePixels>,
+            ImageBrush,
+        ),
+    >,
     /// The texture a whole-frame picture is written into, at its own size.
     picture: Option<(wgpu::Texture, wgpu::TextureView)>,
 }
@@ -213,7 +224,9 @@ impl GpuCanvas {
         // off-centre, its buttons answering touches in the wrong places.
         let screen = Affine::scale(self.scale as f64);
         let (k, ox, oy) = list.design_transform();
-        let base = screen * Affine::translate((ox as f64, oy as f64)) * Affine::scale(k as f64);
+        let design_base =
+            screen * Affine::translate((ox as f64, oy as f64)) * Affine::scale(k as f64);
+        let mut base = design_base;
         // The spare space around a letterboxed design takes the app's own
         // edge colours, so it reads as filling the screen, not as a card
         // between black bars.
@@ -256,6 +269,9 @@ impl GpuCanvas {
                             list.logical_height as f64,
                         ),
                     );
+                }
+                CanvasOp::ScreenSpace(on) => {
+                    base = if *on { screen } else { design_base };
                 }
                 CanvasOp::SetClip(rect) => {
                     while clip_depth > 0 {
@@ -547,6 +563,9 @@ impl GpuCanvas {
                 },
             )
             .map_err(|e| format!("render: {e}"))?;
+        if let Some(path) = crate::uikit_native::preview_due() {
+            self.save_preview(&path);
+        }
 
         let render_ms = t_render.elapsed().as_secs_f64() * 1000.0;
         let t_acquire = std::time::Instant::now();
@@ -585,10 +604,73 @@ impl GpuCanvas {
     /// scaled to the screen in one pass. Through vello it went into the
     /// image atlas again every frame (a new picture each time) and through
     /// its compute passes: Counter-Strike on an iPhone 13 Pro was laggy.
+    /// Read the frame just rendered back from the GPU and write it as the
+    /// app's preview. Once per app, so the stall does not matter.
+    fn save_preview(&self, path: &std::path::Path) {
+        let (width, height) = (self.width, self.height);
+        let bytes_per_row = (width * 4).next_multiple_of(256);
+        let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("krate-preview"),
+            size: u64::from(bytes_per_row) * u64::from(height),
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: &self.target,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &buffer,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(bytes_per_row),
+                    rows_per_image: None,
+                },
+            },
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+        );
+        self.queue.submit([encoder.finish()]);
+        let slice = buffer.slice(..);
+        let (tx, rx) = std::sync::mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |r| {
+            let _ = tx.send(r);
+        });
+        let _ = self.device.poll(wgpu::PollType::Wait {
+            submission_index: None,
+            timeout: None,
+        });
+        if !matches!(rx.recv(), Ok(Ok(()))) {
+            return;
+        }
+        let data = slice.get_mapped_range();
+        let mut rgba = Vec::with_capacity((width * height * 4) as usize);
+        for row in 0..height {
+            let start = (row * bytes_per_row) as usize;
+            rgba.extend_from_slice(&data[start..start + (width * 4) as usize]);
+        }
+        drop(data);
+        buffer.unmap();
+        crate::uikit_native::write_preview(path, &rgba, width, height);
+    }
+
     fn present_picture(
         &mut self,
         image: &krate_adapter_common::ui::ImagePixels,
     ) -> Result<(), String> {
+        if let Some(path) = crate::uikit_native::preview_due() {
+            // A whole-frame picture is its own preview.
+            crate::uikit_native::write_preview(&path, &image.rgba, image.width, image.height);
+        }
         let t = std::time::Instant::now();
         let (w, h) = (image.width.max(1), image.height.max(1));
         let stale = self
@@ -675,7 +757,7 @@ impl GpuCanvas {
         image: &std::sync::Arc<krate_adapter_common::ui::ImagePixels>,
     ) -> ImageBrush {
         let key = std::sync::Arc::as_ptr(image) as usize;
-        if let Some(cached) = self.images.get(&key) {
+        if let Some((_, cached)) = self.images.get(&key) {
             return cached.clone();
         }
         let gpu_image = ImageBrush::new(ImageData {
@@ -685,10 +767,14 @@ impl GpuCanvas {
             width: image.width,
             height: image.height,
         });
+        // Let go of pictures nobody holds any more (the cache's own hold is
+        // the only one left), then cap what remains.
+        self.images
+            .retain(|_, (held, _)| std::sync::Arc::strong_count(held) > 1);
         if self.images.len() >= 64 {
             self.images.clear();
         }
-        self.images.insert(key, gpu_image.clone());
+        self.images.insert(key, (image.clone(), gpu_image.clone()));
         gpu_image
     }
 }
@@ -814,7 +900,10 @@ fn make_target(
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
         format: wgpu::TextureFormat::Rgba8Unorm,
-        usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING,
+        // COPY_SRC: the app's preview is read back from here (once per app).
+        usage: wgpu::TextureUsages::STORAGE_BINDING
+            | wgpu::TextureUsages::TEXTURE_BINDING
+            | wgpu::TextureUsages::COPY_SRC,
         view_formats: &[],
     });
     let view = target.create_view(&wgpu::TextureViewDescriptor::default());

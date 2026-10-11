@@ -38,6 +38,10 @@ const CANVAS_ID: u64 = 2;
 
 /// The Krate mark, 120 px square, straight RGBA.
 const MARK: &[u8] = include_bytes!("../assets/mark-120.rgba");
+/// Krate's file icon, 180 pixels square, straight RGBA: what an app with no
+/// picture of its own wears (F-314), in place of its initial.
+const FILE_ICON: &[u8] = include_bytes!("../assets/krate-file-180.rgba");
+const FILE_ICON_SIDE: u32 = 180;
 const MARK_SIZE: u32 = 120;
 
 // A light, quiet surface so the apps' own pictures carry the colour; the
@@ -155,6 +159,16 @@ fn keep_art(canvas: u64, name: &str) -> Option<Kept> {
     if rgba.len() != (width * height * 4) as usize {
         return None;
     }
+    // A picture of the app as it ran fills its card edge to edge: cut to
+    // the card's shape, keeping the top of a tall screen (what an app
+    // shows first) and the middle of a wide one.
+    let cropped;
+    let (rgba, width, height) = if name.starts_with("screen-") {
+        cropped = crop_to(rgba, width, height, CARD_ASPECT);
+        (cropped.0.as_slice(), cropped.1, cropped.2)
+    } else {
+        (rgba, width, height)
+    };
     let (mut r, mut g, mut b, mut n) = (0u32, 0u32, 0u32, 0u32);
     for p in rgba.chunks_exact(4).step_by(97) {
         r += p[0] as u32;
@@ -170,6 +184,29 @@ fn keep_art(canvas: u64, name: &str) -> Option<Kept> {
         height,
         tint: (r as f32 / n, g as f32 / n, b as f32 / n),
     })
+}
+
+/// A Library card's width over its height (see `draw_library`).
+const CARD_ASPECT: f32 = 1.0 / 0.62;
+
+/// Cut `rgba` (`w` by `h`) to `aspect`: a tall picture keeps its top, below
+/// the status bar; a wide one keeps its middle.
+fn crop_to(rgba: &[u8], w: u32, h: u32, aspect: f32) -> (Vec<u8>, u32, u32) {
+    let (fw, fh) = (w as f32, h as f32);
+    let (cw, ch, x0, y0) = if fw / fh > aspect {
+        let cw = (fh * aspect) as u32;
+        (cw, h, (w - cw) / 2, 0)
+    } else {
+        let ch = ((fw / aspect) as u32).min(h);
+        let y0 = ((fh * 0.06) as u32).min(h - ch);
+        (w, ch, 0, y0)
+    };
+    let mut out = Vec::with_capacity((cw * ch * 4) as usize);
+    for y in y0..y0 + ch {
+        let start = ((y * w + x0) * 4) as usize;
+        out.extend_from_slice(&rgba[start..start + (cw * 4) as usize]);
+    }
+    (out, cw, ch)
 }
 
 /// A small diagonal gradient in a colour picked from the name, so an app
@@ -262,6 +299,8 @@ struct Screen {
     library: Vec<LibraryApp>,
     hub: Vec<HubApp>,
     mark: Option<u64>,
+    /// Krate's file icon, for an app with no picture of its own.
+    file_icon: Option<u64>,
     /// Fades kept by the size they were made for.
     fades: Vec<((u32, u32), u64)>,
     tab: Tab,
@@ -403,7 +442,7 @@ impl Screen {
         let canvas = self.canvas;
         y += 18.0;
         for index in 0..self.library.len() {
-            let card_h = (col * 0.62).min(260.0);
+            let card_h = (col / CARD_ASPECT).min(260.0);
             let area = rect(x, y, col, card_h);
             if Self::visible(y, y + card_h, h) {
                 let app = &self.library[index];
@@ -418,21 +457,28 @@ impl Screen {
                     picture(canvas, area, art, 26.0, 0.30)?;
                 }
                 if app.initial {
-                    let initial: String = app
-                        .name
-                        .chars()
-                        .next()
-                        .map(|c| c.to_uppercase().collect())
-                        .unwrap_or_default();
-                    let m = canvas2d::measure_text_styled(canvas, &initial, 64.0, style(800, 0.0))?;
-                    canvas2d::draw_text_styled(
-                        canvas,
-                        &initial,
-                        pt(x + (col - m.width) / 2.0, y + card_h * 0.42),
-                        64.0,
-                        rgba(1.0, 1.0, 1.0, 0.92),
-                        style(800, 0.0),
-                    )?;
+                    let side = card_h * 0.46;
+                    let at = rect(x + (col - side) / 2.0, y + card_h * 0.12, side, side);
+                    match self.file_icon {
+                        Some(icon) => canvas_images::draw(canvas, icon, at)?,
+                        None => {
+                            let initial: String = app
+                                .name
+                                .chars()
+                                .next()
+                                .map(|c| c.to_uppercase().collect())
+                                .unwrap_or_default();
+                            let m = canvas2d::measure_text_styled(canvas, &initial, 64.0, style(800, 0.0))?;
+                            canvas2d::draw_text_styled(
+                                canvas,
+                                &initial,
+                                pt(x + (col - m.width) / 2.0, y + card_h * 0.42),
+                                64.0,
+                                rgba(1.0, 1.0, 1.0, 0.92),
+                                style(800, 0.0),
+                            )?;
+                        }
+                    }
                 }
                 self.card_fade(area, 0.45, 26.0)?;
                 let app = &self.library[index];
@@ -642,21 +688,30 @@ impl Screen {
                     None => canvas2d::fill_round_rect(canvas, thumb, radii(14.0), PILL)?,
                 }
                 if app.initial {
-                    let initial: String = app
-                        .name
-                        .chars()
-                        .next()
-                        .map(|c| c.to_uppercase().collect())
-                        .unwrap_or_default();
-                    let m = canvas2d::measure_text_styled(canvas, &initial, 26.0, style(800, 0.0))?;
-                    canvas2d::draw_text_styled(
-                        canvas,
-                        &initial,
-                        pt(thumb.x + (60.0 - m.width) / 2.0, thumb.y + 39.0),
-                        26.0,
-                        CARD,
-                        style(800, 0.0),
-                    )?;
+                    match self.file_icon {
+                        Some(icon) => canvas_images::draw(
+                            canvas,
+                            icon,
+                            rect(thumb.x + 8.0, thumb.y + 8.0, 44.0, 44.0),
+                        )?,
+                        None => {
+                            let initial: String = app
+                                .name
+                                .chars()
+                                .next()
+                                .map(|c| c.to_uppercase().collect())
+                                .unwrap_or_default();
+                            let m = canvas2d::measure_text_styled(canvas, &initial, 26.0, style(800, 0.0))?;
+                            canvas2d::draw_text_styled(
+                                canvas,
+                                &initial,
+                                pt(thumb.x + (60.0 - m.width) / 2.0, thumb.y + 39.0),
+                                26.0,
+                                CARD,
+                                style(800, 0.0),
+                            )?;
+                        }
+                    }
                 }
                 let tx = x + 74.0;
                 let text_w = col - 74.0 - 86.0;
@@ -963,6 +1018,7 @@ impl krate::Guest for Component {
             library,
             hub,
             mark: canvas_images::keep(canvas, MARK_SIZE, MARK_SIZE, MARK).ok(),
+            file_icon: canvas_images::keep(canvas, FILE_ICON_SIDE, FILE_ICON_SIDE, FILE_ICON).ok(),
             fades: Vec::new(),
             tab: start,
             scroll: [0.0; 2],

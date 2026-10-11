@@ -1663,6 +1663,299 @@ impl PointerTracker {
 /// renderer consumes it, and this crate only carries it between them.
 pub type CanvasListHandle = std::sync::Arc<dyn std::any::Any + Send + Sync>;
 
+/// Why a Bluetooth call did not work (IC-917).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum BtError {
+    NotAllowed,
+    Unavailable,
+    NotFound,
+    Disconnected,
+    Failed(String),
+}
+
+/// A Bluetooth device the person picked, by the handle the host gave it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BtDevice {
+    pub handle: u64,
+    pub name: String,
+}
+
+/// A value a device sent on its own: service, characteristic, data.
+pub type BtNotification = (String, String, Vec<u8>);
+
+/// One fix of where the phone is (IC-917).
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
+pub struct Position {
+    pub latitude: f64,
+    pub longitude: f64,
+    /// Metres the fix may be off by.
+    pub accuracy: f32,
+    pub altitude: Option<f32>,
+    pub speed: Option<f32>,
+    pub course: Option<f32>,
+    /// How old the fix is.
+    pub age_ms: u64,
+}
+
+/// What asking where the phone is answers.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum LocationAnswer {
+    Here(Position),
+    /// The phone's own prompt was refused, or location is restricted.
+    NotAllowed,
+    /// No location on this device, or it is switched off.
+    Unavailable,
+    /// Still looking.
+    Finding,
+}
+
+/// One reading of a phone's motion sensors (IC-917), in the screen's frame:
+/// x right, y down, z toward the person.
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
+pub struct MotionReading {
+    /// Which way is down, in g.
+    pub gravity: (f32, f32, f32),
+    /// The push given the phone, gravity removed, in g.
+    pub acceleration: (f32, f32, f32),
+    /// Turning about each axis, in degrees a second.
+    pub rotation: (f32, f32, f32),
+    /// Degrees clockwise from magnetic north the top of the screen faces.
+    pub heading: Option<f32>,
+}
+
+/// How the interface is turned, as UIKit and Android both number the four
+/// ways up (IC-917).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ScreenTurn {
+    /// Held upright.
+    Upright,
+    /// Upside down.
+    UpsideDown,
+    /// Turned so the phone's top points left (iOS: home button on the right).
+    TopLeft,
+    /// Turned so the phone's top points right (iOS: home button on the left).
+    TopRight,
+}
+
+/// A vector in a phone's own frame (x right and y up the phone held
+/// upright, z out of the glass) in the screen's frame for how the interface
+/// is turned: x right, y down, z out.
+pub fn device_to_screen(turn: ScreenTurn, (dx, dy, dz): (f64, f64, f64)) -> (f32, f32, f32) {
+    let (sx, sy) = match turn {
+        ScreenTurn::Upright => (dx, -dy),
+        ScreenTurn::UpsideDown => (-dx, dy),
+        ScreenTurn::TopLeft => (-dy, -dx),
+        ScreenTurn::TopRight => (dy, dx),
+    };
+    (sx as f32, sy as f32, dz as f32)
+}
+
+/// A compass heading of the phone's top as the heading of the screen's top.
+pub fn heading_to_screen(turn: ScreenTurn, heading: f64) -> f32 {
+    let offset = match turn {
+        ScreenTurn::Upright => 0.0,
+        ScreenTurn::UpsideDown => 180.0,
+        ScreenTurn::TopLeft => 90.0,
+        ScreenTurn::TopRight => 270.0,
+    };
+    ((heading + offset).rem_euclid(360.0)) as f32
+}
+
+#[cfg(test)]
+mod motion_tests {
+    use super::*;
+
+    #[test]
+    fn down_is_down_the_screen_however_the_phone_is_turned() {
+        // Held upright in each way, gravity points to the phone's bottom
+        // edge as the person sees it: down the screen, (0, 1).
+        let cases = [
+            (ScreenTurn::Upright, (0.0, -1.0, 0.0)),
+            (ScreenTurn::UpsideDown, (0.0, 1.0, 0.0)),
+            (ScreenTurn::TopLeft, (-1.0, 0.0, 0.0)),
+            (ScreenTurn::TopRight, (1.0, 0.0, 0.0)),
+        ];
+        for (turn, device) in cases {
+            assert_eq!(device_to_screen(turn, device), (0.0, 1.0, 0.0), "{turn:?}");
+        }
+        // Lying face up: down is into the table, through the back.
+        assert_eq!(
+            device_to_screen(ScreenTurn::TopLeft, (0.0, 0.0, -1.0)),
+            (0.0, 0.0, -1.0)
+        );
+        // Tilting the phone's right edge down, upright: down leans right.
+        assert_eq!(
+            device_to_screen(ScreenTurn::Upright, (0.5, -0.8, 0.0)).0,
+            0.5
+        );
+    }
+
+    #[test]
+    fn the_heading_is_where_the_top_of_the_screen_faces() {
+        // The phone's top faces north (0). Turned so its top points left,
+        // the screen's top is the phone's right side: 90 degrees on.
+        assert_eq!(heading_to_screen(ScreenTurn::Upright, 0.0), 0.0);
+        assert_eq!(heading_to_screen(ScreenTurn::TopLeft, 0.0), 90.0);
+        assert_eq!(heading_to_screen(ScreenTurn::TopRight, 0.0), 270.0);
+        assert_eq!(heading_to_screen(ScreenTurn::UpsideDown, 270.0), 90.0);
+    }
+}
+
+/// Where a web page inside an app is and what it is doing (IC-927).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct WebPageState {
+    pub address: String,
+    pub title: String,
+    pub loading: bool,
+    pub problem: String,
+}
+
+/// What kind of thing a described element is (IC-926).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AccessRole {
+    Button,
+    Link,
+    Heading,
+    Text,
+    Image,
+    Toggle,
+    Adjustable,
+    Field,
+}
+
+/// One thing on screen, as a screen reader is told it (IC-926).
+#[derive(Clone, Debug, PartialEq)]
+pub struct AccessElement {
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+    pub role: AccessRole,
+    pub label: String,
+    pub value: String,
+    pub checked: Option<bool>,
+    pub enabled: bool,
+}
+
+impl AccessElement {
+    /// What a screen reader says for a widget Krate draws, so widget apps
+    /// are described without doing anything; None for what it skips
+    /// (containers, an unlabelled spacer).
+    pub fn for_placement(placement: &WidgetPlacement) -> Option<Self> {
+        let role = match placement.kind {
+            WidgetKind::Button => AccessRole::Button,
+            WidgetKind::Text => AccessRole::Text,
+            WidgetKind::Checkbox | WidgetKind::Switch | WidgetKind::Radio => AccessRole::Toggle,
+            WidgetKind::Slider | WidgetKind::Progress => AccessRole::Adjustable,
+            WidgetKind::TextField | WidgetKind::TextArea => AccessRole::Field,
+            WidgetKind::Image => AccessRole::Image,
+            _ => return None,
+        };
+        let label = placement.label.clone().unwrap_or_default();
+        if label.trim().is_empty() && !matches!(role, AccessRole::Adjustable | AccessRole::Field) {
+            return None;
+        }
+        Some(Self {
+            x: placement.x,
+            y: placement.y,
+            width: placement.width,
+            height: placement.height,
+            role,
+            label,
+            value: placement
+                .value
+                .map(|v| format!("{:.0}%", (v.clamp(0.0, 1.0)) * 100.0))
+                .unwrap_or_default(),
+            checked: placement.checked,
+            enabled: true,
+        })
+    }
+}
+
+/// How the person asked things to look (IC-925).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Appearance {
+    /// The system is in dark mode.
+    pub dark: bool,
+    /// The person asked for more contrast.
+    pub high_contrast: bool,
+    /// The person's text size against the default: 1.0 by default.
+    pub text_scale: f32,
+}
+
+impl Default for Appearance {
+    fn default() -> Self {
+        Self {
+            dark: false,
+            high_contrast: false,
+            text_scale: 1.0,
+        }
+    }
+}
+
+/// The look Krate's own widgets are drawn in, for every window of this
+/// process: set by the runtime each frame from the person's settings, read
+/// by layout (text sizes) and the painters (colours and text sizes).
+static LOOK_DARK: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static LOOK_CONTRAST: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static LOOK_TEXT_SCALE: std::sync::atomic::AtomicU32 =
+    std::sync::atomic::AtomicU32::new(0x3F80_0000);
+
+/// Draw Krate's widgets in this look from now on (IC-925).
+pub fn set_widget_look(look: Appearance) {
+    use std::sync::atomic::Ordering::Relaxed;
+    LOOK_DARK.store(look.dark, Relaxed);
+    LOOK_CONTRAST.store(look.high_contrast, Relaxed);
+    LOOK_TEXT_SCALE.store(look.text_scale.clamp(0.5, 4.0).to_bits(), Relaxed);
+}
+
+/// The look Krate's widgets are drawn in.
+pub fn widget_look() -> Appearance {
+    use std::sync::atomic::Ordering::Relaxed;
+    Appearance {
+        dark: LOOK_DARK.load(Relaxed),
+        high_contrast: LOOK_CONTRAST.load(Relaxed),
+        text_scale: f32::from_bits(LOOK_TEXT_SCALE.load(Relaxed)),
+    }
+}
+
+impl Appearance {
+    /// Read `KRATE_APPEARANCE` as a stand-in for the person's settings:
+    /// comma-separated `dark`, `contrast` and `text=1.35`, in any order.
+    pub fn parse(text: &str) -> Self {
+        let mut look = Self::default();
+        for part in text.split(',').map(str::trim) {
+            match part {
+                "dark" => look.dark = true,
+                "light" => look.dark = false,
+                "contrast" => look.high_contrast = true,
+                _ => {
+                    if let Some(scale) = part
+                        .strip_prefix("text=")
+                        .and_then(|v| v.parse::<f32>().ok())
+                    {
+                        look.text_scale = scale.clamp(0.5, 4.0);
+                    }
+                }
+            }
+        }
+        look
+    }
+}
+
+/// What a phone's tap back means (IC-917): the platform plays its own feel
+/// for each.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HapticFeel {
+    Light,
+    Medium,
+    Heavy,
+    Selection,
+    Success,
+    Warning,
+    Error,
+}
+
 /// A screen beyond its size (IC-912): touched or pointed at, and the
 /// space at each edge something else covers, in points (top, right,
 /// bottom, left).
@@ -1822,6 +2115,236 @@ pub trait UiAdapter: WindowAdapter {
     /// rather than turning to the shape of the window the app asked for.
     /// Said once per run, before the app's first window.
     fn set_adapts(&self, _adapts: bool) {}
+
+    /// Show the platform's own picker for a file (`folder` false) or a folder
+    /// and return the path the person picked, or None when they cancelled
+    /// or the host has no picker. Hosts whose dialogs the runtime opens
+    /// itself (the desktops, through rfd) leave this as None. `filter` is the
+    /// app's filter string; a host may narrow the picker by it.
+    fn choose_path(
+        &self,
+        _window: WindowId,
+        _folder: bool,
+        _filter: &str,
+    ) -> Option<std::path::PathBuf> {
+        None
+    }
+
+    /// Whether this device can tap back (IC-917). Desktops cannot.
+    fn haptics_available(&self) -> bool {
+        false
+    }
+
+    /// Tap back with `feel`, or an impact at `strength` (0 to 1) when
+    /// `feel` is None. False when there is nothing to tap with.
+    fn haptic(&self, _feel: Option<HapticFeel>, _strength: f32) -> bool {
+        false
+    }
+
+    /// Schedule a reminder for the running app (IC-921): the platform
+    /// delivers it with the app closed. `sender` is the app's consented
+    /// name for the sender line.
+    fn reminder_schedule(
+        &self,
+        _id: &str,
+        _sender: &str,
+        _title: &str,
+        _body: &str,
+        _after_seconds: u64,
+        _daily: bool,
+    ) -> Result<(), String> {
+        Err("reminders that arrive with the app closed are on phones only, for now".to_string())
+    }
+
+    /// Cancel one of the running app's reminders.
+    fn reminder_cancel(&self, _id: &str) {}
+
+    /// The running app's reminders still to come.
+    fn reminder_pending(&self) -> Vec<String> {
+        Vec::new()
+    }
+
+    /// Show the platform's photo picker for up to `limit` photos; the files
+    /// picked, as JPEGs on disk (IC-920). Empty when cancelled. None when
+    /// the host has no picker of its own (desktops use the file dialog).
+    fn pick_photos(
+        &self,
+        _window: WindowId,
+        _limit: u32,
+    ) -> Option<Result<Vec<std::path::PathBuf>, String>> {
+        None
+    }
+
+    /// Add a PNG or JPEG to the photo library; Err(None) when the person
+    /// said no, Err(Some(why)) when it could not.
+    fn save_photo(&self, _data: &[u8]) -> Result<(), Option<String>> {
+        Err(Some(
+            "this device has no photo library Krate can add to".to_string(),
+        ))
+    }
+
+    /// Open the platform's share sheet with a text, a link and files (name,
+    /// bytes); true when sent, false when cancelled (IC-919).
+    fn share(
+        &self,
+        _window: WindowId,
+        _text: Option<&str>,
+        _url: Option<&str>,
+        _files: &[(String, Vec<u8>)],
+    ) -> Result<bool, String> {
+        Err("this device has no share sheet yet".to_string())
+    }
+
+    /// Show a web page in a box of the window (IC-927), going only to the
+    /// granted hosts (`net::web_page_allowed`); its handle.
+    fn open_web_page(
+        &self,
+        _window: WindowId,
+        _address: &str,
+        _frame: (f32, f32, f32, f32),
+        _granted: Vec<(String, String)>,
+    ) -> Result<u64, String> {
+        Err("this device cannot show a web page inside an app yet".to_string())
+    }
+
+    /// Move or resize a web page's box.
+    fn place_web_page(&self, _page: u64, _frame: (f32, f32, f32, f32)) {}
+
+    /// Send a web page to another address (already judged).
+    fn web_page_go(&self, _page: u64, _address: &str) {}
+
+    /// A web page goes back one page.
+    fn web_page_back(&self, _page: u64) {}
+
+    /// Where a web page is and what it is doing.
+    fn web_page_state(&self, _page: u64) -> Option<WebPageState> {
+        None
+    }
+
+    /// Take a web page away.
+    fn close_web_page(&self, _page: u64) {}
+
+    /// Tell the platform's screen reader what the window shows (IC-926).
+    fn describe_accessibility(
+        &self,
+        _window: WindowId,
+        _elements: &[AccessElement],
+    ) -> Result<(), UiAdapterError> {
+        Ok(())
+    }
+
+    /// Whether a screen reader is on (IC-926).
+    fn screen_reader_on(&self) -> bool {
+        false
+    }
+
+    /// How the person asked things to look: dark mode, contrast, text size
+    /// (IC-925).
+    fn appearance(&self) -> Appearance {
+        Appearance::default()
+    }
+
+    /// Open the platform's sign-in sheet at `authorize_url` and wait for the
+    /// service to send the person back to an address starting `scheme:`;
+    /// that address, or None when they closed the sheet (IC-923).
+    fn sign_in(
+        &self,
+        _window: WindowId,
+        _authorize_url: &str,
+        _scheme: &str,
+    ) -> Result<Option<String>, String> {
+        Err("this device has no sign-in sheet yet".to_string())
+    }
+
+    /// Whether this device has Bluetooth (IC-917).
+    fn bluetooth_available(&self) -> bool {
+        false
+    }
+
+    /// Show the platform's list of nearby devices offering `service` and
+    /// connect to the one the person picks; None when they cancel.
+    fn bluetooth_choose(
+        &self,
+        _window: WindowId,
+        _service: &str,
+        _title: &str,
+    ) -> Result<Option<BtDevice>, BtError> {
+        Err(BtError::Unavailable)
+    }
+
+    /// Read a characteristic of a picked device.
+    fn bluetooth_read(
+        &self,
+        _device: u64,
+        _service: &str,
+        _characteristic: &str,
+    ) -> Result<Vec<u8>, BtError> {
+        Err(BtError::Unavailable)
+    }
+
+    /// Write a characteristic of a picked device.
+    fn bluetooth_write(
+        &self,
+        _device: u64,
+        _service: &str,
+        _characteristic: &str,
+        _data: &[u8],
+        _with_response: bool,
+    ) -> Result<(), BtError> {
+        Err(BtError::Unavailable)
+    }
+
+    /// Be sent a characteristic's changes.
+    fn bluetooth_subscribe(
+        &self,
+        _device: u64,
+        _service: &str,
+        _characteristic: &str,
+    ) -> Result<(), BtError> {
+        Err(BtError::Unavailable)
+    }
+
+    /// Values sent since the last ask.
+    fn bluetooth_notifications(&self, _device: u64) -> Vec<BtNotification> {
+        Vec::new()
+    }
+
+    /// Whether a picked device is still connected.
+    fn bluetooth_connected(&self, _device: u64) -> bool {
+        false
+    }
+
+    /// Let a picked device go.
+    fn bluetooth_disconnect(&self, _device: u64) {}
+
+    /// Whether this device can tell where it is (IC-917).
+    fn location_available(&self) -> bool {
+        false
+    }
+
+    /// Where the device is, starting the search (and the platform's own
+    /// prompt) on the first ask. Desktops have none.
+    fn location(&self) -> LocationAnswer {
+        LocationAnswer::Unavailable
+    }
+
+    /// Whether this device can tell how it is held (IC-917).
+    fn motion_available(&self) -> bool {
+        false
+    }
+
+    /// The latest motion reading, starting the sensors on the first ask.
+    fn motion(&self) -> Option<MotionReading> {
+        None
+    }
+
+    /// Hand a file the app has written to the platform's own save sheet,
+    /// where the person picks where it goes (phones, K-1032). The file is
+    /// moved there, or left behind if they cancel. False when the host has
+    /// no such sheet (the desktops save straight to the path picked).
+    fn export_file(&self, _window: WindowId, _path: &std::path::Path) -> bool {
+        false
+    }
 
     /// What the screen a window is on is like, beyond its size: a finger
     /// or a mouse, and the edges something else covers (IC-912). Desktop

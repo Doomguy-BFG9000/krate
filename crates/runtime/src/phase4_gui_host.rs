@@ -368,6 +368,646 @@ impl crate::phase4_gui_bindings::krate::gfx::canvas_images::Host for Phase3GuiHo
     }
 }
 
+/// Videos played in the app's own layout (IC-922). Phase 4 only. A bundled
+/// clip needs no capability, as a bundled picture needs none; a stream needs
+/// `net.connect` to its host, judged as a fetch is.
+impl crate::phase4_gui_bindings::krate::gfx::video::Host for Phase3GuiHost {
+    fn open(&mut self, source: String) -> wasmtime::Result<Result<u64, gfx3::types::GfxError>> {
+        use gfx3::types::GfxError;
+        let source = if source.starts_with("https://") || source.starts_with("http://") {
+            if !self.may_reach(&source) {
+                return Ok(Err(GfxError::PermissionDenied));
+            }
+            crate::video::Source::Url(source)
+        } else {
+            let Some(root) = self.asset_root.as_deref() else {
+                return Ok(Err(GfxError::Unsupported(
+                    "the app does not carry bundled assets".to_string(),
+                )));
+            };
+            let path = match crate::phase2_host::bundled_resource_path(root, &source) {
+                Ok(path) if path.is_file() => path,
+                Ok(_) => {
+                    return Ok(Err(GfxError::Unsupported(format!(
+                        "there is no {source} in the app's assets"
+                    ))))
+                }
+                Err(_) => {
+                    return Ok(Err(GfxError::Unsupported(format!(
+                        "{source} is not a path inside the app's assets"
+                    ))))
+                }
+            };
+            crate::video::Source::File(path)
+        };
+        Ok(match crate::video::open(source) {
+            Ok(video) => {
+                self.videos.borrow_mut().add(video);
+                Ok(video)
+            }
+            Err(problem) => Err(GfxError::Platform(problem)),
+        })
+    }
+
+    fn play(&mut self, video: u64) -> wasmtime::Result<Result<(), gfx3::types::GfxError>> {
+        Ok(self.control_video(video, crate::video::Control::Play))
+    }
+
+    fn pause(&mut self, video: u64) -> wasmtime::Result<Result<(), gfx3::types::GfxError>> {
+        Ok(self.control_video(video, crate::video::Control::Pause))
+    }
+
+    fn seek(
+        &mut self,
+        video: u64,
+        millis: u64,
+    ) -> wasmtime::Result<Result<(), gfx3::types::GfxError>> {
+        Ok(self.control_video(video, crate::video::Control::Seek(millis)))
+    }
+
+    fn set_looping(
+        &mut self,
+        video: u64,
+        looping: bool,
+    ) -> wasmtime::Result<Result<(), gfx3::types::GfxError>> {
+        Ok(self.control_video(video, crate::video::Control::Looping(looping)))
+    }
+
+    fn set_muted(
+        &mut self,
+        video: u64,
+        muted: bool,
+    ) -> wasmtime::Result<Result<(), gfx3::types::GfxError>> {
+        Ok(self.control_video(video, crate::video::Control::Muted(muted)))
+    }
+
+    fn state(
+        &mut self,
+        video: u64,
+    ) -> wasmtime::Result<
+        Result<crate::phase4_gui_bindings::krate::gfx::video::VideoState, gfx3::types::GfxError>,
+    > {
+        if !self.videos.borrow().owns(video) {
+            return Ok(Err(gfx3::types::GfxError::InvalidTarget));
+        }
+        Ok(self
+            .video_state_now(video)
+            .map(
+                |state| crate::phase4_gui_bindings::krate::gfx::video::VideoState {
+                    position_millis: state.position_millis,
+                    duration_millis: state.duration_millis,
+                    width: state.width,
+                    height: state.height,
+                    ready: state.ready,
+                    playing: state.playing,
+                    ended: state.ended,
+                    problem: state.problem,
+                },
+            )
+            .map_err(gfx3::types::GfxError::Platform))
+    }
+
+    fn draw(
+        &mut self,
+        canvas: u64,
+        video: u64,
+        area: gfx3::types::Rect,
+    ) -> wasmtime::Result<Result<(), gfx3::types::GfxError>> {
+        Ok(self.draw_video(canvas, video, area, None))
+    }
+
+    fn draw_round(
+        &mut self,
+        canvas: u64,
+        video: u64,
+        area: gfx3::types::Rect,
+        radii: gfx3::types::CornerRadii,
+    ) -> wasmtime::Result<Result<(), gfx3::types::GfxError>> {
+        Ok(self.draw_video(canvas, video, area, Some(radii)))
+    }
+
+    fn close(&mut self, video: u64) -> wasmtime::Result<()> {
+        if self.videos.borrow_mut().remove(video) {
+            crate::video::close(video);
+            self.video_frames.borrow_mut().remove(&video);
+        }
+        Ok(())
+    }
+}
+
+impl Phase3GuiHost {
+    fn control_video(
+        &self,
+        video: u64,
+        control: crate::video::Control,
+    ) -> Result<(), gfx3::types::GfxError> {
+        if !self.videos.borrow().owns(video) {
+            return Err(gfx3::types::GfxError::InvalidTarget);
+        }
+        // What was read before the change is no longer true.
+        self.video_states.borrow_mut().remove(&video);
+        crate::video::control(video, control).map_err(gfx3::types::GfxError::Platform)
+    }
+
+    /// A video's state, read from the platform at most once a frame: an
+    /// app asks on every finger movement, and each ask waits for the
+    /// phone's main thread, so a scrubber fell behind the finger.
+    fn video_state_now(&self, video: u64) -> Result<crate::video::State, String> {
+        const FRAME: std::time::Duration = std::time::Duration::from_millis(16);
+        if let Some((at, state)) = self.video_states.borrow().get(&video) {
+            if at.elapsed() < FRAME {
+                return Ok(state.clone());
+            }
+        }
+        let state = crate::video::state(video)?;
+        self.video_states
+            .borrow_mut()
+            .insert(video, (std::time::Instant::now(), state.clone()));
+        Ok(state)
+    }
+
+    /// Draw a video's newest frame, or the one it showed last when no newer
+    /// one has arrived; nothing before the first.
+    fn draw_video(
+        &self,
+        canvas: u64,
+        video: u64,
+        area: gfx3::types::Rect,
+        radii: Option<gfx3::types::CornerRadii>,
+    ) -> Result<(), gfx3::types::GfxError> {
+        if !self.videos.borrow().owns(video) {
+            return Err(gfx3::types::GfxError::InvalidTarget);
+        }
+        if !self.canvases_contains(canvas) {
+            return Err(gfx3::types::GfxError::InvalidTarget);
+        }
+        match crate::video::frame(video) {
+            Ok(Some(frame)) => {
+                self.video_frames
+                    .borrow_mut()
+                    .insert(video, std::sync::Arc::new(frame));
+            }
+            Ok(None) => {}
+            Err(problem) => return Err(gfx3::types::GfxError::Platform(problem)),
+        }
+        let Some(frame) = self.video_frames.borrow().get(&video).cloned() else {
+            return Ok(());
+        };
+        self.draw_image(canvas, frame, area, radii)
+    }
+}
+
+/// The phone tapping back (IC-917). Phase 4 only. No capability: a tap is
+/// felt by the person holding the phone and reaches nothing else, as on the
+/// phones themselves.
+impl ui4::haptics::Host for Phase3GuiHost {
+    fn available(&mut self) -> wasmtime::Result<bool> {
+        Ok(self.haptics_available())
+    }
+
+    fn play(&mut self, feel: ui4::haptics::Feel) -> wasmtime::Result<()> {
+        use krate_adapter_common::ui::HapticFeel;
+        use ui4::haptics::Feel;
+        let feel = match feel {
+            Feel::Light => HapticFeel::Light,
+            Feel::Medium => HapticFeel::Medium,
+            Feel::Heavy => HapticFeel::Heavy,
+            Feel::Selection => HapticFeel::Selection,
+            Feel::Success => HapticFeel::Success,
+            Feel::Warning => HapticFeel::Warning,
+            Feel::Error => HapticFeel::Error,
+        };
+        self.haptic(Some(feel), 1.0);
+        Ok(())
+    }
+
+    fn impact(&mut self, strength: f32) -> wasmtime::Result<()> {
+        let strength = if strength.is_finite() {
+            strength.clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        self.haptic(None, strength);
+        Ok(())
+    }
+}
+
+/// Reminders delivered with the app closed (IC-921). Phase 4 only, behind
+/// `ui.notify`.
+impl ui4::reminders::Host for Phase3GuiHost {
+    fn schedule(
+        &mut self,
+        id: String,
+        title: String,
+        body: String,
+        after_seconds: u64,
+        daily: bool,
+    ) -> wasmtime::Result<Result<(), crate::phase3_gui_bindings::krate::ui::notify::NotifyError>>
+    {
+        use crate::desktop_host::NotifyError;
+        Ok(self
+            .reminder_schedule(&id, &title, &body, after_seconds, daily)
+            .map_err(|err| match err {
+                NotifyError::Denied => {
+                    crate::phase3_gui_bindings::krate::ui::notify::NotifyError::Denied
+                }
+                NotifyError::InvalidContent(m) => {
+                    crate::phase3_gui_bindings::krate::ui::notify::NotifyError::InvalidContent(m)
+                }
+                NotifyError::Unavailable(m) => {
+                    crate::phase3_gui_bindings::krate::ui::notify::NotifyError::Unavailable(m)
+                }
+            }))
+    }
+
+    fn cancel(&mut self, id: String) -> wasmtime::Result<()> {
+        self.reminder_cancel(&id);
+        Ok(())
+    }
+
+    fn pending(&mut self) -> wasmtime::Result<Vec<String>> {
+        Ok(self.reminder_pending())
+    }
+}
+
+/// The photo library (IC-920). Phase 4 only: picking needs no capability
+/// (the pick is the grant), adding is behind `photos.add`.
+impl ui4::photos::Host for Phase3GuiHost {
+    fn pick(
+        &mut self,
+        window: u64,
+        limit: u32,
+    ) -> wasmtime::Result<Result<Vec<ui4::types::ChosenFile>, ui4::photos::PhotosError>> {
+        Ok(self
+            .pick_photos(window, limit)
+            .map(|picked| {
+                picked
+                    .into_iter()
+                    .map(|(name, token)| ui4::types::ChosenFile { name, token })
+                    .collect()
+            })
+            .map_err(photos_error))
+    }
+
+    fn save(
+        &mut self,
+        _window: u64,
+        data: Vec<u8>,
+    ) -> wasmtime::Result<Result<(), ui4::photos::PhotosError>> {
+        Ok(self.save_photo(&data).map_err(photos_error))
+    }
+}
+
+fn photos_error((kind, why): (u8, String)) -> ui4::photos::PhotosError {
+    match kind {
+        0 => ui4::photos::PhotosError::NotAllowed,
+        2 => ui4::photos::PhotosError::Invalid(why),
+        _ => ui4::photos::PhotosError::Unavailable(why),
+    }
+}
+
+/// The system's share sheet (IC-919). Phase 4 only; no capability, the
+/// person's pick in the sheet is the grant.
+impl ui4::share::Host for Phase3GuiHost {
+    fn share(
+        &mut self,
+        window: u64,
+        text: Option<String>,
+        url: Option<String>,
+        files: Vec<ui4::share::SharedFile>,
+    ) -> wasmtime::Result<Result<bool, ui4::share::ShareError>> {
+        let files = files.into_iter().map(|f| (f.name, f.data)).collect();
+        Ok(
+            Phase3GuiHost::share(self, window, text, url, files).map_err(|(platform, why)| {
+                if platform {
+                    ui4::share::ShareError::Unavailable(why)
+                } else {
+                    ui4::share::ShareError::Invalid(why)
+                }
+            }),
+        )
+    }
+}
+
+/// Signing in to a service through the system's sheet (IC-923). Phase 4
+/// only. No capability: the person signs in on the service's own page in
+/// the system browser, and the app learns only the address it is sent back
+/// to; trading the code for a token needs `net.connect` like any fetch.
+impl ui4::sign_in::Host for Phase3GuiHost {
+    fn pkce(&mut self) -> wasmtime::Result<(String, String)> {
+        Ok(crate::sign_in::pkce())
+    }
+
+    fn start(
+        &mut self,
+        window: u64,
+        authorize_url: String,
+        callback_scheme: String,
+    ) -> wasmtime::Result<Result<String, ui4::sign_in::SignInError>> {
+        use ui4::sign_in::SignInError;
+        Ok(
+            match Phase3GuiHost::sign_in(self, window, &authorize_url, &callback_scheme) {
+                Ok(Some(back)) => Ok(back),
+                Ok(None) => Err(SignInError::Cancelled),
+                Err((true, why)) => Err(SignInError::Unavailable(why)),
+                Err((false, why)) => Err(SignInError::Invalid(why)),
+            },
+        )
+    }
+}
+
+/// A web page inside the app (IC-927). Phase 4 only, behind the
+/// `net.connect` grants for the hosts it shows.
+impl ui4::web_page::Host for Phase3GuiHost {
+    fn open(
+        &mut self,
+        window: u64,
+        address: String,
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+    ) -> wasmtime::Result<Result<u64, ui4::types::UiError>> {
+        Ok(self
+            .open_web_page(window, &address, (x, y, width.max(0.0), height.max(0.0)))
+            .map_err(error_to_phase4))
+    }
+
+    fn place(
+        &mut self,
+        page: u64,
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+    ) -> wasmtime::Result<Result<(), ui4::types::UiError>> {
+        if !self.owns_web_page(page) {
+            return Ok(Err(error_to_phase4(ui3::types::UiError::InvalidWidget)));
+        }
+        if !self.headless_run() {
+            self.place_web_page(page, (x, y, width.max(0.0), height.max(0.0)));
+        }
+        Ok(Ok(()))
+    }
+
+    fn go(
+        &mut self,
+        page: u64,
+        address: String,
+    ) -> wasmtime::Result<Result<(), ui4::types::UiError>> {
+        Ok(self.web_page_go(page, &address).map_err(error_to_phase4))
+    }
+
+    fn back(&mut self, page: u64) -> wasmtime::Result<()> {
+        if self.owns_web_page(page) && !self.headless_run() {
+            Phase3GuiHost::web_page_back(self, page);
+        }
+        Ok(())
+    }
+
+    fn state(
+        &mut self,
+        page: u64,
+    ) -> wasmtime::Result<Result<ui4::web_page::PageState, ui4::types::UiError>> {
+        Ok(self
+            .web_page_state(page)
+            .map(|s| ui4::web_page::PageState {
+                address: s.address,
+                title: s.title,
+                loading: s.loading,
+                problem: s.problem,
+            })
+            .map_err(error_to_phase4))
+    }
+
+    fn close(&mut self, page: u64) -> wasmtime::Result<()> {
+        self.close_web_page(page);
+        Ok(())
+    }
+}
+
+/// What a screen reader says about an app that draws itself (IC-926).
+/// Phase 4 only. No capability: describing your own screen reaches
+/// nothing but the person's own screen reader.
+impl ui4::accessibility::Host for Phase3GuiHost {
+    fn describe(
+        &mut self,
+        window: u64,
+        elements: Vec<ui4::accessibility::Element>,
+    ) -> wasmtime::Result<Result<(), ui4::types::UiError>> {
+        use krate_adapter_common::ui::{AccessElement, AccessRole};
+        use ui4::accessibility::Role;
+        let elements = elements
+            .into_iter()
+            .map(|e| AccessElement {
+                x: e.x,
+                y: e.y,
+                width: e.width.max(0.0),
+                height: e.height.max(0.0),
+                role: match e.role {
+                    Role::Button => AccessRole::Button,
+                    Role::Link => AccessRole::Link,
+                    Role::Heading => AccessRole::Heading,
+                    Role::Text => AccessRole::Text,
+                    Role::Image => AccessRole::Image,
+                    Role::Toggle => AccessRole::Toggle,
+                    Role::Adjustable => AccessRole::Adjustable,
+                    Role::Field => AccessRole::Field,
+                },
+                label: e.label,
+                value: e.value,
+                checked: e.checked,
+                enabled: e.enabled,
+            })
+            .collect();
+        Ok(Phase3GuiHost::describe_accessibility(self, window, elements).map_err(error_to_phase4))
+    }
+
+    fn screen_reader_on(&mut self) -> wasmtime::Result<bool> {
+        Ok(Phase3GuiHost::screen_reader_on(self))
+    }
+}
+
+/// Dark mode, more contrast and text size (IC-925). Phase 4 only. No
+/// capability: how the person wants things to look is theirs to give every
+/// app, as on the phones themselves.
+impl ui4::appearance::Host for Phase3GuiHost {
+    fn current(&mut self) -> wasmtime::Result<ui4::appearance::Look> {
+        let look = self.appearance();
+        Ok(ui4::appearance::Look {
+            dark: look.dark,
+            high_contrast: look.high_contrast,
+            text_scale: look.text_scale,
+        })
+    }
+}
+
+/// Face ID, Touch ID or the passcode before something private (IC-924).
+/// Phase 4 only. No capability: the system asks the person itself, and the
+/// app learns only whether they passed.
+impl ui4::unlock::Host for Phase3GuiHost {
+    fn available(&mut self) -> wasmtime::Result<bool> {
+        Ok(self.unlock_available())
+    }
+
+    fn check(&mut self, reason: String) -> wasmtime::Result<ui4::unlock::UnlockAnswer> {
+        use crate::unlock::Answer;
+        use ui4::unlock::UnlockAnswer;
+        Ok(match self.unlock_check(&reason) {
+            Answer::Yes => UnlockAnswer::Yes,
+            Answer::No => UnlockAnswer::No,
+            Answer::Unavailable(why) => UnlockAnswer::Unavailable(why),
+        })
+    }
+}
+
+/// Bluetooth devices the person picks (IC-917). Phase 4 only, behind
+/// `bluetooth.connect`.
+impl ui4::bluetooth::Host for Phase3GuiHost {
+    fn available(&mut self) -> wasmtime::Result<bool> {
+        Ok(self.bluetooth_available())
+    }
+
+    fn choose(
+        &mut self,
+        window: u64,
+        service: String,
+        title: String,
+    ) -> wasmtime::Result<Result<Option<ui4::bluetooth::Device>, ui4::bluetooth::BluetoothError>>
+    {
+        Ok(self
+            .bluetooth_choose(window, &service, &title)
+            .map(|picked| {
+                picked.map(|d| ui4::bluetooth::Device {
+                    id: d.handle,
+                    name: d.name,
+                })
+            })
+            .map_err(bt_error))
+    }
+
+    fn read(
+        &mut self,
+        device: u64,
+        service: String,
+        characteristic: String,
+    ) -> wasmtime::Result<Result<Vec<u8>, ui4::bluetooth::BluetoothError>> {
+        Ok(self
+            .bluetooth_read(device, &service, &characteristic)
+            .map_err(bt_error))
+    }
+
+    fn write(
+        &mut self,
+        device: u64,
+        service: String,
+        characteristic: String,
+        data: Vec<u8>,
+        with_response: bool,
+    ) -> wasmtime::Result<Result<(), ui4::bluetooth::BluetoothError>> {
+        Ok(self
+            .bluetooth_write(device, &service, &characteristic, &data, with_response)
+            .map_err(bt_error))
+    }
+
+    fn subscribe(
+        &mut self,
+        device: u64,
+        service: String,
+        characteristic: String,
+    ) -> wasmtime::Result<Result<(), ui4::bluetooth::BluetoothError>> {
+        Ok(self
+            .bluetooth_subscribe(device, &service, &characteristic)
+            .map_err(bt_error))
+    }
+
+    fn notifications(
+        &mut self,
+        device: u64,
+    ) -> wasmtime::Result<Vec<ui4::bluetooth::Notification>> {
+        Ok(self
+            .bluetooth_notifications(device)
+            .into_iter()
+            .map(
+                |(service, characteristic, data)| ui4::bluetooth::Notification {
+                    service,
+                    characteristic,
+                    data,
+                },
+            )
+            .collect())
+    }
+
+    fn connected(&mut self, device: u64) -> wasmtime::Result<bool> {
+        Ok(self.bluetooth_connected(device))
+    }
+
+    fn disconnect(&mut self, device: u64) -> wasmtime::Result<()> {
+        self.bluetooth_disconnect(device);
+        Ok(())
+    }
+}
+
+fn bt_error(error: krate_adapter_common::ui::BtError) -> ui4::bluetooth::BluetoothError {
+    use krate_adapter_common::ui::BtError;
+    use ui4::bluetooth::BluetoothError;
+    match error {
+        BtError::NotAllowed => BluetoothError::NotAllowed,
+        BtError::Unavailable => BluetoothError::Unavailable,
+        BtError::NotFound => BluetoothError::NotFound,
+        BtError::Disconnected => BluetoothError::Disconnected,
+        BtError::Failed(why) => BluetoothError::Failed(why),
+    }
+}
+
+/// Where the phone is (IC-917). Phase 4 only, behind `location.read`.
+impl ui4::location::Host for Phase3GuiHost {
+    fn available(&mut self) -> wasmtime::Result<bool> {
+        Ok(self.location().0)
+    }
+
+    fn current(
+        &mut self,
+    ) -> wasmtime::Result<Result<ui4::location::Position, ui4::location::LocationError>> {
+        use krate_adapter_common::ui::LocationAnswer;
+        use ui4::location::{LocationError, Position};
+        Ok(match self.location().1 {
+            LocationAnswer::Here(p) => Ok(Position {
+                latitude: p.latitude,
+                longitude: p.longitude,
+                accuracy: p.accuracy,
+                altitude: p.altitude,
+                speed: p.speed,
+                course: p.course,
+                age_ms: p.age_ms,
+            }),
+            LocationAnswer::NotAllowed => Err(LocationError::NotAllowed),
+            LocationAnswer::Unavailable => Err(LocationError::Unavailable),
+            LocationAnswer::Finding => Err(LocationError::Finding),
+        })
+    }
+}
+
+/// How the phone is held and moves (IC-917). Phase 4 only. No capability,
+/// as with the screen's own facts: which way a phone is tilted while an app
+/// is on it tells the app nothing about the person beyond that.
+impl ui4::motion::Host for Phase3GuiHost {
+    fn available(&mut self) -> wasmtime::Result<bool> {
+        Ok(self.motion().0)
+    }
+
+    fn read(&mut self) -> wasmtime::Result<Option<ui4::motion::Reading>> {
+        use ui4::motion::{Reading, Vector};
+        let vector = |(x, y, z): (f32, f32, f32)| Vector { x, y, z };
+        Ok(self.motion().1.map(|m| Reading {
+            gravity: vector(m.gravity),
+            acceleration: vector(m.acceleration),
+            rotation: vector(m.rotation),
+            heading: m.heading,
+        }))
+    }
+}
+
 /// What kind of screen a window is on (IC-912). Phase 4 only.
 impl ui4::screen::Host for Phase3GuiHost {
     fn facts(&mut self, window: u64) -> wasmtime::Result<ui4::screen::ScreenFacts> {

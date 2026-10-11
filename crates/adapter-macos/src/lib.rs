@@ -3,10 +3,16 @@
 //! This crate is the macOS ownership boundary. Shared behavior still comes from
 //! `krate-adapter-common`, while macOS-specific host wiring will land here.
 
+mod accessibility;
+mod appearance;
 mod appkit;
 mod clipboard;
 mod consent;
 mod open_document;
+mod reminders;
+mod share_photos;
+mod sign_in;
+mod web_page;
 
 use krate_adapter_common::{
     locale::{DateStyle, HostLocale, LocaleId, NumberStyle},
@@ -521,6 +527,43 @@ impl UiAdapter for MacosUiAdapter {
     fn write_clipboard_text(&self, text: &str) -> Result<(), UiAdapterError> {
         clipboard::write_text(text)
     }
+
+    /// Dark appearance and Increase contrast (IC-925).
+    fn appearance(&self) -> krate_adapter_common::ui::Appearance {
+        appearance::current()
+    }
+
+    /// The system's sign-in sheet (IC-923).
+    fn sign_in(
+        &self,
+        _window: WindowId,
+        authorize_url: &str,
+        scheme: &str,
+    ) -> Result<Option<String>, String> {
+        sign_in::sign_in(authorize_url, scheme)
+    }
+
+    /// Reminders that arrive with the app closed (IC-921). The installed
+    /// app's bundle carries its name, so `sender` is not repeated.
+    fn reminder_schedule(
+        &self,
+        id: &str,
+        _sender: &str,
+        title: &str,
+        body: &str,
+        after_seconds: u64,
+        daily: bool,
+    ) -> Result<(), String> {
+        reminders::schedule(id, title, body, after_seconds, daily)
+    }
+
+    fn reminder_cancel(&self, id: &str) {
+        reminders::cancel(id)
+    }
+
+    fn reminder_pending(&self) -> Vec<String> {
+        reminders::pending()
+    }
 }
 
 impl UiAdapter for MacosAppKitPrototypeUiAdapter {
@@ -680,6 +723,110 @@ impl UiAdapter for MacosAppKitPrototypeUiAdapter {
 
     fn write_clipboard_text(&self, text: &str) -> Result<(), UiAdapterError> {
         self.headless.write_clipboard_text(text)
+    }
+
+    fn sign_in(
+        &self,
+        window: WindowId,
+        authorize_url: &str,
+        scheme: &str,
+    ) -> Result<Option<String>, String> {
+        self.headless.sign_in(window, authorize_url, scheme)
+    }
+
+    fn appearance(&self) -> krate_adapter_common::ui::Appearance {
+        self.headless.appearance()
+    }
+
+    fn open_web_page(
+        &self,
+        window: WindowId,
+        address: &str,
+        frame: (f32, f32, f32, f32),
+        granted: Vec<(String, String)>,
+    ) -> Result<u64, String> {
+        let handle = self
+            .native_window(window)
+            .ok()
+            .flatten()
+            .ok_or("the app's window is not on screen")?;
+        web_page::open(handle.raw_handle, address, frame, granted)
+    }
+
+    fn place_web_page(&self, page: u64, frame: (f32, f32, f32, f32)) {
+        web_page::place(page, frame);
+    }
+
+    fn web_page_go(&self, page: u64, address: &str) {
+        web_page::go(page, address);
+    }
+
+    fn web_page_back(&self, page: u64) {
+        web_page::back(page);
+    }
+
+    fn web_page_state(&self, page: u64) -> Option<krate_adapter_common::ui::WebPageState> {
+        web_page::state(page)
+    }
+
+    fn close_web_page(&self, page: u64) {
+        web_page::close(page);
+    }
+
+    fn describe_accessibility(
+        &self,
+        window: WindowId,
+        elements: &[krate_adapter_common::ui::AccessElement],
+    ) -> Result<(), UiAdapterError> {
+        if let Ok(Some(handle)) = self.native_window(window) {
+            accessibility::describe(handle.raw_handle, window, elements);
+        }
+        Ok(())
+    }
+
+    fn screen_reader_on(&self) -> bool {
+        accessibility::voice_over_on()
+    }
+
+    fn share(
+        &self,
+        window: WindowId,
+        text: Option<&str>,
+        url: Option<&str>,
+        files: &[(String, Vec<u8>)],
+    ) -> Result<bool, String> {
+        let handle = self
+            .native_window(window)
+            .ok()
+            .flatten()
+            .ok_or("the app's window is not on screen")?;
+        share_photos::share(handle.raw_handle, text, url, files)
+    }
+
+    fn save_photo(&self, data: &[u8]) -> Result<(), Option<String>> {
+        share_photos::save_photo(data)
+    }
+
+    /// Reminders that arrive with the app closed (IC-921). The installed
+    /// app's bundle carries its name, so `sender` is not repeated.
+    fn reminder_schedule(
+        &self,
+        id: &str,
+        _sender: &str,
+        title: &str,
+        body: &str,
+        after_seconds: u64,
+        daily: bool,
+    ) -> Result<(), String> {
+        reminders::schedule(id, title, body, after_seconds, daily)
+    }
+
+    fn reminder_cancel(&self, id: &str) {
+        reminders::cancel(id)
+    }
+
+    fn reminder_pending(&self) -> Vec<String> {
+        reminders::pending()
     }
 
     fn pump_event_loop_once(

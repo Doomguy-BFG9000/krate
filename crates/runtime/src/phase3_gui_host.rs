@@ -191,6 +191,31 @@ pub struct Phase3GuiHost {
     /// and the next handle. One Arc per picture, so every frame that draws
     /// it hands the adapters the same picture and they upload it once.
     kept_images: std::cell::RefCell<std::collections::BTreeMap<(u64, u64), Arc<ImagePixels>>>,
+    /// The videos this run opened (krate:gfx/video, IC-922) and the frame
+    /// each last showed, so a draw between new frames hands the adapters the
+    /// same picture and they upload it once.
+    pub(crate) videos: std::cell::RefCell<crate::video::Videos>,
+    pub(crate) video_frames: std::cell::RefCell<std::collections::BTreeMap<u64, Arc<ImagePixels>>>,
+    /// Each video's state as last read, and when (read at most once a frame).
+    pub(crate) video_states: std::cell::RefCell<
+        std::collections::BTreeMap<u64, (std::time::Instant, crate::video::State)>,
+    >,
+    /// Where the app's bundled assets are, for a video named by path.
+    pub(crate) asset_root: Option<std::path::PathBuf>,
+    /// The web pages this run opened (IC-927): their windows, and headless,
+    /// what each shows.
+    pub(crate) web_pages: std::cell::RefCell<
+        std::collections::BTreeMap<u64, (u64, krate_adapter_common::ui::WebPageState)>,
+    >,
+    next_web_page: std::cell::Cell<u64>,
+    /// What each window last told the screen reader (IC-926), for
+    /// check-app and `KRATE_ACCESS_DUMP`.
+    pub(crate) described: std::cell::RefCell<
+        std::collections::BTreeMap<u64, Vec<krate_adapter_common::ui::AccessElement>>,
+    >,
+    /// The look the platform reported last, and when (IC-925).
+    appearance_cache:
+        std::cell::Cell<Option<(std::time::Instant, krate_adapter_common::ui::Appearance)>>,
     /// The size each window was asked for, and the canvases whose apps have
     /// asked how big they are (`canvas-size`). A canvas app that never asks
     /// can only be drawing for the size it requested; where the window is
@@ -203,6 +228,32 @@ pub struct Phase3GuiHost {
     /// app that lays out from the screen's numbers is as responsive as one
     /// that asks `canvas_size`, and must not be given a design to shrink.
     screen_windows: std::cell::RefCell<Vec<WindowId>>,
+    /// The phone profile's cost measure (IC-915). `KRATE_DRIVE_SCROLL=N`
+    /// (headless only) feeds the app N scroll steps through its own wait,
+    /// then closes it; each step's cost is the time from handing the app
+    /// its event to the app presenting the frame that answers it -- the
+    /// app's own work, which a phone runs under the interpreter.
+    drive_scroll_left: std::cell::Cell<Option<u32>>,
+    drive_scroll_total: u32,
+    guest_since: std::cell::Cell<Option<std::time::Instant>>,
+    frame_costs: std::cell::RefCell<Vec<f32>>,
+    /// When the host was made, and how long the app took from then to
+    /// waiting for its first input with a frame drawn (IC-915).
+    born: std::time::Instant,
+    first_wait_ms: std::cell::Cell<Option<f32>>,
+    /// The keys the app has asked about with `key-held`, in the order it
+    /// first asked: what an on-screen pad is built from (IC-914).
+    keys_asked: std::cell::RefCell<Vec<String>>,
+    /// The app reads touch itself (`krate:ui/touch`): it gets no pad.
+    reads_touch: std::cell::Cell<bool>,
+    /// The pad's keys held by fingers now, in the app's own spellings.
+    pad_held: std::cell::RefCell<std::collections::BTreeSet<String>>,
+    /// The pad and where it sits, while one is shown.
+    pad: std::cell::RefCell<Option<(crate::touch_pad::Pad, crate::touch_pad::Layout)>>,
+    /// The fingers on the screen when the pad last looked (for the knob).
+    pad_fingers: std::cell::RefCell<Vec<(f32, f32)>>,
+    /// When a finger was last on the pad: it rests dimmer when left alone.
+    pad_touched_at: std::cell::Cell<std::time::Instant>,
     implicit_designs: std::cell::RefCell<std::collections::BTreeSet<u64>>,
     next_kept_image: std::cell::Cell<u64>,
     /// Connected gamepads, polled on demand.
@@ -552,9 +603,55 @@ impl Phase3GuiHost {
             images: std::cell::RefCell::new(std::collections::BTreeMap::new()),
             canvases: std::cell::RefCell::new(std::collections::BTreeMap::new()),
             kept_images: std::cell::RefCell::new(std::collections::BTreeMap::new()),
+            videos: std::cell::RefCell::new(crate::video::Videos::default()),
+            video_frames: std::cell::RefCell::new(std::collections::BTreeMap::new()),
+            video_states: std::cell::RefCell::new(std::collections::BTreeMap::new()),
+            asset_root: None,
+            appearance_cache: std::cell::Cell::new(None),
+            described: std::cell::RefCell::new(std::collections::BTreeMap::new()),
+            web_pages: std::cell::RefCell::new(std::collections::BTreeMap::new()),
+            next_web_page: std::cell::Cell::new(1),
             requested_sizes: std::cell::RefCell::new(std::collections::BTreeMap::new()),
             canvases_that_asked: std::cell::RefCell::new(std::collections::BTreeSet::new()),
             screen_windows: std::cell::RefCell::new(Vec::new()),
+            drive_scroll_left: std::cell::Cell::new(
+                std::env::var("KRATE_DRIVE_SCROLL")
+                    .ok()
+                    .and_then(|n| n.trim().parse().ok()),
+            ),
+            drive_scroll_total: std::env::var("KRATE_DRIVE_SCROLL")
+                .ok()
+                .and_then(|n| n.trim().parse().ok())
+                .unwrap_or(0),
+            guest_since: std::cell::Cell::new(None),
+            frame_costs: std::cell::RefCell::new(Vec::new()),
+            born: std::time::Instant::now(),
+            first_wait_ms: std::cell::Cell::new(None),
+            // `KRATE_PAD_KEYS` (headless, with `KRATE_SCREEN`): the keys a
+            // game would ask about, so the pad can be drawn and checked
+            // without playing to the point where it asks.
+            keys_asked: std::cell::RefCell::new(
+                std::env::var("KRATE_PAD_KEYS")
+                    .ok()
+                    .filter(|_| std::env::var_os("KRATE_SCREEN").is_some())
+                    .map(|keys| {
+                        keys.split(',')
+                            .map(|k| {
+                                if k == "space" {
+                                    " ".to_string()
+                                } else {
+                                    k.to_string()
+                                }
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+            ),
+            reads_touch: std::cell::Cell::new(false),
+            pad_held: std::cell::RefCell::new(std::collections::BTreeSet::new()),
+            pad: std::cell::RefCell::new(None),
+            pad_fingers: std::cell::RefCell::new(Vec::new()),
+            pad_touched_at: std::cell::Cell::new(std::time::Instant::now()),
             implicit_designs: std::cell::RefCell::new(std::collections::BTreeSet::new()),
             next_kept_image: std::cell::Cell::new(1),
             gamepads: std::cell::RefCell::new(crate::gamepad::Gamepads::new()),
@@ -617,6 +714,7 @@ impl Phase3GuiHost {
     }
 
     pub fn with_asset_root(mut self, root: Option<std::path::PathBuf>) -> Self {
+        self.asset_root = root.clone();
         self.speech = LocalSpeechRuntime::default().with_asset_root(root);
         self
     }
@@ -716,6 +814,8 @@ impl Phase3GuiHost {
     }
 
     fn maybe_take_screenshot(&self) {
+        // A run that ends before it ever waits still shows the person's look.
+        self.follow_widget_look();
         let Some(window) = self.windows.first().copied() else {
             return;
         };
@@ -769,6 +869,7 @@ impl Phase3GuiHost {
     /// Capture a specific window, used on close so an app that never waits for
     /// input still gets its final frame shot.
     fn maybe_take_screenshot_for(&self, window: WindowId) {
+        self.follow_widget_look();
         if self.screenshot_taken.get() || self.screenshot.is_none() {
             return;
         }
@@ -788,6 +889,716 @@ impl Phase3GuiHost {
 
     fn dispatcher(&self) -> Phase3UiDispatcher<'_> {
         self.runtime.dispatcher()
+    }
+
+    /// Schedule a reminder (IC-921), behind `ui.notify`: the id checked
+    /// (it becomes part of the system's identifier), the text checked as a
+    /// notification's is, the delay held to a second to a year.
+    pub(crate) fn reminder_schedule(
+        &self,
+        id: &str,
+        title: &str,
+        body: &str,
+        after_seconds: u64,
+        daily: bool,
+    ) -> Result<(), crate::desktop_host::NotifyError> {
+        use crate::desktop_host::NotifyError;
+        if self
+            .runtime
+            .guard()
+            .check(&UapiCall::Ui(UiCall::Notify))
+            .is_err()
+        {
+            return Err(NotifyError::Denied);
+        }
+        if !valid_reminder_id(id) {
+            return Err(NotifyError::InvalidContent(
+                "a reminder id is 1 to 64 letters, digits, - and _".to_string(),
+            ));
+        }
+        crate::desktop_host::check_notification(title, body)?;
+        if !(1..=366 * 24 * 3600).contains(&after_seconds) {
+            return Err(NotifyError::InvalidContent(
+                "a reminder comes 1 second to a year from now".to_string(),
+            ));
+        }
+        if self.headless {
+            return Err(NotifyError::Unavailable(
+                "no reminders when nothing is on screen".to_string(),
+            ));
+        }
+        let sender = self.attribution();
+        self.dispatcher()
+            .reminders()
+            .reminder_schedule(id, &sender, title, body, after_seconds, daily)
+            .map_err(NotifyError::Unavailable)
+    }
+
+    pub(crate) fn reminder_cancel(&self, id: &str) {
+        let granted = self
+            .runtime
+            .guard()
+            .check(&UapiCall::Ui(UiCall::Notify))
+            .is_ok();
+        if granted && valid_reminder_id(id) && !self.headless {
+            self.dispatcher().reminders().reminder_cancel(id);
+        }
+    }
+
+    pub(crate) fn reminder_pending(&self) -> Vec<String> {
+        let granted = self
+            .runtime
+            .guard()
+            .check(&UapiCall::Ui(UiCall::Notify))
+            .is_ok();
+        if !granted || self.headless {
+            return Vec::new();
+        }
+        self.dispatcher().reminders().reminder_pending()
+    }
+
+    /// Pick photos (IC-920): the phone's photo picker, or on a computer the
+    /// file dialog for pictures; each pick remembered as a chosen file.
+    /// Headless answers as cancelled, as open-file does.
+    pub(crate) fn pick_photos(
+        &self,
+        window: u64,
+        limit: u32,
+    ) -> Result<Vec<(String, String)>, (u8, String)> {
+        let limit = limit.clamp(1, 20);
+        if self.headless {
+            return Ok(Vec::new());
+        }
+        let id = self
+            .window_id(window)
+            .map_err(|_| (2, "no such window".to_string()))?;
+        let picked: Vec<std::path::PathBuf> = match self.dispatcher().pick_photos(id, limit) {
+            Some(Ok(paths)) => paths,
+            Some(Err(why)) => return Err((1, why)),
+            None => {
+                #[cfg(not(any(target_os = "android", target_os = "ios", target_arch = "wasm32")))]
+                {
+                    let mut dialog = rfd::FileDialog::new()
+                        .set_title("Choose photos")
+                        .add_filter("Pictures", &["jpg", "jpeg", "png", "heic", "gif", "webp"]);
+                    let _ = &mut dialog;
+                    let files = if limit == 1 {
+                        dialog.pick_file().into_iter().collect::<Vec<_>>()
+                    } else {
+                        dialog.pick_files().unwrap_or_default()
+                    };
+                    files.into_iter().take(limit as usize).collect()
+                }
+                #[cfg(any(target_os = "android", target_os = "ios", target_arch = "wasm32"))]
+                {
+                    return Err((1, "no photo picker on this device yet".to_string()));
+                }
+            }
+        };
+        let mut chosen = Vec::new();
+        for path in picked {
+            let name = crate::chosen_files::ChosenFiles::display_name(&path);
+            let Some(token) = self.chosen_files.borrow_mut().remember(path) else {
+                return Err((1, "too many files chosen in one run".to_string()));
+            };
+            chosen.push((name, token));
+        }
+        Ok(chosen)
+    }
+
+    /// Add a picture to the photo library (IC-920), behind `photos.add`;
+    /// only PNG and JPEG, at most 64 MB.
+    pub(crate) fn save_photo(&self, data: &[u8]) -> Result<(), (u8, String)> {
+        if self
+            .runtime
+            .guard()
+            .check(&UapiCall::Photos(crate::uapi::PhotosCall::Add))
+            .is_err()
+        {
+            return Err((0, String::new()));
+        }
+        let png = data.starts_with(&[0x89, b'P', b'N', b'G']);
+        let jpeg = data.starts_with(&[0xFF, 0xD8, 0xFF]);
+        if !(png || jpeg) {
+            return Err((2, "only PNG and JPEG pictures can be added".to_string()));
+        }
+        if data.len() > 64 * 1024 * 1024 {
+            return Err((2, "the picture is over 64 MB".to_string()));
+        }
+        if self.headless {
+            return Err((1, "no photo library when nothing is on screen".to_string()));
+        }
+        self.dispatcher().save_photo(data).map_err(|why| match why {
+            None => (0, String::new()),
+            Some(why) => (1, why),
+        })
+    }
+
+    /// Open the share sheet (IC-919), after checking what is offered: at
+    /// least one thing, file names without a path, 64 MB in all.
+    pub(crate) fn share(
+        &self,
+        window: u64,
+        text: Option<String>,
+        url: Option<String>,
+        files: Vec<(String, Vec<u8>)>,
+    ) -> Result<bool, (bool, String)> {
+        const MAX_BYTES: usize = 64 * 1024 * 1024;
+        let empty = |s: &Option<String>| s.as_deref().is_none_or(|t| t.trim().is_empty());
+        if empty(&text) && empty(&url) && files.is_empty() {
+            return Err((false, "nothing to share".to_string()));
+        }
+        for (name, _) in &files {
+            let bare = std::path::Path::new(name)
+                .file_name()
+                .is_some_and(|leaf| leaf == std::ffi::OsStr::new(name));
+            if name.trim().is_empty() || !bare || name.starts_with('.') {
+                return Err((
+                    false,
+                    format!("a file name must be a plain name, not {name:?}"),
+                ));
+            }
+        }
+        let total: usize = files.iter().map(|(_, data)| data.len()).sum::<usize>()
+            + text.as_ref().map_or(0, String::len)
+            + url.as_ref().map_or(0, String::len);
+        if total > MAX_BYTES {
+            return Err((false, "more than 64 MB to share".to_string()));
+        }
+        if self.headless {
+            return Err((true, "no share sheet when nothing is on screen".to_string()));
+        }
+        let id = self
+            .window_id(window)
+            .map_err(|_| (false, "no such window".to_string()))?;
+        self.dispatcher()
+            .share(id, text.as_deref(), url.as_deref(), &files)
+            .map_err(|why| (true, why))
+    }
+
+    /// How the person asked things to look (IC-925), read at most twice a
+    /// second: an app asks every frame and the platform answers on its main
+    /// thread. Headless, `KRATE_APPEARANCE` stands in (`dark,text=1.35`).
+    pub(crate) fn appearance(&self) -> krate_adapter_common::ui::Appearance {
+        if self.headless {
+            return std::env::var("KRATE_APPEARANCE")
+                .map(|text| krate_adapter_common::ui::Appearance::parse(&text))
+                .unwrap_or_default();
+        }
+        let now = std::time::Instant::now();
+        if let Some((at, look)) = self.appearance_cache.get() {
+            if now.duration_since(at) < std::time::Duration::from_millis(500) {
+                return look;
+            }
+        }
+        let look = self.dispatcher().appearance();
+        self.appearance_cache.set(Some((now, look)));
+        look
+    }
+
+    /// The hosts a web page may go to (IC-927): each `net.connect` (or
+    /// `net.fetch`) grant's host and port.
+    fn web_page_hosts(&self) -> Vec<(String, String)> {
+        self.runtime
+            .guard()
+            .policy()
+            .grants()
+            .iter()
+            .map(ToString::to_string)
+            .filter_map(|cap| {
+                let rest = cap
+                    .strip_prefix("net.connect:")
+                    .or_else(|| cap.strip_prefix("net.fetch:"))?;
+                let (host, port) = rest.rsplit_once(':').unwrap_or((rest, "443"));
+                Some((host.to_string(), port.to_string()))
+            })
+            .collect()
+    }
+
+    /// Show a web page in a box of a window (IC-927), when its address is
+    /// one the app may open.
+    pub(crate) fn open_web_page(
+        &self,
+        window: u64,
+        address: &str,
+        frame: (f32, f32, f32, f32),
+    ) -> Result<u64, ui::types::UiError> {
+        let id = self.window_id(window)?;
+        let hosts = self.web_page_hosts();
+        krate_adapter_common::net::web_page_allowed(address, &hosts)
+            .map_err(|_| ui::types::UiError::PermissionDenied)?;
+        let page = if self.headless {
+            let page = self.next_web_page.get();
+            self.next_web_page.set(page + 1);
+            page
+        } else {
+            self.dispatcher()
+                .bluetooth()
+                .open_web_page(id, address, frame, hosts)
+                .map_err(ui::types::UiError::Unsupported)?
+        };
+        self.web_pages.borrow_mut().insert(
+            page,
+            (
+                window,
+                krate_adapter_common::ui::WebPageState {
+                    address: address.to_string(),
+                    ..Default::default()
+                },
+            ),
+        );
+        Ok(page)
+    }
+
+    /// Whether this run opened `page`.
+    pub(crate) fn owns_web_page(&self, page: u64) -> bool {
+        self.web_pages.borrow().contains_key(&page)
+    }
+
+    /// Send a page this run owns to another address, judged as at open.
+    pub(crate) fn web_page_go(&self, page: u64, address: &str) -> Result<(), ui::types::UiError> {
+        if !self.owns_web_page(page) {
+            return Err(ui::types::UiError::InvalidWidget);
+        }
+        if let Err(why) =
+            krate_adapter_common::net::web_page_allowed(address, &self.web_page_hosts())
+        {
+            if let Some((_, state)) = self.web_pages.borrow_mut().get_mut(&page) {
+                state.problem = why;
+            }
+            return Err(ui::types::UiError::PermissionDenied);
+        }
+        if self.headless {
+            if let Some((_, state)) = self.web_pages.borrow_mut().get_mut(&page) {
+                state.address = address.to_string();
+                state.problem.clear();
+            }
+        } else {
+            self.dispatcher().bluetooth().web_page_go(page, address);
+        }
+        Ok(())
+    }
+
+    /// Where a page this run owns is, and what it is doing.
+    pub(crate) fn web_page_state(
+        &self,
+        page: u64,
+    ) -> Result<krate_adapter_common::ui::WebPageState, ui::types::UiError> {
+        let held = self
+            .web_pages
+            .borrow()
+            .get(&page)
+            .map(|(_, state)| state.clone())
+            .ok_or(ui::types::UiError::InvalidWidget)?;
+        if self.headless {
+            return Ok(held);
+        }
+        let mut live = self
+            .dispatcher()
+            .bluetooth()
+            .web_page_state(page)
+            .unwrap_or(held.clone());
+        // A refusal the host made (a `go` to an ungranted host) is said too.
+        if live.problem.is_empty() {
+            live.problem = held.problem;
+        }
+        Ok(live)
+    }
+
+    /// Whether nothing is on screen (a headless run).
+    pub(crate) fn headless_run(&self) -> bool {
+        self.headless
+    }
+
+    /// Move a page's box, or send it back a page.
+    pub(crate) fn place_web_page(&self, page: u64, frame: (f32, f32, f32, f32)) {
+        self.dispatcher().bluetooth().place_web_page(page, frame);
+    }
+
+    pub(crate) fn web_page_back(&self, page: u64) {
+        self.dispatcher().bluetooth().web_page_back(page);
+    }
+
+    /// Take a page this run owns away.
+    pub(crate) fn close_web_page(&self, page: u64) {
+        if self.web_pages.borrow_mut().remove(&page).is_some() && !self.headless {
+            self.dispatcher().bluetooth().close_web_page(page);
+        }
+    }
+
+    /// The most elements one description may carry, and the longest label.
+    const MAX_ACCESS_ELEMENTS: usize = 2000;
+    const MAX_ACCESS_TEXT: usize = 500;
+
+    /// Tell the screen reader what a window shows (IC-926). Headless, the
+    /// description is kept, and written as JSON to `KRATE_ACCESS_DUMP`.
+    pub(crate) fn describe_accessibility(
+        &self,
+        window: u64,
+        mut elements: Vec<krate_adapter_common::ui::AccessElement>,
+    ) -> Result<(), ui::types::UiError> {
+        let id = self.window_id(window)?;
+        elements.truncate(Self::MAX_ACCESS_ELEMENTS);
+        for element in &mut elements {
+            for text in [&mut element.label, &mut element.value] {
+                if text.len() > Self::MAX_ACCESS_TEXT {
+                    let mut cut = Self::MAX_ACCESS_TEXT;
+                    while !text.is_char_boundary(cut) {
+                        cut -= 1;
+                    }
+                    text.truncate(cut);
+                }
+            }
+        }
+        if let Some(path) = std::env::var_os("KRATE_ACCESS_DUMP") {
+            let dump: Vec<serde_json::Value> = elements
+                .iter()
+                .map(|e| {
+                    serde_json::json!({
+                        "role": format!("{:?}", e.role).to_lowercase(),
+                        "label": e.label,
+                        "value": e.value,
+                        "checked": e.checked,
+                        "enabled": e.enabled,
+                        "frame": [e.x, e.y, e.width, e.height],
+                    })
+                })
+                .collect();
+            let _ = std::fs::write(path, serde_json::Value::Array(dump).to_string());
+        }
+        let result = if self.headless {
+            Ok(())
+        } else {
+            self.dispatcher()
+                .describe_accessibility(id, &elements)
+                .map_err(|error| ui::types::UiError::Platform(error.to_string()))
+        };
+        // check-app's frame report is written at `present`, and an app
+        // describes the frame just after drawing it: mark the report too.
+        if !elements.is_empty() {
+            if let Some(path) = std::env::var_os("KRATE_FIT_REPORT") {
+                if let Some(mut report) = std::fs::read_to_string(&path)
+                    .ok()
+                    .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+                {
+                    report["described"] = serde_json::Value::Bool(true);
+                    let _ = std::fs::write(&path, report.to_string());
+                }
+            }
+        }
+        self.described.borrow_mut().insert(window, elements);
+        result
+    }
+
+    /// Whether a screen reader is on (IC-926). Headless,
+    /// `KRATE_SCREEN_READER=1` stands in for one.
+    pub(crate) fn screen_reader_on(&self) -> bool {
+        if self.headless {
+            return std::env::var("KRATE_SCREEN_READER").as_deref() == Ok("1");
+        }
+        self.dispatcher().screen_reader_on()
+    }
+
+    /// Draw Krate's own widgets in the person's look (IC-925), checked at
+    /// the top of every frame: dark colours in dark mode, labels at their
+    /// text size, laid out at that size on the next layout.
+    fn follow_widget_look(&self) {
+        let look = self.appearance();
+        if look != krate_adapter_common::ui::widget_look() {
+            krate_adapter_common::ui::set_widget_look(look);
+        }
+    }
+
+    /// Whether this device can check it is the person (IC-924). Headless,
+    /// only when `KRATE_UNLOCK` stands in for one that can.
+    pub(crate) fn unlock_available(&self) -> bool {
+        if self.headless {
+            return matches!(std::env::var("KRATE_UNLOCK").as_deref(), Ok("yes" | "no"));
+        }
+        crate::unlock::available()
+    }
+
+    /// Ask the person to prove it is them (IC-924). Headless, `KRATE_UNLOCK`
+    /// stands in for them: `yes`, `no`, or anything else for a device that
+    /// cannot check.
+    pub(crate) fn unlock_check(&self, reason: &str) -> crate::unlock::Answer {
+        if let Err(why) = crate::unlock::check_reason(reason) {
+            return crate::unlock::Answer::Unavailable(why);
+        }
+        if self.headless {
+            return match std::env::var("KRATE_UNLOCK") {
+                Ok(answer) => crate::unlock::stand_in(&answer),
+                Err(_) => crate::unlock::Answer::Unavailable(
+                    "nothing is on screen to ask with".to_string(),
+                ),
+            };
+        }
+        crate::unlock::check(reason.trim())
+    }
+
+    /// Sign the person in through the system's sheet (IC-923): the address
+    /// the service sent them back to, None when they closed it; Err((true,
+    /// why)) when there is no sheet, Err((false, why)) for a bad request.
+    /// Headless, `KRATE_SIGN_IN` stands in for the person: `cancel`, or the
+    /// code the service sends back.
+    pub(crate) fn sign_in(
+        &self,
+        window: u64,
+        authorize_url: &str,
+        scheme: &str,
+    ) -> Result<Option<String>, (bool, String)> {
+        crate::sign_in::check(authorize_url, scheme).map_err(|why| (false, why))?;
+        if self.headless {
+            return match std::env::var("KRATE_SIGN_IN") {
+                Ok(answer) => crate::sign_in::stand_in(&answer, authorize_url, scheme)
+                    .map_err(|why| (true, why)),
+                Err(_) => Err((
+                    true,
+                    "no sign-in sheet when nothing is on screen".to_string(),
+                )),
+            };
+        }
+        let id = self
+            .window_id(window)
+            .map_err(|_| (false, "no such window".to_string()))?;
+        self.dispatcher()
+            .sign_in(id, authorize_url, scheme)
+            .map_err(|why| (true, why))
+    }
+
+    /// Whether `bluetooth.connect` was granted (IC-917).
+    fn bluetooth_granted(&self) -> bool {
+        self.runtime
+            .guard()
+            .check(&UapiCall::Bluetooth(crate::uapi::BluetoothCall::Connect))
+            .is_ok()
+    }
+
+    /// Whether this device has Bluetooth (IC-917). Headless with
+    /// `KRATE_BLUETOOTH=heart`, a stand-in heart-rate strap is nearby.
+    pub(crate) fn bluetooth_available(&self) -> bool {
+        if self.headless {
+            return fake_heart();
+        }
+        self.dispatcher().bluetooth().bluetooth_available()
+    }
+
+    /// Krate's chooser, then the picked device (IC-917). Not granted, the
+    /// person is never shown a list and nothing is scanned.
+    pub(crate) fn bluetooth_choose(
+        &self,
+        window: u64,
+        service: &str,
+        title: &str,
+    ) -> Result<Option<krate_adapter_common::ui::BtDevice>, krate_adapter_common::ui::BtError> {
+        use krate_adapter_common::ui::{BtDevice, BtError};
+        if !self.bluetooth_granted() {
+            return Err(BtError::NotAllowed);
+        }
+        if self.headless {
+            return match fake_heart() {
+                true if short_uuid(service) == "180D" => Ok(Some(BtDevice {
+                    handle: 1,
+                    name: "Test Heart".to_string(),
+                })),
+                true => Err(BtError::NotFound),
+                false => Err(BtError::Unavailable),
+            };
+        }
+        let id = self.window_id(window).map_err(|_| BtError::NotFound)?;
+        self.dispatcher()
+            .bluetooth()
+            .bluetooth_choose(id, service, title)
+    }
+
+    /// Read, write, subscribe, collect, check and let go of a picked
+    /// device (IC-917): each behind the grant, the stand-in headless.
+    pub(crate) fn bluetooth_read(
+        &self,
+        device: u64,
+        service: &str,
+        characteristic: &str,
+    ) -> Result<Vec<u8>, krate_adapter_common::ui::BtError> {
+        use krate_adapter_common::ui::BtError;
+        if !self.bluetooth_granted() {
+            return Err(BtError::NotAllowed);
+        }
+        if self.headless {
+            return match (
+                device,
+                short_uuid(service).as_str(),
+                short_uuid(characteristic).as_str(),
+            ) {
+                (1, "180F", "2A19") => Ok(vec![87]),
+                (1, _, _) => Err(BtError::NotFound),
+                _ => Err(BtError::Disconnected),
+            };
+        }
+        self.dispatcher()
+            .bluetooth()
+            .bluetooth_read(device, service, characteristic)
+    }
+
+    pub(crate) fn bluetooth_write(
+        &self,
+        device: u64,
+        service: &str,
+        characteristic: &str,
+        data: &[u8],
+        with_response: bool,
+    ) -> Result<(), krate_adapter_common::ui::BtError> {
+        use krate_adapter_common::ui::BtError;
+        if !self.bluetooth_granted() {
+            return Err(BtError::NotAllowed);
+        }
+        if self.headless {
+            return if device == 1 {
+                Ok(())
+            } else {
+                Err(BtError::Disconnected)
+            };
+        }
+        self.dispatcher().bluetooth().bluetooth_write(
+            device,
+            service,
+            characteristic,
+            data,
+            with_response,
+        )
+    }
+
+    pub(crate) fn bluetooth_subscribe(
+        &self,
+        device: u64,
+        service: &str,
+        characteristic: &str,
+    ) -> Result<(), krate_adapter_common::ui::BtError> {
+        use krate_adapter_common::ui::BtError;
+        if !self.bluetooth_granted() {
+            return Err(BtError::NotAllowed);
+        }
+        if self.headless {
+            return match (
+                device,
+                short_uuid(service).as_str(),
+                short_uuid(characteristic).as_str(),
+            ) {
+                (1, "180D", "2A37") => Ok(()),
+                (1, _, _) => Err(BtError::NotFound),
+                _ => Err(BtError::Disconnected),
+            };
+        }
+        self.dispatcher()
+            .bluetooth()
+            .bluetooth_subscribe(device, service, characteristic)
+    }
+
+    pub(crate) fn bluetooth_notifications(
+        &self,
+        device: u64,
+    ) -> Vec<krate_adapter_common::ui::BtNotification> {
+        if !self.bluetooth_granted() {
+            return Vec::new();
+        }
+        if self.headless {
+            // One heartbeat each ask: flags 0, then 72 beats a minute.
+            return if device == 1 {
+                vec![("180D".to_string(), "2A37".to_string(), vec![0, 72])]
+            } else {
+                Vec::new()
+            };
+        }
+        self.dispatcher()
+            .bluetooth()
+            .bluetooth_notifications(device)
+    }
+
+    pub(crate) fn bluetooth_connected(&self, device: u64) -> bool {
+        if !self.bluetooth_granted() {
+            return false;
+        }
+        if self.headless {
+            return device == 1 && fake_heart();
+        }
+        self.dispatcher().bluetooth().bluetooth_connected(device)
+    }
+
+    pub(crate) fn bluetooth_disconnect(&self, device: u64) {
+        if self.bluetooth_granted() && !self.headless {
+            self.dispatcher().bluetooth().bluetooth_disconnect(device);
+        }
+    }
+
+    /// Where the device is (IC-917), behind `location.read`: an app that
+    /// was not granted it hears `not-allowed` and the phone is never asked.
+    /// Headless, `KRATE_LOCATION=lat,lon,accuracy` stands in for a fix.
+    pub(crate) fn location(&self) -> (bool, krate_adapter_common::ui::LocationAnswer) {
+        use krate_adapter_common::ui::{LocationAnswer, Position};
+        let granted = self
+            .runtime
+            .guard()
+            .check(&UapiCall::Location(crate::uapi::LocationCall::Read))
+            .is_ok();
+        if self.headless {
+            let fix = std::env::var("KRATE_LOCATION").ok().and_then(|spec| {
+                let v: Vec<f64> = spec
+                    .split(',')
+                    .filter_map(|n| n.trim().parse().ok())
+                    .collect();
+                (v.len() == 3).then(|| Position {
+                    latitude: v[0],
+                    longitude: v[1],
+                    accuracy: v[2] as f32,
+                    ..Default::default()
+                })
+            });
+            let answer = match fix {
+                _ if !granted => LocationAnswer::NotAllowed,
+                Some(fix) => LocationAnswer::Here(fix),
+                None => LocationAnswer::Unavailable,
+            };
+            return (fix.is_some(), answer);
+        }
+        let dispatcher = self.dispatcher();
+        let available = dispatcher.location_available();
+        if !granted {
+            return (available, LocationAnswer::NotAllowed);
+        }
+        (available, dispatcher.location())
+    }
+
+    /// How the device is held (IC-917). Headless, `KRATE_MOTION=gx,gy,gz`
+    /// stands in for a phone held so, to check an app's tilt handling.
+    pub(crate) fn motion(&self) -> (bool, Option<krate_adapter_common::ui::MotionReading>) {
+        if self.headless {
+            let held = std::env::var("KRATE_MOTION").ok().and_then(|spec| {
+                let v: Vec<f32> = spec
+                    .split(',')
+                    .filter_map(|n| n.trim().parse().ok())
+                    .collect();
+                (v.len() == 3).then(|| krate_adapter_common::ui::MotionReading {
+                    gravity: (v[0], v[1], v[2]),
+                    heading: Some(0.0),
+                    ..Default::default()
+                })
+            });
+            return (held.is_some(), held);
+        }
+        let dispatcher = self.dispatcher();
+        (dispatcher.motion_available(), dispatcher.motion())
+    }
+
+    /// Whether the device can tap back (IC-917); never headless.
+    pub(crate) fn haptics_available(&self) -> bool {
+        !self.headless && self.dispatcher().haptics_available()
+    }
+
+    /// Tap back (IC-917): a feel, or an impact at `strength` when `feel` is
+    /// None. Headless runs have no one holding anything.
+    pub(crate) fn haptic(&self, feel: Option<krate_adapter_common::ui::HapticFeel>, strength: f32) {
+        if !self.headless {
+            self.dispatcher().haptic(feel, strength);
+        }
     }
 
     /// On a headless host, report a window close once the guest has waited
@@ -2500,6 +3311,13 @@ impl Phase3GuiHost {
         for window in &self.windows {
             self.sync_native_text(*window, &dispatcher);
         }
+        // Files saved on a phone and let go of go to the save sheet.
+        let exports = self.chosen_files.borrow_mut().take_ready_exports();
+        if let Some(window) = self.windows.first() {
+            for path in exports {
+                dispatcher.export_file(*window, &path);
+            }
+        }
 
         // Route raw native pointer input through layout hit testing so the
         // app-facing event carries a widget id. Raw samples never reach the
@@ -2731,6 +3549,9 @@ impl Phase3GuiHost {
                 }
             }
             if let Some(event) = event_to_wit(event) {
+                if self.pad_covers(&event) {
+                    continue;
+                }
                 // Count a close request at the one point every real event
                 // passes exactly once -- not in poll/wait/key-held, where an
                 // event that cycles through the pending queue would be
@@ -3016,7 +3837,14 @@ impl Phase3GuiHost {
                 let asked = self.requested_sizes.borrow().values().next().copied();
                 // Fixed: the app draws in a size of its own, not the screen's.
                 let fixed = (canvas.0 - screen.0).abs() > 1.0 || (canvas.1 - screen.1).abs() > 1.0;
-                let report = serde_json::json!({ "facts": facts, "asked": asked, "fixed": fixed });
+                // Whether the app told the screen reader anything (IC-926).
+                let described = self.described.borrow().values().any(|e| !e.is_empty());
+                let report = serde_json::json!({
+                    "facts": facts,
+                    "asked": asked,
+                    "fixed": fixed,
+                    "described": described,
+                });
                 let _ = std::fs::write(path, report.to_string());
             }
         }
@@ -3242,6 +4070,8 @@ impl Phase3GuiHost {
 
     /// The fingers on a window the app owns; none for one it does not.
     pub(crate) fn touch_points(&self, window: u64) -> Vec<(u64, f32, f32)> {
+        // An app that reads fingers has its own touch controls: no pad.
+        self.reads_touch.set(true);
         self.pump_for_query();
         match self.window_id(window) {
             Ok(id) => self.dispatcher().touches(id),
@@ -3334,6 +4164,23 @@ impl Phase3GuiHost {
         let Some(image) = self.kept_images.borrow().get(&(canvas, handle)).cloned() else {
             return Err(gfx::types::GfxError::InvalidTarget);
         };
+        self.draw_image(canvas, image, area, radii)
+    }
+
+    /// Whether a canvas exists.
+    pub(crate) fn canvases_contains(&self, canvas: u64) -> bool {
+        self.canvases.borrow().contains_key(&canvas)
+    }
+
+    /// Draw a picture the host holds -- a kept picture, a video's frame --
+    /// as draw-pixels (no radii) or draw-pixels-round.
+    pub(crate) fn draw_image(
+        &self,
+        canvas: u64,
+        image: Arc<ImagePixels>,
+        area: gfx::types::Rect,
+        radii: Option<gfx::types::CornerRadii>,
+    ) -> Result<(), gfx::types::GfxError> {
         let rect = (area.x, area.y, area.width, area.height);
         let radii = radii.map(|r| (r.top_left, r.top_right, r.bottom_right, r.bottom_left));
         if self.lists_enabled() || self.inspect_layout.get() {
@@ -3379,6 +4226,449 @@ impl Phase3GuiHost {
         self.dispatcher().set_adapts(adapts);
     }
 
+    /// Follow the on-screen pad (IC-914): shown on a touch screen for an app
+    /// that asked about keys and never read touch, built from those keys,
+    /// pressed by the fingers on it. A key a finger presses or lifts is also
+    /// sent as a key event, for an app that listens for events.
+    fn update_pad(&self) {
+        let Some(window) = self.windows.first().copied() else {
+            return;
+        };
+        let screen = self.screen_now(window);
+        let wanted = !self.reads_touch.get() && screen.is_some_and(|(_, _, touch, _)| touch);
+        let built = if wanted {
+            screen.and_then(|(w, h, _, safe)| {
+                let pad = crate::touch_pad::Pad::from_keys(&self.keys_asked.borrow())?;
+                let layout = crate::touch_pad::layout(&pad, w, h, safe);
+                Some((pad, layout))
+            })
+        } else {
+            None
+        };
+        let now = match &built {
+            Some((pad, layout)) => {
+                let mut fingers: Vec<(f32, f32)> = self
+                    .dispatcher()
+                    .touches(window)
+                    .into_iter()
+                    .map(|(_, x, y)| (x, y))
+                    .collect();
+                // `KRATE_PAD_FINGERS=x,y;x,y` (headless): fingers held down,
+                // to draw the pad being pressed.
+                if self.headless {
+                    if let Ok(spec) = std::env::var("KRATE_PAD_FINGERS") {
+                        fingers.extend(spec.split(';').filter_map(|pair| {
+                            let (x, y) = pair.split_once(',')?;
+                            Some((x.trim().parse().ok()?, y.trim().parse().ok()?))
+                        }));
+                    }
+                }
+                if fingers
+                    .iter()
+                    .any(|&(x, y)| crate::touch_pad::covers(layout, x, y))
+                {
+                    self.pad_touched_at.set(std::time::Instant::now());
+                }
+                let held = crate::touch_pad::held(pad, layout, &fingers);
+                *self.pad_fingers.borrow_mut() = fingers;
+                held
+            }
+            None => std::collections::BTreeSet::new(),
+        };
+        let before = self.pad_held.replace(now.clone());
+        let key_event = |key: &String, pressed: bool| {
+            ui::types::Event::Key(ui::types::KeyEvent {
+                window: window.get(),
+                widget: None,
+                key: key.clone(),
+                pressed,
+                modifiers: modifiers_to_wit(Modifiers::default()),
+            })
+        };
+        let mut pending = self.pending_events.borrow_mut();
+        for key in now.difference(&before) {
+            pending.push_back(key_event(key, true));
+        }
+        for key in before.difference(&now) {
+            pending.push_back(key_event(key, false));
+        }
+        drop(pending);
+        *self.pad.borrow_mut() = built;
+    }
+
+    /// Whether a pointer event landed on the pad.
+    fn pad_covers(&self, event: &ui::types::Event) -> bool {
+        let ui::types::Event::Pointer(p) = event else {
+            return false;
+        };
+        self.pad
+            .borrow()
+            .as_ref()
+            .is_some_and(|(_, layout)| crate::touch_pad::covers(layout, p.x, p.y))
+    }
+
+    /// Draw the pad over the frame about to be shown, in the canvas's own
+    /// coordinates (a game with a design size is scaled; the pad must not
+    /// be).
+    /// Returns the app's design size when it switched it off for the pad,
+    /// to be put back once the frame is published.
+    fn draw_pad(&mut self, canvas: u64) -> Option<(f32, f32)> {
+        use gfx::canvas2d::Host as _;
+        self.update_pad();
+        let (pad, layout) = self.pad.borrow().clone()?;
+        // Drawn in the screen's own points, outside the app's design: a
+        // fixed-size game is scaled into the middle of a phone, and a pad
+        // drawn in its coordinates was cut off over the side bands. The list
+        // carries a marker; the CPU raster has its design switched off for
+        // the pad's ops and back on after.
+        // The GPU path (a recorded list) only needs the marker. The CPU
+        // raster has its bands painted first, then its design switched off
+        // for the pad and back on once the frame is published.
+        let design = if self.lists_enabled() {
+            None
+        } else {
+            self.canvases
+                .borrow()
+                .get(&canvas)
+                .and_then(|(_, _, surface)| surface.design_size())
+        };
+        self.record_op(canvas, crate::canvas_list::CanvasOp::ScreenSpace(true));
+        if design.is_some() {
+            if let Some((_, _, surface)) = self.canvases.borrow_mut().get_mut(&canvas) {
+                surface.bake_letterbox();
+                surface.set_design_size(0.0, 0.0);
+            }
+        }
+        let color = |r: f32, g: f32, b: f32, a: f32| gfx::types::Color { r, g, b, a };
+        let pt = |x: f32, y: f32| gfx::types::Point { x, y };
+        let held = self.pad_held.borrow().clone();
+        let pressed = |keys: &[String]| keys.iter().any(|key| held.contains(key));
+        // Left alone for a few seconds the pad rests dimmer, so the game
+        // shows through; a touch brings it back at once.
+        let idle = self.pad_touched_at.get().elapsed().as_secs_f32();
+        let fade = if idle < 2.5 {
+            1.0
+        } else {
+            1.0 - ((idle - 2.5) / 0.6).min(1.0) * 0.45
+        };
+        let white = |a: f32| color(1.0, 1.0, 1.0, a * fade);
+        let shadow = |a: f32| color(0.0, 0.0, 0.0, a * fade);
+        // A rounded stroke from (x0, y0) to (x1, y1), as a run of dots: the
+        // canvas has no line, and no font has to carry an arrow.
+        let stroke = |host: &mut Self, x0: f32, y0: f32, x1: f32, y1: f32, w: f32, ink| {
+            let len = ((x1 - x0).powi(2) + (y1 - y0).powi(2)).sqrt();
+            let steps = (len / (w * 0.35)).ceil().max(1.0) as usize;
+            for i in 0..=steps {
+                let t = i as f32 / steps as f32;
+                let _ = host.fill_circle(
+                    canvas,
+                    pt(x0 + (x1 - x0) * t, y0 + (y1 - y0) * t),
+                    w / 2.0,
+                    ink,
+                );
+            }
+        };
+        let bold = gfx::types::TextStyle {
+            weight: 700,
+            italic: false,
+            letter_spacing: 0.0,
+            family: gfx::types::FontFamily::Sans,
+        };
+
+        // The stick: a glass base, a chevron for each way the game reads, and
+        // a knob that follows the thumb.
+        if let Some((cx, cy, r)) = layout.dpad {
+            let _ = self.fill_circle(canvas, pt(cx, cy + 2.0), r + 1.0, shadow(0.18));
+            let _ = self.fill_circle(canvas, pt(cx, cy), r, shadow(0.32));
+            let _ = self.fill_circle(canvas, pt(cx, cy), r, white(0.06));
+            let _ = self.stroke_circle(canvas, pt(cx, cy), r - 0.75, 1.5, white(0.22));
+            for (dir, keys) in &pad.dirs {
+                let on = pressed(keys);
+                // The chevron's tip, pointing out, and its two arms.
+                let (ux, uy) = match dir {
+                    crate::touch_pad::Dir::Left => (-1.0, 0.0),
+                    crate::touch_pad::Dir::Right => (1.0, 0.0),
+                    crate::touch_pad::Dir::Up => (0.0, -1.0),
+                    crate::touch_pad::Dir::Down => (0.0, 1.0),
+                };
+                let tip = r * 0.80;
+                let back = r * 0.66;
+                let spread = r * 0.13;
+                let (tx, ty) = (cx + ux * tip, cy + uy * tip);
+                let (bx, by) = (cx + ux * back, cy + uy * back);
+                let (px, py) = (-uy * spread, ux * spread);
+                let ink = if on { white(1.0) } else { white(0.55) };
+                if on {
+                    let _ = self.radial_gradient(
+                        canvas,
+                        pt(cx + ux * r * 0.62, cy + uy * r * 0.62),
+                        r * 0.55,
+                        white(0.28),
+                        white(0.0),
+                    );
+                }
+                let w = (r * 0.065).max(3.0);
+                stroke(self, bx + px, by + py, tx, ty, w, ink);
+                stroke(self, bx - px, by - py, tx, ty, w, ink);
+            }
+            let (kx, ky) =
+                crate::touch_pad::knob(&layout, &self.pad_fingers.borrow()).unwrap_or((cx, cy));
+            let kr = r * 0.42;
+            let touched = (kx, ky) != (cx, cy) || pad.dirs.iter().any(|(_, keys)| pressed(keys));
+            let _ = self.fill_circle(canvas, pt(kx, ky + 3.0), kr + 1.0, shadow(0.30));
+            let _ = self.fill_circle(
+                canvas,
+                pt(kx, ky),
+                kr,
+                white(if touched { 0.92 } else { 0.78 }),
+            );
+            let _ = self.stroke_circle(
+                canvas,
+                pt(kx, ky),
+                kr - 0.5,
+                1.0,
+                color(1.0, 1.0, 1.0, fade),
+            );
+        }
+
+        // The buttons: glass circles, labelled; pressed, they fill white
+        // and their label turns dark.
+        for ((text, keys), (bx, by, br)) in pad.buttons.iter().zip(&layout.buttons) {
+            let on = pressed(keys);
+            let r = if on { br * 1.06 } else { *br };
+            let _ = self.fill_circle(canvas, pt(*bx, by + 2.0), r + 1.0, shadow(0.18));
+            if on {
+                let _ = self.fill_circle(canvas, pt(*bx, *by), r, white(0.92));
+            } else {
+                let _ = self.fill_circle(canvas, pt(*bx, *by), r, shadow(0.32));
+                let _ = self.fill_circle(canvas, pt(*bx, *by), r, white(0.08));
+                let _ = self.stroke_circle(canvas, pt(*bx, *by), r - 0.75, 1.5, white(0.30));
+            }
+            let size = if text.chars().count() > 2 {
+                br * 0.40
+            } else {
+                br * 0.62
+            };
+            let width = self
+                .measure_text_styled(canvas, text.to_string(), size, bold)
+                .ok()
+                .and_then(|m| m.ok())
+                .map(|m| m.width)
+                .unwrap_or(0.0);
+            let ink = if on {
+                color(0.08, 0.09, 0.12, fade)
+            } else {
+                white(0.92)
+            };
+            let _ = self.draw_text_styled(
+                canvas,
+                text.to_string(),
+                pt(bx - width / 2.0, by + size * 0.36),
+                size,
+                ink,
+                bold,
+            );
+        }
+        self.record_op(canvas, crate::canvas_list::CanvasOp::ScreenSpace(false));
+        design
+    }
+
+    /// Publish a frame: pace it, then hand it to whichever consumer shows it.
+    fn present_frame(&mut self, canvas: u64) -> wasmtime::Result<Result<(), gfx::types::GfxError>> {
+        // The one call that reaches the widget. Draw calls mutate the raster;
+        // this publishes it, so a hundred fills cost one render.
+        // Pace the frame. A game loop calls poll and present with no sleep of
+        // its own, which spins a core flat out to produce frames no display
+        // can show -- a laptop's fan tells you before the frame rate does.
+        // Sleeping the remainder of a 60Hz budget here means every app is
+        // paced without every author having to think about it, and an app that
+        // is already slower than the budget waits for nothing.
+        //
+        // Deliberately not in the guest: an app that forgets to sleep should
+        // not be able to melt the machine, and one that sleeps by hand still
+        // works because this only ever waits for the time left over.
+        // A game loop lives in present, not in wait or poll, so an interrupt
+        // has to be answered here as well or Ctrl-C does nothing to a game.
+        if interrupted() {
+            self.interrupts.set(self.interrupts.get() + 1);
+            if self.interrupts.get() > 1 {
+                std::process::exit(130);
+            }
+        }
+        // Same for the close button: a game loop may never call poll or wait,
+        // so the second unanswered close click has to be honoured here or the
+        // window cannot be shut at all (K-121).
+        if self.close_ignored_by_guest() {
+            std::process::exit(0);
+        }
+        // A GPU adapter's present blocks for the panel inside
+        // get_current_texture, and that IS the pacing. Adding our own timer
+        // on top made the guest free-run into FIFO's queue: measured on
+        // device as present-done immediately followed by present-start,
+        // every frame landing one refresh late, a hard 30 fps against a
+        // 60 Hz link, and acquire pinned at 27 ms. Let the display pace it.
+        // Keep the canvas the same size as its window, even for an app that
+        // never calls canvas-size. Without this the app keeps drawing at its
+        // opening size and the host scales that picture up to fit: blurry
+        // text, and a game's world pushed off the edge (K-096). Refitting
+        // here means the very next frame is drawn at the real resolution.
+        let _ = self.refit_canvas(canvas);
+        if self.lists_enabled() {
+            self.last_present.set(Some(std::time::Instant::now()));
+            return Ok(self.publish_canvas(canvas));
+        }
+        // A new frame begins: the next poll must see the queue for real.
+        self.last_pump.set(None);
+        let entry = std::time::Instant::now();
+        let gap_ms = self
+            .last_present_entry
+            .get()
+            .map(|t| t.elapsed().as_secs_f32() * 1000.0)
+            .unwrap_or(0.0);
+        self.last_present_entry.set(Some(entry));
+        let mut slept_ms = 0.0f32;
+        if let Some(previous) = self.last_present.get() {
+            let elapsed = previous.elapsed();
+            if elapsed < FRAME_BUDGET {
+                let remainder = FRAME_BUDGET - elapsed;
+                // Prefer the display's own clock where the adapter has one:
+                // park until the panel says a frame is due (CADisplayLink on
+                // iOS), capped by our budget so a host without a link still
+                // paces itself. Sleeping a fixed 16 ms drifts against the
+                // real refresh; on a 120 Hz phone that drift is visible.
+                //
+                // NOT the plain input-waking park of an earlier attempt:
+                // that let a 120 Hz finger present at touch rate, exhaust
+                // the drawable pool, and stall the next acquire for its full
+                // one-second timeout. Waking on VSYNC is bounded by the
+                // panel; waking on touches is not.
+                // Only sleep when the adapter does NOT block for vsync
+                // itself. A GPU adapter's present already waits for the
+                // panel inside get_current_texture, so pacing here as well
+                // is the second wait that put input a frame behind
+                // (measured: 12 ms of a 15.3 ms frame in acquire).
+                if !self.dispatcher().supports_canvas_lists() {
+                    let sleep_started = std::time::Instant::now();
+                    // Sleep short, then close the gap by yielding. Every OS
+                    // rounds a sleep UP to its timer granularity, and on
+                    // Windows that default is ~15.6ms -- a 2ms request
+                    // costing a full tick, twice a frame, is how 6ms of
+                    // work became 14fps. Asking for 1ms resolution fixes
+                    // the scale of the error; landing the last slice by
+                    // yielding fixes the error itself, on every platform.
+                    const SPIN_MARGIN: std::time::Duration =
+                        std::time::Duration::from_micros(1_200);
+                    if remainder > SPIN_MARGIN {
+                        std::thread::sleep(remainder - SPIN_MARGIN);
+                    }
+                    while previous.elapsed() < FRAME_BUDGET {
+                        std::thread::yield_now();
+                    }
+                    slept_ms = sleep_started.elapsed().as_secs_f32() * 1000.0;
+                }
+            }
+        }
+        if std::env::var("KRATE_FRAME_STATS").as_deref() == Ok("1") {
+            let mut times = self.present_times.borrow_mut();
+            times.push((gap_ms, slept_ms));
+            if times.len() >= 60 {
+                let p = |values: &mut Vec<f32>, q: f32| -> f32 {
+                    values.sort_by(|a, b| a.total_cmp(b));
+                    values[((values.len() - 1) as f32 * q) as usize]
+                };
+                let mut gaps: Vec<f32> = times.iter().map(|(g, _)| *g).collect();
+                let mut sleeps: Vec<f32> = times.iter().map(|(_, sl)| *sl).collect();
+                let pump = PUMP_MS.with(|c| c.replace(0.0));
+                let calls = PUMP_CALLS.with(|c| c.replace(0));
+                eprintln!("krate-pump: {pump:.1}ms across {calls} pump calls over these frames");
+                eprintln!(
+                    "krate-present: gap p50 {:.2}ms p99 {:.2}ms | slept p50 {:.2}ms p99 {:.2}ms (n={})",
+                    p(&mut gaps, 0.5),
+                    p(&mut gaps, 0.99),
+                    p(&mut sleeps, 0.5),
+                    p(&mut sleeps, 0.99),
+                    times.len(),
+                );
+                times.clear();
+            }
+        }
+        self.last_present.set(Some(std::time::Instant::now()));
+
+        let result = self.publish_canvas(canvas);
+        // A presented canvas is a real drawn frame -- the right moment to
+        // capture a 2D game or drawing, which may never call wait.
+        if result.is_ok() {
+            self.maybe_take_screenshot();
+        }
+        // The measured frame is done with; the next draw op begins another.
+        self.frame_ended.set(true);
+        self.end_stepped_frame();
+        Ok(result)
+    }
+
+    /// One step of the scroll drive (`KRATE_DRIVE_SCROLL`): a scroll event
+    /// at the middle of the first window, down for the first half of the
+    /// steps and back up for the second; when the steps are done, the cost
+    /// report is written (`KRATE_COST_REPORT`) and the window asked to
+    /// close. None when no drive was asked for, or not headless.
+    fn drive_scroll_step(&self) -> Option<ui::types::Event> {
+        if !self.headless {
+            return None;
+        }
+        let left = self.drive_scroll_left.get()?;
+        let window = *self.windows.first()?;
+        if left == 0 {
+            self.drive_scroll_left.set(None);
+            self.write_cost_report();
+            return Some(ui::types::Event::CloseRequested(window.get()));
+        }
+        self.drive_scroll_left.set(Some(left - 1));
+        let (w, h) = self
+            .dispatcher()
+            .window(window)
+            .ok()
+            .flatten()
+            .map(|record| (record.size.width as f32, record.size.height as f32))
+            .unwrap_or((400.0, 800.0));
+        let down = left > self.drive_scroll_total / 2;
+        self.guest_since.set(Some(std::time::Instant::now()));
+        Some(ui::types::Event::Wheel(ui::types::WheelEvent {
+            window: window.get(),
+            widget: None,
+            x: w / 2.0,
+            y: h / 2.0,
+            dx: 0.0,
+            dy: if down { 24.0 } else { -24.0 },
+            modifiers: modifiers_to_wit(Modifiers::default()),
+        }))
+    }
+
+    /// The frame costs the scroll drive measured, as JSON: how many frames
+    /// answered, and the median, 95th percentile and worst, in ms.
+    fn write_cost_report(&self) {
+        let Some(path) = std::env::var_os("KRATE_COST_REPORT") else {
+            return;
+        };
+        let mut costs = self.frame_costs.borrow().clone();
+        costs.sort_by(|a, b| a.total_cmp(b));
+        let at = |q: f32| -> f32 {
+            if costs.is_empty() {
+                0.0
+            } else {
+                costs[((costs.len() - 1) as f32 * q).round() as usize]
+            }
+        };
+        let report = serde_json::json!({
+            "steps": self.drive_scroll_total,
+            "frames": costs.len(),
+            "p50_ms": at(0.5),
+            "p95_ms": at(0.95),
+            "max_ms": costs.last().copied().unwrap_or(0.0),
+            "first_frame_ms": self.first_wait_ms.get(),
+        });
+        let _ = std::fs::write(path, report.to_string());
+    }
+
     /// A window's screen (krate:ui/screen, IC-912): width and height in
     /// points, a finger or a mouse, and the edges something else covers
     /// (top, right, bottom, left). None for a window the app does not own.
@@ -3388,6 +4678,23 @@ impl Phase3GuiHost {
     /// and home bar, Krate's close button at the top right -- so check-app
     /// judges an app on the phone it will meet, not on a phone-shaped
     /// desktop window.
+    /// A window's screen, without counting it as the app asking (see
+    /// `screen_facts`).
+    fn screen_now(&self, id: WindowId) -> Option<ScreenAnswer> {
+        let record = self.dispatcher().window(id).ok().flatten()?;
+        let (w, h) = (record.size.width as f32, record.size.height as f32);
+        let mut kind = self.dispatcher().screen_kind(id);
+        if self.headless && std::env::var_os("KRATE_SCREEN").is_some() && w.min(h) < 600.0 {
+            kind.touch = true;
+            kind.safe = if h >= w {
+                (89.0, 0.0, 34.0, 0.0)
+            } else {
+                (50.0, 47.0, 21.0, 47.0)
+            };
+        }
+        Some((w, h, kind.touch, kind.safe))
+    }
+
     pub(crate) fn screen_facts(&self, window: u64) -> Option<ScreenAnswer> {
         let id = self.window_id(window).ok()?;
         // Asking is laying out from the screen: drop any design the host
@@ -3929,6 +5236,7 @@ impl ui::window::Host for Phase3GuiHost {
         title: String,
         size: ui::types::WindowSize,
     ) -> wasmtime::Result<Result<u64, ui::types::UiError>> {
+        self.follow_widget_look();
         let size = match WindowSize::new(size.width, size.height) {
             Ok(size) => size,
             Err(err) => return Ok(Err(ui::types::UiError::Platform(err.to_string()))),
@@ -4145,7 +5453,23 @@ impl Phase3GuiHost {
         if self.headless {
             return Ok(None);
         }
-        #[cfg(any(target_os = "android", target_os = "ios", target_arch = "wasm32"))]
+        // A phone: the app writes into a file of Krate's, and once it lets
+        // go the file goes to the system's save sheet, where the person
+        // picks the place (K-1032). The person's tap on Save in the app is
+        // the ask; the sheet is the answer.
+        #[cfg(target_os = "ios")]
+        {
+            let _ = title;
+            let chosen = export_path(suggested, filter);
+            let name = crate::chosen_files::ChosenFiles::display_name(&chosen);
+            let Some(token) = self.chosen_files.borrow_mut().remember_export(chosen) else {
+                return Err(ui::types::UiError::Unsupported(
+                    "too many files chosen in one run".to_string(),
+                ));
+            };
+            Ok(Some((name, token)))
+        }
+        #[cfg(any(target_os = "android", target_arch = "wasm32"))]
         {
             let _ = (title, suggested, filter);
             Ok(None)
@@ -4300,6 +5624,7 @@ impl ui::events::Host for Phase3GuiHost {
         // No screenshot here for the same reason as key_held: poll is called at
         // the top of a frame loop, before this frame is drawn. wait (widget
         // apps) and present (canvas and scene apps) are the capture points.
+        self.follow_widget_look();
         self.pump_native_windows();
         // A game never calls `wait` -- it polls at the top of every frame and
         // draws regardless. Driving only from `wait` means such an app is never
@@ -4367,7 +5692,14 @@ impl ui::events::Host for Phase3GuiHost {
         if let Ok(Some(event)) = self.poll_one_event() {
             self.pending_events.borrow_mut().push_back(event);
         }
-        Ok(self.held_keys.borrow().contains(&key))
+        {
+            let mut asked = self.keys_asked.borrow_mut();
+            if asked.len() < 32 && !asked.contains(&key) {
+                asked.push(key.clone());
+            }
+        }
+        self.update_pad();
+        Ok(self.held_keys.borrow().contains(&key) || self.pad_held.borrow().contains(&key))
     }
 
     fn gamepad_connected(&mut self) -> wasmtime::Result<bool> {
@@ -4383,10 +5715,19 @@ impl ui::events::Host for Phase3GuiHost {
     }
 
     fn wait(&mut self, timeout_millis: Option<u32>) -> wasmtime::Result<Option<ui::types::Event>> {
+        self.follow_widget_look();
         // The app has built its window and is now waiting for input: the first
         // stable, fully-drawn frame. Capture here, before any budget check
         // that might end the run.
         self.maybe_take_screenshot();
+        if self.first_wait_ms.get().is_none() {
+            self.first_wait_ms
+                .set(Some(self.born.elapsed().as_secs_f32() * 1000.0));
+        }
+
+        if let Some(event) = self.drive_scroll_step() {
+            return Ok(Some(event));
+        }
 
         let deadline = timeout_millis
             .map(|ms| std::time::Instant::now() + std::time::Duration::from_millis(u64::from(ms)));
@@ -4586,7 +5927,7 @@ impl ui::dialog::Host for Phase3GuiHost {
     /// location for a later run.
     fn open_file(
         &mut self,
-        _window: u64,
+        window: u64,
         title: String,
         filter: String,
     ) -> wasmtime::Result<Result<Option<ui::dialog::ChosenFile>, ui::types::UiError>> {
@@ -4609,16 +5950,31 @@ impl ui::dialog::Host for Phase3GuiHost {
         if self.headless {
             return Ok(Ok(None));
         }
-        // Android has no rfd backend; until M3 wires the platform document
-        // picker, a dialog there answers as cancelled -- the headless rule,
-        // for the same reason: there is no desktop dialog to show.
+        // Phones have no rfd backend: the adapter shows the platform's own
+        // picker (iOS: the Files picker). Every dialog there used to answer
+        // as cancelled, so a Studio-made recipe book's "Add photo" did
+        // nothing on an iPhone (IC-915). A host without a picker still
+        // answers cancelled.
         #[cfg(any(target_os = "android", target_os = "ios", target_arch = "wasm32"))]
         {
-            let _ = (&title, &filter);
-            Ok(Ok(None))
+            let _ = &title;
+            let Ok(id) = self.window_id(window) else {
+                return Ok(Ok(None));
+            };
+            let Some(chosen) = self.dispatcher().choose_path(id, false, &filter) else {
+                return Ok(Ok(None));
+            };
+            let name = crate::chosen_files::ChosenFiles::display_name(&chosen);
+            let Some(token) = self.chosen_files.borrow_mut().remember(chosen) else {
+                return Ok(Err(ui::types::UiError::Unsupported(
+                    "too many files chosen in one run".to_string(),
+                )));
+            };
+            Ok(Ok(Some(ui::dialog::ChosenFile { name, token })))
         }
         #[cfg(not(any(target_os = "android", target_os = "ios", target_arch = "wasm32")))]
         {
+            let _ = window;
             let chosen = match choose_file_on_host(&title, &filter) {
                 Ok(Some(path)) => path,
                 // Cancelling is a normal answer, not a failure.
@@ -4646,7 +6002,7 @@ impl ui::dialog::Host for Phase3GuiHost {
     /// the grant dies with the run.
     fn open_folder(
         &mut self,
-        _window: u64,
+        window: u64,
         title: String,
     ) -> wasmtime::Result<Result<Option<ui::dialog::ChosenFolder>, ui::types::UiError>> {
         if self
@@ -4662,15 +6018,29 @@ impl ui::dialog::Host for Phase3GuiHost {
         if self.headless {
             return Ok(Ok(None));
         }
-        // Android: cancelled until M3 wires the document picker (see
-        // open_file).
+        // Phones: the platform's own folder picker, through the adapter (see
+        // open_file). A music player made in Studio could not be given a
+        // folder of songs on an iPhone before this.
         #[cfg(any(target_os = "android", target_os = "ios", target_arch = "wasm32"))]
         {
             let _ = &title;
-            Ok(Ok(None))
+            let Ok(id) = self.window_id(window) else {
+                return Ok(Ok(None));
+            };
+            let Some(folder) = self.dispatcher().choose_path(id, true, "") else {
+                return Ok(Ok(None));
+            };
+            let name = crate::chosen_files::ChosenFiles::display_name(&folder);
+            let Some(token) = self.chosen_files.borrow_mut().remember_folder(folder) else {
+                return Ok(Err(ui::types::UiError::Unsupported(
+                    "too many files or folders chosen in one run".to_string(),
+                )));
+            };
+            Ok(Ok(Some(ui::dialog::ChosenFolder { name, token })))
         }
         #[cfg(not(any(target_os = "android", target_os = "ios", target_arch = "wasm32")))]
         {
+            let _ = window;
             let mut dialog = rfd::FileDialog::new();
             if !title.is_empty() {
                 dialog = dialog.set_title(title);
@@ -5724,136 +7094,25 @@ impl gfx::canvas2d::Host for Phase3GuiHost {
     }
 
     fn present(&mut self, canvas: u64) -> wasmtime::Result<Result<(), gfx::types::GfxError>> {
+        // The app's work for the event it was handed ends here (IC-915).
+        if let Some(since) = self.guest_since.take() {
+            self.frame_costs
+                .borrow_mut()
+                .push(since.elapsed().as_secs_f32() * 1000.0);
+        }
         self.fit_unasked_canvas(canvas);
-        // The one call that reaches the widget. Draw calls mutate the raster;
-        // this publishes it, so a hundred fills cost one render.
-        // Pace the frame. A game loop calls poll and present with no sleep of
-        // its own, which spins a core flat out to produce frames no display
-        // can show -- a laptop's fan tells you before the frame rate does.
-        // Sleeping the remainder of a 60Hz budget here means every app is
-        // paced without every author having to think about it, and an app that
-        // is already slower than the budget waits for nothing.
-        //
-        // Deliberately not in the guest: an app that forgets to sleep should
-        // not be able to melt the machine, and one that sleeps by hand still
-        // works because this only ever waits for the time left over.
-        // A game loop lives in present, not in wait or poll, so an interrupt
-        // has to be answered here as well or Ctrl-C does nothing to a game.
-        if interrupted() {
-            self.interrupts.set(self.interrupts.get() + 1);
-            if self.interrupts.get() > 1 {
-                std::process::exit(130);
+        // The pad is drawn with the app's design switched off, and the design
+        // comes back only after the frame is published: the CPU raster fills
+        // the bands around a design with its edge colours when it publishes,
+        // which would paint over the pad there.
+        let design = self.draw_pad(canvas);
+        let result = self.present_frame(canvas);
+        if let Some((dw, dh)) = design {
+            if let Some((_, _, surface)) = self.canvases.borrow_mut().get_mut(&canvas) {
+                surface.set_design_size(dw, dh);
             }
         }
-        // Same for the close button: a game loop may never call poll or wait,
-        // so the second unanswered close click has to be honoured here or the
-        // window cannot be shut at all (K-121).
-        if self.close_ignored_by_guest() {
-            std::process::exit(0);
-        }
-        // A GPU adapter's present blocks for the panel inside
-        // get_current_texture, and that IS the pacing. Adding our own timer
-        // on top made the guest free-run into FIFO's queue: measured on
-        // device as present-done immediately followed by present-start,
-        // every frame landing one refresh late, a hard 30 fps against a
-        // 60 Hz link, and acquire pinned at 27 ms. Let the display pace it.
-        // Keep the canvas the same size as its window, even for an app that
-        // never calls canvas-size. Without this the app keeps drawing at its
-        // opening size and the host scales that picture up to fit: blurry
-        // text, and a game's world pushed off the edge (K-096). Refitting
-        // here means the very next frame is drawn at the real resolution.
-        let _ = self.refit_canvas(canvas);
-        if self.lists_enabled() {
-            self.last_present.set(Some(std::time::Instant::now()));
-            return Ok(self.publish_canvas(canvas));
-        }
-        // A new frame begins: the next poll must see the queue for real.
-        self.last_pump.set(None);
-        let entry = std::time::Instant::now();
-        let gap_ms = self
-            .last_present_entry
-            .get()
-            .map(|t| t.elapsed().as_secs_f32() * 1000.0)
-            .unwrap_or(0.0);
-        self.last_present_entry.set(Some(entry));
-        let mut slept_ms = 0.0f32;
-        if let Some(previous) = self.last_present.get() {
-            let elapsed = previous.elapsed();
-            if elapsed < FRAME_BUDGET {
-                let remainder = FRAME_BUDGET - elapsed;
-                // Prefer the display's own clock where the adapter has one:
-                // park until the panel says a frame is due (CADisplayLink on
-                // iOS), capped by our budget so a host without a link still
-                // paces itself. Sleeping a fixed 16 ms drifts against the
-                // real refresh; on a 120 Hz phone that drift is visible.
-                //
-                // NOT the plain input-waking park of an earlier attempt:
-                // that let a 120 Hz finger present at touch rate, exhaust
-                // the drawable pool, and stall the next acquire for its full
-                // one-second timeout. Waking on VSYNC is bounded by the
-                // panel; waking on touches is not.
-                // Only sleep when the adapter does NOT block for vsync
-                // itself. A GPU adapter's present already waits for the
-                // panel inside get_current_texture, so pacing here as well
-                // is the second wait that put input a frame behind
-                // (measured: 12 ms of a 15.3 ms frame in acquire).
-                if !self.dispatcher().supports_canvas_lists() {
-                    let sleep_started = std::time::Instant::now();
-                    // Sleep short, then close the gap by yielding. Every OS
-                    // rounds a sleep UP to its timer granularity, and on
-                    // Windows that default is ~15.6ms -- a 2ms request
-                    // costing a full tick, twice a frame, is how 6ms of
-                    // work became 14fps. Asking for 1ms resolution fixes
-                    // the scale of the error; landing the last slice by
-                    // yielding fixes the error itself, on every platform.
-                    const SPIN_MARGIN: std::time::Duration =
-                        std::time::Duration::from_micros(1_200);
-                    if remainder > SPIN_MARGIN {
-                        std::thread::sleep(remainder - SPIN_MARGIN);
-                    }
-                    while previous.elapsed() < FRAME_BUDGET {
-                        std::thread::yield_now();
-                    }
-                    slept_ms = sleep_started.elapsed().as_secs_f32() * 1000.0;
-                }
-            }
-        }
-        if std::env::var("KRATE_FRAME_STATS").as_deref() == Ok("1") {
-            let mut times = self.present_times.borrow_mut();
-            times.push((gap_ms, slept_ms));
-            if times.len() >= 60 {
-                let p = |values: &mut Vec<f32>, q: f32| -> f32 {
-                    values.sort_by(|a, b| a.total_cmp(b));
-                    values[((values.len() - 1) as f32 * q) as usize]
-                };
-                let mut gaps: Vec<f32> = times.iter().map(|(g, _)| *g).collect();
-                let mut sleeps: Vec<f32> = times.iter().map(|(_, sl)| *sl).collect();
-                let pump = PUMP_MS.with(|c| c.replace(0.0));
-                let calls = PUMP_CALLS.with(|c| c.replace(0));
-                eprintln!("krate-pump: {pump:.1}ms across {calls} pump calls over these frames");
-                eprintln!(
-                    "krate-present: gap p50 {:.2}ms p99 {:.2}ms | slept p50 {:.2}ms p99 {:.2}ms (n={})",
-                    p(&mut gaps, 0.5),
-                    p(&mut gaps, 0.99),
-                    p(&mut sleeps, 0.5),
-                    p(&mut sleeps, 0.99),
-                    times.len(),
-                );
-                times.clear();
-            }
-        }
-        self.last_present.set(Some(std::time::Instant::now()));
-
-        let result = self.publish_canvas(canvas);
-        // A presented canvas is a real drawn frame -- the right moment to
-        // capture a 2D game or drawing, which may never call wait.
-        if result.is_ok() {
-            self.maybe_take_screenshot();
-        }
-        // The measured frame is done with; the next draw op begins another.
-        self.frame_ended.set(true);
-        self.end_stepped_frame();
-        Ok(result)
+        result
     }
 }
 
@@ -6332,6 +7591,21 @@ impl Phase3GuiHost {
             .guard()
             .check(&UapiCall::Camera(CameraCall::Capture))
             .is_err()
+    }
+
+    /// Whether the person granted `net.connect` to the host an address
+    /// names: the judgment a fetch gets, for a video streamed from it.
+    pub(crate) fn may_reach(&self, address: &str) -> bool {
+        let Ok(endpoint) = krate_adapter_common::net::parse_url_endpoint(address) else {
+            return false;
+        };
+        self.runtime
+            .guard()
+            .check(&UapiCall::Net(crate::uapi::NetCall::Connect {
+                host: endpoint.host,
+                port: endpoint.port,
+            }))
+            .is_ok()
     }
 }
 
@@ -7023,6 +8297,70 @@ pub(crate) fn save_file_on_host(
     Ok(dialog.save_file())
 }
 
+/// A reminder id an app may use: 1 to 64 of letters, digits, `-` and `_`.
+pub(crate) fn valid_reminder_id(id: &str) -> bool {
+    (1..=64).contains(&id.len())
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+
+/// Headless, `KRATE_BLUETOOTH=heart`: a stand-in heart-rate strap is
+/// nearby (service 180D, measurement 2A37; battery 180F/2A19 at 87%).
+fn fake_heart() -> bool {
+    std::env::var("KRATE_BLUETOOTH").is_ok_and(|v| v == "heart")
+}
+
+/// A Bluetooth UUID in its short form when it is one of the standard ones
+/// ("0000180D-0000-1000-8000-00805F9B34FB" is "180D"), upper case.
+pub(crate) fn short_uuid(uuid: &str) -> String {
+    let upper = uuid.trim().to_ascii_uppercase();
+    match upper.strip_suffix("-0000-1000-8000-00805F9B34FB") {
+        Some(head) if head.len() == 8 && head.starts_with("0000") => head[4..].to_string(),
+        _ => upper,
+    }
+}
+
+/// Where a save on a phone is written before it goes to the save sheet: a
+/// fresh folder of its own in the app's temporary space (so two saves of
+/// one name never meet), under the name the app suggested, with the
+/// filter's first extension when the name has none.
+#[cfg(any(target_os = "ios", test))]
+pub(crate) fn export_path(suggested: &str, filter: &str) -> std::path::PathBuf {
+    let mut name: String = suggested
+        .chars()
+        .map(|c| {
+            if c == '/' || c == '\\' || c.is_control() {
+                '-'
+            } else {
+                c
+            }
+        })
+        .collect::<String>()
+        .trim()
+        .trim_start_matches('.')
+        .to_string();
+    if name.is_empty() {
+        name = "Untitled".to_string();
+    }
+    let ext = filter
+        .split(',')
+        .map(|e| e.trim().trim_start_matches('.'))
+        .find(|e| !e.is_empty() && e.chars().all(|c| c.is_ascii_alphanumeric()));
+    if let Some(ext) = ext {
+        if std::path::Path::new(&name).extension().is_none() {
+            name = format!("{name}.{ext}");
+        }
+    }
+    static SAVES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = SAVES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let dir = std::env::temp_dir()
+        .join("krate-saves")
+        .join(format!("{}-{n}", std::process::id()));
+    let _ = std::fs::create_dir_all(&dir);
+    dir.join(name)
+}
+
 // Desktop only, like its neighbour: on the phones and in a browser `rfd`
 // is not linked at all, and an ungated call broke the Android build.
 #[cfg(not(any(target_os = "android", target_os = "ios", target_arch = "wasm32")))]
@@ -7052,6 +8390,33 @@ pub(crate) fn choose_file_on_host(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_phone_save_keeps_the_apps_name_and_gets_an_extension() {
+        let path = export_path("Sketch", "png,jpg");
+        assert_eq!(path.file_name().unwrap(), "Sketch.png");
+        assert_eq!(
+            export_path("notes.txt", "md").file_name().unwrap(),
+            "notes.txt"
+        );
+        assert_eq!(export_path("", "").file_name().unwrap(), "Untitled");
+        let sneaky = export_path("../../etc/x", "");
+        assert_eq!(
+            sneaky
+                .parent()
+                .unwrap()
+                .parent()
+                .unwrap()
+                .file_name()
+                .unwrap(),
+            "krate-saves"
+        );
+        assert_ne!(
+            export_path("a", "").parent(),
+            export_path("a", "").parent(),
+            "two saves never meet"
+        );
+    }
 
     /// "You cannot" and "this Mac cannot" must not reach a GUI app as the
     /// same error (CP2).

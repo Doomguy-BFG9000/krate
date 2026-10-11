@@ -1,0 +1,26 @@
+[app]
+id = "dev.krate.unlock-probe"
+name = "Vault"
+version = "0.1.0"
+entry = "target/wasm32-wasip1/release/krate_unlock_probe.wasm"
+world = "krate:app/gui@0.2.0"
+
+[[capabilities]]
+cap = "ui.window:create"
+rationale = "A vault that stays locked until you prove it is you"
+required = true
+
+[[capabilities]]
+cap = "store.secret"
+rationale = "Keep the vault's entries in the system's secret store"
+required = true
+
+[[capabilities]]
+cap = "io.stdout"
+rationale = "Report how the check went, for automated runs"
+required = true
+
+[[capabilities]]
+cap = "io.args"
+rationale = "Read the quick-run flag used by automated tests"
+required = true

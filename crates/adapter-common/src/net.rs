@@ -1171,3 +1171,60 @@ mod tests {
         assert!(matches!(err, PlainHttpReadError::Timeout));
     }
 }
+
+/// Whether a web page shown inside an app may load `address` (IC-927): https
+/// only, on a host and port the app was granted `net.connect` to. `granted`
+/// holds each grant's host and port as written (`example.com`, `443`), where
+/// a host `*` is any host, `*.example.com` any host under it, and a port `*`
+/// any port. The reason, worded for the person, when not.
+pub fn web_page_allowed(address: &str, granted: &[(String, String)]) -> Result<(), String> {
+    if !address
+        .get(..8)
+        .is_some_and(|s| s.eq_ignore_ascii_case("https://"))
+    {
+        return Err(format!("{address} is not a secure (https) address"));
+    }
+    let endpoint =
+        parse_url_endpoint(address).map_err(|_| format!("{address} is not an address"))?;
+    let host = endpoint.host.to_ascii_lowercase();
+    let port = endpoint.port.to_string();
+    let host_matches = |pattern: &str| {
+        let pattern = pattern.to_ascii_lowercase();
+        pattern == "*"
+            || pattern == host
+            || pattern
+                .strip_prefix("*.")
+                .is_some_and(|base| host.ends_with(&format!(".{base}")))
+    };
+    if granted
+        .iter()
+        .any(|(h, p)| host_matches(h) && (p == "*" || *p == port))
+    {
+        Ok(())
+    } else {
+        Err(format!("{host} is not a place this app may open"))
+    }
+}
+
+#[cfg(test)]
+mod web_page_tests {
+    use super::web_page_allowed;
+
+    fn grants() -> Vec<(String, String)> {
+        vec![
+            ("docs.krate.tech".into(), "443".into()),
+            ("*.github.com".into(), "443".into()),
+        ]
+    }
+
+    #[test]
+    fn only_https_on_a_granted_host_loads() {
+        assert!(web_page_allowed("https://docs.krate.tech/help", &grants()).is_ok());
+        assert!(web_page_allowed("https://gist.github.com/x", &grants()).is_ok());
+        assert!(web_page_allowed("http://docs.krate.tech/help", &grants()).is_err());
+        assert!(web_page_allowed("https://evil.com/", &grants()).is_err());
+        assert!(web_page_allowed("https://docs.krate.tech:8443/", &grants()).is_err());
+        assert!(web_page_allowed("https://github.com.evil.com/", &grants()).is_err());
+        assert!(web_page_allowed("https://user@docs.krate.tech/", &grants()).is_err());
+    }
+}

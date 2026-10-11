@@ -16849,6 +16849,10 @@ fn install_bundle(bundle_path: &Path, prefix: &Path) -> Result<PathBuf> {
     <string>{name} asked for the camera, and you allowed it in Krate's permission window.</string>
     <key>NSMicrophoneUsageDescription</key>
     <string>{name} asked for the microphone, and you allowed it in Krate's permission window.</string>
+    <key>NSSpeechRecognitionUsageDescription</key>
+    <string>{name} asked to turn speech into text. Apple's recognizer does it, on this Mac where it can.</string>
+    <key>NSPhotoLibraryAddUsageDescription</key>
+    <string>{name} asked to add a picture to your Photos, and you allowed it in Krate's permission window.</string>
 {icon_entry}</dict>
 </plist>
 "#,
@@ -17313,6 +17317,9 @@ fn macos_launcher_bundle(dir: &Path, name: &str, engine: &Path) -> std::io::Resu
          \u{20}   <key>NSMicrophoneUsageDescription</key>\n\
          \u{20}   <string>{name} asked for the microphone, and you allowed it in Krate's \
          permission window.</string>\n\
+         \u{20}   <key>NSSpeechRecognitionUsageDescription</key>\n\
+         \u{20}   <string>{name} asked to turn speech into text. Apple's recognizer does \
+         it, on this Mac where it can.</string>\n\
          </dict>\n</plist>\n"
     );
     fs::write(app.join("Contents/Info.plist"), plist)?;
@@ -18732,6 +18739,10 @@ enum CheckStage {
     /// Running the app on a phone, a tablet and a desktop window and reading
     /// how each frame lands there (IC-911).
     Screens,
+    /// Running the app the way a phone runs it -- the interpreter iOS
+    /// requires, a phone's screen -- and timing its first frame and its
+    /// frames while scrolling (IC-915).
+    Phone,
 }
 
 impl CheckStage {
@@ -18747,6 +18758,7 @@ impl CheckStage {
             CheckStage::Shoot => 15,
             CheckStage::Usability => 16,
             CheckStage::Screens => 17,
+            CheckStage::Phone => 18,
         }
     }
 
@@ -18760,6 +18772,7 @@ impl CheckStage {
             CheckStage::Shoot => "shoot",
             CheckStage::Usability => "usability",
             CheckStage::Screens => "screens",
+            CheckStage::Phone => "phone",
         }
     }
 }
@@ -18896,6 +18909,9 @@ fn manifest_overreach(manifest: &krate_manifest::Manifest, imports: &[String]) -
             "audio.playback" => Some(":audio/playback"),
             "audio.capture" => Some(":audio/capture"),
             "camera.capture" => Some(":camera/capture"),
+            "location.read" => Some(":ui/location"),
+            "bluetooth.connect" => Some(":ui/bluetooth"),
+            "photos.add" => Some(":ui/photos"),
             "ui.dialog" => Some(":ui/dialog"),
             "ui.clipboard" => Some(":ui/clipboard"),
             // System and always-on families carry no signal here.
@@ -18922,7 +18938,10 @@ fn manifest_overreach(manifest: &krate_manifest::Manifest, imports: &[String]) -
         // existing whenever they appear at all. A file dialog or the clipboard
         // is genuinely a nice-to-have in most apps; a camera is not something
         // an app reaches for in passing.
-        let defining = matches!(family, "camera.capture" | "audio.capture");
+        let defining = matches!(
+            family,
+            "camera.capture" | "audio.capture" | "location.read" | "bluetooth.connect"
+        );
         if defining && !request.required {
             return Some(format!(
                 "the manifest asks for {cap} but marks it optional. The person is only asked about required capabilities, so this one is never granted and never even mentioned -- the app opens without it, with nothing on screen to say why. If the app still makes sense without {cap}, do not declare it; if it does not, mark it required"
@@ -19692,6 +19711,11 @@ fn run_check_app(
         // or answer a press is told that first.
         run_screens_stage(dir, &wasm_str, &manifest_str, shoot)?;
         passed.push("screens");
+
+        // Stage: phone. On an iPhone every app runs on the interpreter, so
+        // a frame the desktop draws in time can miss a phone's (IC-915).
+        run_phone_stage(dir, &wasm_str, &manifest_str)?;
+        passed.push("phone");
     }
 
     Ok(CheckSummary {
@@ -19700,6 +19724,100 @@ fn run_check_app(
         shoot: shot,
         usability_notes,
         source_changes,
+    })
+}
+
+/// The longest a phone may wait for an app's first frame, measured on a Mac
+/// under the interpreter. An iPhone 13 Pro is somewhat slower; the margin
+/// keeps an app that passes here inside two seconds there.
+const PHONE_FIRST_FRAME_MS: f32 = 1200.0;
+/// The most an app may spend answering one scroll step (95th percentile),
+/// on the same terms: a 60 Hz frame is 16.7 ms, and the host's own drawing
+/// needs the rest.
+const PHONE_FRAME_MS: f32 = 10.0;
+
+/// Run the app as a phone runs it -- the interpreter iOS allows, a phone's
+/// screen -- scroll it 40 steps, and fail when its first frame or its
+/// frames take longer than a phone can spare (IC-915).
+///
+/// Measured on 2026-10-10 under the interpreter on this kind of machine:
+/// Studio-made recipe, kanban, budget, music and sketch apps reach their
+/// first frame in 26-170 ms and answer a scroll step in at most 5 ms (95th
+/// percentile); an app's per-frame cost is mostly the host's native
+/// drawing, which the interpreter does not slow down.
+fn run_phone_stage(
+    dir: &Path,
+    wasm_str: &str,
+    manifest_str: &str,
+) -> std::result::Result<(), CheckFailure> {
+    let scratch = tempfile::tempdir().map_err(|error| CheckFailure {
+        stage: CheckStage::Phone,
+        detail: format!("could not create a scratch dir for the phone run: {error}"),
+        fix: String::new(),
+    })?;
+    let report = scratch.path().join("cost.json");
+    let args: Vec<String> = vec![
+        "run".into(),
+        "--profile".into(),
+        "analysis".into(),
+        wasm_str.to_string(),
+        "--manifest".into(),
+        manifest_str.to_string(),
+        "--auto-grant".into(),
+        "--headless".into(),
+    ];
+    // SAFETY: single-threaded at this point in check-app.
+    unsafe {
+        std::env::set_var("KRATE_PULLEY", "1");
+        std::env::set_var("KRATE_SCREEN", "390x844");
+        std::env::set_var("KRATE_DRIVE_SCROLL", "40");
+        std::env::set_var("KRATE_COST_REPORT", &report);
+    }
+    let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    let _ = run_self(dir, &refs);
+    unsafe {
+        for name in [
+            "KRATE_PULLEY",
+            "KRATE_SCREEN",
+            "KRATE_DRIVE_SCROLL",
+            "KRATE_COST_REPORT",
+        ] {
+            std::env::remove_var(name);
+        }
+    }
+    // Nothing measured is not a failure: an app that never waits for input
+    // has no frames to time.
+    let Some(cost) = fs::read_to_string(&report)
+        .ok()
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+    else {
+        return Ok(());
+    };
+    let first = cost["first_frame_ms"].as_f64().unwrap_or(0.0) as f32;
+    let p95 = cost["p95_ms"].as_f64().unwrap_or(0.0) as f32;
+    let mut faults = Vec::new();
+    if first > PHONE_FIRST_FRAME_MS {
+        faults.push(format!(
+            "its first frame takes {first:.0} ms on a phone's interpreter (most a phone should wait: {PHONE_FIRST_FRAME_MS:.0} ms)"
+        ));
+    }
+    if p95 > PHONE_FRAME_MS {
+        faults.push(format!(
+            "answering a scroll takes {p95:.1} ms of the app's own work (95th percentile; at most {PHONE_FRAME_MS:.0} ms leaves a phone time to draw at 60 fps)"
+        ));
+    }
+    if faults.is_empty() {
+        return Ok(());
+    }
+    Err(CheckFailure {
+        stage: CheckStage::Phone,
+        detail: format!("on a phone {}", faults.join(", and ")),
+        fix: "On a phone the app's own code runs on an interpreter, several times slower than a \
+              desktop's. Do heavy work once, not every frame: compute layouts, pictures and \
+              tables when the data changes and keep them; draw only what is on screen; leave \
+              decoding, text and drawing to Krate's calls, which run native. Work at start-up \
+              (generating pictures, parsing big data) belongs after the first frame is shown."
+            .to_string(),
     })
 }
 
@@ -19735,38 +19853,45 @@ fn run_screens_stage(
             None => scratch.path().join(format!("{slug}.png")),
         }
     };
-    let run_on = |w: f32, h: f32, slug: &str| -> Option<serde_json::Value> {
-        let report = scratch.path().join(format!("{slug}.json"));
-        let png = picture(slug).to_string_lossy().into_owned();
-        let args: Vec<String> = vec![
-            "run".into(),
-            "--profile".into(),
-            "analysis".into(),
-            wasm_str.to_string(),
-            "--manifest".into(),
-            manifest_str.to_string(),
-            "--auto-grant".into(),
-            "--shoot".into(),
-            png,
-            "--check-layout".into(),
-            "--".into(),
-            "quick".into(),
-        ];
-        // SAFETY: single-threaded at this point in check-app.
-        unsafe {
-            std::env::set_var("KRATE_SCREEN", format!("{w:.0}x{h:.0}"));
-            std::env::set_var("KRATE_FIT_REPORT", &report);
-        }
-        let refs: Vec<&str> = args.iter().map(String::as_str).collect();
-        let _ = run_self(dir, &refs);
-        unsafe {
-            std::env::remove_var("KRATE_SCREEN");
-            std::env::remove_var("KRATE_FIT_REPORT");
-        }
-        fs::read_to_string(&report)
-            .ok()
-            .and_then(|text| serde_json::from_str(&text).ok())
-    };
+    let run_looking =
+        |w: f32, h: f32, slug: &str, look: Option<&str>| -> Option<serde_json::Value> {
+            let report = scratch.path().join(format!("{slug}.json"));
+            let png = picture(slug).to_string_lossy().into_owned();
+            let args: Vec<String> = vec![
+                "run".into(),
+                "--profile".into(),
+                "analysis".into(),
+                wasm_str.to_string(),
+                "--manifest".into(),
+                manifest_str.to_string(),
+                "--auto-grant".into(),
+                "--shoot".into(),
+                png,
+                "--check-layout".into(),
+                "--".into(),
+                "quick".into(),
+            ];
+            // SAFETY: single-threaded at this point in check-app.
+            unsafe {
+                std::env::set_var("KRATE_SCREEN", format!("{w:.0}x{h:.0}"));
+                std::env::set_var("KRATE_FIT_REPORT", &report);
+                match look {
+                    Some(look) => std::env::set_var("KRATE_APPEARANCE", look),
+                    None => std::env::remove_var("KRATE_APPEARANCE"),
+                }
+            }
+            let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+            let _ = run_self(dir, &refs);
+            unsafe {
+                std::env::remove_var("KRATE_SCREEN");
+                std::env::remove_var("KRATE_FIT_REPORT");
+                std::env::remove_var("KRATE_APPEARANCE");
+            }
+            fs::read_to_string(&report)
+                .ok()
+                .and_then(|text| serde_json::from_str(&text).ok())
+        };
+    let run_on = |w: f32, h: f32, slug: &str| run_looking(w, h, slug, None);
     let slug = |name: &str| match name {
         "a phone" => "phone",
         "a phone turned sideways" => "phone-turned",
@@ -19776,6 +19901,20 @@ fn run_screens_stage(
     // Nothing measured is not a failure: an app that draws no text on its
     // first frame, or a run that could not paint, has nothing to judge.
     let Some(desktop) = run_on(1280.0, 800.0, "desktop") else {
+        // No canvas text to measure -- a widget app, which Krate draws in
+        // the person's look itself. Its own box colours are still its own,
+        // so judge how bright it stays in dark mode (IC-925).
+        let _ = run_looking(390.0, 844.0, "phone-dark-large", Some(LARGEST_LOOK));
+        if let Some(fault) = appearance_fault(None, None, &picture("phone-dark-large")) {
+            return Err(CheckFailure {
+                stage: CheckStage::Screens,
+                detail: format!("a phone in dark mode with the largest text: {fault}"),
+                fix: "Krate draws its own widgets dark in dark mode; the bright part is the \
+                      app's own: a box or text colour it set. Read `krate::layout::Look::now()` \
+                      and give those boxes a dark colour when `look.dark`."
+                    .to_string(),
+            });
+        }
         return Ok(());
     };
     let asked = desktop["asked"]
@@ -19784,6 +19923,18 @@ fn run_screens_stage(
         .unwrap_or((1280.0, 800.0));
     let fixed = desktop["fixed"].as_bool().unwrap_or(false);
     let mut faults = Vec::new();
+    // A screen reader hears nothing from a canvas the app never described
+    // (IC-926). A game drawn at a fixed design size is left out.
+    let mut undescribed = false;
+    if let Some(texts) = desktop["facts"]["texts"].as_u64() {
+        if !fixed && texts >= 3 && !desktop["described"].as_bool().unwrap_or(false) {
+            undescribed = true;
+            faults.push(format!(
+                "a screen reader hears nothing: the app draws {texts} pieces of text and describes none of them"
+            ));
+        }
+    }
+    let mut phone = None;
     for (name, w, h) in screen_fit::screens(asked, fixed) {
         let report = if name == "a desktop window" {
             Some(desktop.clone())
@@ -19798,6 +19949,30 @@ fn run_screens_stage(
         if let Some(fault) = screen_fit::fault(name, &facts) {
             faults.push(fault);
         }
+        if name == "a phone" {
+            phone = Some((w, h, facts));
+        }
+    }
+    // The same phone in dark mode at the largest standard text size (IC-925):
+    // an app must not stay bright white in a dark room, must grow its text
+    // for someone who asked, and must still fit when it does.
+    let mut ignores_look = false;
+    if let Some((w, h, light)) = phone {
+        let name = "a phone in dark mode with the largest text";
+        let report = run_looking(w, h, "phone-dark-large", Some(LARGEST_LOOK));
+        if let Some(dark) = report.and_then(|r| {
+            serde_json::from_value::<screen_fit::ScreenFacts>(r["facts"].clone()).ok()
+        }) {
+            if let Some(fault) = screen_fit::fault(name, &dark) {
+                faults.push(fault);
+            }
+            if let Some(fault) =
+                appearance_fault(Some(&light), Some(&dark), &picture("phone-dark-large"))
+            {
+                faults.push(format!("{name}: {fault}"));
+                ignores_look = true;
+            }
+        }
     }
     if faults.is_empty() {
         return Ok(());
@@ -19808,7 +19983,21 @@ fn run_screens_stage(
             "the app does not fit every screen it will open on: {}",
             faults.join(" | ")
         ),
-        fix: if fixed {
+        fix: if undescribed {
+            "Tell the screen reader what each frame shows, as you draw it: \
+             `let mut said = krate::layout::Said::new();` then `said.heading(rect, \"Inbox\")`, \
+             `said.button(rect, \"New message\")`, `said.text(rect, &line)` with the rects \
+             you drew them in, and `said.send(win)` after `present`. A person using VoiceOver \
+             hears them and double-taps a button to press it."
+                .to_string()
+        } else if ignores_look {
+            "Draw from the person's look every frame: `let look = krate::layout::Look::now();` \
+             (or `Screen::of(win).look`), `let colors = look.palette();`, clear with \
+             `colors.background`, draw text in `colors.ink` and `colors.muted`, cards in \
+             `colors.surface`, and size every font with `look.text(points)` so text grows for \
+             someone who asked for it large. Then lay out again so the larger text still fits."
+                .to_string()
+        } else if fixed {
             "The app draws in a fixed size and is shrunk to fit, so its text becomes too small \
              to read. Drop `set_design_size` and lay out from `canvas2d::canvas_size` every \
              frame, so a phone gets text at its real size."
@@ -19822,6 +20011,68 @@ fn run_screens_stage(
                 .to_string()
         },
     })
+}
+
+/// The look check-app judges a phone in (IC-925): dark mode at the largest
+/// standard text size, iOS's XXXL (23 points against 17).
+const LARGEST_LOOK: &str = "dark,text=1.35";
+
+/// Most of a dark-mode frame this bright, and the app is a white screen in a
+/// dark room. Mean luminance of the frame, 0 to 1.
+const TOO_BRIGHT_IN_DARK: f32 = 0.6;
+
+/// Why an app ignores the person's look, from its phone frame in light at
+/// the default text size and in dark at the largest: still bright, or text
+/// no larger. None when it follows both, or there was nothing to judge.
+fn appearance_fault(
+    light: Option<&krate_runtime::screen_fit::ScreenFacts>,
+    dark: Option<&krate_runtime::screen_fit::ScreenFacts>,
+    dark_png: &Path,
+) -> Option<String> {
+    let mut found = Vec::new();
+    if let Some(bright) = mean_luminance(dark_png) {
+        if bright > TOO_BRIGHT_IN_DARK {
+            found.push(format!(
+                "the screen stays {:.0}% bright when the phone is in dark mode",
+                bright * 100.0
+            ));
+        }
+    }
+    let smallest = |facts: Option<&krate_runtime::screen_fit::ScreenFacts>| {
+        facts.and_then(|f| f.smallest_text.clone())
+    };
+    if let (Some((before, _)), Some((after, text))) = (smallest(light), smallest(dark)) {
+        if after < before * 1.1 {
+            found.push(format!(
+                "text stays at {after:.1} points (\"{}\") when the person asked for it larger",
+                text.chars().take(24).collect::<String>(),
+            ));
+        }
+    }
+    (!found.is_empty()).then(|| found.join(", and "))
+}
+
+/// The mean luminance (0 to 1) of an RGBA PNG, or None when it cannot be
+/// read.
+fn mean_luminance(png_path: &Path) -> Option<f32> {
+    let file = fs::File::open(png_path).ok()?;
+    let mut decoder = png::Decoder::new(std::io::BufReader::new(file));
+    decoder.set_transformations(png::Transformations::EXPAND);
+    let mut reader = decoder.read_info().ok()?;
+    let mut buf = vec![0; reader.output_buffer_size()?];
+    let info = reader.next_frame(&mut buf).ok()?;
+    let channels = info.color_type.samples();
+    if channels < 3 || info.bit_depth != png::BitDepth::Eight {
+        return None;
+    }
+    let pixels = &buf[..info.buffer_size()];
+    let mut sum = 0.0f64;
+    let mut n = 0u64;
+    for px in pixels.chunks_exact(channels) {
+        sum += (0.2126 * px[0] as f64 + 0.7152 * px[1] as f64 + 0.0722 * px[2] as f64) / 255.0;
+        n += 1;
+    }
+    (n > 0).then(|| (sum / n as f64) as f32)
 }
 
 /// Drive the app and turn what was observed into either a failure or notes.
@@ -22648,6 +22899,55 @@ mod starter_cargo_tests {
                 example.name, seeded_std, shipped_std
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod look_tests {
+    use super::appearance_fault;
+    use krate_runtime::screen_fit::ScreenFacts;
+
+    fn facts(smallest: f32) -> ScreenFacts {
+        ScreenFacts {
+            screen: (390.0, 844.0),
+            scale: 1.0,
+            smallest_text: Some((smallest, "Today".to_string())),
+            off_edge: Vec::new(),
+            texts: 4,
+            overlaps: Vec::new(),
+        }
+    }
+
+    fn frame(dir: &std::path::Path, grey: u8) -> std::path::PathBuf {
+        let path = dir.join(format!("frame-{grey}.png"));
+        let file = std::fs::File::create(&path).expect("png");
+        let mut encoder = png::Encoder::new(std::io::BufWriter::new(file), 8, 8);
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        let mut writer = encoder.write_header().expect("header");
+        writer
+            .write_image_data(&[grey, grey, grey, 255].repeat(64))
+            .expect("pixels");
+        path
+    }
+
+    /// An app that follows the look passes; one that stays white in dark
+    /// mode, or keeps its text at the default size, fails and says which.
+    #[test]
+    fn a_white_screen_in_the_dark_or_text_that_does_not_grow_fails() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let dark = frame(dir.path(), 20);
+        let white = frame(dir.path(), 245);
+        let (normal, grown, same) = (facts(15.0), facts(20.25), facts(15.0));
+        assert_eq!(appearance_fault(Some(&normal), Some(&grown), &dark), None);
+        let bright = appearance_fault(Some(&normal), Some(&grown), &white).expect("bright");
+        assert!(bright.contains("stays 96% bright"), "{bright}");
+        assert!(
+            appearance_fault(None, None, &white).is_some(),
+            "a widget app is judged on brightness"
+        );
+        let fixed = appearance_fault(Some(&normal), Some(&same), &dark).expect("fixed text");
+        assert!(fixed.contains("text stays at 15.0 points"), "{fixed}");
     }
 }
 

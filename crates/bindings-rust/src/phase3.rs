@@ -7,8 +7,107 @@
 
 #![allow(clippy::too_many_arguments)]
 
-/// `krate:ui`: clipboard, dialog, events, image, launcher, menu, notify, pointer, print, screen, text_entry, touch, tree, window.
+/// `krate:ui`: accessibility, appearance, bluetooth, clipboard, dialog, events, haptics, image, launcher, location, menu, motion, notify, photos, pointer, print, reminders, screen, share, sign_in, text_entry, touch, tree, unlock, web_page, window.
 pub mod ui {
+    /// `krate:ui/accessibility`.
+    pub mod accessibility {
+        pub use crate::bindings::krate::ui::accessibility::{Element, Role, UiError};
+
+        /// Say what the window shows now, in reading order (top to bottom, then
+        /// left to right, as the person would read it). Replaces what was said
+        /// before; call it again whenever the screen changes. An empty list says
+        /// the window shows nothing to read.
+        pub fn describe(window: u64, elements: &[Element]) -> Result<(), UiError> {
+            crate::bindings::krate::ui::accessibility::describe(window, elements)
+        }
+
+        /// Whether a screen reader is on right now, so an app can skip work that
+        /// only matters to one (it must still describe its screen either way).
+        pub fn screen_reader_on() -> bool {
+            crate::bindings::krate::ui::accessibility::screen_reader_on()
+        }
+    }
+    /// `krate:ui/appearance`.
+    pub mod appearance {
+        pub use crate::bindings::krate::ui::appearance::Look;
+
+        /// How things should look right now.
+        pub fn current() -> Look {
+            crate::bindings::krate::ui::appearance::current()
+        }
+    }
+    /// `krate:ui/bluetooth`.
+    pub mod bluetooth {
+        pub use crate::bindings::krate::ui::bluetooth::{BluetoothError, Device, Notification};
+
+        /// Whether this device has Bluetooth at all.
+        pub fn available() -> bool {
+            crate::bindings::krate::ui::bluetooth::available()
+        }
+
+        /// Look for nearby devices offering `service`, show them in Krate's own
+        /// list under `title` ("Pick your heart-rate monitor"), and connect to
+        /// the one the person taps. None when they cancel.
+        pub fn choose(
+            window: u64,
+            service: &str,
+            title: &str,
+        ) -> Result<Option<Device>, BluetoothError> {
+            crate::bindings::krate::ui::bluetooth::choose(window, service, title)
+        }
+
+        /// Read a characteristic's value once.
+        pub fn read(
+            device: u64,
+            service: &str,
+            characteristic: &str,
+        ) -> Result<alloc::vec::Vec<u8>, BluetoothError> {
+            crate::bindings::krate::ui::bluetooth::read(device, service, characteristic)
+        }
+
+        /// Write a characteristic's value; `with-response` waits for the device
+        /// to say it took it.
+        pub fn write(
+            device: u64,
+            service: &str,
+            characteristic: &str,
+            data: &[u8],
+            with_response: bool,
+        ) -> Result<(), BluetoothError> {
+            crate::bindings::krate::ui::bluetooth::write(
+                device,
+                service,
+                characteristic,
+                data,
+                with_response,
+            )
+        }
+
+        /// Be sent a characteristic's value each time it changes (a heartbeat,
+        /// a reading); collect them with `notifications`.
+        pub fn subscribe(
+            device: u64,
+            service: &str,
+            characteristic: &str,
+        ) -> Result<(), BluetoothError> {
+            crate::bindings::krate::ui::bluetooth::subscribe(device, service, characteristic)
+        }
+
+        /// Every value sent since the last ask, oldest first.
+        pub fn notifications(device: u64) -> alloc::vec::Vec<Notification> {
+            crate::bindings::krate::ui::bluetooth::notifications(device)
+        }
+
+        /// Whether the device is still connected.
+        pub fn connected(device: u64) -> bool {
+            crate::bindings::krate::ui::bluetooth::connected(device)
+        }
+
+        /// Let the device go. Closing the app does this too.
+        pub fn disconnect(device: u64) {
+            crate::bindings::krate::ui::bluetooth::disconnect(device)
+        }
+    }
     /// `krate:ui/clipboard`.
     pub mod clipboard {
         pub use crate::bindings::krate::ui::clipboard::UiError;
@@ -175,6 +274,27 @@ pub mod ui {
             crate::bindings::krate::ui::events::gamepad_axis(axis)
         }
     }
+    /// `krate:ui/haptics`.
+    pub mod haptics {
+        pub use crate::bindings::krate::ui::haptics::Feel;
+
+        /// Whether this device can tap back at all.
+        pub fn available() -> bool {
+            crate::bindings::krate::ui::haptics::available()
+        }
+
+        /// Tap back now. Taps closer together than the phone can play are
+        /// dropped, so a game may call this every frame something is hit.
+        pub fn play(feel: Feel) {
+            crate::bindings::krate::ui::haptics::play(feel)
+        }
+
+        /// A game's impact at `strength`, from 0 (barely felt) to 1 (as hard as
+        /// the phone can); outside that range is held to it.
+        pub fn impact(strength: f32) {
+            crate::bindings::krate::ui::haptics::impact(strength)
+        }
+    }
     /// `krate:ui/image`.
     pub mod image {
         pub use crate::bindings::krate::ui::image::{ImagePixels, UiError};
@@ -202,6 +322,20 @@ pub mod ui {
             crate::bindings::krate::ui::launcher::open_url(url)
         }
     }
+    /// `krate:ui/location`.
+    pub mod location {
+        pub use crate::bindings::krate::ui::location::{LocationError, Position};
+
+        /// Whether this device can tell where it is at all.
+        pub fn available() -> bool {
+            crate::bindings::krate::ui::location::available()
+        }
+
+        /// The latest fix.
+        pub fn current() -> Result<Position, LocationError> {
+            crate::bindings::krate::ui::location::current()
+        }
+    }
     /// `krate:ui/menu`.
     pub mod menu {
         pub use crate::bindings::krate::ui::menu::{MenuItem, UiError};
@@ -209,6 +343,21 @@ pub mod ui {
         /// Set the simple top-level menu for a window.
         pub fn set_items(window: u64, items: &[MenuItem]) -> Result<(), UiError> {
             crate::bindings::krate::ui::menu::set_items(window, items)
+        }
+    }
+    /// `krate:ui/motion`.
+    pub mod motion {
+        pub use crate::bindings::krate::ui::motion::{Reading, Vector};
+
+        /// Whether this device can tell how it is held.
+        pub fn available() -> bool {
+            crate::bindings::krate::ui::motion::available()
+        }
+
+        /// The latest reading, up to sixty a second; none on a device without
+        /// sensors, and for the first moment after the first ask.
+        pub fn read() -> Option<Reading> {
+            crate::bindings::krate::ui::motion::read()
         }
     }
     /// `krate:ui/notify`.
@@ -223,6 +372,22 @@ pub mod ui {
         /// which keeps this from becoming a way to watch the person.
         pub fn show(title: &str, body: &str) -> Result<(), NotifyError> {
             crate::bindings::krate::ui::notify::show(title, body)
+        }
+    }
+    /// `krate:ui/photos`.
+    pub mod photos {
+        pub use crate::bindings::krate::ui::photos::{ChosenFile, PhotosError};
+
+        /// Show the photo picker for up to `limit` photos (1 to 20). The photos
+        /// picked, as JPEG files; empty when the person cancelled. On a computer,
+        /// the system's file picker for pictures.
+        pub fn pick(window: u64, limit: u32) -> Result<alloc::vec::Vec<ChosenFile>, PhotosError> {
+            crate::bindings::krate::ui::photos::pick(window, limit)
+        }
+
+        /// Add a picture -- PNG or JPEG bytes -- to the photo library.
+        pub fn save(window: u64, data: &[u8]) -> Result<(), PhotosError> {
+            crate::bindings::krate::ui::photos::save(window, data)
         }
     }
     /// `krate:ui/pointer`.
@@ -294,6 +459,33 @@ pub mod ui {
             crate::bindings::krate::ui::print::finish(window, title)
         }
     }
+    /// `krate:ui/reminders`.
+    pub mod reminders {
+        pub use crate::bindings::krate::ui::reminders::NotifyError;
+
+        /// Set reminder `id` (letters, digits, `-` and `_`, up to 64) to arrive
+        /// `after-seconds` from now (1 second to a year), replacing one with the
+        /// same id. With `daily`, it comes back at that time of day every day.
+        pub fn schedule(
+            id: &str,
+            title: &str,
+            body: &str,
+            after_seconds: u64,
+            daily: bool,
+        ) -> Result<(), NotifyError> {
+            crate::bindings::krate::ui::reminders::schedule(id, title, body, after_seconds, daily)
+        }
+
+        /// Take back a reminder not yet delivered. Unknown ids are ignored.
+        pub fn cancel(id: &str) {
+            crate::bindings::krate::ui::reminders::cancel(id)
+        }
+
+        /// The ids of this app's reminders still to come.
+        pub fn pending() -> alloc::vec::Vec<alloc::string::String> {
+            crate::bindings::krate::ui::reminders::pending()
+        }
+    }
     /// `krate:ui/screen`.
     pub mod screen {
         pub use crate::bindings::krate::ui::screen::{InputKind, Insets, ScreenFacts, SizeClass};
@@ -302,6 +494,46 @@ pub mod ui {
         /// answers as a desktop window of no size.
         pub fn facts(window: u64) -> ScreenFacts {
             crate::bindings::krate::ui::screen::facts(window)
+        }
+    }
+    /// `krate:ui/share`.
+    pub mod share {
+        pub use crate::bindings::krate::ui::share::{ShareError, SharedFile};
+
+        /// Open the share sheet with any of a text, a link and files. True when
+        /// the person sent it somewhere, false when they cancelled.
+        pub fn share(
+            window: u64,
+            text: Option<&str>,
+            url: Option<&str>,
+            files: &[SharedFile],
+        ) -> Result<bool, ShareError> {
+            crate::bindings::krate::ui::share::share(window, text, url, files)
+        }
+    }
+    /// `krate:ui/sign_in`.
+    pub mod sign_in {
+        pub use crate::bindings::krate::ui::sign_in::SignInError;
+
+        /// A fresh PKCE pair: the verifier the app keeps for the token request,
+        /// and its S256 challenge for the authorize address
+        /// (`code_challenge=...&code_challenge_method=S256`).
+        pub fn pkce() -> (alloc::string::String, alloc::string::String) {
+            crate::bindings::krate::ui::sign_in::pkce()
+        }
+
+        /// Open the sign-in sheet at `authorize-url` (https, carrying the app's
+        /// client id, its redirect address, a `state` and the PKCE challenge)
+        /// and wait for the service to send the person back to an address that
+        /// starts with `callback-scheme:` -- the one registered with the service
+        /// ("myapp" for `myapp://signed-in`). Returns that whole address: read
+        /// `code` from it, and check its `state` is the one you sent.
+        pub fn start(
+            window: u64,
+            authorize_url: &str,
+            callback_scheme: &str,
+        ) -> Result<alloc::string::String, SignInError> {
+            crate::bindings::krate::ui::sign_in::start(window, authorize_url, callback_scheme)
         }
     }
     /// `krate:ui/text_entry`.
@@ -362,6 +594,64 @@ pub mod ui {
     pub mod types {
         pub use crate::bindings::krate::ui::types::*;
     }
+    /// `krate:ui/unlock`.
+    pub mod unlock {
+        pub use crate::bindings::krate::ui::unlock::UnlockAnswer;
+
+        /// Whether this device can check it is the person.
+        pub fn available() -> bool {
+            crate::bindings::krate::ui::unlock::available()
+        }
+
+        /// Ask, with the app's reason in the system's own sheet ("Unlock your
+        /// vault"). Waits while the person looks or types their passcode.
+        pub fn check(reason: &str) -> UnlockAnswer {
+            crate::bindings::krate::ui::unlock::check(reason)
+        }
+    }
+    /// `krate:ui/web_page`.
+    pub mod web_page {
+        pub use crate::bindings::krate::ui::web_page::{PageState, UiError};
+
+        /// Show `address` in a box of the window: `x`, `y`, `width` and `height`
+        /// in points, as the app lays it out. Refused when the address is not
+        /// https on a host the app was granted `net.connect` to.
+        pub fn open(
+            window: u64,
+            address: &str,
+            x: f32,
+            y: f32,
+            width: f32,
+            height: f32,
+        ) -> Result<u64, UiError> {
+            crate::bindings::krate::ui::web_page::open(window, address, x, y, width, height)
+        }
+
+        /// Move or resize its box (the screen turned, the layout changed).
+        pub fn place(page: u64, x: f32, y: f32, width: f32, height: f32) -> Result<(), UiError> {
+            crate::bindings::krate::ui::web_page::place(page, x, y, width, height)
+        }
+
+        /// Go to another address, judged as `open` judges the first.
+        pub fn go(page: u64, address: &str) -> Result<(), UiError> {
+            crate::bindings::krate::ui::web_page::go(page, address)
+        }
+
+        /// Back to the page before, when there is one.
+        pub fn back(page: u64) {
+            crate::bindings::krate::ui::web_page::back(page)
+        }
+
+        /// Where it is and what it is doing.
+        pub fn state(page: u64) -> Result<PageState, UiError> {
+            crate::bindings::krate::ui::web_page::state(page)
+        }
+
+        /// Take it away.
+        pub fn close(page: u64) {
+            crate::bindings::krate::ui::web_page::close(page)
+        }
+    }
     /// `krate:ui/window`.
     pub mod window {
         pub use crate::bindings::krate::ui::window::{UiError, WindowSize, WindowState};
@@ -413,7 +703,7 @@ pub mod ui {
     }
 }
 
-/// `krate:gfx`: canvas2d, canvas_images, scene3d.
+/// `krate:gfx`: canvas2d, canvas_images, scene3d, video.
 pub mod gfx {
     /// `krate:gfx/canvas2d`.
     pub mod canvas2d {
@@ -1036,6 +1326,71 @@ pub mod gfx {
     /// The records and errors this package's interfaces share.
     pub mod types {
         pub use crate::bindings::krate::gfx::types::*;
+    }
+    /// `krate:gfx/video`.
+    pub mod video {
+        pub use crate::bindings::krate::gfx::video::{CornerRadii, GfxError, Rect, VideoState};
+
+        /// Open a video, paused at the start. `source` is a path inside the app's
+        /// bundled assets ("clips/intro.mp4") or an `https://` address the app
+        /// was granted `net.connect` to. Loading continues after this returns:
+        /// read `state` for `ready`.
+        pub fn open(source: &str) -> Result<u64, GfxError> {
+            crate::bindings::krate::gfx::video::open(source)
+        }
+
+        /// Start or carry on playing.
+        pub fn play(video: u64) -> Result<(), GfxError> {
+            crate::bindings::krate::gfx::video::play(video)
+        }
+
+        /// Stop where it is.
+        pub fn pause(video: u64) -> Result<(), GfxError> {
+            crate::bindings::krate::gfx::video::pause(video)
+        }
+
+        /// Jump to `millis` from the start, exactly, playing or paused.
+        pub fn seek(video: u64, millis: u64) -> Result<(), GfxError> {
+            crate::bindings::krate::gfx::video::seek(video, millis)
+        }
+
+        /// Start again from the beginning on reaching the end.
+        pub fn set_looping(video: u64, looping: bool) -> Result<(), GfxError> {
+            crate::bindings::krate::gfx::video::set_looping(video, looping)
+        }
+
+        /// Silence it, or let it be heard.
+        pub fn set_muted(video: u64, muted: bool) -> Result<(), GfxError> {
+            crate::bindings::krate::gfx::video::set_muted(video, muted)
+        }
+
+        /// Where it is and what it is doing.
+        pub fn state(video: u64) -> Result<VideoState, GfxError> {
+            crate::bindings::krate::gfx::video::state(video)
+        }
+
+        /// Draw the current frame into `area` of a canvas, stretched to fill it.
+        /// Draws nothing until the first frame is ready. Call it every frame the
+        /// canvas is drawn; keep `area` to the video's shape (`width`/`height`)
+        /// to avoid stretching it.
+        pub fn draw(canvas: u64, video: u64, area: Rect) -> Result<(), GfxError> {
+            crate::bindings::krate::gfx::video::draw(canvas, video, area)
+        }
+
+        /// The same, with rounded corners.
+        pub fn draw_round(
+            canvas: u64,
+            video: u64,
+            area: Rect,
+            radii: CornerRadii,
+        ) -> Result<(), GfxError> {
+            crate::bindings::krate::gfx::video::draw_round(canvas, video, area, radii)
+        }
+
+        /// Stop it and let it go.
+        pub fn close(video: u64) {
+            crate::bindings::krate::gfx::video::close(video)
+        }
     }
 }
 

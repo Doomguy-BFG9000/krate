@@ -553,11 +553,13 @@ fn build_taffy_node(
         // A text leaf carries its run so the measure function can size it.
         let run: TextRun = match (node.kind, node.label.as_deref()) {
             (WidgetKind::Text, Some(label)) if !label.is_empty() => {
+                // At the person's text size (IC-925), as the painters draw it.
                 let size = node
                     .style
                     .text
                     .and_then(|t| t.sanitized().size)
-                    .unwrap_or(DEFAULT_TEXT_SIZE);
+                    .unwrap_or(DEFAULT_TEXT_SIZE)
+                    * krate_adapter_common::ui::widget_look().text_scale;
                 Some((String::from(label), size))
             }
             _ => None,

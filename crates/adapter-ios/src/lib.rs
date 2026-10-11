@@ -26,6 +26,8 @@ use std::time::Duration;
 /// Host family handled by this adapter crate.
 pub const HOST_FAMILY: &str = "ios";
 
+#[cfg(target_os = "ios")]
+mod bluetooth;
 /// Linux Phase 3 UI adapter entry point.
 ///
 /// This is still a headless draft adapter. It proves the Linux crate exposes
@@ -525,6 +527,206 @@ impl UiAdapter for IosUikitPrototypeUiAdapter {
 
     fn set_text_entry(&self, window: WindowId, on: bool) -> bool {
         uikit_native::set_text_entry(window, on)
+    }
+
+    fn choose_path(
+        &self,
+        _window: WindowId,
+        folder: bool,
+        filter: &str,
+    ) -> Option<std::path::PathBuf> {
+        uikit_native::choose_path(folder, filter)
+    }
+
+    #[cfg(target_os = "ios")]
+    fn bluetooth_available(&self) -> bool {
+        bluetooth::available()
+    }
+
+    #[cfg(target_os = "ios")]
+    fn bluetooth_choose(
+        &self,
+        _window: WindowId,
+        service: &str,
+        title: &str,
+    ) -> Result<Option<krate_adapter_common::ui::BtDevice>, krate_adapter_common::ui::BtError> {
+        bluetooth::choose(service, title)
+    }
+
+    #[cfg(target_os = "ios")]
+    fn bluetooth_read(
+        &self,
+        device: u64,
+        service: &str,
+        characteristic: &str,
+    ) -> Result<Vec<u8>, krate_adapter_common::ui::BtError> {
+        bluetooth::read(device, service, characteristic)
+    }
+
+    #[cfg(target_os = "ios")]
+    fn bluetooth_write(
+        &self,
+        device: u64,
+        service: &str,
+        characteristic: &str,
+        data: &[u8],
+        with_response: bool,
+    ) -> Result<(), krate_adapter_common::ui::BtError> {
+        bluetooth::write(device, service, characteristic, data, with_response)
+    }
+
+    #[cfg(target_os = "ios")]
+    fn bluetooth_subscribe(
+        &self,
+        device: u64,
+        service: &str,
+        characteristic: &str,
+    ) -> Result<(), krate_adapter_common::ui::BtError> {
+        bluetooth::subscribe(device, service, characteristic)
+    }
+
+    #[cfg(target_os = "ios")]
+    fn bluetooth_notifications(
+        &self,
+        device: u64,
+    ) -> Vec<krate_adapter_common::ui::BtNotification> {
+        bluetooth::notifications(device)
+    }
+
+    #[cfg(target_os = "ios")]
+    fn bluetooth_connected(&self, device: u64) -> bool {
+        bluetooth::connected(device)
+    }
+
+    #[cfg(target_os = "ios")]
+    fn bluetooth_disconnect(&self, device: u64) {
+        bluetooth::disconnect(device)
+    }
+
+    fn location_available(&self) -> bool {
+        uikit_native::location_available()
+    }
+
+    fn location(&self) -> krate_adapter_common::ui::LocationAnswer {
+        uikit_native::location_read()
+    }
+
+    fn motion_available(&self) -> bool {
+        uikit_native::motion_available()
+    }
+
+    fn motion(&self) -> Option<krate_adapter_common::ui::MotionReading> {
+        uikit_native::motion_read()
+    }
+
+    fn reminder_schedule(
+        &self,
+        id: &str,
+        sender: &str,
+        title: &str,
+        body: &str,
+        after_seconds: u64,
+        daily: bool,
+    ) -> Result<(), String> {
+        uikit_native::reminder_schedule(sender, id, title, body, after_seconds, daily)
+    }
+
+    fn reminder_cancel(&self, id: &str) {
+        uikit_native::reminder_cancel(id)
+    }
+
+    fn reminder_pending(&self) -> Vec<String> {
+        uikit_native::reminder_pending()
+    }
+
+    fn pick_photos(
+        &self,
+        _window: WindowId,
+        limit: u32,
+    ) -> Option<Result<Vec<std::path::PathBuf>, String>> {
+        Some(uikit_native::pick_photos(limit))
+    }
+
+    fn save_photo(&self, data: &[u8]) -> Result<(), Option<String>> {
+        uikit_native::save_photo(data)
+    }
+
+    fn share(
+        &self,
+        _window: WindowId,
+        text: Option<&str>,
+        url: Option<&str>,
+        files: &[(String, Vec<u8>)],
+    ) -> Result<bool, String> {
+        uikit_native::share(text, url, files)
+    }
+
+    fn appearance(&self) -> krate_adapter_common::ui::Appearance {
+        uikit_native::appearance()
+    }
+
+    fn describe_accessibility(
+        &self,
+        _window: WindowId,
+        elements: &[krate_adapter_common::ui::AccessElement],
+    ) -> Result<(), UiAdapterError> {
+        uikit_native::describe_accessibility(elements);
+        Ok(())
+    }
+
+    fn screen_reader_on(&self) -> bool {
+        uikit_native::voice_over_on()
+    }
+
+    fn open_web_page(
+        &self,
+        _window: WindowId,
+        address: &str,
+        frame: (f32, f32, f32, f32),
+        granted: Vec<(String, String)>,
+    ) -> Result<u64, String> {
+        uikit_native::open_web_page(address, frame, granted)
+    }
+
+    fn place_web_page(&self, page: u64, frame: (f32, f32, f32, f32)) {
+        uikit_native::place_web_page(page, frame);
+    }
+
+    fn web_page_go(&self, page: u64, address: &str) {
+        uikit_native::web_page_go(page, address);
+    }
+
+    fn web_page_back(&self, page: u64) {
+        uikit_native::web_page_back(page);
+    }
+
+    fn web_page_state(&self, page: u64) -> Option<krate_adapter_common::ui::WebPageState> {
+        uikit_native::web_page_state(page)
+    }
+
+    fn close_web_page(&self, page: u64) {
+        uikit_native::close_web_page(page);
+    }
+
+    fn sign_in(
+        &self,
+        _window: WindowId,
+        authorize_url: &str,
+        scheme: &str,
+    ) -> Result<Option<String>, String> {
+        uikit_native::sign_in(authorize_url, scheme)
+    }
+
+    fn haptics_available(&self) -> bool {
+        true
+    }
+
+    fn haptic(&self, feel: Option<krate_adapter_common::ui::HapticFeel>, strength: f32) -> bool {
+        uikit_native::haptic(feel, strength)
+    }
+
+    fn export_file(&self, _window: WindowId, path: &std::path::Path) -> bool {
+        uikit_native::export_file(path)
     }
 
     fn set_adapts(&self, adapts: bool) {

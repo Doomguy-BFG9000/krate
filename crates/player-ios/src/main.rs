@@ -28,7 +28,6 @@ mod player {
     use objc2::{define_class, ClassType, DefinedClass, MainThreadMarker, MainThreadOnly};
     use objc2_foundation::{NSDictionary, NSObject, NSObjectProtocol, NSString, NSURL};
     use objc2_ui_kit::{
-        UIAlertAction, UIAlertActionStyle, UIAlertController, UIAlertControllerStyle,
         UIApplication, UIApplicationDelegate, UIApplicationOpenURLOptionsKey,
         UIDocumentPickerDelegate, UIViewController, UIWindow, UIWindowScene,
     };
@@ -93,6 +92,19 @@ mod player {
         }
 
         unsafe impl UIApplicationDelegate for KrateAppDelegate {
+            /// Be the notification center's delegate before launch ends, so
+            /// a reminder tapped while Krate was closed opens its app
+            /// (IC-921).
+            #[unsafe(method(application:didFinishLaunchingWithOptions:))]
+            fn did_finish_launching(
+                &self,
+                _application: &UIApplication,
+                _options: Option<&NSDictionary<objc2::runtime::AnyObject, objc2::runtime::AnyObject>>,
+            ) -> objc2::runtime::Bool {
+                krate_adapter_ios::uikit_native::install_notice_delegate();
+                objc2::runtime::Bool::YES
+            }
+
             /// "Open in Krate" from Messages, Mail, AirDrop or Files: iOS
             /// copies the file into Documents/Inbox and hands over its URL,
             /// before the app becomes active.
@@ -107,16 +119,36 @@ mod player {
                     return objc2::runtime::Bool::NO;
                 };
                 *OPENED.lock().expect("opened lock") = Some(PathBuf::from(path.to_string()));
+                // Krate stays alive in the background now, so this usually
+                // arrives with the home screen or an app already open: close
+                // it, and the player opens the file next. At a cold start
+                // nothing is running yet and the player reads OPENED first.
+                if self.ivars().started.get() {
+                    krate_adapter_ios::uikit_native::close_for_opened_file();
+                }
                 objc2::runtime::Bool::YES
             }
 
+            /// Leaving Krate (another app, the home screen, the lock) used
+            /// to end the process: whatever the person had open, playing or
+            /// half-typed was gone when they came back. Krate now waits in
+            /// the background as a phone's own apps do, drawing nothing.
             #[unsafe(method(applicationDidEnterBackground:))]
             fn did_enter_background(&self, _application: &UIApplication) {
-                std::process::exit(0);
+                krate_adapter_ios::uikit_native::set_background(true);
+            }
+
+            #[unsafe(method(applicationWillEnterForeground:))]
+            fn will_enter_foreground(&self, _application: &UIApplication) {
+                krate_adapter_ios::uikit_native::set_background(false);
             }
 
             #[unsafe(method(applicationDidBecomeActive:))]
             fn did_become_active(&self, _application: &UIApplication) {
+                // Back on screen, however it got there: iOS does not promise
+                // will-enter-foreground for every return, and a background
+                // flag left set draws nothing ever again.
+                krate_adapter_ios::uikit_native::set_background(false);
                 if self.ivars().started.replace(true) {
                     return;
                 }
@@ -172,6 +204,33 @@ mod player {
         }
     }
 
+    /// While an app that may record runs, the session plays AND records:
+    /// the play-only session refuses the microphone, so a voice memo made in
+    /// Studio heard nothing on an iPhone (IC-918). Sound still comes out of
+    /// the speaker, not the earpiece, and Bluetooth headphones still play.
+    fn record_session(records: bool) {
+        // SAFETY: ordinary category changes on the shared session.
+        unsafe {
+            let session = objc2_avf_audio::AVAudioSession::sharedInstance();
+            let result = if records {
+                objc2_avf_audio::AVAudioSessionCategoryPlayAndRecord.map(|category| {
+                    // DefaultToSpeaker (0x8) | AllowBluetoothA2DP (0x20).
+                    session.setCategory_withOptions_error(
+                        category,
+                        objc2_avf_audio::AVAudioSessionCategoryOptions(0x8 | 0x20),
+                    )
+                })
+            } else {
+                objc2_avf_audio::AVAudioSessionCategoryPlayback
+                    .map(|category| session.setCategory_error(category))
+            };
+            if let Some(Err(why)) = result {
+                eprintln!("krate: audio session category refused: {why:?}");
+            }
+            let _ = session.setActive_error(true);
+        }
+    }
+
     fn run_player() {
         audio_session();
         let data_root = std::env::var("HOME")
@@ -181,19 +240,62 @@ mod player {
         let _ = std::fs::create_dir_all(&library);
 
         krate_adapter_ios::uikit_native::show_loading("Krate", "");
-        let opened = OPENED.lock().expect("opened lock").take();
-        let mut next = opened.and_then(|path| receive(&path, &library, &data_root));
+        let mut next = None;
         loop {
+            // A file opened from Messages, Mail or Files -- at start, or
+            // while something else was on screen -- comes first.
+            if let Some(path) = OPENED.lock().expect("opened lock").take() {
+                if let Some(app) = receive(&path, &library, &data_root) {
+                    next = Some(app);
+                }
+            }
+            // A reminder tapped: the app that set it.
+            let reminded = REMINDED.lock().expect("reminded lock").take();
+            if let Some(opens) = reminded.or_else(krate_adapter_ios::uikit_native::take_notice_open)
+            {
+                if let Some(app) = app_named(&opens, &library) {
+                    next = Some(app);
+                }
+            }
             let app = match next.take() {
                 Some(app) => app,
                 None => match home(&library, &data_root) {
                     Some(app) => app,
+                    // The home screen closed because a file was opened: go
+                    // round and open it. Otherwise Krate's home was closed.
+                    None if OPENED.lock().expect("opened lock").is_some() => continue,
+                    None if next.is_none() && reminder_waiting() => continue,
                     None => return,
                 },
             };
             launch(app, &data_root);
         }
     }
+
+    /// The app a reminder names: "carried", or a file in the library.
+    fn app_named(opens: &str, library: &Path) -> Option<App> {
+        #[cfg(krate_native_image)]
+        if opens == "carried" {
+            return Some(App::Carried);
+        }
+        let path = PathBuf::from(opens);
+        (path.parent() == Some(library) && path.is_file()).then_some(App::Received(path))
+    }
+
+    /// Whether a tapped reminder is waiting to open its app. Looked at, not
+    /// taken: the loop takes it on its next turn.
+    fn reminder_waiting() -> bool {
+        match krate_adapter_ios::uikit_native::take_notice_open() {
+            Some(opens) => {
+                REMINDED.lock().expect("reminded lock").replace(opens);
+                true
+            }
+            None => REMINDED.lock().expect("reminded lock").is_some(),
+        }
+    }
+
+    /// A tapped reminder seen by `reminder_waiting`, for the loop to open.
+    static REMINDED: Mutex<Option<String>> = Mutex::new(None);
 
     /// Keep a received `.krate` in the library, named for its app, so the
     /// home screen lists it and a newer copy replaces an older one.
@@ -356,15 +458,27 @@ mod player {
             #[cfg(krate_native_image)]
             if let Ok(manifest) = krate_manifest::Manifest::parse(native::MANIFEST) {
                 apps.push(App::Carried);
+                let preview = preview_name(&App::Carried);
+                let art = if art_dir.join(&preview).exists() {
+                    preview.as_str()
+                } else {
+                    "-"
+                };
                 rows.push(format!(
-                    "{}\tBuilt in \u{00b7} Runs at full speed\t-",
+                    "{}\tBuilt in \u{00b7} Runs at full speed\t{art}",
                     field(&manifest.app.name)
                 ));
             }
             for (path, name, sha, size) in library_apps(library) {
-                // An app that came from the hub shows its hub picture: the
-                // hub names apps by the SHA-256 of their bytes.
-                let art = hub_art.get(&sha).map(String::as_str).unwrap_or("-");
+                // The app as it really looked the last time it ran on this
+                // phone; else, for an app from the hub, its hub picture (the
+                // hub names apps by the SHA-256 of their bytes).
+                let preview = preview_name(&App::Received(path.clone()));
+                let art = if art_dir.join(&preview).exists() {
+                    preview.as_str()
+                } else {
+                    hub_art.get(&sha).map(String::as_str).unwrap_or("-")
+                };
                 rows.push(format!(
                     "{}\tReceived \u{00b7} {}\t{art}",
                     field(&name),
@@ -573,8 +687,89 @@ mod player {
         Some(window)
     }
 
+    /// The file an app's preview is kept in, in the home screen's art folder:
+    /// one per library file, so a newer copy of an app replaces its preview.
+    /// (`screen-`, not the first builds' `preview-`: those could hold a
+    /// picture of the Library itself and are left unread.)
+    fn preview_name(app: &App) -> String {
+        match app {
+            #[cfg(krate_native_image)]
+            App::Carried => "screen-carried.rgba".to_string(),
+            App::Received(path) => format!(
+                "screen-{}.rgba",
+                sanitize(
+                    &path
+                        .file_stem()
+                        .map(|s| s.to_string_lossy().into_owned())
+                        .unwrap_or_default()
+                )
+            ),
+        }
+    }
+
+    /// The app is gone: Krate's menu, its name and grants go with it.
+    fn leave_app() {
+        krate_adapter_ios::uikit_native::set_app_chrome(false);
+        krate_adapter_ios::uikit_native::set_current_app(None);
+        krate_adapter_ios::uikit_native::set_current_name(None);
+        krate_adapter_ios::uikit_native::set_current_uses(None);
+    }
+
+    /// A granted capability as the permission sheet words it (apps/krate-wall
+    /// `describe`), or None for what every app has: its window, its output,
+    /// the clock and randomness.
+    fn use_in_words(cap: &str) -> Option<String> {
+        let mut parts = cap.splitn(2, ':');
+        let kind = parts.next().unwrap_or("");
+        let target = parts.next().unwrap_or("");
+        let host = target.split(':').next().unwrap_or("");
+        let own = target.is_empty() || target.starts_with('.');
+        Some(match kind {
+            "ui.window" | "io.stdout" | "io.stderr" | "io.stdin" | "io.args" | "io.env"
+            | "time.clock" | "time.monotonic" | "random.bytes" => return None,
+            "net.fetch" | "net.connect" if !host.is_empty() && host != "*" => {
+                format!("The internet, at {host}")
+            }
+            "net.fetch" | "net.connect" => "The internet".to_string(),
+            "net.listen" => "The local network".to_string(),
+            "net.ws" => "A live connection".to_string(),
+            "hub" | "hub.rooms" => "Krate online".to_string(),
+            "fs.read" | "fs.list" if own => "Read its own files".to_string(),
+            "fs.write" | "fs.remove" if own => "Save its own files".to_string(),
+            "fs.read" | "fs.list" => "Read files".to_string(),
+            "fs.write" | "fs.remove" => "Change files".to_string(),
+            "ui.dialog" => "Files you pick".to_string(),
+            "audio.playback" => "Sound".to_string(),
+            "audio.capture" => "The microphone".to_string(),
+            "speech" | "speech.say" | "speech.listen" => "Speech".to_string(),
+            "camera.capture" | "camera" => "The camera".to_string(),
+            "location.read" => "Where you are".to_string(),
+            "bluetooth.connect" => "Bluetooth devices you pick".to_string(),
+            "photos.add" => "Adding to your Photos".to_string(),
+            "store.kv" | "store.sql" => "Keeping its data".to_string(),
+            "store.shared" => "Sharing data with people you invite".to_string(),
+            "store.secret" => "Keeping secrets safe".to_string(),
+            "ui.clipboard" => "The clipboard".to_string(),
+            "ui.notify" => "Notifications".to_string(),
+            "ui.open-url" => "Opening links".to_string(),
+            "gfx.gpu" => "The graphics chip".to_string(),
+            "memory.budget" => return None,
+            _ => cap.to_string(),
+        })
+    }
+
     /// Ask, then run. Every open asks: the answer is never remembered.
     fn launch(app: App, data_root: &Path) {
+        // The screen the person tapped from, blurred, for the permission
+        // sheet to sit over (F-314): taken now, before anything covers it.
+        let _ = std::fs::create_dir_all(data_root.join("wall"));
+        krate_adapter_ios::uikit_native::capture_behind(
+            &data_root.join("wall").join("behind.rgba"),
+        );
+        let preview_path = data_root
+            .join("home-ui")
+            .join("art")
+            .join(preview_name(&app));
         // What runs, and its manifest.
         let mut _opened_bundle = None;
         let (manifest_text, wasm, assets_root) = match &app {
@@ -606,13 +801,42 @@ mod player {
                 return;
             }
         };
+        // Which app runs, for its reminders: their ids are namespaced by the
+        // app's id, and a tapped one opens it again by this name.
+        let opens = match &app {
+            #[cfg(krate_native_image)]
+            App::Carried => "carried".to_string(),
+            App::Received(path) => path.to_string_lossy().into_owned(),
+        };
+        krate_adapter_ios::uikit_native::set_current_app(Some((manifest.app.id.clone(), opens)));
+        // Krate's menu from the permission sheet on (IC-934): the sheet and
+        // the opening cover are where a stuck app is first noticed, and Close
+        // there means "don't open it".
+        krate_adapter_ios::uikit_native::set_current_name(Some(manifest.app.name.clone()));
+        krate_adapter_ios::uikit_native::set_current_uses(None);
+        krate_adapter_ios::uikit_native::set_app_chrome(true);
 
-        let Some(all) = ask_permission(&manifest) else {
+        // The line under the app's name on the permission sheet.
+        let detail = match &app {
+            #[cfg(krate_native_image)]
+            App::Carried => format!("Version {} \u{00b7} Built in", manifest.app.version),
+            App::Received(path) => match std::fs::metadata(path) {
+                Ok(meta) => format!(
+                    "Version {} \u{00b7} {}",
+                    manifest.app.version,
+                    human_size(meta.len())
+                ),
+                Err(_) => format!("Version {}", manifest.app.version),
+            },
+        };
+        let Some(granted) = ask_on_wall(data_root, &manifest, &detail) else {
+            leave_app();
             return;
         };
         let declared = match manifest.declared_capabilities() {
             Ok(declared) => declared,
             Err(err) => {
+                leave_app();
                 notice(data_root, "This app did not open", &format!("{err:#}"));
                 return;
             }
@@ -621,15 +845,41 @@ mod player {
             .capabilities
             .iter()
             .zip(declared)
-            .filter(|(request, _)| all || request.required)
+            .filter(|(request, _)| {
+                request.required || granted.iter().any(|cap| *cap == request.cap)
+            })
             .map(|(_, capability)| capability)
             .collect();
+        // For Krate's menu (IC-934): the app's name, and what it may use this
+        // run in the permission sheet's own words.
+        let mut uses: Vec<String> = manifest
+            .capabilities
+            .iter()
+            .filter(|request| request.required || granted.contains(&request.cap))
+            .filter_map(|request| use_in_words(&request.cap))
+            .collect();
+        uses.dedup();
+        krate_adapter_ios::uikit_native::set_current_uses(Some(uses));
 
+        let records = kept
+            .iter()
+            .any(|cap| cap.module() == "audio" && cap.action() == "capture");
+        record_session(records);
         let sandbox = data_root.join("apps").join(sanitize(&manifest.app.id));
         let _ = std::fs::create_dir_all(&sandbox);
+        // The app's key-value store and database: the runtime opens them only
+        // when told where, and the phone players never said, so every
+        // store.kv and store.sql call was refused and a recipe book made in
+        // Studio quit at start. Kept beside the sandbox, not in it, as on a
+        // desktop: the app names keys, never files.
+        let stores = data_root.join("stores");
+        let _ = std::fs::create_dir_all(&stores);
+        let store = stores.join(format!("{}.kv", sanitize(&manifest.app.id)));
         let mut config = krate_runtime::Config {
             session_policy: krate_policy::SessionPolicy::from_grants(kept),
             sandbox_root: sandbox,
+            app_store_path: Some(store.clone()),
+            app_database_path: Some(store.with_extension("sqlite")),
             bundle_assets_root: assets_root,
             phase3_ui_mode: krate_runtime::phase3_ui::Phase3HostUiMode::NativePrototype,
             ..Default::default()
@@ -652,18 +902,30 @@ mod player {
         // loading -- lifting on the app's first frame at the screen's real
         // size; Krate's close capsule over the app, the way back home.
         krate_adapter_ios::uikit_native::show_loading(&manifest.app.name, "Opening");
-        krate_adapter_ios::uikit_native::set_app_chrome(true);
+        // A picture of the app as it really looks, for its home-screen card,
+        // taken a few seconds into its own run (once per run). Asked only
+        // now, past the permission sheet: asked earlier, a slow answer on the
+        // sheet or a Don't Allow took the picture of Krate's own Library.
+        krate_adapter_ios::uikit_native::capture_preview(
+            preview_path,
+            std::time::Duration::from_millis(4000),
+        );
         let outcome = if native {
             run_native(&config)
         } else {
             let Some(wasm) = wasm else {
+                leave_app();
                 return;
             };
             krate_runtime::Runtime::new(&config).and_then(|runtime| {
                 runtime.run_bytes_for_world(&wasm, &config, krate_runtime::RuntimeWorld::Gui)
             })
         };
-        krate_adapter_ios::uikit_native::set_app_chrome(false);
+        krate_adapter_ios::uikit_native::cancel_preview();
+        leave_app();
+        if records {
+            record_session(false);
+        }
         // Back home: the cover until Krate's own screen has drawn.
         krate_adapter_ios::uikit_native::show_loading("Krate", "");
         match outcome {
@@ -703,92 +965,38 @@ mod player {
         unreachable!("no native app in this build")
     }
 
-    /// What the app may use, asked the way iOS asks: one native alert
-    /// naming the app and every reason it gave. Some(true) allows all,
-    /// Some(false) only what the app cannot run without, None opens
-    /// nothing. An app that asks for nothing privileged is not asked.
-    fn ask_permission(manifest: &krate_manifest::Manifest) -> Option<bool> {
+    /// Ask on Krate's own permission sheet (apps/krate-wall): the app's
+    /// name, then each request's capability, its reason and whether the app
+    /// needs it. Returns what the person allowed, or None when they did not
+    /// open the app. An app that asks for nothing opens without asking.
+    fn ask_on_wall(
+        data_root: &Path,
+        manifest: &krate_manifest::Manifest,
+        detail: &str,
+    ) -> Option<Vec<String>> {
         if manifest.capabilities.is_empty() {
-            return Some(true);
+            return Some(Vec::new());
         }
-        let title = format!("\u{201c}{}\u{201d} would like to", manifest.app.name);
-        let mut reasons: Vec<String> = Vec::new();
+        // `wall:ask`, the name, then the line under it as its own argument,
+        // so a name cannot forge that line.
+        let mut args = vec![
+            "wall:ask".to_string(),
+            field(&manifest.app.name),
+            field(detail),
+        ];
         for request in &manifest.capabilities {
-            let line = request.rationale.trim();
-            if !line.is_empty() && !reasons.iter().any(|r| r == line) {
-                reasons.push(line.to_string());
-            }
+            args.push(field(&request.cap));
+            args.push(field(&request.rationale));
+            args.push(if request.required { "1" } else { "0" }.to_string());
         }
-        let message = reasons
-            .iter()
-            .map(|r| format!("\u{2022} {r}"))
-            .collect::<Vec<_>>()
-            .join("\n");
-        let optional = manifest.capabilities.iter().any(|c| !c.required);
-
-        let (tx, rx) = std::sync::mpsc::channel::<Option<bool>>();
-        dispatch2::DispatchQueue::main().exec_async(move || {
-            present_alert(&title, &message, optional, tx);
-        });
-        rx.recv().ok().flatten()
-    }
-
-    /// Present the permission alert over whatever is on screen, in a window
-    /// of its own, and send the answer when a button is tapped.
-    fn present_alert(
-        title: &str,
-        message: &str,
-        optional: bool,
-        tx: std::sync::mpsc::Sender<Option<bool>>,
-    ) {
-        let Some(mtm) = MainThreadMarker::new() else {
-            let _ = tx.send(None);
-            return;
-        };
-        let Some(window) = overlay_window(mtm) else {
-            let _ = tx.send(None);
-            return;
-        };
-        let Some(root) = window.rootViewController() else {
-            let _ = tx.send(None);
-            return;
-        };
-        let alert = UIAlertController::alertControllerWithTitle_message_preferredStyle(
-            Some(&NSString::from_str(title)),
-            Some(&NSString::from_str(message)),
-            UIAlertControllerStyle::Alert,
-            mtm,
-        );
-        let action = |label: &str, style: UIAlertActionStyle, answer: Option<bool>| {
-            let tx = tx.clone();
-            let window = window.clone();
-            let handler = block2::RcBlock::new(move |_: std::ptr::NonNull<UIAlertAction>| {
-                window.setHidden(true);
-                let _ = tx.send(answer);
-            });
-            UIAlertAction::actionWithTitle_style_handler(
-                Some(&NSString::from_str(label)),
-                style,
-                Some(&handler),
-                mtm,
-            )
-        };
-        let allow = action("Allow", UIAlertActionStyle::Default, Some(true));
-        alert.addAction(&allow);
-        if optional {
-            alert.addAction(&action(
-                "Allow Only What It Needs",
-                UIAlertActionStyle::Default,
-                Some(false),
-            ));
-        }
-        alert.addAction(&action(
-            "Don\u{2019}t Allow",
-            UIAlertActionStyle::Cancel,
-            None,
-        ));
-        alert.setPreferredAction(Some(&allow));
-        root.presentViewController_animated_completion(&alert, true, None);
+        let answer = run_wall(data_root, args)?;
+        let caps = answer.trim().strip_prefix("wall:open:")?;
+        Some(
+            caps.split(',')
+                .filter(|cap| !cap.is_empty())
+                .map(str::to_string)
+                .collect(),
+        )
     }
 
     /// Run the wall guest -- Krate's own trusted screens -- and return what

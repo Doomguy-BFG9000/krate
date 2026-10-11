@@ -1,0 +1,26 @@
+[app]
+id = "dev.krate.web-probe"
+name = "Help"
+version = "0.1.0"
+entry = "target/wasm32-wasip1/release/krate_web_probe.wasm"
+world = "krate:app/gui@0.2.0"
+
+[[capabilities]]
+cap = "ui.window:create"
+rationale = "A window with Krate's help page inside it"
+required = true
+
+[[capabilities]]
+cap = "net.connect:krate.tech:443"
+rationale = "Show Krate's own help pages"
+required = true
+
+[[capabilities]]
+cap = "io.stdout"
+rationale = "Report what the page did, for automated runs"
+required = true
+
+[[capabilities]]
+cap = "io.args"
+rationale = "Read the quick-run flag used by automated tests"
+required = true

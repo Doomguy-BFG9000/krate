@@ -587,6 +587,120 @@ impl<'a> Phase3UiDispatcher<'a> {
         self.adapter.set_adapts(adapts)
     }
 
+    /// The platform's own file or folder picker (phones); None when cancelled.
+    pub fn choose_path(
+        &self,
+        id: WindowId,
+        folder: bool,
+        filter: &str,
+    ) -> Option<std::path::PathBuf> {
+        self.adapter.choose_path(id, folder, filter)
+    }
+
+    /// Whether the device can tap back (IC-917).
+    pub fn haptics_available(&self) -> bool {
+        self.adapter.haptics_available()
+    }
+
+    /// Tap back: a feel, or an impact at a strength when `feel` is None.
+    pub fn haptic(
+        &self,
+        feel: Option<krate_adapter_common::ui::HapticFeel>,
+        strength: f32,
+    ) -> bool {
+        self.adapter.haptic(feel, strength)
+    }
+
+    /// The adapter, for reminders (IC-921), which pass through as they are.
+    pub fn reminders(&self) -> &dyn krate_adapter_common::ui::UiAdapter {
+        self.adapter
+    }
+
+    /// The photo picker (IC-920).
+    pub fn pick_photos(
+        &self,
+        id: WindowId,
+        limit: u32,
+    ) -> Option<Result<Vec<std::path::PathBuf>, String>> {
+        self.adapter.pick_photos(id, limit)
+    }
+
+    /// Add a picture to the photo library (IC-920).
+    pub fn save_photo(&self, data: &[u8]) -> Result<(), Option<String>> {
+        self.adapter.save_photo(data)
+    }
+
+    /// Open the share sheet (IC-919).
+    pub fn share(
+        &self,
+        id: WindowId,
+        text: Option<&str>,
+        url: Option<&str>,
+        files: &[(String, Vec<u8>)],
+    ) -> Result<bool, String> {
+        self.adapter.share(id, text, url, files)
+    }
+
+    /// Tell the screen reader what a window shows (IC-926).
+    pub fn describe_accessibility(
+        &self,
+        id: WindowId,
+        elements: &[krate_adapter_common::ui::AccessElement],
+    ) -> Result<(), krate_adapter_common::ui::UiAdapterError> {
+        self.adapter.describe_accessibility(id, elements)
+    }
+
+    /// Whether a screen reader is on (IC-926).
+    pub fn screen_reader_on(&self) -> bool {
+        self.adapter.screen_reader_on()
+    }
+
+    /// How the person asked things to look (IC-925).
+    pub fn appearance(&self) -> krate_adapter_common::ui::Appearance {
+        self.adapter.appearance()
+    }
+
+    /// Open the sign-in sheet (IC-923).
+    pub fn sign_in(
+        &self,
+        id: WindowId,
+        authorize_url: &str,
+        scheme: &str,
+    ) -> Result<Option<String>, String> {
+        self.adapter.sign_in(id, authorize_url, scheme)
+    }
+
+    /// The adapter, for the Bluetooth calls (IC-917), which pass through
+    /// as they are.
+    pub fn bluetooth(&self) -> &dyn krate_adapter_common::ui::UiAdapter {
+        self.adapter
+    }
+
+    /// Whether the device can tell where it is (IC-917).
+    pub fn location_available(&self) -> bool {
+        self.adapter.location_available()
+    }
+
+    /// Where the device is (IC-917).
+    pub fn location(&self) -> krate_adapter_common::ui::LocationAnswer {
+        self.adapter.location()
+    }
+
+    /// Whether the device can tell how it is held (IC-917).
+    pub fn motion_available(&self) -> bool {
+        self.adapter.motion_available()
+    }
+
+    /// The latest motion reading (IC-917).
+    pub fn motion(&self) -> Option<krate_adapter_common::ui::MotionReading> {
+        self.adapter.motion()
+    }
+
+    /// Hand a written file to the platform's save sheet (phones).
+    pub fn export_file(&self, id: WindowId, path: &std::path::Path) -> bool {
+        self.adapter.export_file(id, path)
+    }
+
     /// Touch or pointer, and the covered edges, of a window's screen.
     pub fn screen_kind(&self, id: WindowId) -> krate_adapter_common::ui::ScreenKind {
         self.adapter.screen_kind(id)
