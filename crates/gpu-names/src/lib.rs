@@ -639,6 +639,10 @@ pub fn set_limit(limits: &mut Limits, name: &str, value: u64) -> bool {
     }
 }
 
+/// The same tables for wgpu-types 27, for programs on wgpu 27 (IC-931).
+#[cfg(feature = "wgpu-27")]
+pub mod wgpu27;
+
 #[cfg(test)]
 mod tests {
     use super::*;

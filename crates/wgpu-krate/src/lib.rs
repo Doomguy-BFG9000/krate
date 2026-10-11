@@ -29,7 +29,14 @@ use std::sync::{Arc, Mutex};
 
 use krate::bindings::krate::gpu::types as t;
 use krate::gpu::gpu as g;
+#[cfg(not(feature = "wgpu-27"))]
 use krate_gpu_names as names;
+#[cfg(feature = "wgpu-27")]
+use krate_gpu_names::wgpu27 as names;
+#[cfg(feature = "wgpu-27")]
+extern crate naga27 as naga;
+#[cfg(feature = "wgpu-27")]
+extern crate wgpu27 as wgpu;
 
 mod lower;
 
@@ -53,7 +60,10 @@ pub fn instance() -> wgpu::Instance {
 /// Nothing is dereferenced; it is unsafe only because wgpu's API is.
 pub fn surface_target(window: u64, widget: u64) -> wgpu::SurfaceTargetUnsafe {
     wgpu::SurfaceTargetUnsafe::RawHandle {
+        #[cfg(not(feature = "wgpu-27"))]
         raw_display_handle: None,
+        #[cfg(feature = "wgpu-27")]
+        raw_display_handle: rwh::RawDisplayHandle::Web(rwh::WebDisplayHandle::new()),
         raw_window_handle: KrateWindow::new(window, widget).raw(),
     }
 }
@@ -65,21 +75,23 @@ pub struct KrateWindow {
     id: u32,
 }
 
-static WINDOWS: Mutex<Vec<(u64, u64)>> = Mutex::new(Vec::new());
-
 impl KrateWindow {
     /// Name the canvas `widget` of `window`.
+    ///
+    /// The id is `window * 256 + widget`: stateless, so anything that makes
+    /// a raw window handle for a Krate canvas -- winit's Krate backend, an
+    /// engine's own seam -- names it the same way without sharing a table
+    /// with this crate. Window ids are small and a canvas widget's id is
+    /// under 256; 0 is never a window, so the id is never 0 (raw-window-handle
+    /// reserves it).
     pub fn new(window: u64, widget: u64) -> KrateWindow {
-        let mut list = WINDOWS.lock().unwrap();
-        let id = match list.iter().position(|w| *w == (window, widget)) {
-            Some(i) => i,
-            None => {
-                list.push((window, widget));
-                list.len() - 1
-            }
-        };
-        // Web window ids start at 1 (0 is reserved by raw-window-handle).
-        KrateWindow { id: id as u32 + 1 }
+        assert!(
+            widget < 256 && window > 0 && window < (1 << 24),
+            "a Krate canvas id out of range"
+        );
+        KrateWindow {
+            id: (window as u32) * 256 + widget as u32,
+        }
     }
 
     fn raw(&self) -> rwh::RawWindowHandle {
@@ -87,11 +99,7 @@ impl KrateWindow {
     }
 
     fn lookup(id: u32) -> Option<(u64, u64)> {
-        WINDOWS
-            .lock()
-            .unwrap()
-            .get(id.checked_sub(1)? as usize)
-            .copied()
+        (id >= 256).then_some(((id / 256) as u64, (id % 256) as u64))
     }
 }
 
@@ -230,6 +238,7 @@ fn to_wgpu_error(e: &t::GpuError) -> (wgpu::ErrorFilter, wgpu::Error) {
 /// WebGPU's error machinery.
 struct DeviceCtx {
     handle: Owned,
+    #[cfg_attr(feature = "wgpu-27", allow(dead_code))]
     info: wgpu::AdapterInfo,
     features: wgpu::Features,
     limits: wgpu::Limits,
@@ -499,11 +508,18 @@ fn filter(f: wgpu::FilterMode) -> t::FilterMode {
     }
 }
 
+#[cfg(not(feature = "wgpu-27"))]
 fn mip_filter(f: wgpu::MipmapFilterMode) -> t::FilterMode {
     match f {
         wgpu::MipmapFilterMode::Nearest => t::FilterMode::Nearest,
         wgpu::MipmapFilterMode::Linear => t::FilterMode::Linear,
     }
+}
+
+/// wgpu 27 names a mipmap filter with the ordinary filter mode.
+#[cfg(feature = "wgpu-27")]
+fn mip_filter(f: wgpu::FilterMode) -> t::FilterMode {
+    filter(f)
 }
 
 fn compare(c: wgpu::CompareFunction) -> t::CompareFunction {
@@ -701,7 +717,13 @@ fn limits_from(list: &[t::Limit]) -> wgpu::Limits {
 struct KInstance;
 
 impl InstanceInterface for KInstance {
+    #[cfg(not(feature = "wgpu-27"))]
     fn new(_desc: wgpu::InstanceDescriptor) -> Self {
+        KInstance
+    }
+
+    #[cfg(feature = "wgpu-27")]
+    fn new(_desc: &wgpu::InstanceDescriptor) -> Self {
         KInstance
     }
 
@@ -753,6 +775,7 @@ impl InstanceInterface for KInstance {
         wgpu::WgslLanguageFeatures::empty()
     }
 
+    #[cfg(not(feature = "wgpu-27"))]
     fn enumerate_adapters(
         &self,
         _backends: wgpu::Backends,
@@ -807,13 +830,17 @@ fn adapter_info(info: Option<t::AdapterInfo>) -> wgpu::AdapterInfo {
             t::DeviceType::Cpu => wgpu::DeviceType::Cpu,
             t::DeviceType::Other => wgpu::DeviceType::Other,
         },
+        #[cfg(not(feature = "wgpu-27"))]
         device_pci_bus_id: String::new(),
         driver: info.driver,
         driver_info: format!("{} through krate:gpu", info.backend),
         // The app talks WebGPU; what is under the host is the host's.
         backend: wgpu::Backend::BrowserWebGpu,
+        #[cfg(not(feature = "wgpu-27"))]
         subgroup_min_size: 4,
+        #[cfg(not(feature = "wgpu-27"))]
         subgroup_max_size: 128,
+        #[cfg(not(feature = "wgpu-27"))]
         transient_saves_memory: false,
     }
 }
@@ -833,6 +860,9 @@ impl AdapterInterface for KAdapter {
     ) -> Pin<Box<dyn RequestDeviceFuture>> {
         let required_limits = names::limit_pairs(&desc.required_limits)
             .into_iter()
+            // A wgpu 27 limit the host's wgpu no longer has (it dropped
+            // max-inter-stage-shader-components) is not asked for.
+            .filter(|(name, _)| krate_gpu_names::LIMITS.iter().any(|(n, _, _)| n == name))
             .map(|(name, value)| t::Limit {
                 name: name.to_string(),
                 value,
@@ -938,6 +968,7 @@ impl AdapterInterface for KAdapter {
         wgpu::PresentationTimestamp::INVALID_TIMESTAMP
     }
 
+    #[cfg(not(feature = "wgpu-27"))]
     fn cooperative_matrix_properties(&self) -> Vec<wgpu::wgt::CooperativeMatrixProperties> {
         Vec::new()
     }
@@ -1132,6 +1163,7 @@ impl DeviceInterface for KDevice {
         self.ctx.limits.clone()
     }
 
+    #[cfg(not(feature = "wgpu-27"))]
     fn adapter_info(&self) -> wgpu::AdapterInfo {
         self.ctx.info.clone()
     }
@@ -1332,12 +1364,28 @@ impl DeviceInterface for KDevice {
             self.ctx.h(),
             &t::PipelineLayoutDescriptor {
                 label: label(desc.label),
+                #[cfg(not(feature = "wgpu-27"))]
                 bind_group_layouts: desc
                     .bind_group_layouts
                     .iter()
                     .map(|l| l.map(|l| handle_of(l.as_custom::<KBindGroupLayout>())))
                     .collect(),
+                #[cfg(not(feature = "wgpu-27"))]
                 immediate_size: desc.immediate_size,
+                #[cfg(feature = "wgpu-27")]
+                bind_group_layouts: desc
+                    .bind_group_layouts
+                    .iter()
+                    .map(|l| Some(handle_of(l.as_custom::<KBindGroupLayout>())))
+                    .collect(),
+                // wgpu 27's push constant ranges are one block of immediates.
+                #[cfg(feature = "wgpu-27")]
+                immediate_size: desc
+                    .push_constant_ranges
+                    .iter()
+                    .map(|r| r.range.end)
+                    .max()
+                    .unwrap_or(0),
             },
         ));
         DispatchPipelineLayout::custom(KPipelineLayout::new(h))
@@ -1400,8 +1448,14 @@ impl DeviceInterface for KDevice {
         };
         let depth_stencil = desc.depth_stencil.as_ref().map(|ds| t::DepthStencilState {
             format: fmt_name(ds.format),
+            #[cfg(not(feature = "wgpu-27"))]
             depth_write_enabled: ds.depth_write_enabled.unwrap_or(false),
+            #[cfg(not(feature = "wgpu-27"))]
             depth_compare: compare(ds.depth_compare.unwrap_or(wgpu::CompareFunction::Always)),
+            #[cfg(feature = "wgpu-27")]
+            depth_write_enabled: ds.depth_write_enabled,
+            #[cfg(feature = "wgpu-27")]
+            depth_compare: compare(ds.depth_compare),
             stencil_front: stencil_face(&ds.stencil.front),
             stencil_back: stencil_face(&ds.stencil.back),
             stencil_read_mask: ds.stencil.read_mask,
@@ -1443,7 +1497,11 @@ impl DeviceInterface for KDevice {
                     alpha_to_coverage_enabled: desc.multisample.alpha_to_coverage_enabled,
                 },
                 fragment,
+                #[cfg(not(feature = "wgpu-27"))]
                 multiview_mask: desc.multiview_mask.map(|m| m.get()),
+                // wgpu 27 counts views; the mask has that many low bits.
+                #[cfg(feature = "wgpu-27")]
+                multiview_mask: desc.multiview.map(|n| (1u32 << n.get().min(31)) - 1),
             },
         ));
         DispatchRenderPipeline::custom(KRenderPipeline {
@@ -1639,13 +1697,26 @@ impl DeviceInterface for KDevice {
         *self.ctx.handler.lock().unwrap() = Some(handler);
     }
 
+    #[cfg(not(feature = "wgpu-27"))]
     fn push_error_scope(&self, filter: wgpu::ErrorFilter) -> u32 {
         let mut scopes = self.ctx.scopes.lock().unwrap();
         scopes.push((filter, None));
         (scopes.len() - 1) as u32
     }
 
+    #[cfg(not(feature = "wgpu-27"))]
     fn pop_error_scope(&self, _index: u32) -> Pin<Box<dyn PopErrorScopeFuture>> {
+        let error = self.ctx.scopes.lock().unwrap().pop().and_then(|(_, e)| e);
+        Box::pin(ready(error))
+    }
+
+    #[cfg(feature = "wgpu-27")]
+    fn push_error_scope(&self, filter: wgpu::ErrorFilter) {
+        self.ctx.scopes.lock().unwrap().push((filter, None));
+    }
+
+    #[cfg(feature = "wgpu-27")]
+    fn pop_error_scope(&self) -> Pin<Box<dyn PopErrorScopeFuture>> {
         let error = self.ctx.scopes.lock().unwrap().pop().and_then(|(_, e)| e);
         Box::pin(ready(error))
     }
@@ -1700,12 +1771,24 @@ struct KQueueWriteBuffer {
 }
 
 impl QueueWriteBufferInterface for KQueueWriteBuffer {
+    #[cfg(not(feature = "wgpu-27"))]
     fn len(&self) -> usize {
         self.data.len()
     }
 
+    #[cfg(not(feature = "wgpu-27"))]
     unsafe fn write_slice(&mut self) -> wgpu::WriteOnly<'_, [u8]> {
         wgpu::WriteOnly::from_mut(&mut self.data[..])
+    }
+
+    #[cfg(feature = "wgpu-27")]
+    fn slice(&self) -> &[u8] {
+        &self.data
+    }
+
+    #[cfg(feature = "wgpu-27")]
+    fn slice_mut(&mut self) -> &mut [u8] {
+        &mut self.data
     }
 }
 
@@ -1824,17 +1907,32 @@ struct KMappedRange {
 }
 
 impl BufferMappedRangeInterface for KMappedRange {
+    #[cfg(not(feature = "wgpu-27"))]
     fn len(&self) -> usize {
         self.data.len()
     }
 
+    #[cfg(not(feature = "wgpu-27"))]
     unsafe fn read_slice(&self) -> &[u8] {
         &self.data
     }
 
+    #[cfg(not(feature = "wgpu-27"))]
     unsafe fn write_slice(&mut self) -> wgpu::WriteOnly<'_, [u8]> {
         self.modified = true;
         wgpu::WriteOnly::from_mut(&mut self.data[..])
+    }
+
+    #[cfg(feature = "wgpu-27")]
+    fn slice(&self) -> &[u8] {
+        &self.data
+    }
+
+    /// wgpu 27 cannot say whether a mutable view was written; assume it was.
+    #[cfg(feature = "wgpu-27")]
+    fn slice_mut(&mut self) -> &mut [u8] {
+        self.modified = true;
+        &mut self.data
     }
 }
 
@@ -2131,7 +2229,10 @@ impl CommandEncoderInterface for KCommandEncoder {
                     )
                 }),
                 occlusion_query_set: desc.occlusion_query_set.map(query_h),
+                #[cfg(not(feature = "wgpu-27"))]
                 multiview_mask: desc.multiview_mask.map(|m| m.get()),
+                #[cfg(feature = "wgpu-27")]
+                multiview_mask: None,
             }),
             commands: Vec::new(),
         })
@@ -2244,12 +2345,31 @@ impl ComputePassInterface for KComputePass {
             )));
     }
 
+    #[cfg(not(feature = "wgpu-27"))]
     fn set_immediates(&mut self, offset: u32, data: &[u8]) {
         self.commands
             .push(t::ComputeCommand::SetImmediates(t::SetImmediates {
                 offset,
                 data: data.to_vec(),
             }));
+    }
+
+    /// wgpu 27's push constants are what the host calls immediates.
+    #[cfg(feature = "wgpu-27")]
+    fn set_push_constants(&mut self, offset: u32, data: &[u8]) {
+        self.commands
+            .push(t::ComputeCommand::SetImmediates(t::SetImmediates {
+                offset,
+                data: data.to_vec(),
+            }));
+    }
+
+    #[cfg(feature = "wgpu-27")]
+    fn end(&mut self) {
+        if let Some(desc) = self.desc.take() {
+            self.ctx
+                .check(g::encode_compute_pass(self.encoder, &desc, &self.commands));
+        }
     }
 
     fn insert_debug_marker(&mut self, _label: &str) {}
@@ -2417,11 +2537,28 @@ impl RenderPassInterface for KRenderPass {
         rec_vertex(self, slot, buffer, offset, size);
     }
 
+    #[cfg(not(feature = "wgpu-27"))]
     fn set_immediates(&mut self, offset: u32, data: &[u8]) {
         self.push(t::RenderCommand::SetImmediates(t::SetImmediates {
             offset,
             data: data.to_vec(),
         }));
+    }
+
+    #[cfg(feature = "wgpu-27")]
+    fn set_push_constants(&mut self, _stages: wgpu::ShaderStages, offset: u32, data: &[u8]) {
+        self.push(t::RenderCommand::SetImmediates(t::SetImmediates {
+            offset,
+            data: data.to_vec(),
+        }));
+    }
+
+    #[cfg(feature = "wgpu-27")]
+    fn end(&mut self) {
+        if let Some(desc) = self.desc.take() {
+            self.ctx
+                .check(g::encode_render_pass(self.encoder, &desc, &self.commands));
+        }
     }
 
     fn set_blend_constant(&mut self, c: wgpu::Color) {
@@ -2643,7 +2780,16 @@ impl RenderBundleEncoderInterface for KRenderBundleEncoder {
         rec_vertex(self, slot, buffer, offset, size);
     }
 
+    #[cfg(not(feature = "wgpu-27"))]
     fn set_immediates(&mut self, offset: u32, data: &[u8]) {
+        self.push(t::RenderCommand::SetImmediates(t::SetImmediates {
+            offset,
+            data: data.to_vec(),
+        }));
+    }
+
+    #[cfg(feature = "wgpu-27")]
+    fn set_push_constants(&mut self, _stages: wgpu::ShaderStages, offset: u32, data: &[u8]) {
         self.push(t::RenderCommand::SetImmediates(t::SetImmediates {
             offset,
             data: data.to_vec(),
@@ -2775,7 +2921,10 @@ impl SurfaceInterface for KSurface {
                 },
                 detail,
             ),
+            #[cfg(not(feature = "wgpu-27"))]
             Err(t::SurfaceError::Occluded) => (None, wgpu::SurfaceStatus::Occluded, detail),
+            #[cfg(feature = "wgpu-27")]
+            Err(t::SurfaceError::Occluded) => (None, wgpu::SurfaceStatus::Timeout, detail),
             Err(t::SurfaceError::Lost(_)) => (None, wgpu::SurfaceStatus::Lost, detail),
             Err(_) => (None, wgpu::SurfaceStatus::Outdated, detail),
         }

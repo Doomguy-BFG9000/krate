@@ -33,3 +33,6 @@ in ~/Projects/krate-bevy (built with its build-app.sh).
 Bistro: Amazon Lumberyard Bistro, Open Research Content Archive (ORCA),
 Amazon Lumberyard, 2017, http://developer.nvidia.com/orca/amazon-lumberyard-bistro,
 CC-BY 4.0. Converted to glTF with Blender 5.2.2 (scripts in krate-bevy).
+- m5-wgpu27-cube.jpg -- wgpu v27.0.1's own cube example (src/cube byte for
+  byte, krate-bevy/wgpu27-cube) through wgpu-krate built with `wgpu-27`:
+  2048x1536 headless, 55-57 fps display-paced (IC-931).

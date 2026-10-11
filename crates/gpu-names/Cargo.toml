@@ -13,3 +13,8 @@ description = "WebGPU's names for texture formats, vertex formats, features and 
 # same value on both sides of krate:gpu.
 [dependencies]
 wgt = { package = "wgpu-types", version = "29.0.4", default-features = false }
+# The same names for programs on wgpu 27 (IC-931): wgpu-krate's `wgpu-27`.
+wgt27 = { package = "wgpu-types", version = "27.0.1", default-features = false, optional = true }
+
+[features]
+wgpu-27 = ["dep:wgt27"]

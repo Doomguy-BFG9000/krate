@@ -16,17 +16,24 @@ description = "wgpu's custom backend over krate:gpu: a program or engine written
 # backend this crate implements; `wgsl` and `naga-ir` match what Bevy turns
 # on, because both change the backend traits; the fragile Send/Sync feature
 # is what Bevy builds wgpu with on wasm.
-wgpu = { version = "29.0.4", default-features = false, features = ["custom", "std", "wgsl", "naga-ir", "fragile-send-sync-non-atomic-wasm"] }
+wgpu = { version = "29.0.4", default-features = false, features = ["custom", "std", "wgsl", "naga-ir", "fragile-send-sync-non-atomic-wasm"], optional = true }
+# The same backend for programs on wgpu 27 (Veloren), feature `wgpu-27`
+# (IC-931): one source, the few trait methods that differ cfg'd.
+wgpu27 = { package = "wgpu", version = "27.0.1", default-features = false, features = ["custom", "std", "wgsl", "naga-ir", "fragile-send-sync-non-atomic-wasm"], optional = true }
 # A naga module (Bevy's composed shaders) goes to the host as WGSL text.
-naga = { version = "29.0.3", default-features = false, features = ["wgsl-out"] }
+naga = { version = "29.0.3", default-features = false, features = ["wgsl-out"], optional = true }
+naga27 = { package = "naga", version = "27.0.3", default-features = false, features = ["wgsl-out"], optional = true }
 krate = { path = "../bindings-rust", features = ["gui", "std"] }
 krate-gpu-names = { path = "../gpu-names" }
 
 [features]
+default = ["wgpu-29"]
+wgpu-29 = ["dep:wgpu", "dep:naga"]
+wgpu-27 = ["dep:wgpu27", "dep:naga27", "krate-gpu-names/wgpu-27"]
 # Shaders written in GLSL or SPIR-V: parsed by naga inside the app, then sent
 # to the host as WGSL like any other (krate:gpu takes WGSL only).
-glsl = ["wgpu/glsl", "naga/glsl-in"]
-spirv = ["wgpu/spirv", "naga/spv-in"]
+glsl = ["wgpu?/glsl", "naga?/glsl-in", "wgpu27?/glsl", "naga27?/glsl-in"]
+spirv = ["wgpu?/spirv", "naga?/spv-in", "wgpu27?/spirv", "naga27?/spv-in"]
 
 [dev-dependencies]
 naga = { version = "29.0.3", features = ["glsl-in", "wgsl-in", "wgsl-out"] }
