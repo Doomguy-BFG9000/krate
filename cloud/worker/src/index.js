@@ -238,6 +238,8 @@ export default {
     // Every ten minutes: the founder's welcome to people who signed up at
     // least ten minutes ago. Nightly: the scrub.
     if (event && event.cron === WELCOME_CRON) {
+      // A big upload still waiting for its judgement is asked about again.
+      await retryBigJudging(env);
       // Only while the automatic welcome is switched on; the founder writes
       // them himself otherwise, from the desk.
       if (env.WELCOME_AUTO === "1") await sendDueWelcomes(env);
@@ -290,6 +292,31 @@ export default {
       }
       if (request.method === "POST" && pathname === "/publish") {
         return cors(await publish(request, env));
+      }
+      // The big-file path (IC-945).
+      if (request.method === "POST" && pathname === "/publish/big/start") {
+        return cors(await bigStart(request, env));
+      }
+      {
+        const big = /^\/publish\/big\/([0-9a-zA-Z]{8,40})(?:\/(part\/(\d+)|finish))?$/.exec(pathname);
+        if (big) {
+          const [, id, tail, n] = big;
+          if (request.method === "PUT" && tail && tail.startsWith("part/")) {
+            return cors(await bigPart(request, env, id, Number(n)));
+          }
+          if (request.method === "POST" && tail === "finish") {
+            return cors(await bigFinish(request, env, id));
+          }
+          if (request.method === "GET" && !tail) {
+            return cors(await bigGetStatus(request, env, id));
+          }
+        }
+        const internal = /^\/internal\/big\/([0-9a-zA-Z]{8,40})\/(bytes|verdict)$/.exec(pathname);
+        if (internal) {
+          const [, id, what] = internal;
+          if (request.method === "GET" && what === "bytes") return await bigBytes(request, env, id);
+          if (request.method === "POST" && what === "verdict") return await bigVerdict(request, env, id);
+        }
       }
       if (request.method === "GET" && pathname === "/login/start") {
         return noteStep(env, "signin", "github-start", loginStart(url, env));
@@ -574,6 +601,14 @@ export default {
       // checkers and chat unfurlers ask with HEAD first, and a 404 there
       // made every shared app link read as dead.
       if ((request.method === "GET" || request.method === "HEAD") && pathname.startsWith("/a/")) {
+        // A listing's source or notices, attached through the big-file path.
+        const attached = /^\/a\/([0-9a-f]{64})\/(source|notices)$/.exec(pathname);
+        if (attached) {
+          const res = await fetchAttachment(attached[1], attached[2], env);
+          return cors(request.method === "HEAD"
+            ? new Response(null, { status: res.status, headers: res.headers })
+            : res);
+        }
         const res = await fetchBundle(request, url, pathname.slice(3), env);
         return cors(request.method === "HEAD"
           ? new Response(null, { status: res.status, headers: res.headers })
@@ -720,7 +755,42 @@ async function publish(request, env) {
   if (!judged.ok) {
     return text(`not a valid .krate bundle: ${judged.problem}`, 422);
   }
-  const judgement = judged.judgement;
+  const hash = await sha256Hex(body);
+  return admitJudged(env, {
+    identity,
+    judgement: judged.judgement,
+    hash,
+    size: body.length,
+    fields: listingFields(request),
+    store: () => storeBundle(env, hash, body),
+  });
+}
+
+/// What a publisher says about a listing, from the publish door's headers.
+function listingFields(request) {
+  return {
+    unlisted: header(request, "x-krate-unlisted") === "1",
+    name: textHeader(request, "x-krate-name") || "",
+    description: textHeader(request, "x-krate-description") || "",
+    category: shelfOf(header(request, "x-krate-category")),
+  };
+}
+
+/// A small fixed shelf list: free-text categories fragment a gallery.
+function shelfOf(raw) {
+  const c = (raw || "").toLowerCase();
+  return ["games", "productivity", "tools", "media", "learning"].includes(c) ? c : "apps";
+}
+
+/// Everything after a bundle has been judged, for both doors (IC-945): the
+/// publish door's one request and the big tier's parts judged on the build
+/// service. One function, so the two cannot list an app differently: the
+/// signature refusal, ownership before bytes, the listing read from the
+/// judgement, the alias, the retired rows and the moving name.
+///
+/// `store` puts the bytes where /a/<hash> serves them and answers
+/// `{ size, sha256 }` or `{ problem }`; `extra` adds fields to the listing.
+async function admitJudged(env, { identity, judgement, hash, size, fields, store, extra }) {
   if (judgement.signature.state !== "absent" && judgement.signature.state !== "valid") {
     // A file that carries a signature that does not verify is not
     // published: to a recipient it would read as somebody's release that
@@ -737,7 +807,6 @@ async function publish(request, env) {
     required: Boolean(c.required),
   }));
 
-  const hash = await sha256Hex(body);
 
   // Identical bytes are idempotent, and authorship does not transfer
   // (IC-387). Content addressing means anyone can re-POST bytes they
@@ -785,7 +854,7 @@ async function publish(request, env) {
   // same URL, so a person who publishes twice does not get two entries. The
   // store is told the digest and read back before anything is listed
   // (IC-833, tests 1837 and 1840).
-  const stored = await storeBundle(env, hash, body);
+  const stored = await store();
   if (stored.problem) {
     // Nothing public was created, so the ownership record owns nothing.
     // Best effort: a stray one names no bytes and is harmless.
@@ -796,22 +865,16 @@ async function publish(request, env) {
   }
 
   const meta = {
-    unlisted: header(request, "x-krate-unlisted") === "1",
-    name: textHeader(request, "x-krate-name") || "Untitled app",
-    description: textHeader(request, "x-krate-description") || "",
-    // A small fixed shelf list: free-text categories fragment a gallery.
-    category: (() => {
-      const c = (header(request, "x-krate-category") || "").toLowerCase();
-      return ["games", "productivity", "tools", "media", "learning"].includes(c)
-        ? c
-        : "apps";
-    })(),
+    unlisted: Boolean(fields.unlisted),
+    name: fields.name || "Untitled app",
+    description: fields.description || "",
+    category: fields.category || "apps",
     author: identity.name || identity.login,
     author_login: identity.login,
     author_url: `https://github.com/${identity.login}`,
     avatar_url: identity.avatar_url || "",
     published: Math.floor(Date.now() / 1000),
-    size: body.length,
+    size,
     // What the app declares it needs, so its page can show the permissions
     // BEFORE anyone downloads it. This is the one thing a Krate listing has
     // that an app store listing does not, and it was not being stored at
@@ -840,6 +903,7 @@ async function publish(request, env) {
     release: judgement.release,
     derived_from: judgement.derived_from,
     validator: { version: judgement.validator, wit: judgement.wit },
+    ...(extra || {}),
   };
 
   // Keyed so KV's own lexicographic listing comes back newest-first when
@@ -1113,6 +1177,7 @@ async function unpublish(request, hash, env) {
   // alias that resolves to it, and the screenshot. Removing only the
   // listing left the app downloadable by anyone holding the URL -- which is
   // the opposite of what "remove it" means to the person clicking it.
+  await deleteBigParts(env, hash);
   await env.APPS.delete(`app:${hash}`);
   await env.APPS.delete(`owner:${hash}`);
   await env.BUNDLES.delete(hash);
@@ -1476,6 +1541,7 @@ async function purgeBundle(request, hash, env) {
   const admins = (env.KRATE_ADMINS || "").split(",").map((name) => name.trim());
   if (!admins.includes(identity.login)) return text("not found", 404);
   if (!/^[0-9a-f]{64}$/.test(hash)) return text("not found", 404);
+  await deleteBigParts(env, hash);
   await env.APPS.delete(`app:${hash}`);
   await env.APPS.delete(`owner:${hash}`);
   await env.BUNDLES.delete(hash);
@@ -1570,7 +1636,18 @@ async function fetchBundle(request, url, hash, env) {
   if (takedown) {
     return takedownResponse(takedown, env);
   }
-  const object = await env.BUNDLES.get(hash);
+  let object = await env.BUNDLES.get(hash);
+  // A big-tier app lives where its upload landed, named by the record its
+  // passing verdict wrote (IC-945). Asked only on a miss, so an ordinary
+  // download costs no extra read.
+  let big = false;
+  if (!object) {
+    const blob = await env.APPS.get(`bigkey:${hash}`);
+    if (blob) {
+      object = await env.BUNDLES.get(blob);
+      big = Boolean(object);
+    }
+  }
   if (!object) {
     return text("not found", 404);
   }
@@ -1654,6 +1731,10 @@ async function fetchBundle(request, url, hash, env) {
     "cache-control": "public, max-age=31536000, immutable",
     vary: "accept, user-agent",
     "content-disposition": `attachment; filename="${filename}"`,
+    // The size up front, so a download can show its progress; and the
+    // tier, so `krate run` knows to save a big app to a file first.
+    "content-length": String(object.size),
+    ...(big ? { "x-krate-tier": "big" } : {}),
   };
   if (request.method === "HEAD") {
     // The size is the one thing a HEAD is usually asked for, and the
@@ -3359,6 +3440,624 @@ async function verifyGitHub(request, env) {
     // call costs one extra GitHub round trip, which is nothing.
   }
   return identity;
+}
+
+// ------------------------------------------------------------- big files
+
+/* The big-file path (IC-945): an app too large for the publish door's one
+ * 5 MiB request -- Veloren is 370 MB -- uploaded in parts and judged on the
+ * build service, because a Worker cannot hold it.
+ *
+ *   POST /publish/big/start            sign-in, allowlist, quota; opens an
+ *                                      R2 multipart upload; answers a token
+ *   PUT  /publish/big/<id>/part/<n>    one part, streamed into R2
+ *   POST /publish/big/<id>/finish      completes it; the build service judges
+ *   GET  /publish/big/<id>             where it is: uploading, judging,
+ *                                      listed (with its URL) or refused
+ *   GET  /internal/big/<id>/bytes      the build service reads the upload
+ *   POST /internal/big/<id>/verdict    and answers with the hub's judgement
+ *
+ * Nothing is listed or served before a passing verdict: the upload lives at
+ * big/<id>, which no public route names, and /a/<hash> reaches it only
+ * through the `bigkey:<hash>` record the verdict writes. The token carries
+ * everything a part needs, so a part costs no KV operation at all.
+ */
+const BIG_PART_BYTES = 64 * 1024 * 1024;
+const BIG_MAX_BYTES = {
+  bundle: 1024 * 1024 * 1024,
+  source: 512 * 1024 * 1024,
+  notices: 1024 * 1024,
+};
+const BIG_PER_LOGIN_PER_DAY = 3;
+const BIG_ALL_PER_DAY = 10;
+const BIG_LIVE_PER_LOGIN = 5;
+const BIG_KEEP_VERSIONS = 2;
+// R2 aborts an unfinished multipart upload after seven days; the record
+// outlives it by one so the status can still say what happened.
+const BIG_RECORD_TTL_SECONDS = 8 * 24 * 60 * 60;
+const BIG_TOKEN_SECONDS = 2 * 24 * 60 * 60;
+
+function bigOn(env) {
+  return Boolean(env.KRATE_BUILDER_SECRET);
+}
+
+/// Who may use the big tier while it is new: logins named in
+/// BIG_PUBLISHERS (comma-separated). Empty means nobody.
+function bigAllowed(env, login) {
+  return String(env.BIG_PUBLISHERS || "")
+    .split(",")
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean)
+    .includes(String(login || "").toLowerCase());
+}
+
+function b64url(bytes) {
+  let s = "";
+  for (const b of bytes) s += String.fromCharCode(b);
+  return btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+function unb64url(text) {
+  const s = atob(text.replace(/-/g, "+").replace(/_/g, "/"));
+  return Uint8Array.from(s, (c) => c.charCodeAt(0));
+}
+
+/// The upload token's key: derived from the builder secret, labelled, so
+/// it needs no secret of its own and cannot be confused with the builder's.
+async function bigTokenKey(env) {
+  const base = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(env.KRATE_BUILDER_SECRET || ""),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  const derived = await crypto.subtle.sign("HMAC", base, new TextEncoder().encode("krate big upload v1"));
+  return crypto.subtle.importKey("raw", derived, { name: "HMAC", hash: "SHA-256" }, false, [
+    "sign",
+    "verify",
+  ]);
+}
+
+async function signBigToken(env, claims) {
+  const body = b64url(new TextEncoder().encode(JSON.stringify(claims)));
+  const sig = await crypto.subtle.sign("HMAC", await bigTokenKey(env), new TextEncoder().encode(body));
+  return `${body}.${b64url(new Uint8Array(sig))}`;
+}
+
+/// The claims of a valid, unexpired token for upload `id`, or null.
+async function readBigToken(request, env, id) {
+  const raw = (request.headers.get("x-krate-upload") || "").trim();
+  const dot = raw.indexOf(".");
+  if (dot <= 0) return null;
+  const body = raw.slice(0, dot);
+  let sig;
+  try {
+    sig = unb64url(raw.slice(dot + 1));
+  } catch (_) {
+    return null;
+  }
+  const ok = await crypto.subtle.verify(
+    "HMAC",
+    await bigTokenKey(env),
+    sig,
+    new TextEncoder().encode(body),
+  );
+  if (!ok) return null;
+  let claims;
+  try {
+    claims = JSON.parse(new TextDecoder().decode(unb64url(body)));
+  } catch (_) {
+    return null;
+  }
+  if (!claims || claims.id !== id) return null;
+  if (!(claims.exp > Math.floor(Date.now() / 1000))) return null;
+  return claims;
+}
+
+function partLength(claims, n) {
+  return n < claims.parts ? claims.part_size : claims.size - claims.part_size * (claims.parts - 1);
+}
+
+function today() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+async function readCount(env, key) {
+  const raw = await env.APPS.get(key);
+  const n = Number(raw || 0);
+  return Number.isFinite(n) ? n : 0;
+}
+
+/// How many big listings this login has live: the kept versions of each
+/// of their big apps.
+async function bigLive(env, login) {
+  const listing = await env.APPS.list({ prefix: `bigversions:${login}:` });
+  let n = 0;
+  for (const key of listing.keys || []) {
+    try {
+      n += JSON.parse((await env.APPS.get(key.name)) || "[]").length;
+    } catch (_) {}
+  }
+  return n;
+}
+
+async function bigStart(request, env) {
+  if (!bigOn(env)) return text("the big-file path is not switched on here", 503);
+  const identity = await verifyGitHub(request, env);
+  if (!identity) {
+    return text("publishing needs a GitHub sign-in -- run `krate publish` and it will ask", 401);
+  }
+  if (!bigAllowed(env, identity.login)) {
+    return text(
+      "apps over 5 MiB go through the big-file path, which is open to a few publishers " +
+        "while it is new -- write to the Krate team to be added",
+      403,
+    );
+  }
+  const ask = await readJson(request, 16384);
+  if (!ask) return text("a JSON body, please", 400);
+  const kind = String(ask.kind || "bundle");
+  if (!(kind in BIG_MAX_BYTES)) return text("kind is bundle, source or notices", 400);
+  const size = Number(ask.size);
+  if (!Number.isInteger(size) || size <= 0) return text("size is a whole number of bytes", 400);
+  if (size > BIG_MAX_BYTES[kind]) {
+    return text(
+      kind === "bundle"
+        ? `this app is ${size} bytes; Krate Cloud takes apps up to ${BIG_MAX_BYTES.bundle} bytes. ` +
+            "It still opens from the file on a desktop."
+        : `a ${kind} file is at most ${BIG_MAX_BYTES[kind]} bytes`,
+      413,
+    );
+  }
+  const sha256 = String(ask.sha256 || "").toLowerCase();
+  if (!/^[0-9a-f]{64}$/.test(sha256)) return text("sha256 is 64 hex characters", 400);
+
+  let forHash = null;
+  if (kind === "bundle") {
+    // These exact bytes are already listed: nothing to upload.
+    const listed = await env.APPS.get(`app:${sha256}`);
+    if (listed) {
+      const base = (env.PUBLIC_BASE || "").replace(/\/$/, "");
+      return json({ already: true, url: `${base}/a/${sha256}`, id: sha256 });
+    }
+    const mine = await readCount(env, `bigday:${identity.login}:${today()}`);
+    if (mine >= BIG_PER_LOGIN_PER_DAY) {
+      return text(`${BIG_PER_LOGIN_PER_DAY} big apps a day per publisher -- try again tomorrow`, 429);
+    }
+    const all = await readCount(env, `bigday:all:${today()}`);
+    if (all >= BIG_ALL_PER_DAY) {
+      return text("Krate Cloud has taken its big uploads for today -- try again tomorrow", 429);
+    }
+    if ((await bigLive(env, identity.login)) >= BIG_LIVE_PER_LOGIN) {
+      return text(
+        `${BIG_LIVE_PER_LOGIN} big apps live per publisher -- unpublish one to add another`,
+        429,
+      );
+    }
+  } else {
+    // Source and notices belong to a listing this person published.
+    forHash = String(ask.for || "").toLowerCase();
+    if (!/^[0-9a-f]{64}$/.test(forHash)) return text("`for` names the app's 64-hex id", 400);
+    const owner = await env.APPS.get(`app:${forHash}`);
+    let prior = null;
+    try {
+      prior = owner ? JSON.parse(owner) : null;
+    } catch (_) {}
+    if (!prior || prior.author_login !== identity.login) {
+      return text("that app is not one you published", 403);
+    }
+  }
+
+  const id = b64url(crypto.getRandomValues(new Uint8Array(16))).replace(/[-_]/g, "x");
+  const key = `big/${id}`;
+  let upload;
+  try {
+    upload = await env.BUNDLES.createMultipartUpload(key, {
+      httpMetadata: { contentType: "application/octet-stream" },
+    });
+  } catch (err) {
+    return text("the store could not open an upload -- try again in a few minutes", 503);
+  }
+  // BIG_PART_BYTES in the environment only for tests; never under R2's
+  // 5 MiB minimum or over what one request may carry.
+  const partSize = Math.min(
+    BIG_PART_BYTES,
+    Math.max(5 * 1024 * 1024, Number(env.BIG_PART_BYTES) || BIG_PART_BYTES),
+  );
+  const parts = Math.max(1, Math.ceil(size / partSize));
+  const record = {
+    id,
+    kind,
+    for: forHash,
+    login: identity.login,
+    identity: { login: identity.login, name: identity.name || "", avatar_url: identity.avatar_url || "" },
+    size,
+    sha256,
+    key,
+    upload_id: upload.uploadId,
+    parts,
+    part_size: partSize,
+    fields: {
+      unlisted: Boolean(ask.unlisted),
+      name: String(ask.name || "").slice(0, 80),
+      description: String(ask.description || "").slice(0, 280),
+      category: shelfOf(ask.category),
+    },
+    status: "uploading",
+    created: Math.floor(Date.now() / 1000),
+  };
+  try {
+    await env.APPS.put(`bigup:${id}`, JSON.stringify(record), {
+      expirationTtl: BIG_RECORD_TTL_SECONDS,
+    });
+    if (kind === "bundle") {
+      const mine = await readCount(env, `bigday:${identity.login}:${today()}`);
+      await env.APPS.put(`bigday:${identity.login}:${today()}`, String(mine + 1), {
+        expirationTtl: 2 * 24 * 60 * 60,
+      });
+      const all = await readCount(env, `bigday:all:${today()}`);
+      await env.APPS.put(`bigday:all:${today()}`, String(all + 1), {
+        expirationTtl: 2 * 24 * 60 * 60,
+      });
+    }
+  } catch (_) {
+    try {
+      await upload.abort();
+    } catch (_) {}
+    return text("could not record the upload -- try again in a few minutes", 503);
+  }
+  const token = await signBigToken(env, {
+    id,
+    login: identity.login,
+    key,
+    upload_id: upload.uploadId,
+    size,
+    sha256,
+    parts,
+    part_size: partSize,
+    exp: Math.floor(Date.now() / 1000) + BIG_TOKEN_SECONDS,
+  });
+  return json({ id, parts, part_size: partSize, token });
+}
+
+async function bigPart(request, env, id, n) {
+  const claims = await readBigToken(request, env, id);
+  if (!claims) return text("this upload's token is missing, wrong or expired -- start again", 401);
+  if (!Number.isInteger(n) || n < 1 || n > claims.parts) {
+    return text(`part numbers run from 1 to ${claims.parts}`, 400);
+  }
+  const want = partLength(claims, n);
+  const declared = request.headers.get("content-length");
+  if (declared === null) return text("each part says its length", 411);
+  if (Number(declared) !== want) {
+    return text(`part ${n} is ${want} bytes, not ${declared}`, 400);
+  }
+  if (!request.body) return text("an empty part", 400);
+  try {
+    const upload = env.BUNDLES.resumeMultipartUpload(claims.key, claims.upload_id);
+    const part = await upload.uploadPart(n, request.body);
+    return json({ part: n, etag: part.etag });
+  } catch (err) {
+    return text(`the store did not take part ${n} -- send it again`, 503);
+  }
+}
+
+async function readBigRecord(env, id) {
+  if (!/^[0-9a-zA-Z]{8,40}$/.test(id)) return null;
+  try {
+    return JSON.parse((await env.APPS.get(`bigup:${id}`)) || "null");
+  } catch (_) {
+    return null;
+  }
+}
+
+async function writeBigRecord(env, record) {
+  try {
+    await env.APPS.put(`bigup:${record.id}`, JSON.stringify(record), {
+      expirationTtl: BIG_RECORD_TTL_SECONDS,
+    });
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+async function bigFinish(request, env, id) {
+  const claims = await readBigToken(request, env, id);
+  if (!claims) return text("this upload's token is missing, wrong or expired -- start again", 401);
+  const record = await readBigRecord(env, id);
+  if (!record) return text("no such upload", 404);
+  if (record.status !== "uploading") return json(bigStatus(record, env));
+  const ask = await readJson(request, 65536);
+  const parts = ask && Array.isArray(ask.parts) ? ask.parts : null;
+  if (!parts || parts.length !== claims.parts) {
+    return text(`finish names all ${claims.parts} parts with their etags`, 400);
+  }
+  const seen = new Set();
+  for (const p of parts) {
+    if (!Number.isInteger(p.part) || p.part < 1 || p.part > claims.parts || seen.has(p.part)) {
+      return text("each part once, numbered from 1", 400);
+    }
+    if (typeof p.etag !== "string" || !p.etag) return text("each part carries its etag", 400);
+    seen.add(p.part);
+  }
+  let object;
+  try {
+    const upload = env.BUNDLES.resumeMultipartUpload(claims.key, claims.upload_id);
+    object = await upload.complete(
+      parts
+        .slice()
+        .sort((a, b) => a.part - b.part)
+        .map((p) => ({ partNumber: p.part, etag: p.etag })),
+    );
+  } catch (err) {
+    return text("the store could not put the parts together -- send any missing part and finish again", 409);
+  }
+  if (!object || object.size !== record.size) {
+    try {
+      await env.BUNDLES.delete(record.key);
+    } catch (_) {}
+    record.status = "refused";
+    record.problem = `${object ? object.size : 0} bytes arrived where ${record.size} were declared`;
+    await writeBigRecord(env, record);
+    return json(bigStatus(record, env), 422);
+  }
+  record.status = "judging";
+  record.finished = Math.floor(Date.now() / 1000);
+  await writeBigRecord(env, record);
+  await askBuilderToJudge(env, record);
+  return json(bigStatus(record, env), 202);
+}
+
+/// Ask the build service to judge an upload. Best effort: the cron asks
+/// again for anything still judging, so a sleeping or busy builder only
+/// delays a listing, never loses it.
+async function askBuilderToJudge(env, record) {
+  const builder = (env.KRATE_BUILDER_URL || "").replace(/\/$/, "");
+  if (!builder) return false;
+  try {
+    const res = await fetch(`${builder}/judge`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-krate-builder": env.KRATE_BUILDER_SECRET || "" },
+      body: JSON.stringify({ id: record.id, kind: record.kind, size: record.size, sha256: record.sha256 }),
+      signal: AbortSignal.timeout(10_000),
+    });
+    return res.ok;
+  } catch (_) {
+    return false;
+  }
+}
+
+function bigStatus(record, env) {
+  const out = { id: record.id, kind: record.kind, status: record.status };
+  if (record.problem) out.problem = record.problem;
+  if (record.url) out.url = record.url;
+  if (record.status === "uploading") out.parts = record.parts;
+  return out;
+}
+
+async function bigGetStatus(request, env, id) {
+  const claims = await readBigToken(request, env, id);
+  if (!claims) return text("this upload's token is missing, wrong or expired", 401);
+  const record = await readBigRecord(env, id);
+  if (!record) return text("no such upload", 404);
+  return json(bigStatus(record, env));
+}
+
+/// The build service reads an upload it was asked to judge.
+async function bigBytes(request, env, id) {
+  if (!(await fromBuilder(request, env))) return text("not found", 404);
+  const record = await readBigRecord(env, id);
+  if (!record || record.status !== "judging") return text("nothing to judge", 404);
+  const object = await env.BUNDLES.get(record.key);
+  if (!object) return text("the upload is gone", 404);
+  return new Response(object.body, {
+    headers: { "content-type": "application/octet-stream", "content-length": String(object.size) },
+  });
+}
+
+/// The build service's answer. On a pass the upload is listed through the
+/// same admitJudged the publish door uses; on a refusal it is removed.
+async function bigVerdict(request, env, id) {
+  if (!(await fromBuilder(request, env))) return text("not found", 404);
+  const record = await readBigRecord(env, id);
+  if (!record) return text("no such upload", 404);
+  if (record.status !== "judging") return json(bigStatus(record, env));
+  const verdict = await readJson(request, 4 * 1024 * 1024);
+  if (!verdict) return text("a JSON verdict, please", 400);
+
+  const refuse = async (problem) => {
+    try {
+      await env.BUNDLES.delete(record.key);
+    } catch (_) {}
+    record.status = "refused";
+    record.problem = problem;
+    await writeBigRecord(env, record);
+    return json(bigStatus(record, env));
+  };
+  if (String(verdict.sha256 || "") !== record.sha256) {
+    return refuse("the bytes that arrived are not the ones the upload declared");
+  }
+  if (!verdict.ok) return refuse(`not a valid ${record.kind === "bundle" ? ".krate bundle" : record.kind + " file"}: ${verdict.problem || "refused"}`);
+
+  const base = (env.PUBLIC_BASE || "").replace(/\/$/, "");
+  if (record.kind === "bundle") {
+    if (!verdict.judgement) return refuse("the judgement was missing");
+    const response = await admitJudged(env, {
+      identity: record.identity,
+      judgement: verdict.judgement,
+      hash: record.sha256,
+      size: record.size,
+      fields: record.fields,
+      extra: { big: true, blob: record.key },
+      store: async () => {
+        const head = await env.BUNDLES.head(record.key);
+        if (!head || head.size !== record.size) {
+          return { problem: "the upload could not be found in the store; nothing was published" };
+        }
+        try {
+          await env.APPS.put(`bigkey:${record.sha256}`, record.key);
+        } catch (_) {
+          return { problem: "could not record where the app lives -- try again in a few minutes" };
+        }
+        return { size: head.size, sha256: record.sha256 };
+      },
+    });
+    const answer = await response.clone().json().catch(() => null);
+    if (!response.ok || !answer) {
+      return refuse((await response.text().catch(() => "")) || "the listing could not be made");
+    }
+    if (answer.note && /already published/.test(answer.note)) {
+      // Somebody else's listing of the same bytes stands; ours is not needed.
+      try {
+        await env.BUNDLES.delete(record.key);
+      } catch (_) {}
+    } else {
+      await keepLatestBig(env, record.login, record.fields.name, record.sha256);
+    }
+    record.status = "listed";
+    record.url = answer.url;
+    await writeBigRecord(env, record);
+    return json(bigStatus(record, env));
+  }
+
+  // Source or notices: attached to the listing they were declared for.
+  const raw = await env.APPS.get(`app:${record.for}`);
+  let meta = null;
+  try {
+    meta = raw ? JSON.parse(raw) : null;
+  } catch (_) {}
+  if (!meta || meta.author_login !== record.login) return refuse("that app is no longer listed");
+  const previous = meta[record.kind];
+  meta[record.kind] = { key: record.key, size: record.size, sha256: record.sha256 };
+  try {
+    await env.APPS.put(`app:${record.for}`, JSON.stringify(meta));
+  } catch (_) {
+    return text("could not attach it -- the build service will be asked again", 503);
+  }
+  if (previous && previous.key && previous.key !== record.key) {
+    try {
+      await env.BUNDLES.delete(previous.key);
+    } catch (_) {}
+  }
+  record.status = "listed";
+  record.url = `${base}/a/${record.for}/${record.kind}`;
+  await writeBigRecord(env, record);
+  return json(bigStatus(record, env));
+}
+
+/// Keep the newest BIG_KEEP_VERSIONS versions of a big app; older ones'
+/// bytes, address record and source go (a 370 MB version kept forever per
+/// publish is the cost that matters here).
+async function keepLatestBig(env, login, name, hash) {
+  const key = `bigversions:${login}:${slugOf(name || "untitled")}`;
+  let versions = [];
+  try {
+    versions = JSON.parse((await env.APPS.get(key)) || "[]");
+  } catch (_) {}
+  versions = [hash, ...versions.filter((h) => h !== hash)];
+  const dropped = versions.slice(BIG_KEEP_VERSIONS);
+  versions = versions.slice(0, BIG_KEEP_VERSIONS);
+  try {
+    await env.APPS.put(key, JSON.stringify(versions));
+  } catch (_) {
+    return;
+  }
+  for (const old of dropped) {
+    try {
+      const blob = await env.APPS.get(`bigkey:${old}`);
+      if (blob) await env.BUNDLES.delete(blob);
+      await env.APPS.delete(`bigkey:${old}`);
+      const raw = await env.APPS.get(`app:${old}`);
+      if (raw) {
+        const meta = JSON.parse(raw);
+        for (const kind of ["source", "notices"]) {
+          if (meta[kind] && meta[kind].key) await env.BUNDLES.delete(meta[kind].key);
+        }
+        await env.APPS.delete(`app:${old}`);
+      }
+      await env.APPS.delete(`owner:${old}`);
+    } catch (_) {}
+  }
+}
+
+/// Remove what a big-tier listing keeps outside its content address: the
+/// bytes at big/<id>, the record naming them, and any attached source or
+/// notices (IC-945). A listing that is not big has none of these.
+async function deleteBigParts(env, hash) {
+  try {
+    const blob = await env.APPS.get(`bigkey:${hash}`);
+    if (blob) {
+      await env.BUNDLES.delete(blob);
+      await env.APPS.delete(`bigkey:${hash}`);
+    }
+    const raw = await env.APPS.get(`app:${hash}`);
+    const meta = raw ? JSON.parse(raw) : null;
+    for (const kind of ["source", "notices"]) {
+      if (meta && meta[kind] && meta[kind].key) await env.BUNDLES.delete(meta[kind].key);
+    }
+    // No longer one of its publisher's live big apps.
+    if (meta && meta.big) {
+      const key = `bigversions:${meta.author_login}:${slugOf(meta.name || "untitled")}`;
+      const versions = JSON.parse((await env.APPS.get(key)) || "[]").filter((h) => h !== hash);
+      if (versions.length) await env.APPS.put(key, JSON.stringify(versions));
+      else await env.APPS.delete(key);
+    }
+  } catch (_) {}
+}
+
+/// A listing's attached source or notices, served as a download.
+async function fetchAttachment(hash, kind, env) {
+  if (!/^[0-9a-f]{64}$/.test(hash)) return text("not found", 404);
+  const raw = await env.APPS.get(`app:${hash}`);
+  let meta = null;
+  try {
+    meta = raw ? JSON.parse(raw) : null;
+  } catch (_) {}
+  const attached = meta && meta[kind];
+  if (!attached || !attached.key) return text("not found", 404);
+  const object = await env.BUNDLES.get(attached.key);
+  if (!object) return text("not found", 404);
+  const slug = slugOf(meta.name || "app");
+  const headers =
+    kind === "source"
+      ? {
+          "content-type": "application/zstd",
+          "content-disposition": `attachment; filename="${slug}-source.tar.zst"`,
+        }
+      : { "content-type": "text/plain; charset=utf-8" };
+  return new Response(object.body, {
+    headers: { ...headers, "content-length": String(object.size), "cache-control": "public, max-age=3600" },
+  });
+}
+
+/// The cron's part: ask again about anything still judging after ten
+/// minutes, and give up on anything judging for a day.
+async function retryBigJudging(env) {
+  if (!bigOn(env)) return;
+  let listing;
+  try {
+    listing = await env.APPS.list({ prefix: "bigup:" });
+  } catch (_) {
+    return;
+  }
+  const now = Math.floor(Date.now() / 1000);
+  for (const key of listing.keys || []) {
+    const record = await readBigRecord(env, key.name.slice("bigup:".length));
+    if (!record || record.status !== "judging") continue;
+    const waited = now - (record.finished || record.created || now);
+    if (waited > 24 * 60 * 60) {
+      try {
+        await env.BUNDLES.delete(record.key);
+      } catch (_) {}
+      record.status = "refused";
+      record.problem = "the build service did not judge it within a day -- publish it again";
+      await writeBigRecord(env, record);
+    } else if (waited > 10 * 60) {
+      await askBuilderToJudge(env, record);
+    }
+  }
 }
 
 // ------------------------------------------------------------------- helpers
@@ -6073,6 +6772,17 @@ async function runScrub(env, { repair }) {
   const problems = [];
   const objects = await listAllObjects(env.BUNDLES);
   const bundles = new Map(objects.filter((o) => /^[0-9a-f]{64}$/.test(o.key)).map((o) => [o.key, o]));
+  // A big-tier app's bytes live at big/<id>, named by its bigkey record
+  // (IC-945): present when that object is. Without this a repairing scrub
+  // would delete every big listing as "bytes gone".
+  {
+    const byKey = new Map(objects.map((o) => [o.key, o]));
+    for (const key of await listAllKeys(env.APPS, "bigkey:")) {
+      const blob = await env.APPS.get(key);
+      const object = blob ? byKey.get(blob) : null;
+      if (object) bundles.set(key.slice("bigkey:".length), { ...object, sha256: null });
+    }
+  }
 
   // 1896: every content-addressed object hashes to its own key when the
   // store recorded a digest; one that does not is corrupt and is named.
