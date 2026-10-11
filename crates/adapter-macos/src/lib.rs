@@ -9,6 +9,7 @@ mod clipboard;
 mod consent;
 mod open_document;
 mod sign_in;
+mod web_page;
 
 use krate_adapter_common::{
     locale::{DateStyle, HostLocale, LocaleId, NumberStyle},
@@ -710,6 +711,41 @@ impl UiAdapter for MacosAppKitPrototypeUiAdapter {
 
     fn appearance(&self) -> krate_adapter_common::ui::Appearance {
         self.headless.appearance()
+    }
+
+    fn open_web_page(
+        &self,
+        window: WindowId,
+        address: &str,
+        frame: (f32, f32, f32, f32),
+        granted: Vec<(String, String)>,
+    ) -> Result<u64, String> {
+        let handle = self
+            .native_window(window)
+            .ok()
+            .flatten()
+            .ok_or("the app's window is not on screen")?;
+        web_page::open(handle.raw_handle, address, frame, granted)
+    }
+
+    fn place_web_page(&self, page: u64, frame: (f32, f32, f32, f32)) {
+        web_page::place(page, frame);
+    }
+
+    fn web_page_go(&self, page: u64, address: &str) {
+        web_page::go(page, address);
+    }
+
+    fn web_page_back(&self, page: u64) {
+        web_page::back(page);
+    }
+
+    fn web_page_state(&self, page: u64) -> Option<krate_adapter_common::ui::WebPageState> {
+        web_page::state(page)
+    }
+
+    fn close_web_page(&self, page: u64) {
+        web_page::close(page);
     }
 
     fn pump_event_loop_once(
