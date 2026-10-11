@@ -102,10 +102,12 @@
       </intent-filter>
     </activity>
     <!-- krate:ui/reminders: posts a reminder when its alarm comes, and sets
-         them all again when the phone restarts. -->
+         them all again when the phone restarts or the person allows exact
+         alarms. -->
     <receiver android:name="tech.krate.player.Reminder" android:exported="false">
       <intent-filter>
         <action android:name="android.intent.action.BOOT_COMPLETED" />
+        <action android:name="android.app.action.SCHEDULE_EXACT_ALARM_PERMISSION_STATE_CHANGED" />
       </intent-filter>
     </receiver>
     <!-- Files an app shares (krate:ui/share), read-only, to the one app the

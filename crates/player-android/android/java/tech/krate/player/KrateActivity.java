@@ -588,6 +588,98 @@ public class KrateActivity extends NativeActivity {
         return Photos.save(this, data);
     }
 
+    /** The on-time question: 0 none, 1 sheet up, 2 in Settings, 3 answered. */
+    private int exactStep;
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        synchronized (lock) {
+            if (exactStep == 2) {
+                exactStep = 3;
+            }
+        }
+    }
+
+    /**
+     * Whether app's reminders come on time (krate:ui/reminders). On Android
+     * 12 and up that needs "Alarms & reminders" for Krate: the first time an
+     * app sets a reminder without it, Krate's own sheet asks, in the app's
+     * name, and Allow opens the system's page for Krate. Asked once per app.
+     * 0 on time, 1 near the time (may be late), 2 while the person decides.
+     */
+    public int krateExactAsk(String app, final String name) {
+        synchronized (lock) {
+            if (exactStep == 3) {
+                exactStep = 0;
+                return Reminder.exactAllowed(this) ? 0 : 1;
+            }
+            if (exactStep != 0) {
+                return 2;
+            }
+        }
+        if (Reminder.exactAllowed(this)) {
+            return 0;
+        }
+        if (Reminder.askedBefore(this, app)) {
+            return 1;
+        }
+        synchronized (lock) {
+            exactStep = 1;
+        }
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                showExactSheet(name);
+            }
+        });
+        return 2;
+    }
+
+    private void showExactSheet(final String name) {
+        final boolean[] allowed = {false};
+        new android.app.AlertDialog.Builder(this)
+                .setTitle(name + " wants to remind you on time.")
+                .setMessage("Allow Krate to set alarms?")
+                .setPositiveButton("Allow", new android.content.DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(android.content.DialogInterface dialog, int which) {
+                        allowed[0] = true;
+                        Intent page = new Intent(
+                                android.provider.Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM,
+                                Uri.parse("package:" + getPackageName()));
+                        try {
+                            synchronized (lock) {
+                                exactStep = 2;
+                            }
+                            startActivity(page);
+                            Log.i(TAG, "reminders: opened Alarms & reminders for Krate");
+                        } catch (ActivityNotFoundException e) {
+                            synchronized (lock) {
+                                exactStep = 3;
+                            }
+                        }
+                    }
+                })
+                .setNegativeButton("Not now", null)
+                .setOnDismissListener(new android.content.DialogInterface.OnDismissListener() {
+                    @Override
+                    public void onDismiss(android.content.DialogInterface dialog) {
+                        if (allowed[0]) {
+                            return;
+                        }
+                        synchronized (lock) {
+                            exactStep = 3;
+                        }
+                        android.widget.Toast.makeText(KrateActivity.this,
+                                "Reminders from " + name + " may arrive late.",
+                                android.widget.Toast.LENGTH_LONG).show();
+                        Log.i(TAG, "reminders: not now, near the time");
+                    }
+                })
+                .show();
+    }
+
     /** Set a reminder (krate:ui/reminders); null once set, else why not. */
     public String krateRemind(String id, String sender, String title, String body,
             long afterSeconds, boolean daily, String opens) {

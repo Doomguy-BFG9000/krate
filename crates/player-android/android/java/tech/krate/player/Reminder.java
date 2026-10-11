@@ -32,6 +32,30 @@ public final class Reminder extends BroadcastReceiver {
     private static final String STORE = "krate-reminders";
     private static final String FIRE = "tech.krate.player.REMIND";
     private static final long DAY = 24L * 60 * 60 * 1000;
+    /** Android's word that the person allowed Krate exact alarms. */
+    private static final String EXACT_ALLOWED =
+            "android.app.action.SCHEDULE_EXACT_ALARM_PERMISSION_STATE_CHANGED";
+    /** Apps already asked about exact alarms, so each is asked once. */
+    private static final String ASKED = "krate-exact-asked";
+
+    /** Whether reminders can come at the time asked. */
+    static boolean exactAllowed(Context context) {
+        if (Build.VERSION.SDK_INT < 31) {
+            return true;
+        }
+        AlarmManager alarms = (AlarmManager) context.getSystemService(Context.ALARM_SERVICE);
+        return alarms != null && alarms.canScheduleExactAlarms();
+    }
+
+    /** Whether app was asked before; marks it asked. */
+    static boolean askedBefore(Context context, String app) {
+        SharedPreferences asked = context.getSharedPreferences(ASKED, Context.MODE_PRIVATE);
+        if (asked.getBoolean(app, false)) {
+            return true;
+        }
+        asked.edit().putBoolean(app, true).apply();
+        return false;
+    }
 
     /** One reminder, as stored: when (wall clock ms), daily, sender, title, body, opens. */
     private static String pack(long at, boolean daily, String sender, String title, String body,
@@ -101,8 +125,11 @@ public final class Reminder extends BroadcastReceiver {
     @Override
     public void onReceive(Context context, Intent intent) {
         SharedPreferences store = context.getSharedPreferences(STORE, Context.MODE_PRIVATE);
-        if (Intent.ACTION_BOOT_COMPLETED.equals(intent.getAction())) {
-            // A restarted phone forgets its alarms: set every reminder again.
+        if (Intent.ACTION_BOOT_COMPLETED.equals(intent.getAction())
+                || EXACT_ALLOWED.equals(intent.getAction())) {
+            // A restarted phone forgets its alarms, and alarms set before
+            // the person allowed exact ones were set near the time: set every
+            // reminder again (exact now, where allowed).
             for (Map.Entry<String, ?> e : store.getAll().entrySet()) {
                 String[] r = String.valueOf(e.getValue()).split("\u001f", -1);
                 long at = Long.parseLong(r[0]);

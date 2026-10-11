@@ -32,9 +32,10 @@ fn current() -> Option<(String, String)> {
 #[cfg(target_os = "android")]
 mod real {
     use super::{current, prefix_for};
-    use crate::java::{string, with_activity};
+    use crate::java::{string, wait_for, with_activity};
     use crate::phone::{ask, Asked};
     use jni::objects::{JObjectArray, JValue};
+    use std::time::Duration;
 
     pub fn schedule(
         id: &str,
@@ -48,6 +49,32 @@ mod real {
         if ask("krateNotifyAsk") == Asked::Refused {
             return Err("notifications were not allowed for Krate".to_string());
         }
+        // On time needs "Alarms & reminders" on Android 12 and up: asked
+        // once per app, on its first reminder, by Krate's own sheet. A no
+        // still sets the reminder, near the time.
+        let app_for_ask = app.clone();
+        let on_time = wait_for(Duration::from_secs(10 * 60), || {
+            match with_activity("asking about on-time reminders", |env, activity| {
+                let id = env.new_string(&app_for_ask)?;
+                let name = env.new_string(sender)?;
+                env.call_method(
+                    activity,
+                    "krateExactAsk",
+                    "(Ljava/lang/String;Ljava/lang/String;)I",
+                    &[JValue::Object(&id), JValue::Object(&name)],
+                )?
+                .i()
+            }) {
+                Some(2) => None,
+                Some(answer) => Some(answer == 0),
+                None => Some(false),
+            }
+        })
+        .unwrap_or(false);
+        log::info!(
+            "reminder {id}: {}",
+            if on_time { "on time" } else { "may be late" }
+        );
         let system_id = format!("{}{id}", prefix_for(&app));
         let why = with_activity("setting a reminder", |env, activity| {
             let strings = [
