@@ -8778,6 +8778,35 @@ required = true
         assert!(asset.is_file());
     }
 
+    /// An entry's lock lives beside the entries, never in one (IC-944): on
+    /// Windows a folder with an open file in it cannot be renamed or
+    /// removed, so a sweep holding a lock kept inside the entry could never
+    /// remove it -- the two sweep tests below failed on windows-2022 that way.
+    #[test]
+    fn an_entry_keeps_no_lock_of_its_own() {
+        let dir = TempDir::new().expect("tempdir");
+        let root = dir.path().join("opened");
+        let bundle = cached_fixture(dir.path(), b"a level");
+        let opened = open_cached(&bundle, &root).expect("open");
+        let entries = opened_cache_entries(&root);
+        assert_eq!(entries.len(), 1);
+        let entry = root.join(&entries[0]);
+        let top: Vec<String> = fs::read_dir(&entry)
+            .expect("entry")
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .filter(|name| name.ends_with(".lock"))
+            .collect();
+        assert!(top.is_empty(), "no lock inside the entry: {top:?}");
+        assert!(
+            root.join(".locks")
+                .join(format!("{}.lock", entries[0]))
+                .is_file(),
+            "the lock is beside the entries"
+        );
+        drop(opened);
+    }
+
     /// A changed bundle is unpacked fresh, and the app's old entry goes.
     #[test]
     fn a_changed_bundle_is_unpacked_fresh_and_the_old_entry_swept() {

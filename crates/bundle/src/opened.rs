@@ -21,7 +21,8 @@
 //!   whole-archive checks and the unpack, a hit reuses a verdict made over
 //!   the same bytes by the same rules ([`RULES`]).
 //! - One entry is kept per app id: making a new one removes the others for
-//!   that app, except any a running app still holds (a shared lock).
+//!   that app, except any a running app still holds (a shared lock, kept
+//!   beside the entries in `.locks/`).
 
 use std::fs::{self, File};
 use std::io;
@@ -43,9 +44,16 @@ const RULES: &str = concat!("krate-bundle ", env!("CARGO_PKG_VERSION"), " opened
 
 /// The marker, written last; an entry without one was never finished.
 const MARKER: &str = ".krate-opened.json";
-/// Held shared by every bundle open from the entry, taken exclusively by a
-/// sweep before it removes one.
-const LOCK: &str = ".krate-opened.lock";
+/// Each entry's lock, held shared by every bundle open from the entry and
+/// taken exclusively by a sweep before it removes one. Beside the entries,
+/// in `.locks/<digest>.lock`, never inside one: on Windows a folder cannot
+/// be renamed or removed while a file in it is open, so a sweep holding a
+/// lock that lived in the entry could never remove that entry -- two IC-944
+/// tests failed on windows-2022 with the old entry still there.
+const LOCKS: &str = ".locks";
+/// Where an entry's lock lived before (IC-944's first version): still left
+/// out of an entry's file list, so an entry made then is not rebuilt for it.
+const LEGACY_LOCK: &str = ".krate-opened.lock";
 /// A staging folder's prefix: a run killed while unpacking leaves one, and
 /// the sweep removes those an hour old.
 const STAGING_PREFIX: &str = ".opening-";
@@ -151,6 +159,19 @@ fn open_cached_here(bundle_path: &Path, root: &Path) -> Result<OpenBundle> {
     Ok(keep(root, &digest, unpacked))
 }
 
+/// The lock for the entry `digest`, opened (and made) beside the entries.
+fn open_lock(root: &Path, digest: &str) -> Option<File> {
+    let dir = root.join(LOCKS);
+    fs::create_dir_all(&dir).ok()?;
+    File::options()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(dir.join(format!("{digest}.lock")))
+        .ok()
+}
+
 /// The entry for `digest`, if it is finished, made by these rules, and
 /// exactly as its marker lists it. Anything else there is removed.
 fn reuse(root: &Path, digest: &str) -> Option<OpenBundle> {
@@ -158,13 +179,7 @@ fn reuse(root: &Path, digest: &str) -> Option<OpenBundle> {
     if !entry.exists() {
         return None;
     }
-    let lock = File::options()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .open(entry.join(LOCK))
-        .ok();
+    let lock = open_lock(root, digest);
     if let Some(lock) = &lock {
         let _ = lock.lock_shared();
     }
@@ -265,13 +280,7 @@ fn keep(root: &Path, digest: &str, unpacked: OpenBundle) -> OpenBundle {
         Ok(rest) => entry.join(rest),
         Err(_) => path,
     };
-    let lock = File::options()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .open(entry.join(LOCK))
-        .ok();
+    let lock = open_lock(root, digest);
     if let Some(lock) = &lock {
         let _ = lock.lock_shared();
     }
@@ -314,20 +323,17 @@ fn sweep_app(root: &Path, app_id: &str, keep: &str) {
         if !same_app {
             continue;
         }
-        let Ok(lock) = File::options()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(path.join(LOCK))
-        else {
+        let Some(lock) = open_lock(root, name) else {
             continue;
         };
         // In use: a running copy of the older version keeps its files.
         if lock.try_lock().is_err() {
             continue;
         }
+        // Held through the removal, so no open can take the entry meanwhile;
+        // the lock is not in the entry, so holding it does not pin it.
         remove_entry(&path);
+        drop(lock);
     }
 }
 
@@ -374,7 +380,7 @@ fn files_of(dir: &Path) -> Option<Vec<(String, u64, u64)>> {
                 .map(|c| c.as_os_str().to_string_lossy().into_owned())
                 .collect::<Vec<_>>()
                 .join("/");
-            if name == MARKER || name == LOCK {
+            if name == MARKER || name == LEGACY_LOCK {
                 continue;
             }
             let meta = entry.metadata().ok()?;
