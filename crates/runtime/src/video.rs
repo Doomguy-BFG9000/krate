@@ -13,6 +13,12 @@ use std::path::PathBuf;
 use krate_adapter_common::ui::ImagePixels;
 
 /// What to play.
+// Read only by a platform that plays video; elsewhere every call answers
+// UNSUPPORTED before looking inside.
+#[cfg_attr(
+    not(any(target_os = "macos", target_os = "ios", target_os = "android")),
+    allow(dead_code)
+)]
 #[derive(Debug, Clone)]
 pub(crate) enum Source {
     /// A file inside the app's bundled assets, already resolved and checked.
@@ -22,6 +28,12 @@ pub(crate) enum Source {
 }
 
 /// One thing to tell a player.
+// Read only by a platform that plays video; elsewhere every call answers
+// UNSUPPORTED before looking inside.
+#[cfg_attr(
+    not(any(target_os = "macos", target_os = "ios", target_os = "android")),
+    allow(dead_code)
+)]
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum Control {
     Play,
