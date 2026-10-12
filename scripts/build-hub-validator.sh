@@ -20,6 +20,13 @@ if [ -z "${TARGET_CC:-}" ]; then
   fi
 fi
 
+# rustup's shims first, so the repo's rust-toolchain.toml picks the Rust:
+# a Homebrew cargo earlier on PATH ignores the pin and stops at "rustc 1.91.1
+# is not supported" (seen deploying the hub, 2026-10-12).
+if [ -x "$HOME/.cargo/bin/cargo" ]; then
+  PATH="$HOME/.cargo/bin:$PATH"
+  export PATH
+fi
 cargo build --release --target wasm32-unknown-unknown -p krate-validator-wasm
 out=cloud/worker/src/validator.wasm
 cp target/wasm32-unknown-unknown/release/krate_validator_wasm.wasm "$out"
