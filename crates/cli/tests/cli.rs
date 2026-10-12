@@ -7392,6 +7392,7 @@ fn a_big_app_is_published_in_parts_and_a_cut_off_publish_resumes() {
             _ => (404, vec![], b"not found".to_vec()),
         }
     })) else {
+        eprintln!("skipping a_big_app_is_published_in_parts_and_a_cut_off_publish_resumes: no local port for the fake hub");
         return;
     };
     let publish = || {
@@ -7488,6 +7489,7 @@ fn a_big_tier_link_is_saved_to_a_file_and_run_from_it() {
             (404, vec![], b"not found".to_vec())
         }
     })) else {
+        eprintln!("skipping a_big_tier_link_is_saved_to_a_file_and_run_from_it: no local port for the fake hub");
         return;
     };
     let run = |path: &str| {

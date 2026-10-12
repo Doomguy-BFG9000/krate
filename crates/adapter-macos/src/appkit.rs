@@ -3271,8 +3271,6 @@ mod platform {
         Vec::new()
     }
 
-    pub fn push_raw_pointer_sample(_sample: krate_adapter_common::ui::RawPointerSample) {}
-
     /// No pointer off macOS: nowhere, nothing held.
     pub fn pointer_state(_id: WindowId) -> krate_adapter_common::ui::PointerTracker {
         krate_adapter_common::ui::PointerTracker::default()
@@ -3496,6 +3494,7 @@ mod platform {
     }
 }
 
+#[cfg(target_os = "macos")]
 pub use platform::push_raw_pointer_sample;
 pub use platform::take_raw_key_samples;
 pub use platform::take_raw_pointer_samples;

@@ -3,15 +3,21 @@
 //! This crate is the macOS ownership boundary. Shared behavior still comes from
 //! `krate-adapter-common`, while macOS-specific host wiring will land here.
 
+#[cfg(target_os = "macos")]
 mod accessibility;
+#[cfg(target_os = "macos")]
 mod appearance;
 mod appkit;
 mod clipboard;
 mod consent;
 mod open_document;
+#[cfg(target_os = "macos")]
 mod reminders;
+#[cfg(target_os = "macos")]
 mod share_photos;
+#[cfg(target_os = "macos")]
 mod sign_in;
+#[cfg(target_os = "macos")]
 mod web_page;
 
 use krate_adapter_common::{
@@ -528,11 +534,13 @@ impl UiAdapter for MacosUiAdapter {
         clipboard::write_text(text)
     }
 
+    #[cfg(target_os = "macos")]
     /// Dark appearance and Increase contrast (IC-925).
     fn appearance(&self) -> krate_adapter_common::ui::Appearance {
         appearance::current()
     }
 
+    #[cfg(target_os = "macos")]
     /// The system's sign-in sheet (IC-923).
     fn sign_in(
         &self,
@@ -543,6 +551,7 @@ impl UiAdapter for MacosUiAdapter {
         sign_in::sign_in(authorize_url, scheme)
     }
 
+    #[cfg(target_os = "macos")]
     /// Reminders that arrive with the app closed (IC-921). The installed
     /// app's bundle carries its name, so `sender` is not repeated.
     fn reminder_schedule(
@@ -557,10 +566,12 @@ impl UiAdapter for MacosUiAdapter {
         reminders::schedule(id, title, body, after_seconds, daily)
     }
 
+    #[cfg(target_os = "macos")]
     fn reminder_cancel(&self, id: &str) {
         reminders::cancel(id)
     }
 
+    #[cfg(target_os = "macos")]
     fn reminder_pending(&self) -> Vec<String> {
         reminders::pending()
     }
@@ -738,6 +749,7 @@ impl UiAdapter for MacosAppKitPrototypeUiAdapter {
         self.headless.appearance()
     }
 
+    #[cfg(target_os = "macos")]
     fn open_web_page(
         &self,
         window: WindowId,
@@ -753,26 +765,32 @@ impl UiAdapter for MacosAppKitPrototypeUiAdapter {
         web_page::open(handle.raw_handle, address, frame, granted)
     }
 
+    #[cfg(target_os = "macos")]
     fn place_web_page(&self, page: u64, frame: (f32, f32, f32, f32)) {
         web_page::place(page, frame);
     }
 
+    #[cfg(target_os = "macos")]
     fn web_page_go(&self, page: u64, address: &str) {
         web_page::go(page, address);
     }
 
+    #[cfg(target_os = "macos")]
     fn web_page_back(&self, page: u64) {
         web_page::back(page);
     }
 
+    #[cfg(target_os = "macos")]
     fn web_page_state(&self, page: u64) -> Option<krate_adapter_common::ui::WebPageState> {
         web_page::state(page)
     }
 
+    #[cfg(target_os = "macos")]
     fn close_web_page(&self, page: u64) {
         web_page::close(page);
     }
 
+    #[cfg(target_os = "macos")]
     fn describe_accessibility(
         &self,
         window: WindowId,
@@ -784,10 +802,12 @@ impl UiAdapter for MacosAppKitPrototypeUiAdapter {
         Ok(())
     }
 
+    #[cfg(target_os = "macos")]
     fn screen_reader_on(&self) -> bool {
         accessibility::voice_over_on()
     }
 
+    #[cfg(target_os = "macos")]
     fn share(
         &self,
         window: WindowId,
@@ -803,10 +823,12 @@ impl UiAdapter for MacosAppKitPrototypeUiAdapter {
         share_photos::share(handle.raw_handle, text, url, files)
     }
 
+    #[cfg(target_os = "macos")]
     fn save_photo(&self, data: &[u8]) -> Result<(), Option<String>> {
         share_photos::save_photo(data)
     }
 
+    #[cfg(target_os = "macos")]
     /// Reminders that arrive with the app closed (IC-921). The installed
     /// app's bundle carries its name, so `sender` is not repeated.
     fn reminder_schedule(
@@ -821,10 +843,12 @@ impl UiAdapter for MacosAppKitPrototypeUiAdapter {
         reminders::schedule(id, title, body, after_seconds, daily)
     }
 
+    #[cfg(target_os = "macos")]
     fn reminder_cancel(&self, id: &str) {
         reminders::cancel(id)
     }
 
+    #[cfg(target_os = "macos")]
     fn reminder_pending(&self) -> Vec<String> {
         reminders::pending()
     }
@@ -881,6 +905,7 @@ pub fn discover_appkit_prototype_ui_adapter(
     }
     // A window here presents a krate:gpu app's frames from its own texture
     // (IC-940); the runtime reads them back only where nothing can.
+    #[cfg(target_os = "macos")]
     krate_presenter_gpu::shared::app_frames::add_consumer();
     Ok(adapter)
 }
