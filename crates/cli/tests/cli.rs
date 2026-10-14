@@ -16435,7 +16435,11 @@ fn a_marked_app_checks_in_and_an_unreleased_one_is_refused() {
         .output()
         .expect("run");
         assert!(ran.status.success(), "{}", stderr_of(&ran));
-        assert_eq!(check_ins(&world), round, "every open checks in");
+        // Counted on the fake; a real hub (KRATE_ORG_E2E_HUB) keeps its own
+        // log, where run-one.sh counts the requests.
+        if world.real_hub().is_none() {
+            assert_eq!(check_ins(&world), round, "every open checks in");
+        }
     }
     // Marked and signed, but never released: refused, and says so.
     let own = world.bundle("own.krate", "9.9.9", 64);
