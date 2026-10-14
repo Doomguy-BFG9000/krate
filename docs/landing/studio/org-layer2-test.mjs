@@ -219,6 +219,36 @@ const two = [member(ALICE, "owner"), member("github:olga", "owner"), member("git
   check(/requires company sign-in/.test(req.el("stop").shown) && a && a.href.startsWith("/login/?org=acme&next="), "sso-required offers the company sign-in, coming back here");
 }
 
+/* ---- F. the rest of company sign-in ------------------------------------ */
+{
+  const cur = { issuer: "https://acme.okta.com", client_id: "c", has_secret: true, domain: "acme.test", domain_verified: true, verified_at: 1760000000, auto_join_role: null, enforce: false };
+  const p = await page("https://krate.tech/org/?o=acme&tab=settings", DASH, {
+    token: "t", routes: { ...orgRoutes(ALICE), ...withOrg(ALICE), "GET /orgs/acme/exports": () => [200, []], "GET /orgs/acme/sso": () => [200, cur],
+      "PUT /orgs/acme/sso": () => [409, { error: "sso-needs-break-glass", message: "" }], "DELETE /orgs/acme/sso": () => [204, null] },
+  });
+  check(/tenant must issue verified email claims/.test(p.el("ssoCard").shown), "the Entra hint says its tenant must issue verified email claims");
+  p.el("ssoEnforce").checked = true;
+  button(p.el("ssoCard"), "Save changes").click();
+  await settle();
+  check(/Keep a way in that does not need company sign-in/.test(p.el("ssoCard").shown) && /at least one owner must sign in another way/.test(p.el("ssoCard").shown), "enforcing without a way back in is explained, with what to do");
+  button(p.el("ssoCard"), "Turn off company sign-in").click();
+  check(/Turn off company sign-in/.test(p.el("sheetH").textContent) && p.sent.every((x) => x.key !== "DELETE /orgs/acme/sso"), "turning it off asks first");
+  p.el("sheetYes").onclick();
+  await settle();
+  check(p.sent.some((x) => x.key === "DELETE /orgs/acme/sso" && x.headers["idempotency-key"]), "and then sends DELETE /orgs/acme/sso");
+  const off = await page("https://krate.tech/org/?o=acme&tab=settings", DASH, { token: "t", routes: { ...orgRoutes(ALICE), ...withOrg(ALICE), "GET /orgs/acme/exports": () => [200, []], "GET /orgs/acme/sso": () => [503, { error: "sso-off", message: "" }] } });
+  check(/Company sign-in is not switched on on this hub yet/.test(off.el("ssoCard").shown), "a hub without the key says company sign-in is not switched on yet");
+
+  // What a finished company sign-in did, on the page it returns to.
+  const K = off.win.KrateOrg;
+  const words = ["joined", "member", "removed", "no-auto-join", "off-domain"].map((s) => K.ssoNotice(s, "Acme"));
+  check(/joined Acme/.test(words[0]) && /signed in through Acme/.test(words[1]) && /removed from Acme/.test(words[2]) && /ask one of its owners for an invitation/.test(words[3]) && /not at Acme's verified domain/.test(words[4]), "each company sign-in result reads in words");
+  const back = await page("https://krate.tech/org/?o=acme", DASH, { token: "t", routes: orgRoutes(ALICE) });
+  back.localStorage.setItem("krate_sso_notice", JSON.stringify({ org: "acme", state: "no-auto-join" }));
+  check(/does not let people join by themselves/.test(back.win.KrateOrg.takeSsoNotice(back.localStorage, "Acme")) && back.localStorage.getItem("krate_sso_notice") === null, "the result is shown once, then forgotten");
+  check(/not switched on on this hub yet/.test(K.refusal("leases-off").title), "offline access off on the hub says so");
+}
+
 /* ---- G. offline access ------------------------------------------------- */
 {
   const routes = (me, role) => ({ ...orgRoutes(me), ...withOrg(me, {}, [member(me, role)]),
@@ -289,6 +319,8 @@ const two = [member(ALICE, "owner"), member("github:olga", "owner"), member("git
   check(/Sign in to acme/.test(page1.loginH.textContent), "and says which organisation");
   const bad = visit("https://krate.tech/login/?org=acme&error=sso-wrong-domain");
   check(/not at acme's company domain/.test(bad.loginSub.textContent) && !/sso-wrong-domain/.test(bad.loginSub.textContent), "a company sign-in that failed says why in words");
+  const nodomain = visit("https://krate.tech/login/?org=acme&error=domain-not-verified");
+  check(/has not proved its company domain yet/.test(nodomain.loginSub.textContent), "a company sign-in refused for an unproved domain says so");
   const none = visit("https://krate.tech/login/?org=..%2Fevil");
   check(!(none.orgBtn && none.orgBtn.shown),"a made-up org value offers no company button");
 }
