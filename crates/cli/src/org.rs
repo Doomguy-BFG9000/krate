@@ -116,8 +116,14 @@ pub enum OrgCommand {
     #[command(name = "root-key")]
     RootKey {
         slug: String,
-        /// The root's public key file, or its PKCS#8 key file.
+        /// The root's public key file, or its PKCS#8 key file. With --new,
+        /// where the new root key is written.
         key: std::path::PathBuf,
+        /// Make a new root key at that path first (it refuses to overwrite
+        /// one), then register its public half. The key stays on this
+        /// computer: keep it where your company keeps signing keys.
+        #[arg(long)]
+        new: bool,
         /// The signed list `krate revoke` wrote with this root: the hub
         /// refuses anything those release keys signed, from now on.
         #[arg(long, value_name = "FILE")]
@@ -1171,8 +1177,28 @@ pub fn run(command: OrgCommand, hub_override: Option<&str>) -> Result<u8> {
         OrgCommand::RootKey {
             slug,
             key,
+            new,
             revocations,
         } => {
+            if new {
+                if key.exists() {
+                    anyhow::bail!(
+                        "{} already exists, so no new root key was made: register that one \
+                         with `krate org root-key {slug} {}`, or name a new file",
+                        key.display(),
+                        key.display()
+                    );
+                }
+                let pkcs8 = krate_bundle::signing::SigningKey::generate_pkcs8()
+                    .map_err(|err| anyhow::anyhow!("could not make a root key: {err}"))?;
+                write_private_key(&key, &pkcs8)?;
+                println!(
+                    "made {slug}'s root key at {}. It never leaves this computer: keep it where \
+                     your company keeps signing keys, and make release keys from it with \
+                     `krate delegate`.",
+                    key.display()
+                );
+            }
             let (public_key, from_private) = public_key_from(&key)?;
             let mut body = serde_json::json!({ "public_key": public_key });
             if let Some(path) = &revocations {
@@ -2092,12 +2118,16 @@ fn keys_init(client: &Client, slug: &str) -> Result<()> {
     let agent = key_agent(client, slug)?;
     let (held, code) = agent.init().map_err(|err| key_words(err, slug))?;
     println!(
-        "made {slug}'s key (version {}) on this computer. Its apps' data is sealed with it;          Krate's hub holds only ciphertext.",
+        "made {slug}'s key (version {}) on this computer. Its apps' data is sealed with it; \
+         Krate's hub holds only ciphertext.",
         held.keyring.current().0
     );
     println!("recovery code: {}", code.display());
     println!(
-        "Keep the recovery code where your company keeps passwords: it is shown once. With it an          owner or admin restores the key on a new computer (`krate org keys recover {slug}`).          Without a member's computer or this code, the organisation's app data cannot be read by          anyone, Krate included."
+        "Keep the recovery code where your company keeps passwords: it is shown once. With it an \
+         owner or admin restores the key on a new computer (`krate org keys recover {slug}`). \
+         Without a member's computer or this code, the organisation's app data cannot be read by \
+         anyone, Krate included."
     );
     Ok(())
 }
@@ -2462,4 +2492,23 @@ mod tests {
             "2026-10-21T00:00:00Z"
         );
     }
+}
+
+/// Write a private key readable by this person only.
+fn write_private_key(path: &Path, bytes: &[u8]) -> Result<()> {
+    if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+        std::fs::create_dir_all(parent)?;
+    }
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    use std::io::Write;
+    options
+        .open(path)
+        .and_then(|mut f| f.write_all(bytes))
+        .map_err(|err| anyhow::anyhow!("could not write {}: {err}", path.display()))
 }

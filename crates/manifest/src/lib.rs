@@ -759,6 +759,10 @@ impl Capability {
             ("io", "log") => "write to its own log".to_string(),
             ("time", "monotonic") | ("time", "sleep") => "measure and wait for time".to_string(),
             ("locale", _) => "read your language and number format".to_string(),
+            ("store", "org") => {
+                "keep data shared with your team, sealed so only its members can read it"
+                    .to_string()
+            }
             ("store", "shared") => "share data with people who have its invite code".to_string(),
             ("camera", "capture") => "use your camera".to_string(),
             ("location", "read") => "know where you are".to_string(),
