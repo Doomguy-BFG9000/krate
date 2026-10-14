@@ -137,6 +137,11 @@ const RATE_LIMITS = {
   founding: 5,
   makeit: 5,
   "support/new": 5,
+  // Requests with no session to an organisation's routes or private
+  // links (IC-946). They never reach the organisation's store -- so they
+  // cannot grow its audit -- and this bounds what they cost. A person
+  // opening a private link before signing in sends one.
+  "org/anonymous": 20,
 };
 
 /// Who is asking, as far as the edge can tell.
@@ -6890,6 +6895,17 @@ function orgError(status, reason, slug, detail) {
   return json({ error: reason, message: messageFor(reason, slug, detail) }, status);
 }
 
+/// The answer to a request with no session (IC-946): `not-signed-in`, or
+/// the anonymous wall's 429 once this caller has sent too many. Never
+/// reaches an organisation's store.
+async function anonymousOrgRefusal(request, env, status, slug) {
+  const over = await rateLimited(request, env, "org/anonymous");
+  if (over) return over;
+  const res = orgError(status, "not-signed-in", slug);
+  res.headers.set("cache-control", "private, no-store");
+  return res;
+}
+
 /// Ask organisation `slug`'s store one command. Answers `{ status, body }`.
 async function orgAsk(env, slug, command) {
   const stub = env.ORGS.get(env.ORGS.idFromName(`org:${slug}`));
@@ -6995,6 +7011,10 @@ async function orgRoute(request, url, env) {
 
   const slug = String(parts[1] || "").toLowerCase();
   if (!SLUG.test(slug)) return orgError(400, "slug-invalid", slug);
+  // No session: answered here, never by the organisation's store, so an
+  // anonymous flood appends nothing to its audit and creates no object.
+  // Only an authenticated principal's attempts are audited.
+  if (!actor) return anonymousOrgRefusal(request, env, 401, slug);
   const rest = parts.slice(2);
   const ask = async (op, args = {}, idempotency = null) =>
     orgAnswer(await orgAsk(env, slug, { op, actor, args, idempotency }));
@@ -7114,14 +7134,23 @@ async function orgCandidate(request, env, slug, actor, path, base) {
 async function fetchPrivate(request, hash, object, slug, big, env) {
   const identity = await verifyGitHub(request, env);
   const actor = identity && identity.login ? String(identity.login).toLowerCase() : null;
+  const drop = async () => {
+    try {
+      if (object.body && typeof object.body.cancel === "function") await object.body.cancel();
+    } catch (_) {}
+  };
+  if (!actor) {
+    // A copied URL with no session: refused without asking the store, so
+    // it is neither audited nor able to flood the audit.
+    await drop();
+    return anonymousOrgRefusal(request, env, 403, slug);
+  }
   const answer = env.ORGS
     ? await orgAsk(env, slug, { op: "download", actor, args: { digest: hash } })
     : { status: 403, body: { error: "not-a-member", message: "organisations are not switched on on this hub" } };
   const noStore = { "cache-control": "private, no-store", vary: "authorization" };
   if (answer.status !== 200) {
-    try {
-      if (object.body && typeof object.body.cancel === "function") await object.body.cancel();
-    } catch (_) {}
+    await drop();
     return new Response(JSON.stringify(answer.body), {
       status: 403,
       headers: { "content-type": "application/json", ...noStore },
@@ -7184,9 +7213,13 @@ async function listAllObjects(bucket) {
   const out = [];
   let cursor;
   for (let page = 0; page < 200; page += 1) {
-    const listing = await bucket.list({ limit: 1000, cursor });
+    // customMetadata, so an organisation's private bytes (IC-946) are
+    // recognised as owned: they have no listing, alias or channel by
+    // design, and would otherwise read as orphans.
+    const listing = await bucket.list({ limit: 1000, cursor, include: ["customMetadata"] });
     for (const object of listing.objects) {
-      out.push({ key: object.key, size: object.size, sha256: checksumHex(object) });
+      const org = (object.customMetadata && object.customMetadata.org) || null;
+      out.push({ key: object.key, size: object.size, sha256: checksumHex(object), org });
     }
     if (!listing.truncated || !listing.cursor) break;
     cursor = listing.cursor;
@@ -7280,8 +7313,15 @@ async function runScrub(env, { repair }) {
 
   // Orphans: bytes nothing points at. Reported, never removed here -- a
   // retired listing keeps its bytes on purpose, and so may a link that
-  // was only ever sent by hand.
-  for (const hash of bundles.keys()) {
+  // was only ever sent by hand. An organisation's private bytes (IC-946)
+  // are owned by that organisation's store, which no KV record mirrors on
+  // purpose: never an orphan, and counted on their own.
+  let orgObjects = 0;
+  for (const [hash, object] of bundles) {
+    if (object.org) {
+      orgObjects += 1;
+      continue;
+    }
     if (!referenced.has(hash)) {
       problems.push({ kind: "orphan-object", key: hash, detail: "no listing, alias, channel or takedown names it", repaired: false });
     }
@@ -7297,6 +7337,7 @@ async function runScrub(env, { repair }) {
     aliases: aliases.length,
     channels: channels.length,
     takedowns: takedowns.length,
+    org_objects: orgObjects,
     problems,
   };
   try {

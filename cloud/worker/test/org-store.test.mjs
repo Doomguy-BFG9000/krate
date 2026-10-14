@@ -399,10 +399,10 @@ test("the audit has every step and every denial, chained, with nothing secret in
     "carol candidate.approve denied self-approval",
     "bob candidate.approve allowed",
     "stranger org.view denied not-a-member",
-    "null release.download denied not-signed-in",
   ]) {
     assert.ok(lines.includes(want), `${want} in\n${lines.join("\n")}`);
   }
+  assert.ok(!events.some((e) => e.actor === null), "a request with no session is never audited");
   assert.deepStrictEqual(Object.keys(events[0]).sort(), ["action", "actor", "at", "hash", "prev_hash", "reason", "result", "seq", "target"]);
   assert.strictEqual(events[0].prev_hash, GENESIS);
   const all = JSON.stringify(events);

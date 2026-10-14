@@ -176,7 +176,11 @@ test("a private release downloads only for a current member or recipient, asked 
     const browser = await call(env, who, "GET", `/a/${digest}`, { headers: { accept: "text/html" } });
     assert.strictEqual(browser.status, 403);
   }
-  assert.strictEqual(env.ORGS.requests - asked, 6, "the organisation was asked on every fetch");
+  assert.strictEqual(
+    env.ORGS.requests - asked,
+    3,
+    "the organisation was asked on every signed-in fetch; a fetch with no session is refused at the door",
+  );
 
   // Removed: refused at the very next fetch, no session or cache in between.
   assert.strictEqual((await call(env, "alice", "DELETE", "/orgs/acme/members/dan")).status, 204);

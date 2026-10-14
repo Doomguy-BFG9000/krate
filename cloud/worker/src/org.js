@@ -435,7 +435,10 @@ export class Org {
 
   /// A refusal: audited, then answered with the stable reason.
   deny(ctx, action, target, reason, detail) {
-    if (this.org()) this.audit(ctx.actor, action, target, "denied", reason);
+    // Only an authenticated principal's denials are audited: the door
+    // answers requests with no session itself, and if one reaches here
+    // anyway it must not be able to grow the audit.
+    if (ctx.actor && this.org()) this.audit(ctx.actor, action, target, "denied", reason);
     return {
       status: STATUS[reason] || 403,
       body: { error: reason, message: messageFor(reason, ctx.slug, detail) },
