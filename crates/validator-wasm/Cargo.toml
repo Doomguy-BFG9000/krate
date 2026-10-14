@@ -18,3 +18,15 @@ serde_json = { workspace = true }
 # custom one. Verification never draws randomness, so the custom backend
 # below refuses, and the module has no imports at all.
 getrandom = { version = "0.2", features = ["custom"] }
+# The organisation keyring and signing ring, for a browser tab that is an
+# owner's device (IC-958): the same sealing the CLI does, not a JavaScript
+# copy of it. Without its `agent` feature it has no network code.
+krate-orgkeys = { path = "../orgkeys" }
+zeroize = "1.8"
+
+# The keyring's HPKE draws its randomness through getrandom 0.3. In the
+# module that comes from the page that calls it (crypto.getRandomValues),
+# handed in with each call; the hub's door never asks for any. The build
+# script selects this backend with `--cfg getrandom_backend="custom"`.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom3 = { package = "getrandom", version = "=0.3.4" }

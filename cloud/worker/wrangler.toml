@@ -133,3 +133,11 @@ class_name = "Org"
 [[migrations]]
 tag = "v3-orgs"
 new_sqlite_classes = ["Org"]
+
+# The same validator module, served as a file at /validator.wasm for a
+# browser tab that signs as an organisation owner's device (IC-958). The
+# build script writes public/validator.wasm beside src/validator.wasm;
+# public/_headers lets krate.tech's pages fetch it. Only that file and
+# _headers are there, so every other path still reaches the Worker.
+[assets]
+directory = "./public"

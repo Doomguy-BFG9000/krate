@@ -27,7 +27,18 @@ if [ -x "$HOME/.cargo/bin/cargo" ]; then
   PATH="$HOME/.cargo/bin:$PATH"
   export PATH
 fi
-cargo build --release --target wasm32-unknown-unknown -p krate-validator-wasm
-out=cloud/worker/src/validator.wasm
-cp target/wasm32-unknown-unknown/release/krate_validator_wasm.wasm "$out"
-printf 'wrote %s (%s bytes)\n' "$out" "$(wc -c < "$out" | tr -d ' ')"
+# The organisation keyring's HPKE (crates/orgkeys) asks getrandom 0.3 for
+# randomness; in this module that is the bytes the calling page hands in
+# (crates/validator-wasm/src/browser.rs), selected by this cfg. The hub's
+# door never asks for any.
+RUSTFLAGS="${RUSTFLAGS:-} --cfg getrandom_backend=\"custom\"" \
+  cargo build --release --target wasm32-unknown-unknown -p krate-validator-wasm
+built=target/wasm32-unknown-unknown/release/krate_validator_wasm.wasm
+# The Worker imports one copy; the hub serves the other, byte for byte the
+# same, at /validator.wasm for a browser tab that signs as an
+# organisation's device (IC-958).
+for out in cloud/worker/src/validator.wasm cloud/worker/public/validator.wasm; do
+  mkdir -p "$(dirname "$out")"
+  cp "$built" "$out"
+  printf 'wrote %s (%s bytes)\n' "$out" "$(wc -c < "$out" | tr -d ' ')"
+done
