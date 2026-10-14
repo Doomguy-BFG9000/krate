@@ -3087,6 +3087,23 @@ pub fn judge_bytes_with_limits(
 }
 
 fn judge_bytes_here(bytes: &[u8], max_expanded: u64) -> Result<Judgement> {
+    judge_bytes_entries(bytes, max_expanded).map(|(judgement, _)| judgement)
+}
+
+/// [`judge_bytes`], keeping the entries it judged: for the browser Player
+/// (IC-956), which runs the component it judged and needs the bytes the
+/// judgement was about, not a second read of the archive.
+pub fn judge_bytes_and_entries(
+    bytes: &[u8],
+    max_expanded: u64,
+) -> Result<(Judgement, std::collections::BTreeMap<String, Vec<u8>>)> {
+    with_limits(HUB_LIMITS, || judge_bytes_entries(bytes, max_expanded))
+}
+
+fn judge_bytes_entries(
+    bytes: &[u8],
+    max_expanded: u64,
+) -> Result<(Judgement, std::collections::BTreeMap<String, Vec<u8>>)> {
     use std::collections::BTreeMap;
 
     if bytes.len() as u64 > lim().bundle_bytes {
@@ -3375,25 +3392,28 @@ fn judge_bytes_here(bytes: &[u8], max_expanded: u64) -> Result<Judgement> {
             }
         })
         .collect();
-    Ok(Judgement {
-        validator: imports::VALIDATOR_VERSION,
-        wit: imports::WIT_DIGEST.to_string(),
-        manifest,
-        archive: archive_sha256,
-        execution: execution.digest,
-        project: (project.entries.len() > execution.entries.len()).then_some(project.digest),
-        signature,
-        release,
-        derived_from,
-        entries,
-        expanded_bytes: expanded,
-        profile,
-        records,
-        extensions,
-        closure,
-        org_mark,
-        capabilities,
-    })
+    Ok((
+        Judgement {
+            validator: imports::VALIDATOR_VERSION,
+            wit: imports::WIT_DIGEST.to_string(),
+            manifest,
+            archive: archive_sha256,
+            execution: execution.digest,
+            project: (project.entries.len() > execution.entries.len()).then_some(project.digest),
+            signature,
+            release,
+            derived_from,
+            entries,
+            expanded_bytes: expanded,
+            profile,
+            records,
+            extensions,
+            closure,
+            org_mark,
+            capabilities,
+        },
+        raw,
+    ))
 }
 
 pub fn open_reader<R: Read + io::Seek>(reader: R) -> Result<OpenBundle> {
