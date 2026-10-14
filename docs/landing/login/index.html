@@ -240,7 +240,10 @@ html.krate-booting .booting { display: flex; }
   // Company sign-in (IC-948, CONTRACT.md Addendum 3 F): /login/?org=<slug>
   // offers that organisation's own sign-in first, and its failures come
   // back here as ?org=<slug>&error=<reason>.
-  var orgSlug = (new URLSearchParams(location.search).get("org") || "").toLowerCase();
+  // Studio names the organisation in the fragment (#org=<slug>, IC-953):
+  // on Windows its `start` drops everything after a bare `&`.
+  var orgSlug = (new URLSearchParams(location.search).get("org") ||
+    new URLSearchParams(location.hash.replace(/^#/, "")).get("org") || "").toLowerCase();
   if (!/^[a-z][a-z0-9-]{1,38}$/.test(orgSlug)) orgSlug = "";
   var SSO_WHY = {
     "sso-not-set-up": "Company sign-in is not set up for " + orgSlug + " yet. Sign in another way below.",

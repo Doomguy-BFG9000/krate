@@ -183,6 +183,60 @@ The limit to know: this is enforced by Krate on the device. Someone who
 strips the mark and the signature has an unsigned copy of the code, not the
 organisation's app, and Krate cannot stop a file from being copied.
 
+## Your company's apps on every computer
+
+Every member sees the apps their organisations released to them, on any
+computer with Krate:
+
+```sh
+krate org apps
+```
+
+It lists each app you may open now, with its version, its size and what it
+can do on your computer, in the words the reviewer saw when they approved
+it. Only apps for you are listed: an app limited to groups you are not in is
+not there, and a withdrawn release is gone. Open one by its app id:
+
+```sh
+krate org apps acme --open com.acme.expenses
+```
+
+That opens the release the organisation chose to open now, through the
+same checks as any private app: after a rollback it is the older one.
+
+Apps that may be used offline are kept ready on your computer when they are
+listed, with their offline access, so they open at once, and with no
+connection until that access runs out. With no connection, `krate org apps`
+shows the list it last saw. Krate Studio shows the same apps on its Home
+under Company apps, refreshed when it opens and every 15 minutes while it is
+open. `krate org apps --json` is the same list for other tools.
+
+## Every app's record
+
+Every app `krate create` or Krate Studio makes carries a record of how it
+was made: the tool, the AI and model when Krate knows it, when, and a
+fingerprint of the request. The request itself goes with it only when the
+builder chooses to keep it (`krate create --keep-prompt`, or Studio's
+"Keep the request with the app"). The record is inside the app and covered
+by its signature, so it cannot be changed afterwards without the signature
+failing. `krate inspect app.krate` shows it; an app made by hand has none.
+
+The organisation dashboard's **Apps** tab lists every app the organisation
+has, for owners, admins and reviewers: its owner, who last sent it, how it
+was made, what it can do, the company connections it uses, who it is for,
+how many people opened it in the last 30 days (owners and admins also see
+who), and whether it is in use, waiting or withdrawn. The list downloads as
+a spreadsheet.
+
+Each app has an owner, by default whoever first sent it: the person IT asks
+about the app. Owning an app gives no extra permission. When the owner is
+removed from the organisation, the app shows "Needs an owner" at the top of
+the list until an owner or admin chooses one; both are in the activity.
+
+What the hub counts is only that a person opened a release on a given day,
+seen when Krate checks the app in; nothing from inside the app. It keeps
+those daily counts for 90 days.
+
 ## Company connections
 
 A connection lets the organisation's apps call one of its APIs without any

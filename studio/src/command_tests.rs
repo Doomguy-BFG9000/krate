@@ -385,6 +385,7 @@ fn settings_round_trip_a_folder_with_spaces_and_unicode() {
     settings_set(Settings {
         out_dir: out.display().to_string(),
         agent: "codex".to_string(),
+        keep_prompt: None,
     })
     .expect("save settings");
     let back = settings_get();
@@ -427,6 +428,7 @@ fn the_old_documents_default_is_moved_out_and_saved() {
             .display()
             .to_string(),
         agent: "gemini".to_string(),
+        keep_prompt: None,
     })
     .unwrap();
     let s = settings_get();
@@ -448,6 +450,7 @@ fn a_folder_the_person_chose_inside_documents_is_kept() {
     settings_set(Settings {
         out_dir: mine.display().to_string(),
         agent: "claude".to_string(),
+        keep_prompt: None,
     })
     .unwrap();
     assert_eq!(PathBuf::from(settings_get().out_dir), mine);
@@ -1657,6 +1660,7 @@ fn ide_projects_lists_only_real_projects_in_the_apps_folder_and_the_recent_list(
     settings_set(Settings {
         out_dir: out.display().to_string(),
         agent: "claude".into(),
+        keep_prompt: None,
     })
     .unwrap();
     let root = out.join("Projects");
@@ -2881,6 +2885,131 @@ echo '   '"#,
         // Signed out, or no organisations: no rows, and no error to show.
         t.engine("echo 'error: you are not signed in' >&2; exit 1");
         assert!(block(org_targets()).unwrap().is_empty());
+    }
+
+    /* ---- the company's apps (IC-953) ---------------------------------- */
+
+    #[test]
+    fn company_apps_are_the_engines_list_and_nothing_when_it_cannot_answer() {
+        let t = TestHome::new();
+        t.engine(
+            r#"echo '{"v":1,"signed_in":true,"policy_org":"acme","orgs":[{"slug":"acme","name":"Acme","apps":[{"app_id":"com.acme.expenses","name":"Expenses"}]}]}'"#,
+        );
+        let answer = block(org_apps()).unwrap();
+        assert_eq!(t.args(), vec!["org", "apps", "--json"]);
+        assert_eq!(answer["orgs"][0]["apps"][0]["app_id"], "com.acme.expenses");
+        assert_eq!(answer["policy_org"], "acme");
+        // An engine too old to know the command, or one that fails: an
+        // empty list, so Home draws no section and shows no error.
+        t.engine("echo 'error: unrecognized subcommand apps' >&2; exit 2");
+        assert_eq!(
+            block(org_apps()).unwrap(),
+            serde_json::json!({ "orgs": [] })
+        );
+        t.engine("echo 'not json'");
+        assert_eq!(
+            block(org_apps()).unwrap(),
+            serde_json::json!({ "orgs": [] })
+        );
+    }
+
+    #[test]
+    fn opening_a_company_app_goes_through_the_engines_door_and_says_why_not() {
+        let t = TestHome::new();
+        t.engine("exit 0");
+        block(org_app_open("acme".into(), "com.acme.expenses".into())).unwrap();
+        assert_eq!(
+            t.args(),
+            vec![
+                "org",
+                "apps",
+                "acme",
+                "--open",
+                "com.acme.expenses",
+                "--window"
+            ]
+        );
+        t.engine(
+            "echo 'error: com.acme.expenses does not open: Acme withdrew Expenses 1.3.0' >&2; exit 1",
+        );
+        let err = block(org_app_open("acme".into(), "com.acme.expenses".into())).unwrap_err();
+        assert_eq!(
+            err,
+            "com.acme.expenses does not open: Acme withdrew Expenses 1.3.0"
+        );
+        // Names only: nothing that reads as a flag or a path reaches it.
+        t.engine("echo should-not-run > '/dev/null'; exit 0");
+        for (slug, app) in [
+            ("--hub", "x"),
+            ("acme", "--window"),
+            ("acme", "../../etc"),
+            ("", "x"),
+            ("acme", "a b"),
+        ] {
+            let before = t.args();
+            assert!(
+                block(org_app_open(slug.into(), app.into())).is_err(),
+                "{slug} {app}"
+            );
+            assert_eq!(t.args(), before, "the engine was not run for {slug} {app}");
+        }
+    }
+
+    /* ---- the build record (IC-954) ------------------------------------- */
+
+    #[test]
+    fn studio_builds_say_so_and_keep_the_request_only_when_chosen() {
+        let _t = TestHome::new();
+        let args = || {
+            let mut cmd = std::process::Command::new("krate");
+            studio_build(&mut cmd);
+            let env: Vec<(String, String)> = cmd
+                .get_envs()
+                .filter_map(|(k, v)| {
+                    Some((k.to_string_lossy().into(), v?.to_string_lossy().into()))
+                })
+                .collect();
+            let args: Vec<String> = cmd.get_args().map(|a| a.to_string_lossy().into()).collect();
+            (env, args)
+        };
+        let (env, plain) = args();
+        assert!(env.contains(&("KRATE_BUILT_BY".to_string(), "studio".to_string())));
+        assert!(plain.is_empty(), "off unless chosen: {plain:?}");
+        let mut settings = settings_get();
+        settings.keep_prompt = Some(true);
+        settings_set(settings).unwrap();
+        assert_eq!(args().1, vec!["--keep-prompt"]);
+        // A screen that saves only the folder and the AI keeps the choice.
+        let mut other = settings_get();
+        other.keep_prompt = None;
+        other.agent = "codex".into();
+        settings_set(other).unwrap();
+        assert_eq!(settings_get().keep_prompt, Some(true));
+        assert_eq!(settings_get().agent, "codex");
+        assert_eq!(args().1, vec!["--keep-prompt"]);
+        let mut off = settings_get();
+        off.keep_prompt = Some(false);
+        settings_set(off).unwrap();
+        assert!(args().1.is_empty());
+    }
+
+    #[test]
+    fn the_company_sign_in_is_named_in_the_fragment() {
+        assert_eq!(sign_in_fragment(Some("github")), "#github");
+        assert_eq!(sign_in_fragment(Some("google")), "#google");
+        assert_eq!(sign_in_fragment(Some("org:acme-labs")), "#org=acme-labs");
+        for bad in [
+            "org:",
+            "org:A",
+            "org:1acme",
+            "org:acme&x=1",
+            "org:a",
+            "email",
+            "org:acme#",
+        ] {
+            assert_eq!(sign_in_fragment(Some(bad)), "", "{bad}");
+        }
+        assert_eq!(sign_in_fragment(None), "");
     }
 
     #[test]

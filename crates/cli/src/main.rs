@@ -1122,6 +1122,13 @@ enum Command {
         /// get back will not do the impossible part.
         #[arg(long)]
         force: bool,
+
+        /// Keep your request inside the app's build record, beside the
+        /// tool and model that made it. Without this only a fingerprint of
+        /// the request is kept, which proves which request it was without
+        /// saying what it said.
+        #[arg(long)]
+        keep_prompt: bool,
     },
 
     /// Analyze an existing source project and explain how it can become a
@@ -1326,6 +1333,10 @@ enum Command {
         /// Write the changed app here instead of updating the file in place.
         #[arg(long)]
         output: Option<PathBuf>,
+
+        /// Keep the change you asked for inside the app's build record.
+        #[arg(long)]
+        keep_prompt: bool,
     },
 
     /// Internal: drive a supported AI agent to author the app. `krate create
@@ -2251,7 +2262,10 @@ fn run() -> Result<u8> {
             no_install,
             json,
             force,
+            keep_prompt,
         } => {
+            KEEP_PROMPT.store(keep_prompt, std::sync::atomic::Ordering::Relaxed);
+            let provider = build_provider(author_cmd.as_deref(), agent.as_deref());
             // Attachments go through the ordinary create, with every flag
             // the caller gave: the separate path they used ignored
             // --work-dir, --json and --transcript and turned the request
@@ -2299,6 +2313,8 @@ fn run() -> Result<u8> {
                 force,
                 derived_from: None,
                 attachments,
+                provider,
+                changed_from: None,
             })
         }
         Command::Report { report, show } => run_report_command(&report, show),
@@ -2348,8 +2364,10 @@ fn run() -> Result<u8> {
             agent,
             attachments,
             output,
+            keep_prompt,
         } => {
             fleet::ai_build(Some(&agent))?;
+            KEEP_PROMPT.store(keep_prompt, std::sync::atomic::Ordering::Relaxed);
             revise_cli(&bundle, &change, &agent, &attachments, output.as_deref())
         }
         Command::AuthorAgent { agent } => {
@@ -4552,6 +4570,8 @@ pub(crate) fn author_app_for_tui(
         force: false,
         derived_from: None,
         attachments: attachments.to_vec(),
+        provider: Some(provider.name().to_string()),
+        changed_from: None,
     })?;
     usage::record_with(
         usage::Action::Make,
@@ -4905,6 +4925,8 @@ fn revise_cli(
                 force: true,
                 derived_from,
                 attachments: Vec::new(),
+                provider: Some(provider.name().to_string()),
+                changed_from: Some(bundle.to_path_buf()),
             })?;
             if code == 6 {
                 return Ok(6);
@@ -5091,6 +5113,8 @@ pub(crate) fn revise_app_for_tui(
         force: true,
         derived_from,
         attachments: Vec::new(),
+        provider: Some(provider.name().to_string()),
+        changed_from: Some(output.to_path_buf()),
     })?;
     if code == 0 {
         remember_app(output);
@@ -8645,6 +8669,82 @@ struct CreateRequest {
     derived_from: Option<krate_bundle::DerivedFrom>,
     /// Files the person attached, staged into the app's own workspace.
     attachments: Vec<PathBuf>,
+    /// The AI provider id that authors it, for its build record (IC-954).
+    /// `None` for a built-in template or a person's own command.
+    provider: Option<String>,
+    /// The app this build changes, whose build record counts the changes
+    /// before this one. `None` for a new app.
+    changed_from: Option<PathBuf>,
+}
+
+/// `--keep-prompt` on create or revise: the request goes into the app's
+/// build record as well as its digest (IC-954). Set once at dispatch.
+static KEEP_PROMPT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// The provider a build record names (IC-954): the AI given with --agent,
+/// `author-cmd` for a person's own command (the id the machine policy
+/// knows it by), none for a built-in template.
+fn build_provider(author_cmd: Option<&str>, agent: Option<&str>) -> Option<String> {
+    match (author_cmd, agent) {
+        (Some(_), _) => Some("author-cmd".to_string()),
+        (None, Some(agent)) => Some(agent.trim().to_ascii_lowercase()).filter(|a| !a.is_empty()),
+        (None, None) => None,
+    }
+}
+
+/// Which tool is making the app: Studio says so with `KRATE_BUILT_BY=studio`
+/// when it drives the engine; anything else is `krate create`.
+fn build_tool() -> &'static str {
+    match std::env::var("KRATE_BUILT_BY").as_deref() {
+        Ok("studio") => "krate studio",
+        _ => "krate create",
+    }
+}
+
+/// The model behind a provider, when Krate knows it: an API vendor's is
+/// Krate's own choice; a coding tool's is the tool's, named only when the
+/// person set `KRATE_AGENT_MODEL`.
+fn build_model(provider: Option<&str>) -> Option<String> {
+    let provider = provider?;
+    if let Some(vendor) = api_key::ApiVendor::parse(provider) {
+        return Some(api_author::model_for(vendor)).filter(|m| !m.is_empty());
+    }
+    std::env::var("KRATE_AGENT_MODEL")
+        .ok()
+        .map(|m| m.trim().to_string())
+        .filter(|m| !m.is_empty() && m.len() <= 120)
+}
+
+/// Write the build record into a freshly packed bundle (IC-954): who made
+/// it with what, when, the request's digest (the request itself only with
+/// --keep-prompt), and how many changes came before, counted from the
+/// record of the app it replaces or was changed from.
+fn write_build_record(
+    staged: &Path,
+    req: &CreateRequest,
+    started_at: u64,
+    changed_from: Option<&Path>,
+) -> Result<()> {
+    let revisions = changed_from
+        .and_then(|from| krate_bundle::read_build_provenance(from).ok().flatten())
+        .map(|before| before.revisions.saturating_add(1))
+        .unwrap_or(if changed_from.is_some() { 1 } else { 0 });
+    let keep = KEEP_PROMPT.load(std::sync::atomic::Ordering::Relaxed)
+        && req.request.len() <= krate_bundle::PROVENANCE_PROMPT_MAX;
+    let record = krate_bundle::BuildProvenance {
+        v: 1,
+        tool: build_tool().to_string(),
+        krate_version: krate_version().to_string(),
+        provider: req.provider.clone(),
+        model: build_model(req.provider.as_deref()),
+        started_at,
+        finished_at: unix_now(),
+        prompt_sha256: krate_bundle::sha256_hex(req.request.as_bytes()),
+        prompt: keep.then(|| req.request.clone()),
+        revisions,
+    };
+    krate_bundle::add_build_provenance(staged, &record)
+        .with_context(|| format!("write the build record into {}", staged.display()))
 }
 
 /// Fail now, in plain words, if nothing can be written beside `output`.
@@ -10139,6 +10239,7 @@ fn create_krate(req: CreateRequest) -> Result<u8> {
     // apart. Everything else here -- the name, the feasibility screen, the
     // history entry, what is printed -- must see the person's own words, so
     // strip it once, here, rather than in each of those places.
+    let build_started_at = unix_now();
     let mut req = req;
     let is_change = req.request.starts_with(CHANGE_MARKER);
     let mut marked_request = req.request.clone();
@@ -10447,6 +10548,14 @@ fn create_krate(req: CreateRequest) -> Result<u8> {
         staged.path(),
     )
     .with_context(|| format!("pack {}", req.output.display()))?;
+    // How it was made, in the bundle itself, before anything judges it
+    // (IC-954): every check below runs on the bytes that will ship.
+    write_build_record(
+        staged.path(),
+        &req,
+        build_started_at,
+        req.changed_from.as_deref(),
+    )?;
     steps.push(serde_json::json!({"step": "pack", "detail": format!("{} bytes", size)}));
 
     // Step 5: verify the permission wall by running the packed bundle with all
@@ -15193,16 +15302,22 @@ fn judge_command(bundle: &Path, tier: &str) -> Result<u8> {
 }
 
 /// The smallest bundle worth an unpacked-cache entry (IC-944).
-const OPEN_CACHE_MIN_BYTES: u64 = 8 * 1024 * 1024;
+pub(crate) const OPEN_CACHE_MIN_BYTES: u64 = 8 * 1024 * 1024;
 
 /// Where opened bundles are kept unpacked (IC-944): `KRATE_CACHE_DIR`,
 /// else the platform's cache folder, under `opened` -- beside the compiled
 /// code the runtime keeps. `KRATE_NO_OPEN_CACHE=1` turns it off.
-fn opened_cache_root() -> Option<PathBuf> {
+pub(crate) fn opened_cache_root() -> Option<PathBuf> {
     if std::env::var_os("KRATE_NO_OPEN_CACHE").is_some() {
         return None;
     }
-    let root = if let Some(root) = std::env::var_os("KRATE_CACHE_DIR") {
+    Some(cache_root()?.join("opened"))
+}
+
+/// Krate's cache folder: `KRATE_CACHE_DIR`, else the platform's. What is
+/// here can be thrown away and fetched again; the person's data never is.
+pub(crate) fn cache_root() -> Option<PathBuf> {
+    Some(if let Some(root) = std::env::var_os("KRATE_CACHE_DIR") {
         PathBuf::from(root)
     } else if cfg!(windows) {
         PathBuf::from(std::env::var_os("LOCALAPPDATA")?)
@@ -15210,8 +15325,7 @@ fn opened_cache_root() -> Option<PathBuf> {
             .join("cache")
     } else {
         home_dir()?.join(".cache").join("krate")
-    };
-    Some(root.join("opened"))
+    })
 }
 
 /// A link's app, ready to run. An ordinary one is read and opened by the
@@ -21414,6 +21528,36 @@ fn inspect_command(target: &str, format: OutputFormat) -> Result<u8> {
                 .unwrap_or_else(|| "(none)".to_string())
         );
     }
+    // How it was made (IC-954), in one line, or that nothing says so.
+    match report.get("provenance").filter(|v| v.is_object()) {
+        Some(built) => {
+            let with = match (built["provider"].as_str(), built["model"].as_str()) {
+                (Some(p), Some(m)) => format!(" with {p} ({m})"),
+                (Some(p), None) => format!(" with {p}"),
+                _ => " from a built-in template".to_string(),
+            };
+            let changes = built["revisions"].as_u64().unwrap_or(0);
+            println!(
+                "built           by {}{with}, Krate {}, finished {}{}",
+                field(&built["tool"]),
+                field(&built["krate_version"]),
+                org::when(&built["finished_at"]),
+                match changes {
+                    0 => String::new(),
+                    1 => ", 1 change since".to_string(),
+                    n => format!(", {n} changes since"),
+                }
+            );
+            match built["prompt"].as_str() {
+                Some(prompt) => println!("  asked for     {prompt}"),
+                None => println!(
+                    "  request       not kept (sha256 {})",
+                    field(&built["prompt_sha256"])
+                ),
+            }
+        }
+        None => println!("built           no build record (made by hand, or by an older Krate)"),
+    }
     let requests = report["requests"].as_array().cloned().unwrap_or_default();
     println!("requests        {}", requests.len());
     for request in &requests {
@@ -24332,6 +24476,117 @@ mod home_tests {
 }
 
 #[cfg(test)]
+mod build_record_tests {
+    use super::build_provider;
+
+    /// IC-954: the build record names the AI given with --agent, a
+    /// person's own command as `author-cmd`, and nothing for a template.
+    #[test]
+    fn the_build_record_names_the_provider_the_build_used() {
+        assert_eq!(
+            build_provider(None, Some("Claude ")).as_deref(),
+            Some("claude")
+        );
+        assert_eq!(
+            build_provider(None, Some("anthropic")).as_deref(),
+            Some("anthropic")
+        );
+        assert_eq!(
+            build_provider(Some("my-tool"), Some("claude")).as_deref(),
+            Some("author-cmd"),
+            "an explicit command wins, as it does for authoring"
+        );
+        assert_eq!(build_provider(None, None), None);
+        assert_eq!(build_provider(None, Some("  ")), None);
+    }
+
+    /// A change counts the changes before it, from the record of the app
+    /// it changes; the request is only a digest unless it is kept.
+    #[test]
+    fn a_change_counts_the_changes_before_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let manifest = dir.path().join("manifest.toml");
+        std::fs::write(
+            &manifest,
+            "[app]\nid = \"dev.acme.notes\"\nname = \"Notes\"\nversion = \"1.0.0\"\n\
+             entry = \"code.wasm\"\nworld = \"krate:app/cli@0.1.0\"\n",
+        )
+        .unwrap();
+        let code = dir.path().join("code.wasm");
+        std::fs::write(
+            &code,
+            include_bytes!("../../bundle/tests/fixtures/minimal-run.wasm"),
+        )
+        .unwrap();
+        let req = |request: &str| super::CreateRequest {
+            request: request.to_string(),
+            output: dir.path().join("notes.krate"),
+            author_cmd: None,
+            kind: None,
+            name: None,
+            transcript: None,
+            work_dir: None,
+            yes: false,
+            no_install: true,
+            json: false,
+            force: false,
+            derived_from: None,
+            attachments: Vec::new(),
+            provider: Some("claude".into()),
+            changed_from: None,
+        };
+        let first = dir.path().join("first.krate");
+        krate_bundle::pack(&manifest, &code, &first).unwrap();
+        super::write_build_record(&first, &req("team notes"), 1_760_000_000, None).unwrap();
+        let record = krate_bundle::read_build_provenance(&first)
+            .unwrap()
+            .unwrap();
+        assert_eq!(record.revisions, 0);
+        assert_eq!(record.provider.as_deref(), Some("claude"));
+        assert_eq!(record.prompt, None, "not kept unless asked");
+        assert_eq!(
+            record.prompt_sha256,
+            krate_bundle::sha256_hex(b"team notes")
+        );
+        assert_eq!(record.started_at, 1_760_000_000);
+        assert!(record.finished_at >= record.started_at);
+        let second = dir.path().join("second.krate");
+        krate_bundle::pack(&manifest, &code, &second).unwrap();
+        super::write_build_record(&second, &req("add a search box"), 1, Some(&first)).unwrap();
+        assert_eq!(
+            krate_bundle::read_build_provenance(&second)
+                .unwrap()
+                .unwrap()
+                .revisions,
+            1
+        );
+        let third = dir.path().join("third.krate");
+        krate_bundle::pack(&manifest, &code, &third).unwrap();
+        super::write_build_record(&third, &req("dark mode"), 1, Some(&second)).unwrap();
+        assert_eq!(
+            krate_bundle::read_build_provenance(&third)
+                .unwrap()
+                .unwrap()
+                .revisions,
+            2
+        );
+        // Changing an app made before build records: the first counted change.
+        let old = dir.path().join("old.krate");
+        krate_bundle::pack(&manifest, &code, &old).unwrap();
+        let fourth = dir.path().join("fourth.krate");
+        krate_bundle::pack(&manifest, &code, &fourth).unwrap();
+        super::write_build_record(&fourth, &req("bigger text"), 1, Some(&old)).unwrap();
+        assert_eq!(
+            krate_bundle::read_build_provenance(&fourth)
+                .unwrap()
+                .unwrap()
+                .revisions,
+            1
+        );
+    }
+}
+
+#[cfg(test)]
 mod refusal_tests {
     use super::{agent_failure_reason_in, extract_plan_json};
 
@@ -25760,6 +26015,8 @@ again: {} -> {}",
             force: false,
             derived_from: None,
             attachments: Vec::new(),
+            provider: None,
+            changed_from: None,
         };
         let verdict = krate_author::feasibility::screen(&req.request);
         let krate_author::feasibility::Verdict::Refuse(refusal) = verdict else {

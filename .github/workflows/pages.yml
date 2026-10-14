@@ -284,6 +284,14 @@ jobs:
           # sealing makes the exact bytes crates/orgkeys makes and opens what
           # it seals, on one cross-language vector both test suites read.
           node docs/landing/studio/org-seal-test.mjs
+          # The company's apps on Studio's Home (IC-953): one card per app
+          # the engine lists, Open through its door, a withdrawn app gone,
+          # and a new laptop asked for its organisation's own sign-in.
+          node docs/landing/studio/company-apps-test.mjs
+          # The dashboard's Apps tab (IC-954): every app with its owner and
+          # how it was made, an app whose owner left first with the fix, the
+          # spreadsheet, and no machinery words outside Details.
+          node docs/landing/studio/org-inventory-test.mjs
           # And the doors security asks for (IC-955): SAML, SCIM and the
           # audit export are each shown only to the roles the matrix gives
           # them, a token or secret is shown once and kept nowhere, nothing

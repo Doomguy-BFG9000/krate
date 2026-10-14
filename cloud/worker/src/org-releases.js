@@ -102,6 +102,19 @@ function audienceOf(c) {
   }
 }
 
+/// What a release can do, in the validator's plain words (IC-950, kept in
+/// the `caps` column org-review.js adds): `{cap, words}` each. A release
+/// recorded before that column has none to say.
+function capabilityWords(c) {
+  try {
+    const list = JSON.parse((c && c.caps) || "[]");
+    if (!Array.isArray(list)) return [];
+    return list.filter((x) => x && x.cap).map((x) => ({ cap: String(x.cap), words: String(x.words || x.cap) }));
+  } catch (_) {
+    return [];
+  }
+}
+
 /// "finance", "finance and ops", "finance, ops and legal".
 function spoken(list) {
   if (list.length <= 1) return list.join("");
@@ -207,6 +220,8 @@ const ops = {
       approved_by: c.approved_by,
       at: c.approved_at,
       audience: audience,
+      size: Number(c.size) || 0,
+      capabilities: capabilityWords(c),
     };
     if (typeof this.offlineClassFor === "function") out.offline = this.offlineClassFor(c.name);
     if (c.state === "withdrawn") {
@@ -324,17 +339,22 @@ const ops = {
     return this.ok({ app_id: app, digest, name: c.name, version: c.version, url: `${ctx.args.base || ""}/a/${digest}` });
   },
 
-  /// GET /orgs/<slug>/apps: each app, its current release and its history,
-  /// withdrawn versions included. A member outside an audience does not
-  /// see that release; owners, admins and reviewers see everything.
-  /// Whoever may withdraw also sees the offline access each holds out.
+  /// GET /orgs/<slug>/apps: each app, its current release and its history.
+  /// Owners, admins and reviewers see everything, withdrawn versions
+  /// included. Anyone else sees the company's apps as they open them
+  /// (IC-953): only apps whose current release is in their audience, and
+  /// no withdrawn version. Each app says what its link opens now -- its
+  /// version, size, what it can do (IC-950's words), offline class and the
+  /// link -- so a device can list and open it in one look. Whoever may
+  /// withdraw also sees the offline access each release holds out.
   op_app_releases(ctx) {
     const { me, refusal } = this.mayDo(ctx, "release.download", `org:${ctx.slug}`, (r) => `a ${r} cannot see ${ctx.slug}'s releases`);
     if (refusal) return refusal;
     const mine = this.groupsOf(me.principal);
+    const everything = SEES_ALL.has(me.role);
     const visible = (c) => {
       const a = audienceOf(c);
-      return !a || SEES_ALL.has(me.role) || a.some((g) => mine.has(g));
+      return !a || everything || a.some((g) => mine.has(g));
     };
     const leases = allows(me.role, "release.withdraw") === "yes";
     const byApp = new Map();
@@ -343,18 +363,35 @@ const ops = {
     );
     for (const c of rows) {
       if (!visible(c)) continue;
+      // A withdrawn version is history for the people who manage releases;
+      // for everyone else it is gone.
+      if (!everything && c.state !== "released") continue;
       const app = appOf(c);
       if (!byApp.has(app)) byApp.set(app, { app_id: app, name: c.name, current: null, releases: [] });
       byApp.get(app).releases.push(this.releaseView(c, ctx.args.base, { leases, now: ctx.now }));
     }
+    const apps = [];
     for (const entry of byApp.values()) {
       const current = this.currentOf(entry.app_id);
       // The current release, only when this person may open it.
       entry.current = entry.releases.some((r) => r.digest === current) ? current : null;
+      // An app whose current release is not theirs to open is not on their
+      // list at all, even when an older version was once for them.
+      if (!everything && !entry.current) continue;
       const named = entry.releases.find((r) => r.state === "released") || entry.releases[0];
       entry.name = named.name;
+      const now = entry.current ? entry.releases.find((r) => r.digest === entry.current) : null;
+      Object.assign(entry, {
+        version: now ? now.version : null,
+        digest: now ? now.digest : null,
+        size: now ? now.size : null,
+        capabilities: now ? now.capabilities : [],
+        offline: now ? now.offline || null : null,
+        link: `${ctx.args.base || ""}/orgs/${ctx.slug}/apps/${encodeURIComponent(entry.app_id)}/current`,
+      });
+      apps.push(entry);
     }
-    return this.ok({ apps: [...byApp.values()] });
+    return this.ok({ apps });
   },
 
   /// PUT /orgs/<slug>/releases/<digest>/audience {groups} | {everyone: true}.

@@ -129,5 +129,18 @@ for (const off of ["//evil.example/steal", "https://evil.example/", "/\\evil.exa
   check(done.location.went === "/app/", "next=studio still opens the Studio");
 }
 
+{
+  // Studio names the organisation in the fragment (IC-953), because
+  // Windows' `start` drops everything after a bare `&`: the company's own
+  // sign-in is offered first, as with ?org=.
+  const page = browser().visit("https://krate.tech/login?app_nonce=abc123#org=acme", loginHtml);
+  const door = new URL(page.els.orgBtn.href);
+  check(door.pathname === "/login/oidc/start" && door.searchParams.get("org") === "acme", "#org=<slug> offers that organisation's company sign-in");
+  check(door.searchParams.get("app_nonce") === "abc123", "and keeps Studio's nonce for the way back");
+  check(/Sign in to acme/.test(page.els.loginH.textContent), "and says which organisation");
+  const odd = browser().visit("https://krate.tech/login?app_nonce=abc123#org=Not%20A%20Slug!", loginHtml);
+  check(!(odd.els.orgBtn && odd.els.orgBtn.href), "a fragment that is not a slug offers nothing");
+}
+
 console.log(bad ? `${bad} check(s) failed` : "ok  sign-in comes back to this site's pages, and nowhere else");
 process.exit(bad ? 1 : 0);

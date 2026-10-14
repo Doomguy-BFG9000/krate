@@ -61,6 +61,8 @@ import { orgSamlRoute, samlStart, samlAcs, samlMetadata } from "./org-saml.js";
 // (IC-951, store.org).
 import { orgKeysRoute } from "./org-keys.js";
 import { orgDataRoute } from "./org-data.js";
+// Inventory, provenance and ownership (IC-954), after release control and review.
+import { inventoryRoute, provenanceArg } from "./org-inventory.js";
 // The organisation store (IC-946), one SQLite-backed Durable Object per
 // organisation; wrangler.toml binds it as ORGS.
 export { Org };
@@ -7213,6 +7215,8 @@ function candidateArgs(judgement, digest, size, base) {
     capabilities: judgementCaps(judgement),
     // The company connections it asks for (IC-952).
     connections: connectionsAsked(judgement),
+    // How it was made, from its signed build record (IC-954).
+    provenance: provenanceArg(judgement.provenance),
     base,
   };
 }
@@ -7446,7 +7450,7 @@ async function orgRouteCore(request, url, env, identity) {
     askRaw, mutateRaw, orgAsk, orgAnswer, json, readBody, readBounded, isAdmin, smtpSend, fetchBundle, idempotencyOf,
   };
   const routed =
-    (await orgLifecycleRoute(h)) || (await orgBillingRoute(h)) || (await orgReleaseRoute(h)) || (await connectionRoute(h)) ||
+    (await orgLifecycleRoute(h)) || (await orgBillingRoute(h)) || (await inventoryRoute(h)) || (await orgReleaseRoute(h)) || (await connectionRoute(h)) ||
     (await orgScimRoute(h)) || (await auditExportRoute(h)) || (await orgSamlRoute(h)) ||
     (await orgKeysRoute(h)) ||
     (await orgDataRoute(h));

@@ -629,6 +629,19 @@ struct Settings {
     out_dir: String,
     /// Which AI authors, by provider name.
     agent: String,
+    /// "Keep the request with the app" (IC-954): the request goes into the
+    /// app's build record, not only its fingerprint. Off unless chosen.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    keep_prompt: Option<bool>,
+}
+
+/// Studio's mark on what it builds (IC-954): the engine's build record says
+/// "krate studio", and keeps the request when the person chose to.
+fn studio_build(cmd: &mut Command) {
+    cmd.env("KRATE_BUILT_BY", "studio");
+    if settings_get().keep_prompt == Some(true) {
+        cmd.arg("--keep-prompt");
+    }
 }
 
 impl Default for Settings {
@@ -647,6 +660,7 @@ impl Default for Settings {
             // and macOS asks them once, in response to their own choice.
             out_dir: dirs_home().join("Krate Apps").display().to_string(),
             agent: "claude".to_string(),
+            keep_prompt: None,
         }
     }
 }
@@ -683,6 +697,15 @@ fn settings_get() -> Settings {
 
 #[tauri::command]
 fn settings_set(settings: Settings) -> Result<(), String> {
+    let mut settings = settings;
+    // A screen that saves only the folder and the AI leaves the person's
+    // "Keep the request with the app" choice as it was.
+    if settings.keep_prompt.is_none() {
+        settings.keep_prompt = std::fs::read_to_string(studio_dir().join("settings.json"))
+            .ok()
+            .and_then(|text| serde_json::from_str::<Settings>(&text).ok())
+            .and_then(|stored| stored.keep_prompt);
+    }
     let body = serde_json::to_string_pretty(&settings).map_err(|e| e.to_string())?;
     write_private_atomic(&studio_dir().join("settings.json"), body.as_bytes())
 }
@@ -1664,6 +1687,7 @@ async fn create_app(
         cmd.arg("create")
             .args(["--agent", &agent, "--yes", "--output"])
             .arg(&out_path);
+        studio_build(&mut cmd);
         // One stable workspace per session, so a retry RESUMES from the code
         // the last attempt wrote instead of starting from an empty directory.
         // The stall message has always promised this ("it resumes from the
@@ -1731,6 +1755,7 @@ async fn revise_app(
         let out_path = existing(&path)?;
         let mut cmd = silent_cmd(&engine);
         cmd.arg("revise").args(["--agent", &agent]);
+        studio_build(&mut cmd);
         for file in &attachments {
             cmd.args(["--attach", file]);
         }
@@ -2872,6 +2897,78 @@ fn org_targets_blocking() -> Result<Vec<serde_json::Value>, String> {
         .collect())
 }
 
+/// The company's apps for the signed-in person (IC-953): the engine's
+/// `krate org apps --json`, which lists each organisation's apps this
+/// person may open now (their audience, nothing withdrawn), keeps a copy for
+/// when there is no connection, and gets each app ready to open offline.
+/// Signed out, its answer says so and names the company sign-in when the
+/// machine policy names an organisation. An engine that cannot answer
+/// (too old, not there) is an empty list: the Home section is not drawn.
+#[tauri::command]
+async fn org_apps() -> Result<serde_json::Value, String> {
+    tauri::async_runtime::spawn_blocking(org_apps_blocking)
+        .await
+        .map_err(|err| err.to_string())?
+}
+
+fn org_apps_blocking() -> Result<serde_json::Value, String> {
+    let engine = engine()?;
+    let out = silent_cmd(&engine)
+        .args(["org", "apps", "--json"])
+        .output()
+        .map_err(|err| err.to_string())?;
+    let answer: serde_json::Value =
+        serde_json::from_slice(&out.stdout).unwrap_or(serde_json::Value::Null);
+    if !out.status.success() || !answer.is_object() {
+        return Ok(serde_json::json!({ "orgs": [] }));
+    }
+    Ok(answer)
+}
+
+/// Open one company app (IC-953): the engine's `krate org apps <slug>
+/// --open <app id> --window`, the double-click door, so every check holds:
+/// the machine policy, membership, audience, withdrawal, and offline only
+/// on a lease that holds. The engine's own words come back when it does
+/// not open.
+#[tauri::command]
+async fn org_app_open(slug: String, app_id: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || org_app_open_blocking(&slug, &app_id))
+        .await
+        .map_err(|err| err.to_string())?
+}
+
+fn org_app_open_blocking(slug: &str, app_id: &str) -> Result<(), String> {
+    // Names, never flags or paths: an app id is letters, digits, dots and
+    // dashes, a slug lower-case letters, digits and dashes.
+    let named = |text: &str, extra: &[char]| {
+        !text.is_empty()
+            && text.len() <= 120
+            && !text.starts_with('-')
+            && text
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || extra.contains(&c))
+    };
+    if !named(slug, &[]) || !named(app_id, &['.', '_']) {
+        return Err("That is not one of your company's apps.".to_string());
+    }
+    let engine = engine()?;
+    let out = silent_cmd(&engine)
+        .current_dir(studio_dir())
+        .args(["org", "apps", slug, "--open", app_id, "--window"])
+        .output()
+        .map_err(|err| err.to_string())?;
+    if out.status.success() {
+        return Ok(());
+    }
+    let words = String::from_utf8_lossy(&out.stderr);
+    let words = words.trim().trim_start_matches("error:").trim();
+    Err(if words.is_empty() {
+        "The app did not open.".to_string()
+    } else {
+        words.to_string()
+    })
+}
+
 /// The dashboard tab where an organisation's candidates wait.
 fn waiting_url(slug: &str) -> String {
     let slug: String = slug
@@ -3335,12 +3432,32 @@ fn login_browser(provider: Option<String>) -> Result<(), String> {
     // A provider picked in Studio's sign-in popup rides in the fragment
     // (no `&` to lose), and the page goes straight on to it.
     let nonce = begin_sign_in(&studio_dir());
-    let via = match provider.as_deref() {
-        Some("github") => "#github",
-        Some("google") => "#google",
-        _ => "",
-    };
+    let via = sign_in_fragment(provider.as_deref());
     open_url(&format!("https://krate.tech/login?app_nonce={nonce}{via}"))
+}
+
+/// The sign-in page's fragment for a provider picked in Studio: `#github`,
+/// `#google`, or `#org=<slug>` for an organisation's company sign-in
+/// (IC-953: the machine policy's `[org] slug`), which the page offers
+/// first. Anything else is no fragment at all.
+fn sign_in_fragment(provider: Option<&str>) -> String {
+    match provider {
+        Some("github") => "#github".to_string(),
+        Some("google") => "#google".to_string(),
+        Some(other) => match other.strip_prefix("org:") {
+            Some(slug)
+                if (2..=39).contains(&slug.len())
+                    && slug.starts_with(|c: char| c.is_ascii_lowercase())
+                    && slug
+                        .chars()
+                        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-') =>
+            {
+                format!("#org={slug}")
+            }
+            _ => String::new(),
+        },
+        None => String::new(),
+    }
 }
 
 /// Email a sign-in link, asked for from Studio's sign-in popup. The link
@@ -5709,6 +5826,8 @@ fn main() {
             report_send,
             publish,
             org_targets,
+            org_apps,
+            org_app_open,
             send_to_org,
             make_card,
             make_wrap,

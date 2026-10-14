@@ -1870,6 +1870,42 @@ const COMMANDS = {
   async open_krate({ path } = {}) {
     return COMMANDS.open_app({ path });
   },
+  /* The company's apps (IC-953), the shape `krate org apps --json` gives
+   * the desktop: each organisation's apps this person may open now, from
+   * the hub's own list (their audience, nothing withdrawn). A tab keeps
+   * nothing ready offline, so none says it works offline. */
+  async org_apps() {
+    if (!bridge.token) return { v: 1, signed_in: false, policy_org: null, orgs: [] };
+    let orgs = [];
+    try {
+      const list = await hub("/orgs");
+      orgs = Array.isArray(list) ? list : (list && Array.isArray(list.orgs) ? list.orgs : []);
+    } catch (e) {
+      return { v: 1, signed_in: true, policy_org: null, orgs: [] };
+    }
+    const out = [];
+    for (const org of orgs) {
+      try {
+        const answer = await hub(`/orgs/${encodeURIComponent(org.slug)}/apps`);
+        const apps = (answer && Array.isArray(answer.apps) ? answer.apps : []).filter((a) => typeof a.current === "string");
+        out.push({ slug: org.slug, name: org.name, role: org.role, first: false, from: "hub", apps });
+      } catch (e) { /* refused or unreachable: that organisation shows nothing */ }
+    }
+    return { v: 1, signed_in: true, policy_org: null, offline: false, orgs: out };
+  },
+  /* Open one in a tab: the browser cannot run it, so the release that opens
+   * now is downloaded (with every check a download makes) and the person
+   * double-clicks it, as open_app does for their own apps. */
+  async org_app_open({ slug, appId } = {}) {
+    if (!bridge.token) return refuse("Sign in first: company apps are only for the people they were made for.");
+    const link = `${HUB}/orgs/${encodeURIComponent(slug || "")}/apps/${encodeURIComponent(appId || "")}/current`;
+    if (!hasKrateAlready()) {
+      askFirstRun({ url: link, name: `${appId}.krate` });
+      return "asking";
+    }
+    await downloadApp(link, `${appId}.krate`);
+    return refuse("Downloaded. Double-click the file on your Mac, Windows or Linux. That is where the app really runs.");
+  },
   /* The desktop's test hook (KRATE_STUDIO_AUTORUN): Studio types whatever
    * this returns into the box and starts a build. A tab has no such hook,
    * so the answer is always nothing. It used to borrow open_app, whose

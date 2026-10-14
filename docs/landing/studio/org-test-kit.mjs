@@ -8,9 +8,9 @@ import { webcrypto } from "node:crypto";
 const KIT = readFileSync("docs/landing/kit/org.js", "utf8");
 const ORGS = readFileSync("docs/landing/orgs/orgs.js", "utf8");
 // The page loads parts.js (Addendum 3) before dashboard.js; so does this.
-// And doors.js (IC-955), releases.js (IC-949 R) and connections.js (IC-952) between them, in the page's order,
+// And doors.js (IC-955), releases.js (IC-949 R), connections.js (IC-952) and inventory.js (IC-954) between them, in the page's order,
 // with the sealing it uses (F-316): the vendored hpke-js and orgseal.js.
-const DASH = ["doors.js", "parts.js", "releases.js", "vendor/hpke-js-1.9.0.js", "orgseal.js", "connections.js", "dashboard.js"]
+const DASH = ["doors.js", "parts.js", "releases.js", "vendor/hpke-js-1.9.0.js", "orgseal.js", "connections.js", "inventory.js", "dashboard.js"]
   .map((f) => readFileSync(`docs/landing/org/${f}`, "utf8"))
   .join("\n;\n");
 const JOIN = readFileSync("docs/landing/join/join.js", "utf8");

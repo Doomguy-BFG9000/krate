@@ -73,6 +73,14 @@ export const MATRIX = {
   "keys.hold": { owner: "yes", admin: "yes", developer: "yes", reviewer: "yes", recipient: "yes" },
   "keys.init": { owner: "yes" },
   "keys.recover": { owner: "yes", admin: "yes" },
+  // Inventory, ownership and usage (IC-954): org-inventory.js. The people
+  // who run and review the organisation's apps read the inventory; only
+  // owners and admins see who opened each, choose an app's owner, and read
+  // the daily usage counts.
+  "inventory.view": { owner: "yes", admin: "yes", reviewer: "yes" },
+  "inventory.people": { owner: "yes", admin: "yes" },
+  "app.owner": { owner: "yes", admin: "yes" },
+  "usage.view": { owner: "yes", admin: "yes" },
 };
 
 /// What `role` may do for `action`: "yes", a narrower rule, or null.

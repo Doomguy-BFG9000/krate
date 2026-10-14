@@ -203,9 +203,128 @@ pub fn add_org_mark(bundle_path: &Path, slug: &str) -> Result<()> {
             "{slug:?} is not an organisation's name"
         )));
     }
+    put_krate_extension(
+        bundle_path,
+        ORG_MARK_NAME,
+        ORG_MARK_ENTRY,
+        &org_mark_bytes(slug),
+    )
+}
+
+/// How an app was made (IC-954): a declared extension group
+/// `ext/krate/provenance/` holding `provenance.json`. Written by `krate
+/// create` and revise, and by Studio's build path through them; absent
+/// for an app made by hand. Like the organisation mark it is covered by
+/// the signature, so it cannot be changed after signing without the
+/// signature failing; and like every extension it is left out of the
+/// execution identity, so it never changes what the app IS.
+pub const PROVENANCE_NAME: &str = "provenance";
+/// The one entry the provenance group holds.
+pub const PROVENANCE_ENTRY: &str = "ext/krate/provenance/provenance.json";
+/// The tools that write a provenance record.
+pub const PROVENANCE_TOOLS: [&str; 2] = ["krate create", "krate studio"];
+/// The longest prompt kept with an app, in bytes.
+pub const PROVENANCE_PROMPT_MAX: usize = 16 * 1024;
+
+/// What `ext/krate/provenance/provenance.json` says (version 1).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct BuildProvenance {
+    pub v: u32,
+    /// `krate create` or `krate studio`.
+    pub tool: String,
+    pub krate_version: String,
+    /// The AI provider id (`claude`, `codex`, `anthropic` ...), or none for
+    /// a built-in template.
+    #[serde(default)]
+    pub provider: Option<String>,
+    /// The model, when the tool knows it.
+    #[serde(default)]
+    pub model: Option<String>,
+    /// Unix seconds.
+    pub started_at: u64,
+    pub finished_at: u64,
+    /// sha256 of the request in the person's own words.
+    pub prompt_sha256: String,
+    /// The request itself, only when the builder chose to keep it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<String>,
+    /// How many changes were made on top of the first build.
+    pub revisions: u32,
+}
+
+/// Read a provenance record strictly: version 1, a known tool, a 64-hex
+/// prompt digest that matches the kept prompt when there is one.
+pub fn parse_provenance(bytes: &[u8]) -> Result<BuildProvenance> {
+    let damaged = |detail: &str| BundleError::DamagedExtensions {
+        detail: format!("the build record ({PROVENANCE_ENTRY}) {detail}"),
+    };
+    let record: BuildProvenance =
+        serde_json::from_slice(bytes).map_err(|_| damaged("is not readable"))?;
+    if record.v != 1 {
+        return Err(damaged("is a format this Krate does not read"));
+    }
+    if !PROVENANCE_TOOLS.contains(&record.tool.as_str()) {
+        return Err(damaged("names a tool Krate does not know"));
+    }
+    let hex64 = |t: &str| t.len() == 64 && t.bytes().all(|b| b.is_ascii_hexdigit());
+    if !hex64(&record.prompt_sha256) {
+        return Err(damaged("has no digest of its request"));
+    }
+    if let Some(prompt) = &record.prompt {
+        if prompt.len() > PROVENANCE_PROMPT_MAX {
+            return Err(damaged("keeps a request longer than Krate keeps"));
+        }
+        if sha256_hex(prompt.as_bytes()) != record.prompt_sha256.to_ascii_lowercase() {
+            return Err(damaged("keeps a request that is not the one it names"));
+        }
+    }
+    Ok(record)
+}
+
+/// Put a provenance record into a bundle in place, replacing any earlier
+/// one. A signature the bundle carried no longer covers it afterwards; sign
+/// it again.
+pub fn add_build_provenance(bundle_path: &Path, record: &BuildProvenance) -> Result<()> {
+    let bytes = serde_json::to_vec(record)
+        .map_err(|err| BundleError::Manifest(format!("{PROVENANCE_ENTRY}: {err}")))?;
+    // What is written must read back: the same rules as every reader.
+    parse_provenance(&bytes)?;
+    put_krate_extension(bundle_path, PROVENANCE_NAME, PROVENANCE_ENTRY, &bytes)
+}
+
+/// The provenance record a bundle on disk carries, read without unpacking
+/// it: for a revision, which counts the changes before it.
+pub fn read_build_provenance(bundle_path: &Path) -> Result<Option<BuildProvenance>> {
+    with_limits(LOCAL_LIMITS, || {
+        let file = File::open(bundle_path).map_err(|err| io_err(bundle_path, err))?;
+        let mut archive = ZipArchive::new(file)?;
+        let mut entry = match archive.by_name(PROVENANCE_ENTRY) {
+            Ok(entry) => entry,
+            Err(zip::result::ZipError::FileNotFound) => return Ok(None),
+            Err(err) => return Err(err.into()),
+        };
+        let mut bytes = Vec::new();
+        entry
+            .by_ref()
+            .take(PROVENANCE_PROMPT_MAX as u64 * 2 + 4096)
+            .read_to_end(&mut bytes)
+            .map_err(|err| io_err(bundle_path, err))?;
+        parse_provenance(&bytes).map(Some)
+    })
+}
+
+/// Put one entry of a `krate`-owned extension group into a bundle in place:
+/// `ext/krate/<name>/...`, declared in `extensions.json` beside whatever
+/// else it declares. Any earlier copy of that group is replaced.
+fn put_krate_extension(
+    bundle_path: &Path,
+    group: &str,
+    entry_name: &str,
+    bytes: &[u8],
+) -> Result<()> {
     let source = fs::read(bundle_path).map_err(|err| io_err(bundle_path, err))?;
     let mut archive = ZipArchive::new(io::Cursor::new(&source))?;
-    let mark_prefix = format!("{EXTENSION_PREFIX}{ORG_MARK_OWNER}/{ORG_MARK_NAME}/");
+    let mark_prefix = format!("{EXTENSION_PREFIX}{ORG_MARK_OWNER}/{group}/");
     let mut kept: Vec<(String, Vec<u8>)> = Vec::new();
     let mut declared: Option<ExtensionsRecord> = None;
     for index in 0..archive.len() {
@@ -231,22 +350,22 @@ pub fn add_org_mark(bundle_path: &Path, slug: &str) -> Result<()> {
         }
         kept.push((name, body));
     }
-    let mark = org_mark_bytes(slug);
-    let mut group = BTreeMap::new();
-    group.insert(ORG_MARK_ENTRY.to_string(), mark.clone());
+    let mark = bytes.to_vec();
+    let mut members = BTreeMap::new();
+    members.insert(entry_name.to_string(), mark.clone());
     let mut record = declared.unwrap_or(ExtensionsRecord {
         schema: EXTENSIONS_SCHEMA.to_string(),
         extensions: Vec::new(),
     });
     record
         .extensions
-        .retain(|e| !(e.owner == ORG_MARK_OWNER && e.name == ORG_MARK_NAME));
+        .retain(|e| !(e.owner == ORG_MARK_OWNER && e.name == group));
     record.extensions.push(ExtensionRecord {
         owner: ORG_MARK_OWNER.to_string(),
-        name: ORG_MARK_NAME.to_string(),
+        name: group.to_string(),
         version: "1".to_string(),
         size: mark.len() as u64,
-        digest: extension_digest(&group),
+        digest: extension_digest(&members),
     });
     let declaration = serde_json::to_vec_pretty(&record)
         .map_err(|err| BundleError::Manifest(format!("{EXTENSIONS_ENTRY}: {err}")))?;
@@ -263,7 +382,7 @@ pub fn add_org_mark(bundle_path: &Path, slug: &str) -> Result<()> {
             .add(EXTENSIONS_ENTRY, &declaration)
             .map_err(|err| io_err(&temporary, err))?;
         writer
-            .add(ORG_MARK_ENTRY, &mark)
+            .add(entry_name, &mark)
             .map_err(|err| io_err(&temporary, err))?;
         writer.finish().map_err(|err| io_err(&temporary, err))?;
     }
@@ -2285,6 +2404,18 @@ impl OpenBundle {
         parse_org_mark(&bytes).map(Some)
     }
 
+    /// How this app was made (IC-954), from its build record. `None` for an
+    /// app made by hand. Binding only under a signature that holds, as the
+    /// mark is.
+    pub fn build_provenance(&self) -> Result<Option<BuildProvenance>> {
+        let Some(root) = self.extension_path(ORG_MARK_OWNER, PROVENANCE_NAME) else {
+            return Ok(None);
+        };
+        let path = root.join("provenance.json");
+        let bytes = fs::read(&path).map_err(|err| io_err(&path, err))?;
+        parse_provenance(&bytes).map(Some)
+    }
+
     /// The publisher root whose revocation list applies to this bundle.
     ///
     /// The root named in the delegation, or the signing key itself when the
@@ -2937,6 +3068,10 @@ pub struct Judgement {
     /// and compares them with the release they would replace.
     #[serde(default)]
     pub capabilities: Vec<JudgedCapability>,
+    /// How the app was made, when it carries a build record (IC-954): the
+    /// hub keeps it with the candidate for the organisation's inventory.
+    #[serde(default)]
+    pub provenance: Option<BuildProvenance>,
 }
 
 /// One capability an app asks for, as a door shows it to a person.
@@ -3229,6 +3364,19 @@ fn judge_bytes_here(bytes: &[u8], max_expanded: u64) -> Result<Judgement> {
     } else {
         None
     };
+    let provenance = if extensions
+        .iter()
+        .any(|e| e.owner == ORG_MARK_OWNER && e.name == PROVENANCE_NAME)
+    {
+        let bytes = raw
+            .get(PROVENANCE_ENTRY)
+            .ok_or_else(|| BundleError::DamagedExtensions {
+                detail: format!("the build record has no {PROVENANCE_ENTRY}"),
+            })?;
+        Some(parse_provenance(bytes)?)
+    } else {
+        None
+    };
     let closure = check_closure(&raw)?;
     let manifest_raw = raw
         .get(MANIFEST_ENTRY)
@@ -3393,6 +3541,7 @@ fn judge_bytes_here(bytes: &[u8], max_expanded: u64) -> Result<Judgement> {
         closure,
         org_mark,
         capabilities,
+        provenance,
     })
 }
 
@@ -10749,5 +10898,171 @@ required = true
         assert_eq!(implied_url("my file/x.krate"), None); // space is not DNS
         assert_eq!(implied_url("a.krate"), None); // no slash at all
         assert_eq!(implied_url("krate.tech/"), None); // nothing after the host
+    }
+
+    // ---- IC-954: the build record ------------------------------------
+
+    fn a_build_record(prompt: Option<&str>) -> BuildProvenance {
+        BuildProvenance {
+            v: 1,
+            tool: "krate create".into(),
+            krate_version: "0.5.5".into(),
+            provider: Some("claude".into()),
+            model: Some("claude-opus-5".into()),
+            started_at: 1_760_000_000,
+            finished_at: 1_760_000_300,
+            prompt_sha256: sha256_hex(b"an expenses tracker for finance"),
+            prompt: prompt.map(str::to_string),
+            revisions: 0,
+        }
+    }
+
+    /// The build record goes in as a declared extension, reads back, is
+    /// judged, leaves what runs unchanged, and is covered by the signature:
+    /// changing it after signing reads as tampering.
+    #[test]
+    fn the_build_record_is_kept_judged_and_signed() {
+        let dir = TempDir::new().expect("tempdir");
+        let manifest = write_temp(dir.path(), "manifest.toml", MANIFEST.as_bytes());
+        let component = write_temp(dir.path(), "code.wasm", MINIMAL_COMPONENT);
+        let path = dir.path().join("app.krate");
+        pack(&manifest, &component, &path).expect("pack");
+        let before = open(&path).expect("open").digest().expect("digest");
+        assert_eq!(
+            read_build_provenance(&path).expect("read"),
+            None,
+            "by hand: none"
+        );
+
+        let record = a_build_record(Some("an expenses tracker for finance"));
+        add_build_provenance(&path, &record).expect("record");
+        // Again, so a second write replaces rather than adds.
+        add_build_provenance(&path, &record).expect("record again");
+        add_org_mark(&path, "acme").expect("mark beside it");
+        assert_eq!(
+            read_build_provenance(&path).expect("read"),
+            Some(record.clone())
+        );
+        let opened = open(&path).expect("open");
+        assert_eq!(
+            opened.build_provenance().expect("read"),
+            Some(record.clone())
+        );
+        assert_eq!(opened.org_mark().expect("mark"), Some("acme".into()));
+        assert_eq!(
+            opened.digest().expect("digest"),
+            before,
+            "what runs is the same app"
+        );
+        let judged =
+            judge_bytes(&fs::read(&path).unwrap(), HUB_MAX_EXPANDED_BYTES).expect("judged");
+        assert_eq!(judged.provenance, Some(record.clone()));
+        assert!(judgement_json(Ok(judged)).contains("\"provenance\":{"));
+
+        let key = signing::SigningKey::from_pkcs8(&signing::SigningKey::generate_pkcs8().unwrap())
+            .unwrap();
+        sign_bundle(&path, &key, "acme/expenses", "0.1.0", 1_760_000_400).expect("sign");
+        let signed = open(&path).expect("open signed");
+        assert!(signed
+            .signature_verdict()
+            .unwrap()
+            .unwrap()
+            .is_genuinely_signed());
+        drop(signed);
+
+        // Rewrite the record after signing: the signature no longer holds.
+        let mut changed = record.clone();
+        changed.model = Some("a different model".into());
+        let source = fs::read(&path).unwrap();
+        let mut archive = ZipArchive::new(io::Cursor::new(&source)).unwrap();
+        let forged = dir.path().join("forged.krate");
+        {
+            let mut writer =
+                DeterministicZip::new(io::BufWriter::new(File::create(&forged).unwrap()));
+            for i in 0..archive.len() {
+                let mut entry = archive.by_index(i).unwrap();
+                let name = entry.name().to_string();
+                let mut body = Vec::new();
+                entry.read_to_end(&mut body).unwrap();
+                if name == PROVENANCE_ENTRY {
+                    body = serde_json::to_vec(&changed).unwrap();
+                }
+                if name == EXTENSIONS_ENTRY {
+                    let mut rec: ExtensionsRecord = serde_json::from_slice(&body).unwrap();
+                    let mut group = BTreeMap::new();
+                    group.insert(
+                        PROVENANCE_ENTRY.to_string(),
+                        serde_json::to_vec(&changed).unwrap(),
+                    );
+                    for e in rec
+                        .extensions
+                        .iter_mut()
+                        .filter(|e| e.name == PROVENANCE_NAME)
+                    {
+                        e.digest = extension_digest(&group);
+                        e.size = serde_json::to_vec(&changed).unwrap().len() as u64;
+                    }
+                    body = serde_json::to_vec_pretty(&rec).unwrap();
+                }
+                writer.add(&name, &body).unwrap();
+            }
+            writer.finish().unwrap();
+        }
+        let forged_open = open(&forged).expect("still a bundle");
+        assert_eq!(
+            forged_open
+                .build_provenance()
+                .unwrap()
+                .unwrap()
+                .model
+                .as_deref(),
+            Some("a different model"),
+            "the forgery carries the changed record"
+        );
+        assert!(
+            !forged_open
+                .signature_verdict()
+                .unwrap()
+                .unwrap()
+                .is_genuinely_signed(),
+            "a record changed after signing breaks the signature"
+        );
+        let judged =
+            judge_bytes(&fs::read(&forged).unwrap(), HUB_MAX_EXPANDED_BYTES).expect("judged");
+        assert_ne!(judged.signature.state, "valid", "{:?}", judged.signature);
+    }
+
+    /// A record is read strictly: a known version and tool, a real digest,
+    /// and a kept request that is the one it names.
+    #[test]
+    fn a_build_record_is_read_strictly() {
+        let ok = a_build_record(None);
+        assert!(parse_provenance(&serde_json::to_vec(&ok).unwrap()).is_ok());
+        let kept = a_build_record(Some("an expenses tracker for finance"));
+        assert!(parse_provenance(&serde_json::to_vec(&kept).unwrap()).is_ok());
+        let mut bad = Vec::new();
+        let mut r = ok.clone();
+        r.v = 2;
+        bad.push(r);
+        let mut r = ok.clone();
+        r.tool = "someone else".into();
+        bad.push(r);
+        let mut r = ok.clone();
+        r.prompt_sha256 = "abc".into();
+        bad.push(r);
+        let mut r = ok.clone();
+        r.prompt = Some("a different request".into());
+        bad.push(r);
+        let mut r = ok.clone();
+        r.prompt = Some("x".repeat(PROVENANCE_PROMPT_MAX + 1));
+        r.prompt_sha256 = sha256_hex(r.prompt.as_deref().unwrap().as_bytes());
+        bad.push(r);
+        for r in bad {
+            assert!(
+                parse_provenance(&serde_json::to_vec(&r).unwrap()).is_err(),
+                "{r:?}"
+            );
+        }
+        assert!(parse_provenance(b"not json").is_err());
     }
 }

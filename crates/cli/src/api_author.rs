@@ -282,7 +282,7 @@ fn default_model(vendor: ApiVendor) -> &'static str {
         .unwrap_or("")
 }
 
-fn model_for(vendor: ApiVendor) -> String {
+pub(crate) fn model_for(vendor: ApiVendor) -> String {
     let env = match vendor {
         ApiVendor::Anthropic => "KRATE_ANTHROPIC_MODEL",
         ApiVendor::OpenAi => "KRATE_OPENAI_MODEL",

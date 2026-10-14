@@ -371,3 +371,18 @@ The organisation dashboard at [krate.tech/org/](https://krate.tech/org/) does
 the same: a Releases view for each app with its current release, history,
 withdraw and set current; a Groups card under People; and an audience picker
 on each release.
+
+## Your organisation's apps on a new computer
+
+Put your organisation's short name in the policy:
+
+```toml
+[org]
+slug = "acme"
+```
+
+Krate Studio and `krate org apps` then list that organisation's apps first.
+On a new computer where nobody has signed in yet, Studio's Home asks the
+person to sign in with your company sign-in, and once they have, shows the
+apps released to them. It allows nothing extra: what may open is still
+decided by the rest of the policy and by each release's audience.

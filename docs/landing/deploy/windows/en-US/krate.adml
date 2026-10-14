@@ -44,6 +44,8 @@
       <string id="AuditPath_Help">Where Krate appends its record of every app opened or refused on this computer, one JSON line each. Default: /var/log/krate/opens.jsonl on macOS and Linux, %ProgramData%\Krate\logs\opens.jsonl on Windows. Registry: the value path in HKLM\SOFTWARE\Policies\Krate\audit.</string>
       <string id="RuntimeInterpreter">Run apps on the interpreter</string>
       <string id="RuntimeInterpreter_Help">true: every app runs on Krate's interpreter (Pulley) instead of compiled machine code, so Krate never makes executable memory. For endpoint protection that blocks code generated at run time, and Windows Arbitrary Code Guard. Apps may run slower this way. Enabled sets it to true, Disabled to false, Not configured leaves Krate's default. Registry: the value interpreter in HKLM\SOFTWARE\Policies\Krate\runtime.</string>
+      <string id="OrgSlug">Your organisation on Krate</string>
+      <string id="OrgSlug_Help">Your organisation's short name on the hub (the one in krate.tech/org/?o=acme). Krate Studio and krate org apps list its apps first, and on a new computer Studio asks the person to sign in with your company sign-in the first time it opens. It allows nothing extra. Registry: the value slug in HKLM\SOFTWARE\Policies\Krate\org.</string>
     </stringTable>
     <presentationTable>
       <presentation id="Name"><textBox refId="name"><label>Organisation name</label></textBox></presentation>
@@ -56,6 +58,7 @@
       <presentation id="StudioProviders"><text>Allowed AI providers, one per line:</text><multiTextBox refId="providers" defaultHeight="6" /></presentation>
       <presentation id="UpdatesMode"><dropdownList refId="mode" noSort="true" defaultItem="0">Updates</dropdownList></presentation>
       <presentation id="AuditPath"><textBox refId="path"><label>Open record location</label></textBox></presentation>
+      <presentation id="OrgSlug"><textBox refId="slug"><label>Your organisation on Krate</label></textBox></presentation>
     </presentationTable>
   </resources>
 </policyDefinitionResources>

@@ -707,6 +707,8 @@ function signedInFromBrowser(a) {
   state.signInSince = 0;
   state.account = a;
   renderAccount();
+  // Signed in now: the company's apps are theirs to see.
+  refreshCompanyApps(true);
   // The sign-in popup (redesign.js) says "you're in" and carries on itself.
   if (state.loginSurface === "popup" && window.krLoginDone) { window.krLoginDone(a); return; }
   if (state.loginSurface === "publish") {
@@ -772,6 +774,9 @@ async function enterHome() {
   paintGreeting();
   showView("home");
   renderAccount();
+  // The company's apps (IC-953): on launch, and again on coming back
+  // after a minute; the clock below keeps them fresh while Studio is open.
+  refreshCompanyApps();
   // Settings FIRST, then agents.
   //
   // These two lines were once the other way round, so a request submitted
@@ -5670,6 +5675,154 @@ function refreshOrgTargets() {
   return orgTargets.asked;
 }
 
+/* ---- the company's apps (IC-953) ---------------------------------------
+ * A "Company apps" section on Home for a signed-in member: one card per
+ * app their organisations released to them (their audience, nothing
+ * withdrawn), with its organisation, what it can do in one line, and Open.
+ * The engine's `krate org apps --json` is the list; it also keeps the apps
+ * a company allows offline ready on this computer, so Open is instant and
+ * works without a connection while the offline access lasts. Refreshed on
+ * launch and every 15 minutes while Studio is open: a withdrawn app
+ * disappears, and a rollback's Open opens the older one, because Open asks
+ * the engine for what opens now.
+ *
+ * When the computer's policy names an organisation and nobody is signed
+ * in, the section is one card asking them to sign in with that
+ * organisation's company sign-in: what IT set up is the first thing a new
+ * laptop shows. */
+const companyApps = { answer: null, at: 0, timer: 0, busy: null, said: {} };
+const COMPANY_EVERY = 15 * 60 * 1000;
+
+function companyAppCards(answer) {
+  const cards = [];
+  for (const org of (answer && Array.isArray(answer.orgs)) ? answer.orgs : []) {
+    for (const app of Array.isArray(org.apps) ? org.apps : []) cards.push({ org, app });
+  }
+  return cards;
+}
+
+/* What an app can do, in one line: the words the approver saw (IC-950). */
+function companyCanDo(app) {
+  const words = (Array.isArray(app.capabilities) ? app.capabilities : [])
+    .map((c) => (c && (c.words || c.cap)) || "").filter(Boolean);
+  return words.length ? words.join(" · ") : "Asks for nothing on this computer";
+}
+
+function renderCompanyApps(answer) {
+  const box = $("companyApps"), list = $("companyAppsList"), note = $("companyAppsNote");
+  if (!box || !list) return;
+  list.innerHTML = "";
+  note.hidden = true;
+  const cards = companyAppCards(answer);
+  const ask = answer && answer.signed_in === false && answer.policy_org;
+  if (!cards.length && !ask) { box.hidden = true; return; }
+  box.hidden = false;
+  if (ask) {
+    // The new-laptop prompt: the organisation IT named, its own sign-in.
+    const slug = String(answer.policy_org);
+    // The name IT gave the organisation in the policy, when it gave one.
+    const name = String(answer.policy_name || slug);
+    const label = `Sign in to ${name}`;
+    const card = document.createElement("article");
+    card.className = "co-card co-ask";
+    card.innerHTML = `<div class="co-txt"><b>${escapeHtml(name)} uses Krate</b>` +
+      `<small>Sign in with your work account to see the apps ${escapeHtml(name)} made for you.</small></div>`;
+    const go = document.createElement("button");
+    go.type = "button"; go.className = "co-open"; go.textContent = label;
+    go.addEventListener("click", () => {
+      go.disabled = true; go.textContent = "Opening your browser…";
+      beginBrowserSignIn(`org:${slug}`).catch(() => {}).finally(() => { go.disabled = false; go.textContent = label; });
+    });
+    card.appendChild(go);
+    list.appendChild(card);
+    return;
+  }
+  if (answer.offline) {
+    note.textContent = "No connection. These are your company's apps as last seen; the ones kept on this computer open offline.";
+    note.hidden = false;
+  }
+  for (const { org, app } of cards) {
+    const card = document.createElement("article");
+    card.className = "co-card";
+    const orgName = org.name || org.slug;
+    const ready = app.ready_offline_until ? " · works offline" : "";
+    card.innerHTML =
+      `<div class="co-txt"><b>${escapeHtml(app.name || app.app_id)}</b>` +
+      `<small>${escapeHtml(orgName)} · ${escapeHtml(app.version || "")}${ready}</small>` +
+      `<span class="co-can" title="${escapeHtml(companyCanDo(app))}">${escapeHtml(companyCanDo(app))}</span>` +
+      `<span class="co-said" role="status"></span></div>`;
+    const open = document.createElement("button");
+    open.type = "button"; open.className = "co-open"; open.textContent = "Open";
+    open.setAttribute("aria-label", `Open ${app.name || app.app_id} from ${orgName}`);
+    // Why it last did not open stays on its card through a refresh.
+    const said = card.querySelector(".co-said");
+    said.textContent = companyApps.said[`${org.slug}/${app.app_id}`] || "";
+    open.addEventListener("click", () => openCompanyApp(org, app, open, said));
+    card.appendChild(open);
+    list.appendChild(card);
+  }
+}
+
+async function openCompanyApp(org, app, button, said) {
+  if (button.disabled) return;
+  const key = `${org.slug}/${app.app_id}`;
+  button.disabled = true;
+  button.textContent = "Opening…";
+  said.textContent = "";
+  delete companyApps.said[key];
+  try {
+    await invoke("org_app_open", { slug: org.slug, appId: app.app_id });
+  } catch (err) {
+    // The engine's own words: removed, withdrawn, offline access ran out.
+    said.textContent = clip(String(err && err.message ? err.message : err || "It did not open."), 220);
+    companyApps.said[key] = said.textContent;
+    // What it opens may have changed: look again.
+    refreshCompanyApps(true);
+  } finally {
+    button.disabled = false;
+    button.textContent = "Open";
+  }
+}
+
+/* The last list, kept per computer, so Home shows the company's apps the
+ * moment it opens instead of after the engine answers; the fresh list
+ * replaces it as soon as it lands. Never authority: Open always asks. */
+const COMPANY_KEPT = "krate-company-apps";
+function keptCompanyApps() {
+  try {
+    const kept = typeof lsGet === "function" ? JSON.parse(lsGet(COMPANY_KEPT) || "null") : null;
+    return kept && kept.signed_in === true ? kept : null;
+  } catch (e) { return null; }
+}
+
+function refreshCompanyApps(force) {
+  if (companyApps.busy) return companyApps.busy;
+  if (!force && companyApps.answer && Date.now() - companyApps.at < 60 * 1000) {
+    renderCompanyApps(companyApps.answer);
+    return Promise.resolve(companyApps.answer);
+  }
+  if (!companyApps.answer) {
+    const kept = keptCompanyApps();
+    if (kept) renderCompanyApps(kept);
+  }
+  companyApps.busy = invoke("org_apps")
+    .then((answer) => {
+      companyApps.answer = answer || { orgs: [] };
+      companyApps.at = Date.now();
+      renderCompanyApps(companyApps.answer);
+      try { if (typeof lsSet === "function") lsSet(COMPANY_KEPT, JSON.stringify(companyApps.answer.signed_in === true ? companyApps.answer : null)); } catch (e) {}
+      return companyApps.answer;
+    })
+    .catch(() => companyApps.answer)
+    .finally(() => { companyApps.busy = null; });
+  return companyApps.busy;
+}
+
+(function companyAppsClock() {
+  clearInterval(companyApps.timer);
+  companyApps.timer = setInterval(() => refreshCompanyApps(true), COMPANY_EVERY);
+})();
+
 async function openSendSheet(which, version, anchor) {
   const app = (which && which.path) ? which : currentApp();
   if (!app) return;
@@ -9329,10 +9482,34 @@ async function loadSettingsPage() {
     if (dir) dir.textContent = (settings.out_dir || "").replace(/^\/Users\/[^/]+/, "~");
     const agent = $("setAgent");
     if (agent) agent.textContent = agentLabel();
+    paintKeepPrompt(settings.keep_prompt === true);
   } catch (e) { /* the page still renders without them */ }
   paintTerminalSetting();
   checkForUpdate();
 }
+
+/* "Keep the request with the app" (IC-954): the request goes into the
+ * app's build record, beside the AI and model that made it. Saved the
+ * moment it is pressed; the switch shows what is stored, not what was
+ * pressed, so a save that failed never looks like it worked. */
+function paintKeepPrompt(on) {
+  const sw = $("setKeepPrompt");
+  if (!sw) return;
+  sw.classList.toggle("on", on);
+  sw.setAttribute("aria-checked", String(on));
+}
+$("setKeepPrompt")?.addEventListener("click", async () => {
+  const sw = $("setKeepPrompt");
+  const want = sw.getAttribute("aria-checked") !== "true";
+  try {
+    await invoke("settings_set", { settings: { out_dir: state.outDir, agent: state.agent, keep_prompt: want } });
+    paintKeepPrompt(want);
+  } catch (e) {
+    paintKeepPrompt(!want);
+    const hint = $("setKeepHint");
+    if (hint) hint.textContent = `Could not save that: ${String(e && e.message ? e.message : e).replace(/^error:\s*/i, "")}. Press it again.`;
+  }
+});
 
 $("setOutBtn")?.addEventListener("click", async () => {
   try {

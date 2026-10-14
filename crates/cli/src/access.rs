@@ -347,6 +347,65 @@ pub fn remember_connection(digest: &str, name: &str, base: &str, allow: &Value) 
     }
 }
 
+/// Offline access for `digest`, made ready ahead of the first open (IC-953
+/// background readiness): the lease is fetched now, while there is a
+/// connection, so a company app listed on this computer opens offline
+/// within its lease. A lease already held for this sign-in and not past
+/// half its life is kept, so listing every few minutes issues nothing new.
+/// Answers when the lease runs out, `None` when there is none to hold (an
+/// online-only app, or no answer from the hub); `Err` carries the hub's
+/// refusal reason, and the lease for these bytes is gone.
+///
+/// The offline terms are not shown here: nobody is opening anything. They
+/// are shown at the first open, online or not.
+pub fn prefetch_lease(
+    hub: &str,
+    org: (&str, &str),
+    digest: &str,
+    authorization: &str,
+    me: &str,
+) -> std::result::Result<Option<u64>, String> {
+    let (slug, org_name) = org;
+    let key = krate_lease::lease_key();
+    let mut record = load_record(digest).unwrap_or_else(|| serde_json::json!({}));
+    let held = record
+        .get("answer")
+        .filter(|a| !a.is_null())
+        .zip(key.as_ref())
+        .and_then(|(answer, key)| krate_lease::verify(answer, key).ok())
+        .filter(|lease| lease.principal == me && lease.digest == digest && lease.org == slug);
+    if let Some(lease) = held.as_ref().filter(|l| !l.past_half_life(now())) {
+        return Ok(Some(lease.expires_at));
+    }
+    let answer = match fetch_lease(hub, slug, digest, authorization) {
+        Err(reason) => {
+            if load_record(digest).is_some() {
+                forget(digest);
+            }
+            return Err(reason);
+        }
+        Ok(None) => return Ok(held.map(|l| l.expires_at)),
+        Ok(Some(answer)) => answer,
+    };
+    let lease = key
+        .as_ref()
+        .and_then(|key| krate_lease::verify(&answer, key).ok())
+        .filter(|lease| lease.principal == me);
+    let Some(lease) = lease else {
+        // Online-only, or a lease this Krate cannot check: nothing to keep.
+        return Ok(None);
+    };
+    record["digest"] = serde_json::json!(digest);
+    record["hub"] = serde_json::json!(hub);
+    record["org"] = serde_json::json!({ "slug": slug, "name": org_name });
+    record["principal"] = serde_json::json!(me);
+    record["class"] = serde_json::json!(lease.class);
+    record["answer"] = answer;
+    record["checked_at"] = serde_json::json!(now());
+    save_record(digest, &record);
+    Ok(Some(lease.expires_at))
+}
+
 /// The offline terms, shown before the first private open (Addendum 3 G).
 fn notice(org_name: &str, class: &str, expires_at: Option<u64>) -> String {
     match expires_at {
@@ -714,6 +773,22 @@ fn offline(digest: &str, record: &Value, me: Option<&str>, door: Door) -> Result
         now(),
     ) {
         Ok(lease) => {
+            // A lease made ready ahead of time (IC-953) reaches its first
+            // open here, offline: the terms are shown before it opens, as
+            // they would be online.
+            let noticed = record["noticed_class"].as_str();
+            if noticed.is_none_or(|was| {
+                krate_lease::class_rank(&lease.class) < krate_lease::class_rank(was)
+            }) {
+                tell(
+                    door,
+                    "Offline access",
+                    &notice(&org_name, &lease.class, Some(lease.expires_at)),
+                );
+                let mut kept = record.clone();
+                kept["noticed_class"] = serde_json::json!(lease.class);
+                save_record(digest, &kept);
+            }
             eprintln!(
                 "offline: opening {org_name}'s app on its offline access, which runs out {}",
                 date(lease.expires_at)

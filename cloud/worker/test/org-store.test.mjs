@@ -62,6 +62,11 @@ test("the executable matrix is the contract's table", () => {
     "keys.hold": "y y y y y",
     "keys.init": "y - - - -",
     "keys.recover": "y y - - -",
+    // IC-954: inventory, ownership and usage.
+    "inventory.view": "y y - y -",
+    "inventory.people": "y y - - -",
+    "app.owner": "y y - - -",
+    "usage.view": "y y - - -",
   };
   assert.deepStrictEqual(Object.keys(MATRIX).sort(), Object.keys(table).sort());
   for (const [action, row] of Object.entries(table)) {

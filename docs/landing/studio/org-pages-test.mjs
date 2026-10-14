@@ -27,10 +27,10 @@ import { KIT, ORGS, DASH, JOIN, OPEN, check, page, settle, storage, P, ACME, mem
 
   // Tabs per role, from the contract's matrix.
   const tabs = (r) => K.tabsFor(r).join(",");
-  check(tabs("owner") === "releases,waiting,people,activity,billing,settings", "an owner sees all six tabs, Billing among them");
-  check(tabs("admin") === "releases,waiting,people,activity,billing,settings", "an admin sees the activity and billing");
+  check(tabs("owner") === "releases,apps,waiting,people,activity,billing,settings", "an owner sees all seven tabs, Apps and Billing among them");
+  check(tabs("admin") === "releases,apps,waiting,people,activity,billing,settings", "an admin sees the apps, the activity and billing");
   check(tabs("developer") === "releases,waiting,people,settings", "a developer has no Activity tab");
-  check(tabs("reviewer") === "releases,waiting,people,settings", "a reviewer has no Activity tab");
+  check(tabs("reviewer") === "releases,apps,waiting,people,settings", "a reviewer sees the apps and has no Activity tab");
   check(tabs("recipient") === "releases,people", "a recipient sees releases and their own entry, nothing else");
 
   check(K.invitable("owner").join() === "owner,admin,developer,reviewer,recipient", "an owner invites any role");
@@ -112,7 +112,7 @@ import { KIT, ORGS, DASH, JOIN, OPEN, check, page, settle, storage, P, ACME, mem
 
 {
   const owner = await page("https://krate.tech/org/?o=acme", DASH, { token: "tok-alice", routes: orgRoutes("github:alice") });
-  check(tabNames(owner) === "releases,waiting,people,activity,billing,settings", "/org/ shows an owner all six tabs");
+  check(tabNames(owner) === "releases,apps,waiting,people,activity,billing,settings", "/org/ shows an owner all seven tabs, Apps (IC-954) beside Releases");
   check(/you are an owner/.test(owner.el("oMeta").textContent), "and says which role they hold");
   check(/Bounce 1\.0\.0/.test(owner.el("pane").shown) && /Sent by @carol · approved by @bob/.test(owner.el("pane").shown), "Releases names who sent and who approved");
   check(button(owner.el("pane"), "Open in Krate") && button(owner.el("pane"), "Copy link"), "each release has Open in Krate and Copy link");

@@ -107,3 +107,10 @@ mode = "notify"
 # protection that blocks code generated at run time, and Windows Arbitrary
 # Code Guard. Apps may run slower this way.
 interpreter = false
+
+[org]
+# Your organisation's short name on the hub (the one in
+# krate.tech/org/?o=acme). Krate Studio and krate org apps list its apps
+# first, and on a new computer Studio asks the person to sign in with your
+# company sign-in the first time it opens. It allows nothing extra.
+slug = "acme"

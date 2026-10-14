@@ -14792,6 +14792,7 @@ impl FakeOrgHub {
             ("PUT", Some("releases"), 5) if parts[4] == "audience" => "release.audience",
             ("PUT", Some("apps"), 5) if parts[4] == "current" => "release.set-current",
             ("GET", Some("apps"), 5) if parts[4] == "current" => "release.current-of",
+            ("GET", Some("apps"), 3) => "release.apps",
             ("GET", Some("groups"), 3) => "group.list",
             ("POST", Some("groups"), 3) => "group.manage",
             ("PUT", Some("groups"), 6) => "group.add",
@@ -15348,6 +15349,63 @@ impl FakeOrgHub {
                     200,
                     serde_json::json!({ "app_id": app, "current": current }),
                 )
+            }
+            // IC-953 (org-releases.js op_app_releases): owners, admins and
+            // reviewers see every app; anyone else only apps whose current
+            // release is theirs to open, and no withdrawn version.
+            "release.apps" => {
+                let everything = is(&["owner", "admin", "reviewer"]);
+                let mut by_app: std::collections::BTreeMap<String, Vec<serde_json::Value>> =
+                    Default::default();
+                let mut order: Vec<(&String, &FakeCandidate)> = org
+                    .candidates
+                    .iter()
+                    .filter(|(_, c)| matches!(c.state, "released" | "withdrawn"))
+                    .filter(|(_, c)| everything || c.state == "released")
+                    .filter(|(_, c)| org.in_audience(&who, &role, &c.audience))
+                    .collect();
+                order.sort_by_key(|(_, c)| std::cmp::Reverse(c.approved_at));
+                for (digest, c) in order {
+                    let caps: Vec<serde_json::Value> = krate_bundle::open_bytes(&c.bytes)
+                        .ok()
+                        .and_then(|o| o.manifest().declared_capabilities().ok())
+                        .unwrap_or_default()
+                        .iter()
+                        .map(|cap| serde_json::json!({ "cap": cap.to_string(), "words": cap.to_string() }))
+                        .collect();
+                    by_app
+                        .entry(c.app_id.clone())
+                        .or_default()
+                        .push(serde_json::json!({
+                            "app_id": c.app_id, "name": c.name, "version": c.version,
+                            "digest": digest, "url": format!("{base}/a/{digest}"),
+                            "state": c.state, "size": c.bytes.len(), "capabilities": caps,
+                            "offline": self.lease_class, "audience": c.audience,
+                        }));
+                }
+                let apps: Vec<serde_json::Value> = by_app
+                    .into_iter()
+                    .filter_map(|(app, releases)| {
+                        let current = org.current_of(&app);
+                        let now = releases
+                            .iter()
+                            .find(|r| current.as_deref() == r["digest"].as_str())
+                            .cloned();
+                        if now.is_none() && !everything {
+                            return None;
+                        }
+                        let now = now.unwrap_or(serde_json::Value::Null);
+                        Some(serde_json::json!({
+                            "app_id": app, "name": releases[0]["name"],
+                            "current": now["digest"], "digest": now["digest"],
+                            "version": now["version"], "size": now["size"],
+                            "capabilities": now["capabilities"], "offline": now["offline"],
+                            "link": format!("{base}/orgs/{slug}/apps/{app}/current"),
+                            "releases": releases,
+                        }))
+                    })
+                    .collect();
+                fake_json(200, serde_json::json!({ "apps": apps }))
             }
             "release.current-of" => {
                 let app = parts[3].to_ascii_lowercase();
@@ -21068,4 +21126,529 @@ fn org_team_data_offline_wrong_clock_tampering_refusals_and_limits() {
     for reason in ["not-in-audience", "release-withdrawn"] {
         assert!(denied.contains(&reason), "{reason}: {denied:?}");
     }
+}
+
+// ---------------------------------------------------------------------------
+// IC-953: the company's apps on every device.
+
+impl OrgWorld {
+    /// `krate org apps --json` as `who`, parsed.
+    fn company_apps(&self, who: &str) -> serde_json::Value {
+        let out = self.krate_as(who, &["org", "apps", "--json"]);
+        assert!(out.status.success(), "{}", stderr_of(&out));
+        serde_json::from_slice(&out.stdout).expect("org apps --json is JSON")
+    }
+
+    /// The app ids and versions on `who`'s list for acme.
+    fn company_versions(&self, who: &str) -> Vec<(String, String)> {
+        let list = self.company_apps(who);
+        list["orgs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|o| o["slug"] == "acme")
+            .flat_map(|o| o["apps"].as_array().cloned().unwrap_or_default())
+            .map(|a| {
+                (
+                    a["app_id"].as_str().unwrap().to_string(),
+                    a["version"].as_str().unwrap().to_string(),
+                )
+            })
+            .collect()
+    }
+
+    /// Where `who`'s Krate keeps a release ready for offline use.
+    fn kept_ready(&self, who: &str, digest: &str) -> PathBuf {
+        self.homes[who]
+            .path()
+            .join("cache/org-apps")
+            .join(format!("{digest}.krate"))
+    }
+
+    /// `krate org apps acme --open <app>` as `who`, headless.
+    fn open_company_app(&self, who: &str, app: &str) -> std::process::Output {
+        self.krate_as(
+            who,
+            &[
+                "org",
+                "apps",
+                "acme",
+                "--open",
+                app,
+                "--",
+                "--headless",
+                "--auto-grant",
+            ],
+        )
+    }
+}
+
+/// IC-953 proof: a member sees exactly their audience's apps, each kept
+/// ready offline; a rollback lists and opens the older release; a withdrawn
+/// release is gone from the list and from the computer; a release kept
+/// ready opens offline within its lease, showing the terms first, and is
+/// refused once the lease ran out.
+#[test]
+fn company_apps_are_listed_kept_ready_and_opened_through_the_door() {
+    let Some(world) = OrgWorld::new(&["alice", "bob", "carol", "dan"]) else {
+        eprintln!("skipping company_apps_are_listed_kept_ready_and_opened_through_the_door: no local port");
+        return;
+    };
+    let root = world.acme();
+    let (_, d1, _) = world.released_app(&root, "1.0.0");
+    let (_, d2, _) = world.released_app(&root, "1.0.1");
+    let (_, d3, _) = world.released_app(&root, "1.0.2");
+    let app = "dev.acme.demo";
+
+    // Dan sees the release that opens now, kept ready for offline use.
+    let list = world.company_apps("dan");
+    let acme = &list["orgs"][0];
+    assert_eq!(acme["slug"], "acme");
+    assert_eq!(acme["from"], "hub");
+    let apps = acme["apps"].as_array().unwrap();
+    assert_eq!(apps.len(), 1, "{list}");
+    assert_eq!(
+        (
+            apps[0]["app_id"].as_str(),
+            apps[0]["version"].as_str(),
+            apps[0]["digest"].as_str()
+        ),
+        (Some(app), Some("1.0.2"), Some(d3.as_str()))
+    );
+    assert!(apps[0]["size"].as_u64().unwrap() > 0);
+    assert!(apps[0]["ready_offline_until"].as_u64().is_some(), "{list}");
+    let kept = std::fs::read(world.kept_ready("dan", &d3)).expect("the release is kept ready");
+    assert_eq!(
+        format!("{:x}", Sha256::digest(&kept)),
+        d3,
+        "held to its digest"
+    );
+    let record = world
+        .lease_record("dan", &d3)
+        .expect("its offline access is ready");
+    assert!(
+        record["answer"].is_object() && record["noticed_class"].is_null(),
+        "{record}"
+    );
+    // In words, with the line that opens it.
+    let said = world.says("dan", &["org", "apps"], true);
+    assert!(said.contains("Acme (acme): 1 app"), "{said}");
+    assert!(said.contains("Acme Demo 1.0.2  dev.acme.demo"), "{said}");
+    assert!(said.contains("works offline until"), "{said}");
+    assert!(
+        said.contains("Open one: krate org apps acme --open dev.acme.demo"),
+        "{said}"
+    );
+    // Listed again, nothing new is issued: the lease held is kept.
+    let issued = world.hub.lock().unwrap().leases_issued;
+    world.company_apps("dan");
+    if world.real_hub().is_none() {
+        assert_eq!(world.hub.lock().unwrap().leases_issued, issued);
+    }
+
+    // An audience: 1.0.2 only for finance, which Dan is in and Carol is not.
+    world.says(
+        "alice",
+        &["org", "group", "create", "acme", "finance"],
+        true,
+    );
+    world.says(
+        "alice",
+        &["org", "group", "add", "acme", "finance", "dan@acme.example"],
+        true,
+    );
+    world.says(
+        "alice",
+        &[
+            "org", "release", "audience", "acme", &d3, "--groups", "finance",
+        ],
+        true,
+    );
+    assert_eq!(
+        world.company_versions("dan"),
+        [(app.to_string(), "1.0.2".to_string())]
+    );
+    assert!(
+        world.company_versions("carol").is_empty(),
+        "the release that opens now is not Carol's, so the app is not on her list"
+    );
+    world.says(
+        "alice",
+        &["org", "release", "audience", "acme", &d3, "--everyone"],
+        true,
+    );
+    assert_eq!(
+        world.company_versions("carol"),
+        [(app.to_string(), "1.0.2".to_string())]
+    );
+
+    // Rollback: 1.0.1 is made current. Opening the app opens it -- through
+    // `krate run`, which checks those bytes in with the hub.
+    world.says(
+        "alice",
+        &["org", "release", "current", "acme", app, &d2],
+        true,
+    );
+    assert!(world.lease_record("dan", &d2).is_none());
+    let opened = world.open_company_app("dan", app);
+    assert!(opened.status.success(), "{}", stderr_of(&opened));
+    let record = world
+        .lease_record("dan", &d2)
+        .expect("1.0.1 was what opened");
+    assert!(record["checked_at"].is_u64(), "{record}");
+    assert_eq!(
+        world.company_versions("dan"),
+        [(app.to_string(), "1.0.1".to_string())]
+    );
+    assert!(
+        !world.kept_ready("dan", &d3).exists(),
+        "a release no longer current is not kept"
+    );
+
+    // Withdrawn: 1.0.1, then 1.0.2. Neither is listed, and the open is of
+    // the newest approval left, 1.0.0.
+    for digest in [&d2, &d3] {
+        world.says(
+            "bob",
+            &[
+                "org",
+                "release",
+                "withdraw",
+                "acme",
+                digest,
+                "--reason",
+                "wrong rates",
+            ],
+            true,
+        );
+    }
+    let list = world.company_apps("dan");
+    let digests: Vec<&str> = list["orgs"][0]["apps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|a| a["digest"].as_str())
+        .collect();
+    assert_eq!(
+        digests,
+        [d1.as_str()],
+        "withdrawn releases are gone: {list}"
+    );
+    assert!(!world.kept_ready("dan", &d2).exists());
+    assert!(world.kept_ready("dan", &d1).is_file());
+
+    if world.real_hub().is_some() {
+        // The rest stops the hub, which a real one cannot be asked to do.
+        return;
+    }
+    // Offline: the hub is gone. The list is the one kept, and the app kept
+    // ready opens on its offline access, the terms shown first.
+    world.stop.store(true, std::sync::atomic::Ordering::SeqCst);
+    std::thread::sleep(Duration::from_millis(100));
+    let said = world.says("dan", &["org", "apps"], true);
+    assert!(
+        said.contains("No connection: this is the list from"),
+        "{said}"
+    );
+    assert!(said.contains("Acme Demo 1.0.0"), "{said}");
+    let offline = world.open_company_app("dan", app);
+    let said = stderr_of(&offline);
+    assert!(offline.status.success(), "{said}");
+    assert!(
+        said.contains("This is Acme's private app. Works offline until")
+            && said.contains("offline: opening Acme's app on its offline access"),
+        "the terms, then the offline open: {said}"
+    );
+    let again = world.open_company_app("dan", app);
+    assert!(again.status.success());
+    assert!(
+        !stderr_of(&again).contains("Works offline until"),
+        "the terms are shown once"
+    );
+
+    // Its lease runs out: refused, with the date.
+    let lease_file = world.homes["dan"]
+        .path()
+        .join(".krate/leases")
+        .join(format!("{d1}.json"));
+    let mut record: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&lease_file).unwrap()).unwrap();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let mut body = record["answer"]["lease"].clone();
+    body["issued_at"] = serde_json::json!(now - 8 * 86_400);
+    body["expires_at"] = serde_json::json!(now - 86_400);
+    let pkcs8 = world.hub.lock().unwrap().lease_pkcs8.clone();
+    record["answer"] = krate_lease::sign(&body, &pkcs8).unwrap();
+    std::fs::write(&lease_file, record.to_string()).unwrap();
+    let expired = world.open_company_app("dan", app);
+    assert!(!expired.status.success());
+    assert!(
+        stderr_of(&expired).contains("its offline access ran out on"),
+        "{}",
+        stderr_of(&expired)
+    );
+    // An app never listed here does not open offline, in words.
+    let never = world.open_company_app("dan", "dev.acme.other");
+    assert!(!never.status.success());
+    assert!(
+        stderr_of(&never).contains("was never listed on this computer"),
+        "{}",
+        stderr_of(&never)
+    );
+}
+
+/// IC-953 MDM: `[org] slug` in the machine policy puts that organisation
+/// first, and signed out, the company sign-in is what is offered.
+#[test]
+fn the_policy_organisation_is_listed_first_and_offers_its_company_sign_in() {
+    let Some(world) = OrgWorld::new(&["alice", "bob", "carol", "dan"]) else {
+        eprintln!("skipping the_policy_organisation_is_listed_first_and_offers_its_company_sign_in: no local port");
+        return;
+    };
+    let root = world.acme();
+    world.released_app(&root, "1.0.0");
+    // A second organisation that sorts before acme, with Dan in it.
+    world.says("alice", &["org", "create", "aaa-labs"], true);
+    let said = world.says(
+        "alice",
+        &[
+            "org",
+            "invite",
+            "aaa-labs",
+            "--email",
+            "dan@acme.example",
+            "--role",
+            "recipient",
+        ],
+        true,
+    );
+    let code = said
+        .lines()
+        .find_map(|l| l.trim().strip_prefix("krate org join aaa-labs "))
+        .expect("join line")
+        .trim()
+        .to_string();
+    world.says("dan", &["org", "join", "aaa-labs", &code], true);
+    let policy = world.dir.path().join("policy.toml");
+    std::fs::write(&policy, "version = 1\n\n[org]\nslug = \"acme\"\n").unwrap();
+    let as_dan = |who: &str, args: &[&str], policy_path: &std::path::Path| {
+        org_command(&world, who, args)
+            .env("KRATE_TEST_POLICY", policy_path)
+            .output()
+            .expect("krate")
+    };
+
+    // Without the policy: the hub's order. With it: acme first.
+    let none = world.dir.path().join("none.toml");
+    std::fs::write(&none, "version = 1\n").unwrap();
+    let plain: serde_json::Value =
+        serde_json::from_slice(&as_dan("dan", &["org", "apps", "--json"], &none).stdout).unwrap();
+    let order = |v: &serde_json::Value| -> Vec<String> {
+        v["orgs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|o| o["slug"].as_str().unwrap().to_string())
+            .collect()
+    };
+    assert_eq!(order(&plain), ["aaa-labs", "acme"], "{plain}");
+    let first: serde_json::Value =
+        serde_json::from_slice(&as_dan("dan", &["org", "apps", "--json"], &policy).stdout).unwrap();
+    assert_eq!(order(&first), ["acme", "aaa-labs"], "{first}");
+    assert_eq!(first["policy_org"], "acme");
+    assert_eq!(first["orgs"][0]["first"], true);
+    let said =
+        String::from_utf8_lossy(&as_dan("dan", &["org", "apps"], &policy).stdout).to_string();
+    assert!(
+        said.starts_with("Acme (acme, this computer's organisation): 1 app"),
+        "{said}"
+    );
+    // `krate policy` says it, in words and as JSON.
+    let words = String::from_utf8_lossy(&as_dan("dan", &["policy"], &policy).stdout).to_string();
+    assert!(words.contains("Organisation: acme."), "{words}");
+    let json: serde_json::Value =
+        serde_json::from_slice(&as_dan("dan", &["policy", "--json"], &policy).stdout).unwrap();
+    assert_eq!(json["policy"]["org"]["slug"], "acme");
+
+    // Signed out on a new computer: the company's own sign-in, and nothing
+    // asked of the hub.
+    let before = world.hub.lock().unwrap().seen.len();
+    let out = as_dan("nobody", &["org", "apps"], &policy);
+    assert!(!out.status.success());
+    assert!(
+        stderr_of(&out).contains(
+            "sign in to see acme's apps: open https://krate.tech/login/?org=acme to use your \
+             company sign-in"
+        ),
+        "{}",
+        stderr_of(&out)
+    );
+    let quiet: serde_json::Value =
+        serde_json::from_slice(&as_dan("nobody", &["org", "apps", "--json"], &policy).stdout)
+            .unwrap();
+    assert_eq!(quiet["signed_in"], false);
+    assert_eq!(quiet["sign_in"], "https://krate.tech/login/?org=acme");
+    // With the organisation's name in the policy, a person reads the name.
+    let named = world.dir.path().join("named.toml");
+    std::fs::write(
+        &named,
+        "version = 1\nname = \"Acme Labs\"\n\n[org]\nslug = \"acme\"\n",
+    )
+    .unwrap();
+    let out = as_dan("nobody", &["org", "apps"], &named);
+    assert!(
+        stderr_of(&out).contains("sign in to see Acme Labs's apps"),
+        "{}",
+        stderr_of(&out)
+    );
+    let quiet: serde_json::Value =
+        serde_json::from_slice(&as_dan("nobody", &["org", "apps", "--json"], &named).stdout)
+            .unwrap();
+    assert_eq!(quiet["policy_name"], "Acme Labs");
+    if world.real_hub().is_none() {
+        assert_eq!(
+            world.hub.lock().unwrap().seen.len(),
+            before,
+            "nothing was sent"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// IC-954: provenance in the bundle.
+
+/// `krate create` writes a build record into the app it makes: the tool
+/// (Studio says so through KRATE_BUILT_BY), the provider (a person's own
+/// command here, so no AI is contacted), when, the request's digest, and the
+/// request itself only with --keep-prompt. `krate inspect` shows it, the
+/// signature covers it, and what runs is unchanged by it.
+#[test]
+fn create_writes_a_build_record_that_inspect_shows_and_signing_covers() {
+    if !has_cargo_component() {
+        eprintln!("skipping: cargo-component not installed");
+        return;
+    }
+    let _build_lock = cargo_build_guard();
+    let work = tempfile::tempdir().expect("temp dir");
+    let make = |out: &std::path::Path, keep: bool| {
+        let mut command = krate();
+        command
+            .args([
+                "create",
+                "a small dashboard",
+                "--author-cmd",
+                "true",
+                "--output",
+            ])
+            .arg(out)
+            .env("KRATE_BUILT_BY", "studio");
+        if keep {
+            command.arg("--keep-prompt");
+        }
+        let output = command.output().expect("run create");
+        // A no-op author leaves the starter: exit 6, and the file is written.
+        assert_eq!(
+            output.status.code(),
+            Some(6),
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(out.is_file());
+    };
+    let inspect = |path: &std::path::Path| -> serde_json::Value {
+        let out = krate()
+            .args(["inspect", path.to_str().unwrap(), "--format", "json"])
+            .output()
+            .expect("inspect");
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        serde_json::from_slice(&out.stdout).expect("json")
+    };
+    let kept = work.path().join("kept.krate");
+    make(&kept, true);
+    let report = inspect(&kept);
+    let built = &report["provenance"];
+    assert_eq!(built["v"], 1, "{report}");
+    assert_eq!(built["tool"], "krate studio");
+    assert_eq!(built["provider"], "author-cmd");
+    assert_eq!(built["prompt"], "a small dashboard");
+    assert_eq!(
+        built["prompt_sha256"],
+        format!("{:x}", Sha256::digest(b"a small dashboard"))
+    );
+    assert_eq!(built["revisions"], 0);
+    assert!(built["finished_at"].as_u64() >= built["started_at"].as_u64());
+    assert!(built["krate_version"]
+        .as_str()
+        .is_some_and(|v| !v.is_empty()));
+    assert!(
+        report["extensions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e["owner"] == "krate" && e["name"] == "provenance"),
+        "declared, as every extension is: {report}"
+    );
+    let text = krate()
+        .args(["inspect", kept.to_str().unwrap()])
+        .output()
+        .expect("inspect");
+    let said = String::from_utf8_lossy(&text.stdout);
+    assert!(
+        said.contains("built           by krate studio with author-cmd")
+            && said.contains("  asked for     a small dashboard"),
+        "{said}"
+    );
+
+    // Without --keep-prompt only the digest is kept, and what runs is the
+    // same app either way.
+    let plain = work.path().join("plain.krate");
+    make(&plain, false);
+    let report = inspect(&plain);
+    assert!(report["provenance"]["prompt"].is_null(), "{report}");
+    assert!(report["provenance"]["prompt_sha256"].is_string());
+    assert_eq!(
+        inspect(&kept)["identity"]["execution"],
+        report["identity"]["execution"]
+    );
+
+    // Signed, the signature covers the record: it holds, and once the
+    // record is changed it no longer does.
+    let key = work.path().join("key.pkcs8");
+    let signed = krate()
+        .args([
+            "sign",
+            kept.to_str().unwrap(),
+            "--key",
+            key.to_str().unwrap(),
+            "--generate-key",
+            "--namespace",
+            "acme/dashboard",
+        ])
+        .output()
+        .expect("sign");
+    assert!(
+        signed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&signed.stderr)
+    );
+    let holds = |path: &std::path::Path| {
+        krate_bundle::open(path)
+            .unwrap()
+            .signature_verdict()
+            .unwrap()
+            .is_some_and(|v| v.is_genuinely_signed())
+    };
+    assert!(holds(&kept), "signed over its build record");
+    let mut record = krate_bundle::read_build_provenance(&kept).unwrap().unwrap();
+    record.provider = Some("someone-else".into());
+    krate_bundle::add_build_provenance(&kept, &record).unwrap();
+    assert!(!holds(&kept), "a changed build record breaks the signature");
 }
