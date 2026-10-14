@@ -80,7 +80,7 @@
 @media (max-width: 560px) {
   .theirapp { flex-direction: column; align-items: stretch; gap: 14px; padding: 12px 12px 18px; }
   .theirapp #taShot { width: 100%; }
-  .ta-doc { margin: 8px 0 0 6px; height: 60px; }
+  .ta-doc { margin: 8px 0 0 6px; height: 60px; align-self: flex-start; }
   .ta-text { padding: 0 6px; }
   .ostep { grid-template-columns: minmax(0, 1fr); gap: 14px; }
   .dlrow .btn, #taMore .stack .btn { width: 100%; }
@@ -569,6 +569,11 @@ document.querySelectorAll("[data-copy]").forEach(function (b) {
       if (b.error === "digest-mismatch" || res.status === 404) {
         document.getElementById("pageHead").textContent = "This app is not out yet.";
         state("Private app", "There is no app at this link yet", "It may still be waiting for approval, or the link was cut short. Check the link you were sent.", [], true);
+        return;
+      }
+      if (b.error === "org-closed") {
+        document.getElementById("pageHead").textContent = "This app no longer opens.";
+        state("Private app", "The organisation that sent it has closed", "Its apps stopped opening when it closed. If you still need this one, ask the person who sent it.", [], true);
         return;
       }
       var w = K.refusal(b.error, { here: here, message: b.message });

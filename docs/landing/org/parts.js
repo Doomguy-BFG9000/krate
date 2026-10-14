@@ -56,7 +56,7 @@
             owner() ? [toSettings] : null);
         }
       }
-      if (o.suspended || o.billing_state === "suspended") {
+      if (o.state !== "closed" && (o.suspended || o.billing_state === "suspended")) {
         var acts = K.can(D.roleOf(), "billing.read") ? [el("button", { class: "btn ghost sm", type: "button", text: "Open Billing", onclick: function () { D.show("billing"); } })] : null;
         add("warn", name + " is paused for billing",
           "Apps already released still open, and the export still works. Sending new apps, seats beyond the free ones and company sign-in come back when billing is settled.", acts);
@@ -496,6 +496,7 @@
             : "A second owner has to approve it. Nothing changes until they do, and any owner can cancel it.",
           input: sole ? { label: "Type " + slug + " to confirm", placeholder: slug } : null,
           yes: sole ? "Close " + name : "Ask a second owner",
+          no: "Keep it open",
           busy: "Asking",
           ctx: { what: "close the organisation", whoCan: "an owner" },
           act: function (typed) { return K.api("POST", path("/close"), sole ? { confirm_slug: String(typed || "").trim() } : {}, { key: key }); },

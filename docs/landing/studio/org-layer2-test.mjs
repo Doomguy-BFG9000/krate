@@ -110,6 +110,16 @@ const two = [member(ALICE, "owner"), member("github:olga", "owner"), member("git
   button(asker.el("pane"), "Cancel the closing").click();
   check(/Nothing closes/.test(asker.el("sheetP").textContent), "cancelling asks first");
 
+  // The hub keeps the organisation active while a close waits for its
+  // second owner, and the statement is an object with an effect sentence.
+  const active = await page("https://krate.tech/org/?o=acme&tab=settings", DASH, {
+    token: "t", routes: closeRoutes({}, { state: "active", close: { ...waiting.close, statement: { org: "acme", window_days: 30, effect: "During the 30-day window members keep opening releases." } } }, two),
+  });
+  check(/waits for a second owner/.test(active.el("banner").shown) && /During the 30-day window/.test(active.el("pane").shown), "a close waiting on an active organisation still shows, with the statement's words");
+  const shut = await page("https://krate.tech/org/?o=acme&tab=waiting", DASH, {
+    token: "t", routes: closeRoutes({ "GET /orgs/acme/candidates": () => [200, [{ digest: "a".repeat(64), name: "Bounce", version: "1.0.1", state: "waiting-for-approval", uploaded_by: "github:carol", uploaded_at: 1760000400 }]] }, { state: "closing", close: { id: "k3", state: "scheduled", ends_at: 1762592000, requested_by: ALICE, requested_at: 1760000000 } }),
+  });
+  check(!button(shut.el("pane"), "Approve") && /Approvals stop while Acme is closing/.test(shut.el("pane").shown), "while closing, Approve is not offered and the page says why");
   const sched = await page("https://krate.tech/org/?o=acme&tab=releases", DASH, { token: "t", routes: closeRoutes({}, { state: "closing", close: { id: "k3", state: "scheduled", ends_at: 1762592000, requested_by: ALICE, requested_at: 1760000000 } }) });
   check(/Acme closes on/.test(sched.el("banner").shown) && /still open/.test(sched.el("banner").shown), "a scheduled closing names its date, and that apps still open");
 
@@ -240,6 +250,8 @@ const two = [member(ALICE, "owner"), member("github:olga", "owner"), member("git
     token: "tok", routes: { [`GET /a/${DIGEST}`]: () => [200, { name: "Bounce", version: "1.0.0", size: 13778, org: { slug: "acme", name: "Acme" }, offline: { class: "days-7", until } }] },
   });
   check(t(lease.el("offlineNote").textContent) === "Works offline until 21 Oct 2026, then needs a connection. If you are removed, it stops when it next connects.", "the open page gives the exact offline date before the first open");
+  const gone = await page(`https://krate.tech/open/?a=${DIGEST}&private=1`, code, { token: "tok", routes: { [`GET /a/${DIGEST}`]: () => [403, { error: "org-closed", message: "acme is closed" }] } });
+  check(/organisation that sent it has closed/.test(gone.el("taName").textContent), "an app from a closed organisation says so in words");
   const online = await page(`https://krate.tech/open/?a=${DIGEST}&private=1`, code, {
     token: "tok", routes: { [`GET /a/${DIGEST}`]: () => [200, { name: "Bounce", size: 1, org: { slug: "acme", name: "Acme" }, offline: { class: "online", until: null } }] },
   });
