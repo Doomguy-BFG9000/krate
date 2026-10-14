@@ -15,6 +15,7 @@ import assert from "node:assert";
 import { RateGate, judgeBundle } from "../src/index.js";
 import { orgEnv, call, acme, fixture, worker } from "./org-tools.mjs";
 import { sha256Hex } from "./r2-mock.mjs";
+import "./github-stub.mjs";
 
 /* The REAL RateGate behind a namespace stand-in, as rate-limit.test.mjs. */
 function gateNamespace() {
@@ -151,7 +152,7 @@ async function bigRelease(env, bytes) {
 
 const scrub = async (env, repair) => {
   const res = await worker.fetch(
-    new Request("https://hub.example/admin/scrub", { method: repair ? "POST" : "GET", headers: { authorization: "Bearer krs_alice" } }),
+    new Request("https://hub.example/admin/scrub", { method: repair ? "POST" : "GET", headers: { authorization: "Bearer gho_alice" } }),
     env,
   );
   assert.strictEqual(res.status, 200);

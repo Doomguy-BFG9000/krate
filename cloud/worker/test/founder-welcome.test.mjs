@@ -229,13 +229,15 @@ test("a sign-up tells the founder at once, with the welcome ready in Gmail; noth
 });
 
 test("the desk lists who is waiting for a welcome, and marks them welcomed", async () => {
+  // KRATE_ADMINS is a GitHub login: the desk is opened with a GitHub token (K-1085).
+  githubUser = { id: 7, login: "boss", name: "Boss", email: "boss@example.com" };
   KV.set("session:krs_admin", "a1");
   KV.set("user:a1", JSON.stringify({ id: "a1", login: "boss", name: "Boss" }));
   const as = (path, init = {}) =>
     worker.fetch(
       new Request(`https://hub.test${path}`, {
         ...init,
-        headers: { authorization: "Bearer krs_admin", "content-type": "application/json" },
+        headers: { authorization: "Bearer gho_boss", "content-type": "application/json" },
       }),
       env,
       { waitUntil() {} },

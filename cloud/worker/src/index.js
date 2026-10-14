@@ -1155,7 +1155,10 @@ async function putReport(request, env) {
 /// the caller controls.
 async function isAdmin(request, env) {
   const identity = await verifyGitHub(request, env);
-  if (!identity) return null;
+  // KRATE_ADMINS names GitHub logins, so only a login GitHub vouched for
+  // can match it: an email or Google session whose address starts with an
+  // admin's login is not that admin (K-1085).
+  if (!identity || identity.github !== true) return null;
   const admins = (env.KRATE_ADMINS || "")
     .split(",")
     .map((s) => s.trim().toLowerCase())
@@ -1574,7 +1577,8 @@ async function purgeBundle(request, hash, env) {
   const identity = await verifyGitHub(request, env);
   if (!identity) return text("sign in first", 401);
   const admins = (env.KRATE_ADMINS || "").split(",").map((name) => name.trim());
-  if (!admins.includes(identity.login)) return text("not found", 404);
+  // Only a GitHub-vouched login is an admin (K-1085).
+  if (identity.github !== true || !admins.includes(identity.login)) return text("not found", 404);
   if (!/^[0-9a-f]{64}$/.test(hash)) return text("not found", 404);
   await deleteBigParts(env, hash);
   await env.APPS.delete(`app:${hash}`);
@@ -3468,22 +3472,28 @@ async function verifyGitHub(request, env) {
   const token = auth.replace(/^Bearer\s+/i, "").trim();
   if (!token) return null;
 
-  // Stubbed identities for a local `wrangler dev` proof only (IC-946).
+  // Stubbed identities for a local `wrangler dev` proof only (IC-946). They
+  // stand in for GitHub logins, so they count as vouched.
   const stubbed = testIdentity(token, env);
-  if (stubbed) return { login: stubbed, name: "", avatar_url: "" };
+  if (stubbed) return { login: stubbed, name: "", avatar_url: "", github: true };
 
-  // A Krate session (Google or email sign-in) is as good as a GitHub token.
+  // A Krate session (Google or email sign-in) is as good as a GitHub token
+  // for the account it belongs to -- but its `login` is only the part of an
+  // email address before the @, which anyone can choose. So it is never a
+  // GitHub login: `github` is false, and nothing that trusts a GitHub login
+  // (KRATE_ADMINS above all) may accept it (K-1085).
   if (token.startsWith("krs_")) {
     const userId = await env.APPS.get(`session:${token}`);
     if (!userId) return null;
     const record = JSON.parse((await env.APPS.get(`user:${userId}`)) || "null");
     if (!record) return null;
-    return { login: record.login, name: record.name, avatar_url: record.avatar_url };
+    return { login: record.login, name: record.name, avatar_url: record.avatar_url, github: false };
   }
 
   const cacheKey = `token:${await sha256Hex(new TextEncoder().encode(token))}`;
   const cached = await env.APPS.get(cacheKey);
-  if (cached) return JSON.parse(cached);
+  // Only this function writes the cache, and only after GitHub vouched.
+  if (cached) return { ...JSON.parse(cached), github: true };
 
   const response = await fetch("https://api.github.com/user", {
     headers: {
@@ -3511,7 +3521,7 @@ async function verifyGitHub(request, env) {
     // down, the K-082 disease in a second spot. Without the cache the next
     // call costs one extra GitHub round trip, which is nothing.
   }
-  return identity;
+  return { ...identity, github: true };
 }
 
 // ------------------------------------------------------------- big files
