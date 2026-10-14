@@ -2932,6 +2932,27 @@ pub struct Judgement {
     /// organisation's candidate, and never at the public door.
     #[serde(default)]
     pub org_mark: Option<String>,
+    /// What the app asks to do, in the manifest's order, each in the plain
+    /// words a person reads (IC-950): the hub's approval screen shows these
+    /// and compares them with the release they would replace.
+    #[serde(default)]
+    pub capabilities: Vec<JudgedCapability>,
+}
+
+/// One capability an app asks for, as a door shows it to a person.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct JudgedCapability {
+    /// The exact capability, as the manifest spells it.
+    pub cap: String,
+    /// What it lets the app do, in plain words (`Capability::plain`).
+    pub words: String,
+    /// The app cannot run without it.
+    pub required: bool,
+    /// Its maker's reason, shown as theirs.
+    pub rationale: String,
+    /// Whether a person is asked for it (false for what every app may do
+    /// without asking: print, read the clock, open a window, ...).
+    pub asks: bool,
 }
 
 /// The signature's state, in words a door can act on.
@@ -3335,6 +3356,25 @@ fn judge_bytes_here(bytes: &[u8], max_expanded: u64) -> Result<Judgement> {
             .collect()
     };
     let entries = raw.len();
+    // A capability that does not parse never reaches here: the manifest was
+    // validated above. Kept as written if it somehow does, never dropped.
+    let capabilities = manifest
+        .capabilities
+        .iter()
+        .map(|request| {
+            let parsed = request.cap.parse::<krate_manifest::Capability>().ok();
+            JudgedCapability {
+                cap: request.cap.clone(),
+                words: parsed
+                    .as_ref()
+                    .map(|c| c.plain())
+                    .unwrap_or_else(|| request.cap.clone()),
+                required: request.required,
+                rationale: request.rationale.clone(),
+                asks: parsed.map(|c| !c.is_default_granted()).unwrap_or(true),
+            }
+        })
+        .collect();
     Ok(Judgement {
         validator: imports::VALIDATOR_VERSION,
         wit: imports::WIT_DIGEST.to_string(),
@@ -3352,6 +3392,7 @@ fn judge_bytes_here(bytes: &[u8], max_expanded: u64) -> Result<Judgement> {
         extensions,
         closure,
         org_mark,
+        capabilities,
     })
 }
 

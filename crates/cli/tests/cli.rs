@@ -15184,6 +15184,11 @@ impl OrgWorld {
     /// A bundle named `name` at `version`, padded with `noise` incompressible
     /// bytes, packed by the CLI.
     fn bundle(&self, file: &str, version: &str, noise: usize) -> PathBuf {
+        self.bundle_asking(file, version, noise, "")
+    }
+
+    /// [`OrgWorld::bundle`] with capability tables appended to its manifest.
+    fn bundle_asking(&self, file: &str, version: &str, noise: usize, caps: &str) -> PathBuf {
         let dir = self.dir.path().join(format!("src-{file}"));
         std::fs::create_dir_all(dir.join("assets")).expect("dir");
         let wasm = dir.join("code.wasm");
@@ -15197,7 +15202,7 @@ impl OrgWorld {
             &manifest,
             format!(
                 "[app]\nid = \"dev.acme.demo\"\nname = \"Acme Demo\"\nversion = \"{version}\"\n\
-                 entry = \"code.wasm\"\nworld = \"krate:app/cli@0.1.0\"\n"
+                 entry = \"code.wasm\"\nworld = \"krate:app/cli@0.1.0\"\n{caps}"
             ),
         )
         .expect("manifest");
@@ -18638,4 +18643,66 @@ fn a_member_outside_the_audience_is_refused_and_an_owner_passes() {
         true,
     );
     assert!(out.contains("carol (GitHub) is out of finance"), "{out}");
+}
+
+/// IC-950 through the CLI, against a real hub (its validator gives each
+/// capability its plain words, and its store compares a candidate with the
+/// version that opens now): an update that adds a capability is listed as
+/// new, refused before anything is sent until each is named with --accept,
+/// and approved once it is.
+#[test]
+fn an_update_that_adds_a_capability_is_approved_only_once_it_is_named() {
+    let Some(world) = OrgWorld::new(&["alice", "bob", "carol"]) else {
+        eprintln!("skipping an_update_that_adds_a_capability_is_approved_only_once_it_is_named: no local port");
+        return;
+    };
+    if world.real_hub().is_none() {
+        eprintln!(
+            "skipping an_update_that_adds_a_capability_is_approved_only_once_it_is_named: \
+             the comparison is the hub's (cloud/worker/test/org-review.test.mjs); set \
+             KRATE_ORG_E2E_HUB to run it through the CLI"
+        );
+        return;
+    }
+    let root = world.acme();
+    let (_bundle, _digest, _link) = world.released_app(&root, "1.0.0");
+    let update = world.bundle_asking(
+        "app-1.1.0.krate",
+        "1.1.0",
+        65,
+        "\n[[capabilities]]\ncap = \"net.connect:api.acme.example:443\"\nrationale = \"send expenses\"\nrequired = true\n",
+    );
+    world.sign_delegated(&root, "carol", &update);
+    let digest = OrgWorld::digest_in(&world.says(
+        "carol",
+        &["publish", update.to_str().unwrap(), "--org", "acme"],
+        true,
+    ));
+    let listed = world.says("bob", &["org", "candidates", "acme"], true);
+    assert!(
+        listed.contains("new since 1.0.0, check each before approving:")
+            && listed.contains("connect to api.acme.example:443 over the network (net.connect:api.acme.example:443)"),
+        "{listed}"
+    );
+    let refused = world.says("bob", &["org", "approve", "acme", &digest], false);
+    assert!(
+        refused.contains("nothing was approved: Acme Demo 1.1.0 asks for more than 1.0.0")
+            && refused.contains(&format!(
+                "krate org approve acme {digest} --accept net.connect:api.acme.example:443"
+            )),
+        "{refused}"
+    );
+    let approved = world.says(
+        "bob",
+        &[
+            "org",
+            "approve",
+            "acme",
+            &digest,
+            "--accept",
+            "net.connect:api.acme.example:443",
+        ],
+        true,
+    );
+    assert!(approved.contains("approved."), "{approved}");
 }

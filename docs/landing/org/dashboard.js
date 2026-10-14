@@ -281,14 +281,18 @@
       var closing = S.org && S.org.state === "closing";
       list.forEach(function (c) {
         var mine = isMe(c.uploaded_by);
-        var acts = null, note = null;
+        var acts = null, note = null, btn = null;
+        // What it can do, and what changed (IC-950). Built first so the
+        // Approve button can wait on its ticks.
+        var review = capsReview(c, approver && !mine && !closing);
         if (closing) {
           note = el("p", { class: "note", text: "Approvals stop while " + (S.org.name || slug) + " is closing. If an owner cancels the closing, this can be approved again." });
         } else if (approver && !mine) {
-          acts = el("div", { class: "ra" }, [el("button", {
+          btn = el("button", {
             class: "btn dark sm", type: "button", text: "Approve",
-            onclick: function () { approve(c); },
-          })]);
+            onclick: function () { approve(c, review.accepted()); },
+          });
+          acts = el("div", { class: "ra" }, [btn]);
         } else {
           note = el("p", { class: "note", text: mine
             ? "You sent this one, so someone else approves it."
@@ -299,24 +303,91 @@
             el("b", { text: K.appName(c) }),
             el("small", { text: "Sent by " + K.who(c.uploaded_by).label + " · " + K.moment(c.uploaded_at) }),
             el("small", { class: "dg", text: "sha256 " + c.digest.slice(0, 16) + "…" }),
+            review.node,
             note,
           ]),
           acts,
         ]));
+        if (btn) review.gate(btn);
       });
     });
   }
 
-  function approve(c) {
+  /// What a waiting candidate can do, and what it changes against the
+  /// version that opens now (IC-950). A new capability a person is asked
+  /// for gets a tick; Approve waits until every one is ticked, and the
+  /// hub refuses an approval that leaves one out.
+  function capsReview(c, deciding) {
+    var caps = Array.isArray(c.capabilities) ? c.capabilities : [];
+    var ch = c.changes || { against: null, added: caps, removed: [], kept: 0 };
+    var box = el("div", { class: "caps" });
+    var ticks = [];
+    var line = function (x, extra) {
+      return el("li", {}, [
+        el("span", { text: x.words || x.cap }),
+        x.required ? null : el("span", { class: "opt", text: " (optional)" }),
+        x.rationale ? el("small", { text: "Its maker says: " + x.rationale }) : null,
+        extra || null,
+      ]);
+    };
+    if (!caps.length && !ch.removed.length) {
+      box.appendChild(el("p", { class: "cl", text: "It asks for nothing beyond what every app may do." }));
+    } else if (!ch.against) {
+      var asked = caps.filter(function (x) { return x.asks; });
+      var basic = caps.filter(function (x) { return !x.asks; });
+      box.appendChild(el("p", { class: "cl", text: asked.length ? "What it can do once someone allows it:" : "It asks for nothing a person is asked about." }));
+      if (asked.length) box.appendChild(el("ul", {}, asked.map(function (x) { return line(x); })));
+      if (basic.length) box.appendChild(el("p", { class: "cl sub", text: "And what every app may do: " + basic.map(function (x) { return x.words || x.cap; }).join(", ") + "." }));
+    } else {
+      var since = "Since " + (ch.against.version || "the version that opens now") + ", the version that opens now:";
+      box.appendChild(el("p", { class: "cl", text: since }));
+      var newAsked = ch.added.filter(function (x) { return x.asks; });
+      var newBasic = ch.added.filter(function (x) { return !x.asks; });
+      if (newAsked.length) {
+        box.appendChild(el("p", { class: "cl new", text: "New, check each before approving:" }));
+        box.appendChild(el("ul", { class: "new" }, newAsked.map(function (x) {
+          var tick = el("input", { type: "checkbox", "aria-label": "I checked: " + (x.words || x.cap) });
+          tick.disabled = !deciding;
+          ticks.push({ cap: x.cap, box: tick });
+          return el("li", {}, [el("label", { class: "tick" }, [tick, el("span", { text: x.words || x.cap })]),
+            x.required ? null : el("span", { class: "opt", text: " (optional)" }),
+            x.rationale ? el("small", { text: "Its maker says: " + x.rationale }) : null]);
+        })));
+      }
+      if (newBasic.length) box.appendChild(el("p", { class: "cl sub", text: "Also new, not asked about: " + newBasic.map(function (x) { return x.words || x.cap; }).join(", ") + "." }));
+      if (ch.removed.length) box.appendChild(el("p", { class: "cl sub", text: "No longer asks to: " + ch.removed.map(function (x) { return x.words || x.cap; }).join(", ") + "." }));
+      if (!ch.added.length && !ch.removed.length) box.appendChild(el("p", { class: "cl sub", text: "It asks for exactly the same as before." }));
+      else if (ch.kept) box.appendChild(el("p", { class: "cl sub", text: ch.kept + " unchanged." }));
+    }
+    return {
+      node: box,
+      accepted: function () { return ticks.filter(function (t) { return t.box.checked; }).map(function (t) { return t.cap; }); },
+      newOnes: function () { return ch.against ? ch.added.filter(function (x) { return x.asks; }) : []; },
+      gate: function (btn) {
+        if (!ticks.length) return;
+        var sync = function () {
+          var all = ticks.every(function (t) { return t.box.checked; });
+          btn.disabled = !all;
+          btn.title = all ? "" : "Tick each new capability first";
+        };
+        ticks.forEach(function (t) { t.box.addEventListener("change", sync); });
+        sync();
+      },
+    };
+  }
+
+  function approve(c, accepted) {
     var key = K.key();
+    var added = (c.changes && c.changes.against ? c.changes.added : []).filter(function (x) { return x.asks; });
     confirmSheet({
       title: "Approve " + K.appName(c) + "?",
       body: "This releases exactly these bytes to everyone in " + (S.org.name || slug) + ". If the app changes, the new version waits for its own approval.",
+      points: added.map(function (x) { return { key: true, text: "New: it can " + (x.words || x.cap) }; }),
       digest: c.digest,
       yes: "Approve and release",
       busy: "Releasing",
       ctx: { what: "approve releases", whoCan: "owners and reviewers" },
-      act: function () { return K.api("POST", "/orgs/" + slug + "/candidates/" + c.digest + "/approve", {}, { key: key }); },
+      act: function () { return K.api("POST", "/orgs/" + slug + "/candidates/" + c.digest + "/approve", { accept: accepted || [] }, { key: key }); },
       done: function () {
         toast(K.appName(c) + " is released. Everyone in " + (S.org.name || slug) + " can open it now.");
         show("releases");

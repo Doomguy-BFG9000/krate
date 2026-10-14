@@ -274,6 +274,7 @@ jobs:
           # reason, Make current sends the exact digest, and each role is
           # shown only the controls the matrix gives it (IC-949 R).
           node docs/landing/studio/org-releases-test.mjs
+          node docs/landing/studio/org-review-test.mjs
           # And that the homepage's prompt bar starts a build only from its
           # own fresh handoff, once, and never from a link (K-885).
           node docs/landing/studio/frontpage-test.mjs

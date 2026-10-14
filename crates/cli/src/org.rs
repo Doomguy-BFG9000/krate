@@ -122,7 +122,15 @@ pub enum OrgCommand {
     },
     /// Approve a candidate by its exact digest, so it becomes a release.
     /// You cannot approve your own upload.
-    Approve { slug: String, digest: String },
+    Approve {
+        slug: String,
+        digest: String,
+        /// The new capabilities you checked, by their exact names
+        /// (`krate org candidates` lists them): an update that asks for more
+        /// than the version it replaces is approved only with each named.
+        #[arg(long, value_delimiter = ',', value_name = "CAPABILITY")]
+        accept: Vec<String>,
+    },
     /// The organisation's releases, with who uploaded and who approved each.
     Releases { slug: String },
     /// Every candidate, waiting or released, with who uploaded and who
@@ -518,6 +526,11 @@ pub fn words(refusal: &HubRefusal, org: &str, me: &str, action: Action) -> Strin
         "self-approval" => {
             format!("you can't approve your own upload: ask a reviewer in {org}")
         }
+        "new-capabilities" => format!(
+            "nothing was approved: {}. `krate org candidates {org}` lists what is new; approve \
+             with --accept and each one's name",
+            refusal.message
+        ),
         "digest-mismatch" => match action {
             Action::Approve(digest) => format!(
                 "nothing was approved: {org} has no candidate with the digest {}. Approve the \
@@ -1132,13 +1145,67 @@ pub fn run(command: OrgCommand, hub_override: Option<&str>) -> Result<u8> {
             );
             Ok(0)
         }
-        OrgCommand::Approve { slug, digest } => {
+        OrgCommand::Approve {
+            slug,
+            digest,
+            accept,
+        } => {
             let digest = digest.trim().to_ascii_lowercase();
+            let accept: Vec<String> = accept
+                .iter()
+                .map(|c| c.trim().to_string())
+                .filter(|c| !c.is_empty())
+                .collect();
+            // What this update adds that a person is asked for (IC-950),
+            // said before anything is sent. The hub checks the same; this is
+            // so the words come with the exact command. A list this person
+            // may not read is the hub's to refuse, with its own words.
+            if let Ok(list) = client.send(
+                "GET",
+                &format!("/orgs/{}/candidates", seg(&slug)?),
+                &Body::Empty,
+            ) {
+                let found = list
+                    .as_array()
+                    .and_then(|all| all.iter().find(|c| text(c, "digest") == digest))
+                    .cloned();
+                if let Some(candidate) = found {
+                    let missing = new_capabilities(&candidate)
+                        .into_iter()
+                        .filter(|(cap, _)| !accept.iter().any(|a| a == cap))
+                        .collect::<Vec<_>>();
+                    if !missing.is_empty() {
+                        let against = text(&candidate["changes"]["against"], "version");
+                        let mut said = format!(
+                            "nothing was approved: {} {} asks for more than {}:\n",
+                            text(&candidate, "name"),
+                            text(&candidate, "version"),
+                            if against.is_empty() {
+                                "the version that opens now"
+                            } else {
+                                against
+                            }
+                        );
+                        for (cap, words) in &missing {
+                            said.push_str(&format!("  - it can {words} ({cap})\n"));
+                        }
+                        let all = new_capabilities(&candidate)
+                            .into_iter()
+                            .map(|(cap, _)| cap)
+                            .collect::<Vec<_>>()
+                            .join(",");
+                        said.push_str(&format!(
+                            "Check each, then approve with:\n  krate org approve {slug} {digest} --accept {all}"
+                        ));
+                        anyhow::bail!(said);
+                    }
+                }
+            }
             let answer = worded(
                 client.send(
                     "POST",
                     &format!("/orgs/{}/candidates/{}/approve", seg(&slug)?, seg(&digest)?),
-                    &Body::Empty,
+                    &Body::Json(serde_json::json!({ "accept": accept })),
                 ),
                 &slug,
                 &me,
@@ -1256,6 +1323,29 @@ pub fn run(command: OrgCommand, hub_override: Option<&str>) -> Result<u8> {
                     text(candidate, "version"),
                     text(candidate, "digest"),
                 );
+                // What it can do, and for one that is waiting, what is new
+                // against the version that opens now (IC-950).
+                if text(candidate, "state") == "waiting-for-approval" {
+                    let changes = &candidate["changes"];
+                    let against = text(&changes["against"], "version");
+                    let new = new_capabilities(candidate);
+                    if !changes["against"].is_object() {
+                        let asked = asked_capabilities(candidate);
+                        if !asked.is_empty() {
+                            println!("    can, once someone allows it:");
+                            for (cap, words) in asked {
+                                println!("      - {words} ({cap})");
+                            }
+                        }
+                    } else if new.is_empty() {
+                        println!("    asks for nothing new since {against}");
+                    } else {
+                        println!("    new since {against}, check each before approving:");
+                        for (cap, words) in new {
+                            println!("      - {words} ({cap})");
+                        }
+                    }
+                }
                 let uploaded = when(&candidate["uploaded_at"]);
                 let mut line = format!(
                     "    uploaded by {}",
@@ -1993,8 +2083,68 @@ fn group_member(
     Ok(0)
 }
 
+/// The capabilities a waiting candidate adds that a person is asked for,
+/// as (exact name, plain words), from the hub's `changes` (IC-950). Empty
+/// for a first release, an unchanged one, or a hub from before.
+fn new_capabilities(candidate: &serde_json::Value) -> Vec<(String, String)> {
+    if !candidate["changes"]["against"].is_object() {
+        return Vec::new();
+    }
+    capability_pairs(&candidate["changes"]["added"])
+}
+
+/// What a candidate can do that a person is asked for, as (name, words).
+fn asked_capabilities(candidate: &serde_json::Value) -> Vec<(String, String)> {
+    capability_pairs(&candidate["capabilities"])
+}
+
+fn capability_pairs(list: &serde_json::Value) -> Vec<(String, String)> {
+    list.as_array()
+        .map(|all| {
+            all.iter()
+                .filter(|c| c["asks"].as_bool() != Some(false))
+                .map(|c| {
+                    let cap = text(c, "cap").to_string();
+                    let words = Some(text(c, "words"))
+                        .filter(|w| !w.is_empty())
+                        .unwrap_or(&cap)
+                        .to_string();
+                    (cap, words)
+                })
+                .filter(|(cap, _)| !cap.is_empty())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn new_capabilities_are_the_asked_additions_against_a_release() {
+        let update = serde_json::json!({
+            "changes": {
+                "against": { "digest": "d", "version": "1.0.0" },
+                "added": [
+                    { "cap": "camera.capture", "words": "use your camera", "asks": true },
+                    { "cap": "io.stdout", "words": "print output", "asks": false },
+                    { "cap": "mystery.thing" }
+                ]
+            }
+        });
+        assert_eq!(
+            new_capabilities(&update),
+            vec![
+                ("camera.capture".to_string(), "use your camera".to_string()),
+                ("mystery.thing".to_string(), "mystery.thing".to_string()),
+            ],
+            "asked-for additions, and anything not marked otherwise counts as asked"
+        );
+        // A first release, or a hub from before, has nothing to confirm.
+        let first = serde_json::json!({ "changes": { "against": null, "added": [{ "cap": "camera.capture", "asks": true }] } });
+        assert!(new_capabilities(&first).is_empty());
+        assert!(new_capabilities(&serde_json::json!({ "digest": "x" })).is_empty());
+    }
     use super::*;
 
     /// Every stable reason the contract names has its own words, so none

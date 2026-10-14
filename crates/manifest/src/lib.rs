@@ -656,6 +656,106 @@ impl Capability {
     pub fn is_default_granted(&self) -> bool {
         default_granted_capabilities().contains(self)
     }
+
+    /// Render a capability as a short plain phrase for a person, e.g.
+    /// `fs.write:./checklist/**` -> "save files in ./checklist". Falls back to the
+    /// technical form for anything without a friendly phrasing, so the label is
+    /// always at least as informative as the raw capability. The exact capability
+    /// is still shown alongside this in prompts and denials.
+    pub fn plain(&self) -> String {
+        let cap = self;
+        let resource = cap.resource();
+        match (cap.module(), cap.action()) {
+            ("fs", "read") => match resource {
+                Some(r) => format!("read files in {}", tidy_resource(r)),
+                None => "read files".to_string(),
+            },
+            ("fs", "write") => match resource {
+                Some(r) => format!("save files in {}", tidy_resource(r)),
+                None => "save files".to_string(),
+            },
+            ("fs", "list") => match resource {
+                Some(r) => format!("see the list of files in {}", tidy_resource(r)),
+                None => "see the list of files".to_string(),
+            },
+            ("fs", "mkdir") => match resource {
+                Some(r) => format!("create folders in {}", tidy_resource(r)),
+                None => "create folders".to_string(),
+            },
+            ("fs", "remove") => match resource {
+                Some(r) => format!("delete files in {}", tidy_resource(r)),
+                None => "delete files".to_string(),
+            },
+            ("net", "connect") => match resource {
+                Some(r) => format!("connect to {r} over the network"),
+                None => "connect over the network".to_string(),
+            },
+            ("ui", "window") => "open a window on your screen".to_string(),
+            ("ui", "clipboard") if cap.resource() == Some("read") => {
+                "read from the clipboard".to_string()
+            }
+            ("ui", "clipboard") if cap.resource() == Some("write") => {
+                "copy to the clipboard".to_string()
+            }
+            // Say what the app gains, not how it is stored. "read files in
+            // checklist" described the mechanism and made saving a preference sound
+            // like reading the user's folders.
+            ("store", "kv") => "save its own settings and data".to_string(),
+            ("store", "sql") => "keep its own database".to_string(),
+            ("store", "secret") => "save sign-in details for itself".to_string(),
+            ("memory", "budget") => match cap.resource().and_then(|mib| mib.parse::<u64>().ok()) {
+                Some(mib) if mib >= 1024 && mib % 1024 == 0 => {
+                    format!("use up to {} GB of memory", mib / 1024)
+                }
+                Some(mib) => format!("use up to {mib} MB of memory"),
+                None => "use more memory than apps normally get".to_string(),
+            },
+            ("store", "group") => match cap.resource() {
+                Some(group) => format!("share data in \"{group}\" with other apps its maker names"),
+                None => "share data with other apps its maker names".to_string(),
+            },
+            // Says what the app does with it, not where the bytes come from.
+            // Someone reading a permission list wants to know an app rolls dice or
+            // generates a key, not that it reads an entropy pool.
+            ("random", "bytes") => "use random numbers".to_string(),
+            ("ui", "open-url") => "open links in your browser".to_string(),
+            ("ui", "notify") => "send you notifications".to_string(),
+            ("audio", "capture") => "listen through your microphone".to_string(),
+            ("audio", "playback") => "play sound through your speakers".to_string(),
+            ("time", "clock") => "read the current time".to_string(),
+            ("io", "stdout") => "print output".to_string(),
+            ("io", "stderr") => "print messages about what it is doing".to_string(),
+            ("io", "args") => "read what it was started with".to_string(),
+            ("io", "stdin") => "read what you type into it".to_string(),
+            ("io", "log") => "write to its own log".to_string(),
+            ("time", "monotonic") | ("time", "sleep") => "measure and wait for time".to_string(),
+            ("locale", _) => "read your language and number format".to_string(),
+            ("store", "shared") => "share data with people who have its invite code".to_string(),
+            ("camera", "capture") => "use your camera".to_string(),
+            ("location", "read") => "know where you are".to_string(),
+            ("bluetooth", "connect") => "connect to Bluetooth devices".to_string(),
+            ("photos", "add") => "add pictures to your photo library".to_string(),
+            ("gfx", "gpu") => "draw with your graphics card".to_string(),
+            ("ui", "menu") => "show its own menus".to_string(),
+            ("ui", "dialog") => "show you dialogs and file pickers".to_string(),
+            // Unknown module/action: the technical form is the honest fallback.
+            _ => cap.to_string(),
+        }
+    }
+}
+
+/// Trim a filesystem capability resource to something readable: drop a trailing
+/// glob so `./checklist/**` reads as `./checklist`.
+fn tidy_resource(resource: &str) -> String {
+    let trimmed = resource
+        .trim_end_matches("**")
+        .trim_end_matches('*')
+        .trim_end_matches('/');
+    if trimmed.is_empty() {
+        resource.to_string()
+    } else {
+        trimmed.to_string()
+    }
 }
 
 impl FromStr for Capability {

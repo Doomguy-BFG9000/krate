@@ -46,6 +46,8 @@ import { leaseRoute, leaseKeyRoute } from "./org-lease.js";
 // Release control and groups (IC-949, R). After org-lease.js: it guards
 // the lease command too.
 import { orgReleaseRoute } from "./org-releases.js";
+// What an approver sees and must confirm (IC-950); after release control.
+import { judgementCaps } from "./org-review.js";
 // The organisation store (IC-946), one SQLite-backed Durable Object per
 // organisation; wrangler.toml binds it as ORGS.
 export { Org };
@@ -7177,6 +7179,8 @@ function candidateArgs(judgement, digest, size, base) {
     signature: judgement.signature || { state: "absent" },
     // The organisation the bundle's mark names, or null (Addendum 5).
     mark: judgement.org_mark || null,
+    // What it asks to do, in plain words, for the approver (IC-950).
+    capabilities: judgementCaps(judgement),
     base,
   };
 }
@@ -7392,7 +7396,8 @@ async function orgRouteCore(request, url, env, identity) {
       if (!/^[0-9a-f]{64}$/.test(digest)) {
         return orgError(404, "digest-mismatch", slug, "a digest is the candidate's 64-hex sha256");
       }
-      return mutate("approve", () => ({ digest, base }));
+      // `accept`: the new capabilities the approver confirmed (IC-950).
+      return mutate("approve", (b) => ({ digest, base, accept: Array.isArray(b && b.accept) ? b.accept.slice(0, 200).map(String) : [] }));
     }
   }
   if (rest[0] === "releases" && rest.length === 1 && method === "GET") return ask("releases", { base });
