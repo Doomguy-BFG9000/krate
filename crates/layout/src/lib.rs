@@ -772,6 +772,17 @@ fn taffy_style_from_parts(
                 width: auto(),
                 height: Dimension::from_length(DEFAULT_CONTENT_ROW_HEIGHT),
             }
+        } else if kind == WidgetKind::Scroll {
+            // A scroll container may be smaller than what it holds -- that is
+            // what scrolling is. With an automatic minimum a flex item never
+            // shrinks below its content, so a growing scroll area of 500 rows
+            // was laid out 19,000 pixels tall inside a 600-pixel window and
+            // there was nothing to scroll (K-1070). CSS gives a scroll box a
+            // zero minimum for the same reason.
+            Size {
+                width: auto(),
+                height: Dimension::from_length(0.0),
+            }
         } else {
             Size {
                 width: auto(),
@@ -947,6 +958,42 @@ fn map_taffy(err: TaffyError) -> LayoutError {
 #[cfg(test)]
 mod tests {
     use krate_adapter_common::ui::WidgetStyle;
+
+    /// A growing scroll area holding far more than the window stays the
+    /// window's size, so there is something to scroll (K-1070:
+    /// apps/krate-bigscroll's 500 rows were laid out 19,000 pixels tall).
+    #[test]
+    fn a_growing_scroll_area_is_no_taller_than_its_window() {
+        let id = |raw: u64| WidgetId::new(raw).expect("id");
+        let mut tree = WidgetTree::new(WidgetNode::new(id(1), WidgetKind::Stack)).expect("tree");
+        let scroll = WidgetNode::new(id(2), WidgetKind::Scroll)
+            .with_parent(id(1))
+            .with_style(WidgetStyle {
+                grow: 1.0,
+                ..WidgetStyle::default()
+            })
+            .expect("style");
+        tree.upsert(scroll).expect("scroll");
+        for row in 0..500u64 {
+            let text = WidgetNode::new(id(10 + row), WidgetKind::Text)
+                .with_parent(id(2))
+                .with_style(WidgetStyle {
+                    height: Some(28.0),
+                    ..WidgetStyle::default()
+                })
+                .expect("style");
+            tree.upsert(text).expect("row");
+        }
+        let layout = compute_layout(&tree, LayoutViewport::new(360.0, 520.0).expect("viewport"))
+            .expect("layout");
+        let area = layout.rect(id(2)).expect("scroll rect");
+        assert!(area.height <= 520.0 && area.height > 400.0, "{area:?}");
+        let last = absolute_rect(&tree, &layout, id(509)).expect("last row");
+        assert!(
+            last.y > 10_000.0,
+            "the rows keep their own heights: {last:?}"
+        );
+    }
 
     use super::*;
 
