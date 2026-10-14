@@ -122,6 +122,19 @@ const KRATE_CAPABILITY_SPECS: &[CapabilitySpec] = &[
         "<host>:<port>",
         false,
     ),
+    // A company connection (IC-952): an organisation's admin set up an API's
+    // address and credential once, under this name, and the runtime adds the
+    // credential to this app's requests to that address. The app never holds
+    // the credential, and reaching the address needs no `net.connect`: the
+    // connection is the grant. Only an organisation's private app gets one,
+    // and only for the people and apps the organisation chose.
+    CapabilitySpec::resource_scoped(
+        CapabilityPhase::Phase2,
+        "net",
+        "connection",
+        "<connection-name>",
+        false,
+    ),
     CapabilitySpec::resource_free(CapabilityPhase::Phase2, "time", "clock", true),
     CapabilitySpec::resource_free(CapabilityPhase::Phase2, "time", "monotonic", true),
     CapabilitySpec::resource_free(CapabilityPhase::Phase2, "time", "sleep", true),
@@ -913,6 +926,10 @@ fn validate_capability_resource(
         return Ok(());
     }
 
+    if module == "net" && action == "connection" {
+        return validate_connection_name(resource);
+    }
+
     // A group name is refused rather than flattened: two names reducing to
     // one directory would share a store nobody meant to share.
     if module == "store" && action == "group" {
@@ -1054,6 +1071,27 @@ pub fn validate_memory_budget(resource: &str) -> std::result::Result<u64, String
         ));
     }
     Ok(mib)
+}
+
+/// A company connection's name, as an organisation's admin gave it on the
+/// hub (IC-952): 2 to 39 characters, lower-case letters, digits and dashes,
+/// starting with a letter. The hub holds names to the same shape, so a name
+/// that passes here is one an admin could have made.
+pub fn validate_connection_name(name: &str) -> std::result::Result<(), String> {
+    let ok = (2..=39).contains(&name.len())
+        && name.as_bytes()[0].is_ascii_lowercase()
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-');
+    if ok {
+        Ok(())
+    } else {
+        Err(format!(
+            "connection name `{name}` is 2 to 39 characters: lower-case letters, digits and \
+             dashes, starting with a letter -- the name your organisation's admin gave it, \
+             such as `finance-api`"
+        ))
+    }
 }
 
 pub fn validate_group_name(name: &str) -> std::result::Result<(), String> {

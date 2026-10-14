@@ -761,8 +761,13 @@ fn capability_allows(grant: &Capability, required: &Capability) -> bool {
             else {
                 return false;
             };
-            if grant.module() == "net" {
+            if grant.module() == "net" && grant.action() == "connect" {
                 return net_resource_pattern_matches(&grant_resource, &required_resource);
+            }
+            // A company connection is named exactly (IC-952): one name, no
+            // pattern, so a grant for `finance-api` is never `finance-*`.
+            if grant.module() == "net" && grant.action() == "connection" {
+                return grant_resource == required_resource;
             }
             // `fs.list:images/**` must cover listing `images` itself. The glob
             // matches paths *inside* the folder, so the one operation the
@@ -820,7 +825,7 @@ fn normalize_resource(module: &str, action: &str, resource: &str) -> Option<Stri
             .ok()
             .map(|path| path.as_str().to_string());
     }
-    if module == "net" {
+    if module == "net" && action == "connect" {
         return normalize_net_resource(resource);
     }
     Some(resource.to_string())
@@ -2034,5 +2039,26 @@ rationale = "listens"
                 network: None,
             });
         assert!(!policy.allows(&cap("ui.clipboard:read")));
+    }
+
+    /// A company connection is granted by its exact name (IC-952): no
+    /// pattern, no prefix, and never mistaken for a network place.
+    #[test]
+    fn a_connection_grant_names_one_connection_exactly() {
+        let policy = SessionPolicy::from_grants([cap("net.connection:finance-api")]);
+        assert!(policy.allows(&cap("net.connection:finance-api")));
+        assert!(!policy.allows(&cap("net.connection:finance-apis")));
+        assert!(!policy.allows(&cap("net.connection:payroll-api")));
+        assert!(!policy.allows(&cap("net.connect:finance-api:443")));
+        let ceiling = OrgCeiling {
+            deny: Vec::new(),
+            network: Some(vec![
+                OrgCeiling::parse_network("*.acme.com:443").expect("pattern")
+            ]),
+        };
+        assert!(
+            ceiling.blocks(&cap("net.connection:finance-api")).is_none(),
+            "the network ceiling judges the address a request goes to, at the request"
+        );
     }
 }

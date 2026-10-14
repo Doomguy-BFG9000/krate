@@ -1343,6 +1343,15 @@ fn plain_capability(cap: &str) -> Option<String> {
                 None => "reach the internet".to_string(),
             })
         }
+        // IC-952: the organisation's API, with a credential the app never sees.
+        "net.connection" => {
+            return Some(match scope {
+                Some(name) => format!(
+                    "use your organisation's {name} connection -- the app never sees its credential"
+                ),
+                None => "use one of your organisation's connections".to_string(),
+            })
+        }
         // The dialog asks are grants a person makes AT RUN TIME by
         // clicking; the wall line's job is to say what the click will mean.
         "ui.dialog" => {

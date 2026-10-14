@@ -21,6 +21,9 @@ use clap::{Subcommand, ValueEnum};
 
 use crate::github_auth;
 
+/// `krate org connection ...` (IC-952).
+mod connection;
+
 /// A role in an organisation, exactly as the hub names it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum Role {
@@ -141,6 +144,12 @@ pub enum OrgCommand {
     Group {
         #[command(subcommand)]
         command: GroupCommand,
+    },
+    /// Company connections: an API's address and credential, set up once,
+    /// that the organisation's apps use without ever holding the credential.
+    Connection {
+        #[command(subcommand)]
+        command: connection::ConnectionCommand,
     },
 }
 
@@ -433,6 +442,7 @@ pub enum Action<'a> {
     SetCurrent,
     Audience,
     Groups,
+    Connection,
 }
 
 /// A refusal in plain words: what the reason means here, and the next step.
@@ -508,6 +518,10 @@ pub fn words(refusal: &HubRefusal, org: &str, me: &str, action: Action) -> Strin
                     owner_or_admin.clone(),
                 ),
                 Action::Groups => (format!("manage {org}'s groups"), owner_or_admin.clone()),
+                Action::Connection => (
+                    format!("set up or change {org}'s connections"),
+                    owner_or_admin.clone(),
+                ),
             };
             format!("your role in {org} cannot {what}: ask {who}")
         }
@@ -663,6 +677,33 @@ pub fn words(refusal: &HubRefusal, org: &str, me: &str, action: Action) -> Strin
         "group-invalid" => "nothing changed: a group name is 1 to 39 lower-case letters, \
              digits and dashes, starting with a letter (like finance or field-ops)"
             .to_string(),
+        "no-such-connection" => format!(
+            "nothing changed: {org} has no connection by that name. `krate org connection list \
+             {org}` lists them; {owner_or_admin} makes one with `krate org connection create`"
+        ),
+        "connection-taken" => format!(
+            "nothing changed: {org} already has a connection by that name. Give it a new \
+             credential with `krate org connection replace {org} <name>`, or pick another name"
+        ),
+        "connection-invalid" => format!(
+            "nothing changed: {}. `krate org connection create --help` shows each part",
+            hub_detail(refusal)
+        ),
+        "credential-required" => "nothing changed: moving a connection to another address \
+             needs its credential again, because the stored one is never sent anywhere new: \
+             remove it and create it again with the new address"
+            .to_string(),
+        "connections-off" => format!(
+            "company connections are switched off on this hub: {}",
+            hub_detail(refusal)
+        ),
+        "connection-not-in-audience" | "app-not-allowed" | "connection-not-requested" => {
+            format!(
+                "the app does not get the connection's credential, so nothing is sent with it \
+                 ({}): ask {owner_or_admin} to change who and which apps may use it",
+                hub_detail(refusal).split(" -- ").next().unwrap_or_default()
+            )
+        }
         _ => format!("the hub refused: {}", refusal.message),
     }
 }
@@ -1278,6 +1319,7 @@ pub fn run(command: OrgCommand, hub_override: Option<&str>) -> Result<u8> {
         }
         OrgCommand::Release { command } => release_command(&client, &me, command),
         OrgCommand::Group { command } => group_command(&client, &me, command),
+        OrgCommand::Connection { command } => connection::run(&client, &me, command),
         OrgCommand::Audit { slug } => {
             let answer = worded(
                 client.send("GET", &format!("/orgs/{}/audit", seg(&slug)?), &Body::Empty),
@@ -2032,6 +2074,14 @@ mod tests {
             "no-such-group",
             "group-taken",
             "group-invalid",
+            "no-such-connection",
+            "connection-taken",
+            "connection-invalid",
+            "credential-required",
+            "connections-off",
+            "connection-not-in-audience",
+            "app-not-allowed",
+            "connection-not-requested",
         ];
         for reason in reasons {
             let refusal = HubRefusal {

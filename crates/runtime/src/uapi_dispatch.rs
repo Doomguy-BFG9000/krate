@@ -616,7 +616,7 @@ impl<'a> UapiDispatcher<'a> {
         &self,
         req: HttpRequest,
     ) -> std::result::Result<HttpResponse, NetDispatchError> {
-        self.check_net_request(&req)?;
+        let req = self.prepare_net_request(req)?;
         self.adapter.net().fetch(req).map_err(Into::into)
     }
 
@@ -629,8 +629,72 @@ impl<'a> UapiDispatcher<'a> {
         &self,
         req: HttpRequest,
     ) -> std::result::Result<Option<FetchJob>, NetDispatchError> {
-        self.check_net_request(&req)?;
+        let req = self.prepare_net_request(req)?;
         Ok(self.adapter.net().fetch_job(req))
+    }
+
+    /// Judge a request and make it ready to send (IC-952).
+    ///
+    /// A request inside a company connection's base is that connection's:
+    /// it is sent only within the connection's allow, only with the
+    /// credential in hand, and only where the organisation's network ceiling
+    /// allows -- and then the credential header is added here, after the
+    /// request has left the app, replacing any header of that name the app
+    /// set. Every other request is judged by `net.connect` as before and
+    /// never carries a credential.
+    pub fn prepare_net_request(
+        &self,
+        mut req: HttpRequest,
+    ) -> std::result::Result<HttpRequest, NetDispatchError> {
+        use crate::connections::Route;
+        let policy = self.guard.policy();
+        let granted = |name: &str| {
+            self.guard
+                .check(&UapiCall::Net(NetCall::Connection {
+                    name: name.to_string(),
+                }))
+                .is_ok()
+        };
+        match self
+            .guard
+            .connections()
+            .route(http_method_name(req.method), &req.url, granted)
+        {
+            Route::Plain => {
+                self.check_net_request(&req)?;
+                Ok(req)
+            }
+            Route::Refused(words) => Err(NetDispatchError::Policy(words)),
+            Route::Credential {
+                name,
+                header_name,
+                value,
+                host,
+                port,
+            } => {
+                // The organisation's network ceiling still applies: a
+                // connection is not a way around the machine's own rules.
+                let place = krate_manifest::Capability::new(
+                    "net",
+                    "connect",
+                    Some(&format!("{host}:{port}")),
+                )
+                .map_err(|_| NetDispatchError::InvalidUrl)?;
+                if policy.organisation_blocks(&place).is_some() {
+                    return Err(NetDispatchError::Policy(format!(
+                        "the {name} connection did not send this request: this computer's \
+                         organisation does not allow reaching {host}:{port}"
+                    )));
+                }
+                req.headers
+                    .retain(|header| !header.name.eq_ignore_ascii_case(header_name));
+                req.headers.push(Header {
+                    name: header_name.to_string(),
+                    value: value.to_string(),
+                });
+                Ok(req)
+            }
+        }
     }
 
     /// The permission half of a fetch, on its own.
@@ -915,6 +979,18 @@ fn map_fs_policy(err: UapiError) -> FsDispatchError {
     }
 }
 
+fn http_method_name(method: HttpMethod) -> &'static str {
+    match method {
+        HttpMethod::Get => "GET",
+        HttpMethod::Post => "POST",
+        HttpMethod::Put => "PUT",
+        HttpMethod::Delete => "DELETE",
+        HttpMethod::Patch => "PATCH",
+        HttpMethod::Head => "HEAD",
+        HttpMethod::Options => "OPTIONS",
+    }
+}
+
 fn map_net_policy(err: UapiError) -> NetDispatchError {
     if matches!(
         err,
@@ -967,6 +1043,8 @@ mod tests {
         timezone: usize,
         format_date: usize,
         format_number: usize,
+        /// Every request that reached the transport, as it was sent.
+        sent: Vec<HttpRequest>,
     }
 
     #[derive(Clone, Default)]
@@ -1167,8 +1245,9 @@ mod tests {
     }
 
     impl NetAdapter for RecordingAdapter {
-        fn fetch(&self, _req: HttpRequest) -> std::result::Result<HttpResponse, AdapterError> {
+        fn fetch(&self, req: HttpRequest) -> std::result::Result<HttpResponse, AdapterError> {
             self.calls.borrow_mut().net_fetch += 1;
+            self.calls.borrow_mut().sent.push(req);
             Ok(HttpResponse {
                 status: 200,
                 headers: Vec::new(),
@@ -2186,5 +2265,137 @@ mod tests {
 
         assert_eq!(endpoint.host, "example.com");
         assert_eq!(endpoint.port, 443);
+    }
+
+    // ---------------------------------------------- company connections (IC-952)
+
+    const SECRET: &str = "Bearer sk-dispatch-test-only";
+
+    fn finance_guard(grants: &[&str], ceiling: Option<&str>) -> UapiGuard {
+        let mut policy = SessionPolicy::from_cli_grants(
+            &grants.iter().map(|g| g.to_string()).collect::<Vec<_>>(),
+        )
+        .expect("policy");
+        if let Some(allowed) = ceiling {
+            policy = policy.with_organisation(krate_policy::OrgCeiling {
+                deny: Vec::new(),
+                network: Some(vec![
+                    krate_policy::OrgCeiling::parse_network(allowed).expect("pattern")
+                ]),
+            });
+        }
+        UapiGuard::new(policy).with_connections(crate::connections::Connections::new(vec![
+            crate::connections::Connection {
+                name: "finance-api".into(),
+                base: "https://api.acme.example/finance".into(),
+                methods: vec!["GET".into()],
+                paths: vec!["/".into()],
+                state: crate::connections::ConnectionState::Ready {
+                    header_name: "Authorization".into(),
+                    value: crate::connections::Credential::new(SECRET),
+                },
+            },
+        ]))
+    }
+
+    fn get(url: &str, headers: Vec<Header>) -> HttpRequest {
+        HttpRequest {
+            method: HttpMethod::Get,
+            url: url.to_string(),
+            headers,
+            body: Vec::new(),
+            timeout_millis: None,
+        }
+    }
+
+    #[test]
+    fn a_connection_adds_its_credential_over_the_apps_own_header() {
+        let adapter = RecordingAdapter::default();
+        let guard = finance_guard(&["net.connection:finance-api"], None);
+        let dispatcher = UapiDispatcher::new(&guard, &adapter);
+        // No net.connect at all: the connection is the grant. The app's own
+        // Authorization is replaced, not sent beside it.
+        dispatcher
+            .net_fetch(get(
+                "https://api.acme.example/finance/invoices",
+                vec![Header {
+                    name: "authorization".into(),
+                    value: "Bearer the-apps-guess".into(),
+                }],
+            ))
+            .expect("inside the base and its allow");
+        let calls = adapter.calls.borrow();
+        let auth: Vec<_> = calls.sent[0]
+            .headers
+            .iter()
+            .filter(|h| h.name.eq_ignore_ascii_case("authorization"))
+            .map(|h| h.value.as_str())
+            .collect();
+        assert_eq!(auth, vec![SECRET]);
+    }
+
+    #[test]
+    fn without_the_grant_the_base_is_an_ordinary_host() {
+        let adapter = RecordingAdapter::default();
+        let guard = finance_guard(&["net.connect:api.acme.example:443"], None);
+        let dispatcher = UapiDispatcher::new(&guard, &adapter);
+        dispatcher
+            .net_fetch(get("https://api.acme.example/finance/invoices", Vec::new()))
+            .expect("an ordinary granted host");
+        assert!(
+            adapter.calls.borrow().sent[0].headers.is_empty(),
+            "no credential without the grant"
+        );
+
+        let none = finance_guard(&[], None);
+        let adapter = RecordingAdapter::default();
+        let err = UapiDispatcher::new(&none, &adapter)
+            .net_fetch(get("https://api.acme.example/finance/invoices", Vec::new()))
+            .expect_err("neither grant");
+        assert!(matches!(err, NetDispatchError::PermissionDenied), "{err:?}");
+        assert_eq!(adapter.calls.borrow().net_fetch, 0);
+    }
+
+    #[test]
+    fn a_refused_connection_request_never_reaches_the_transport() {
+        let adapter = RecordingAdapter::default();
+        let guard = finance_guard(&["net.connection:finance-api"], None);
+        let dispatcher = UapiDispatcher::new(&guard, &adapter);
+        let mut post = get("https://api.acme.example/finance/invoices", Vec::new());
+        post.method = HttpMethod::Post;
+        match dispatcher.net_fetch(post) {
+            Err(NetDispatchError::Policy(words)) => assert!(words.contains("GET only"), "{words}"),
+            other => panic!("{other:?}"),
+        }
+        // The background path judges the same way.
+        let mut post = get("https://api.acme.example/finance/invoices", Vec::new());
+        post.method = HttpMethod::Post;
+        assert!(matches!(
+            dispatcher.net_fetch_job(post),
+            Err(NetDispatchError::Policy(_))
+        ));
+        assert_eq!(adapter.calls.borrow().net_fetch, 0);
+    }
+
+    #[test]
+    fn the_organisations_network_ceiling_still_applies_to_a_connection() {
+        let adapter = RecordingAdapter::default();
+        let guard = finance_guard(
+            &["net.connection:finance-api"],
+            Some("*.globex.example:443"),
+        );
+        let dispatcher = UapiDispatcher::new(&guard, &adapter);
+        match dispatcher.net_fetch(get("https://api.acme.example/finance/invoices", Vec::new())) {
+            Err(NetDispatchError::Policy(words)) => {
+                assert!(words.contains("does not allow reaching"), "{words}")
+            }
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(adapter.calls.borrow().net_fetch, 0);
+        let inside = finance_guard(&["net.connection:finance-api"], Some("*.acme.example:443"));
+        let adapter = RecordingAdapter::default();
+        UapiDispatcher::new(&inside, &adapter)
+            .net_fetch(get("https://api.acme.example/finance/invoices", Vec::new()))
+            .expect("inside the ceiling");
     }
 }

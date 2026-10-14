@@ -23,6 +23,7 @@ mod api_author;
 mod api_key;
 mod audit;
 mod authoring_context;
+mod connections;
 mod fleet;
 mod github_auth;
 mod krate_mode;
@@ -16076,6 +16077,24 @@ fn run_component_inner(request: RunRequest) -> Result<u8> {
         .mem_limit
         .or(declared_budget)
         .unwrap_or(DEFAULT_MEMORY_MIB);
+    // Company connections (IC-952): an organisation's private app that was
+    // granted `net.connection:<name>` gets that connection's credential for
+    // this run, from the hub, into memory only. A picture is Krate looking,
+    // not a person using the organisation's API.
+    let connections = if request.for_screenshot {
+        krate_runtime::connections::Connections::default()
+    } else {
+        connections::resolve(manifest, &policy, || {
+            let access::Mark::Signed(slug) = access::mark_of(bundle.as_ref()?) else {
+                return None;
+            };
+            let digest = match fetched_sha256.as_deref() {
+                Some(sha256) => sha256.to_string(),
+                None => krate_bundle::sha256_hex(&std::fs::read(&request.target).ok()?),
+            };
+            Some((slug, digest))
+        })
+    };
     let config = Config {
         fuel: request.fuel,
         memory_bytes: memory_mib
@@ -16143,6 +16162,7 @@ fn run_component_inner(request: RunRequest) -> Result<u8> {
             )
         }),
         app_groups,
+        connections,
         phase3_ui_mode: request.ui_mode,
         screenshot_path: request.screenshot_path.clone(),
         screenshot_scale: request.screenshot_scale,
@@ -18672,6 +18692,14 @@ fn human_label(cap: &Capability) -> String {
         ("net", "connect") => match resource {
             Some(r) => format!("connect to {r} over the network"),
             None => "connect over the network".to_string(),
+        },
+        // IC-952: the organisation set the address and credential up; the
+        // app never holds the credential.
+        ("net", "connection") => match resource {
+            Some(r) => format!(
+                "use your organisation's {r} connection (the app never sees its credential)"
+            ),
+            None => "use one of your organisation's connections".to_string(),
         },
         ("ui", "window") => "open a window on your screen".to_string(),
         ("ui", "clipboard") if cap.resource() == Some("read") => {

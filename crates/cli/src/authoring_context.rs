@@ -875,6 +875,7 @@ fn capability_note(pattern: &str) -> &'static str {
         "store.secret" => "secrets encrypted at rest (passwords, tokens); not the OS keychain",
         "random.bytes" => "entropy (also what getrandom/rand need)",
         "net.connect" => "reach a host and port",
+        "net.connection" => "an organisation's company connection by name: its API, with a credential Krate adds and the app never sees (section 2c, rule 8)",
         "time.clock" => "wall-clock time",
         "time.monotonic" => "a monotonic timer",
         "time.sleep" => "sleep",
@@ -959,6 +960,22 @@ Rust use the `net-krate` crate's `TcpStream`, `UdpSocket` and \
 `lookup_host`, which have std's shape (and tokio and quinn adapters). A \
 UDP socket hears only addresses it sent to, and an app cannot listen for \
 incoming connections yet.\n\n\
+8. **An organisation's own API: a company connection.** When the app is \
+for an organisation (\"for finance, reading the Finance API\") and its admin \
+set that API up as a connection, declare `net.connection:<name>` (the name \
+the admin gave it, such as `finance-api`) and nothing else for it: no \
+`net.connect`, no `store.secret`, no token box. Make ordinary `net` requests \
+to the connection's address (`https://api.acme.com/finance/...`) WITHOUT any \
+Authorization header -- Krate adds the organisation's credential on the way \
+out, and the app never holds it, so never ask the person for a key and never \
+put one in the code. Only the methods and paths the admin allowed are sent \
+(GET alone unless they said more); anything else, a person outside its \
+audience, or no connection to the hub comes back as `net-error::other` with \
+a sentence saying why -- show that sentence as it is. It works only in the \
+organisation's own signed app (`krate sign --org <org>`), so a plain local \
+run says the connection is not available: handle that error like being \
+offline, rule 5. A server that echoes request headers back would show the \
+credential to the app, so never display raw response headers.\n\n\
 # 2d. Sharing data between people: the shared store\n\n\
 For \"my wife and I see the same list\", \"a meal plan the family edits\", \
 \"share this with my roommate\" -- declare `store.shared` and use \

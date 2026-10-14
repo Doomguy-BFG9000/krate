@@ -57,6 +57,7 @@ impl UapiCall {
             Self::Io(call) => format!("io.{call}"),
             Self::Fs(call) => call.to_capability_string(),
             Self::Net(NetCall::Connect { host, port }) => format!("net.connect:{host}:{port}"),
+            Self::Net(NetCall::Connection { name }) => format!("net.connection:{name}"),
             Self::Time(call) => format!("time.{call}"),
             Self::Locale(call) => format!("locale.{call}"),
             Self::Ui(call) => call.to_capability_string(),
@@ -265,7 +266,15 @@ fn is_picked_path(path: &str) -> bool {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NetCall {
-    Connect { host: String, port: u16 },
+    Connect {
+        host: String,
+        port: u16,
+    },
+    /// Use a company connection by name (IC-952): the grant that lets the
+    /// runtime add the connection's credential to a request to its address.
+    Connection {
+        name: String,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -370,15 +379,32 @@ impl fmt::Display for UiDialogResource {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UapiGuard {
     policy: SessionPolicy,
+    /// The company connections this run may use (IC-952). Shared, because
+    /// the guard is cloned into every host of the run and a credential is
+    /// kept in one place.
+    connections: std::sync::Arc<crate::connections::Connections>,
 }
 
 impl UapiGuard {
     pub fn new(policy: SessionPolicy) -> Self {
-        Self { policy }
+        Self {
+            policy,
+            connections: Default::default(),
+        }
+    }
+
+    /// The same guard, with the company connections the caller resolved.
+    pub fn with_connections(mut self, connections: crate::connections::Connections) -> Self {
+        self.connections = std::sync::Arc::new(connections);
+        self
     }
 
     pub fn policy(&self) -> &SessionPolicy {
         &self.policy
+    }
+
+    pub fn connections(&self) -> &crate::connections::Connections {
+        &self.connections
     }
 
     pub fn check(&self, call: &UapiCall) -> Result<Capability> {
@@ -798,6 +824,9 @@ mod tests {
             UapiCall::Net(NetCall::Connect {
                 host: "example.com".to_string(),
                 port: 443,
+            }),
+            UapiCall::Net(NetCall::Connection {
+                name: "finance-api".to_string(),
             }),
             UapiCall::Time(TimeCall::Clock),
             UapiCall::Time(TimeCall::Monotonic),
