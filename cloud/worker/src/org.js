@@ -18,6 +18,12 @@
 //
 // A denial is a committed transaction too: it appends its audit event and
 // returns the refusal. Only a bug throws, and a throw rolls everything back.
+//
+// Company sign-in (org-sso.js) and offline access (org-lease.js) add their
+// own commands and tables to this class; see the bottom of this file.
+
+import { SSO_SCHEMA, installSso } from "./org-sso.js";
+import { LEASE_SCHEMA, installLeases } from "./org-lease.js";
 
 /// The executable role matrix (the contract's table, ch 14 7.2). Each
 /// action maps a role to "yes", or to a narrower rule the command applies:
@@ -308,7 +314,7 @@ const SCHEMA = [
 ];
 
 /// The commands that change state. Each takes an Idempotency-Key.
-const MUTATIONS = new Set([
+export const MUTATIONS = new Set([
   "create",
   "invite",
   "revoke-invite",
@@ -337,7 +343,7 @@ export class Org {
     this.ctx = ctx;
     this.env = env;
     this.sql = ctx.storage.sql;
-    for (const statement of SCHEMA) this.sql.exec(statement);
+    for (const statement of [...SCHEMA, ...SSO_SCHEMA, ...LEASE_SCHEMA]) this.sql.exec(statement);
   }
 
   /// Seconds since the epoch. A method so a test can move the clock.
@@ -1087,3 +1093,6 @@ export class Org {
     return this.ok({ events: this.rows("SELECT * FROM audit ORDER BY seq") });
   }
 }
+
+installSso(Org);
+installLeases(Org);
