@@ -62,6 +62,9 @@
     ctx.slug = slug;
     ctx.here = HERE + "&tab=" + S.tab;
     ctx.message = res.body && res.body.message;
+    // What a withdrawn version and an app for other groups say (IC-949, R).
+    if (res.body && res.body.withdrawn) ctx.withdrawn = res.body.withdrawn;
+    if (res.body && res.body.groups) ctx.groups = res.body.groups;
     return K.refusal(res.body ? res.body.error : "hub-error", ctx);
   }
 
@@ -128,6 +131,13 @@
     var d = $("sheet");
     $("sheetH").textContent = opts.title;
     $("sheetP").textContent = opts.body;
+    // Points under the sentence, one consequence each; `key` ones stand out.
+    var pts = $("sheetPts");
+    pts.textContent = "";
+    (opts.points || []).forEach(function (pt) {
+      if (pt) pts.appendChild(el("li", { class: pt.key ? "key" : "", text: pt.text || pt }));
+    });
+    pts.hidden = !pts.children.length;
     var dg = $("sheetDigest");
     dg.textContent = "";
     var box = $("sheetIn"), inp = $("sheetInput");
@@ -146,6 +156,16 @@
     yes.textContent = opts.yes;
     yes.disabled = false;
     yes.onclick = function () {
+      // A check in the page first (a required reason): it keeps the sheet
+      // open with Yes still there.
+      var said = opts.check ? opts.check(inp.value) : null;
+      if (said) {
+        why.textContent = "";
+        why.appendChild(K.refusalBlock(said, "warn"));
+        why.hidden = false;
+        inp.focus();
+        return;
+      }
       yes.disabled = true;
       yes.textContent = opts.busy || "Working";
       opts.act(inp.value).then(function (res) {
@@ -166,7 +186,15 @@
   }
 
   // ---------------------------------------------------------- releases
+  /// Releases by app, with the current version, history, withdraw, set
+  /// current and audience (releases.js, IC-949 R); the flat list below is
+  /// what a hub without those routes still answers.
   function releases(pane) {
+    if (R) { R.pane(pane); return; }
+    flatReleases(pane);
+  }
+
+  function flatReleases(pane) {
     K.api("GET", "/orgs/" + slug + "/releases").then(function (res) {
       head(pane, "Releases", "Approved apps. Everyone in " + (S.org.name || slug) + " can open them; a copied link alone opens nothing.");
       if (!res.ok) return failed(pane, res, { what: "see the releases" });
@@ -308,6 +336,7 @@
         : "Who is in " + (S.org.name || slug) + ", and what each person may do.");
       var roles = K.invitable(role);
       if (roles.length) pane.appendChild(inviteCard(roles));
+      var groupsAt = el("div", { hidden: true });
 
       var active = S.members.filter(function (m) { return (m.state || "active") === "active"; });
       var gone = S.members.filter(function (m) { return m.state === "removed"; });
@@ -338,6 +367,9 @@
         });
         pane.appendChild(g);
       }
+      // Groups (IC-949, R), below the people they are made of.
+      pane.appendChild(groupsAt);
+      if (R) R.groupsCard(groupsAt, active);
     });
   }
 
@@ -639,10 +671,18 @@
     });
   }
 
+  // Release control and groups (releases.js); absent, the flat list.
+  var R = null;
   P = window.KrateOrgParts({
     S: S, slug: slug, words: words, confirmSheet: confirmSheet, head: head, failed: failed,
     toast: toast, show: function (id) { show(id); }, refresh: refresh, roleOf: roleOf, isMe: isMe,
   });
+  if (window.KrateOrgReleases) {
+    R = window.KrateOrgReleases({
+      S: S, slug: slug, words: words, confirmSheet: confirmSheet, head: head, failed: failed,
+      toast: toast, show: function (id) { show(id); }, roleOf: roleOf, P: P, flat: flatReleases,
+    });
+  }
 
   if (!slug) { location.replace("/orgs/"); return; }
   if (!/^[a-z][a-z0-9-]{1,38}$/.test(slug)) { stop("no-such-org"); return; }
