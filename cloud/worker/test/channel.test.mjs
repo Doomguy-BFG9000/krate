@@ -40,7 +40,7 @@ function env() {
 const req = (path, init = {}) => new Request(`https://hub.example${path}`, init);
 async function publish(e, who, bytes, name, extra = {}) {
   const res = await worker.fetch(
-    req("/publish", { method: "POST", headers: { authorization: `Bearer krs_${who}`, "x-krate-name": name, ...extra }, body: bytes }),
+    req("/publish", { method: "POST", headers: { authorization: `Bearer gho_${who}`, "x-krate-name": name, ...extra }, body: bytes }),
     e,
   );
   assert.strictEqual(res.status, 200, await res.clone().text());
@@ -89,7 +89,7 @@ assert.strictEqual(dl.headers.get("cache-control"), "no-store", "a channel resol
   assert.strictEqual((await channel(e2, "/c/alice/my-notes")).body.current, a.id, "bob publishing the same name did not touch alice's channel");
   // Bob re-POSTing alice's exact bytes: the listing stays alice's (IC-387),
   // and so does her channel.
-  await worker.fetch(req("/publish", { method: "POST", headers: { authorization: "Bearer krs_bob", "x-krate-name": "My Notes" }, body: V1 }), e2);
+  await worker.fetch(req("/publish", { method: "POST", headers: { authorization: "Bearer gho_bob", "x-krate-name": "My Notes" }, body: V1 }), e2);
   assert.strictEqual((await channel(e2, "/c/alice/my-notes")).body.current, a.id, "a re-POST of her bytes by someone else moves nothing");
 }
 
@@ -114,7 +114,7 @@ assert.strictEqual(dl.headers.get("cache-control"), "no-store", "a channel resol
   assert.strictEqual(await e2.APPS.get(`app:${a1.id}`), null, "the older listing was retired");
   const b = await publish(e2, "bob", V1, "Bobs Notes");
   assert.strictEqual(b.id, a1.id, "bob now lists alice's old bytes");
-  await worker.fetch(req(`/app/${a2.id}`, { method: "DELETE", headers: { authorization: "Bearer krs_alice" } }), e2);
+  await worker.fetch(req(`/app/${a2.id}`, { method: "DELETE", headers: { authorization: "Bearer gho_alice" } }), e2);
   assert.strictEqual((await channel(e2, "/c/alice/my-notes")).status, 404, "her channel is gone rather than pointing at bob's listing");
 }
 
@@ -129,7 +129,7 @@ assert.strictEqual(dl.headers.get("cache-control"), "no-store", "a channel resol
 }
 
 /* ---- unpublishing the current release retreats the channel (470) ------- */
-const un = await worker.fetch(req(`/app/${second.id}`, { method: "DELETE", headers: { authorization: "Bearer krs_alice" } }), e);
+const un = await worker.fetch(req(`/app/${second.id}`, { method: "DELETE", headers: { authorization: "Bearer gho_alice" } }), e);
 assert.strictEqual(un.status, 200, await un.text());
 c = await channel(e, "/c/alice/my-notes");
 assert.strictEqual(c.status, 200, "the earlier release's bytes and links were kept, so the name still resolves");

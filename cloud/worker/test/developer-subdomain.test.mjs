@@ -18,6 +18,7 @@ import assert from "node:assert";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import "./github-stub.mjs";
 import worker from "../src/index.js";
 import { r2Mock } from "./r2-mock.mjs";
 
@@ -60,7 +61,7 @@ async function publish(e, name, bytes) {
   const res = await worker.fetch(
     new Request("https://hub.krate.tech/publish", {
       method: "POST",
-      headers: { authorization: "Bearer krs_alice", "x-krate-name": name },
+      headers: { authorization: "Bearer gho_alice", "x-krate-name": name },
       body: bytes,
     }),
     e,

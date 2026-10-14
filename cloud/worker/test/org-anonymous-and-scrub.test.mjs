@@ -63,7 +63,7 @@ test("1,000 requests with no session add zero audit events, reach no store, and 
     ["GET", "/orgs/acme/releases"],
     ["POST", "/orgs/acme/invites"],
     ["POST", `/orgs/acme/candidates/${x}/approve`],
-    ["DELETE", "/orgs/acme/members/alice"],
+    ["DELETE", "/orgs/acme/members/github%3Aalice"],
     ["GET", "/orgs/somewhere-new"],
   ];
   const counts = { refused: 0, limited: 0, other: 0 };
@@ -111,7 +111,7 @@ async function bigRelease(env, bytes) {
     await worker.fetch(
       new Request("https://hub.example/publish/big/start", {
         method: "POST",
-        headers: { authorization: "Bearer krs_carol", "content-type": "application/json" },
+        headers: { authorization: "Bearer gho_carol", "content-type": "application/json" },
         body: JSON.stringify({ kind: "bundle", size: bytes.byteLength, sha256: sha, org: "acme" }),
       }),
       env,

@@ -12,6 +12,7 @@ import { DatabaseSync } from "node:sqlite";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import "./github-stub.mjs";
 import worker, { Org } from "../src/index.js";
 import { r2Mock } from "./r2-mock.mjs";
 
@@ -108,11 +109,27 @@ export function orgEnv(extra = {}) {
   return env;
 }
 
+/* The bearer token for `who`. A bare name is that GitHub user (a stubbed
+ * GitHub token, test/github-stub.mjs): principal github:<who>. An address
+ * is an email account that proved that inbox, signed in with a Krate
+ * session, whose `login` is the part before the @ as a real one's is:
+ * principal email:<who>. */
+export function tokenFor(env, who) {
+  if (!who.includes("@")) return `gho_${who}`;
+  const id = `mail-${who.replace(/[^a-z0-9]/gi, "-")}`;
+  env._kv.set(`session:krs_${id}`, id);
+  env._kv.set(
+    `user:${id}`,
+    JSON.stringify({ id, login: who.split("@")[0], name: "", email: who, avatar_url: "", providers: ["email"], verified_emails: [who.toLowerCase()] }),
+  );
+  return `krs_${id}`;
+}
+
 /* One request to the worker as `who` (or nobody), answering
  * { status, body } with the body parsed when it is JSON. */
 export async function call(env, who, method, path, { json: payload, bytes, key, headers = {} } = {}) {
   const h = { ...headers };
-  if (who) h.authorization = `Bearer krs_${who}`;
+  if (who) h.authorization = `Bearer ${tokenFor(env, who)}`;
   if (key) h["idempotency-key"] = key;
   let body;
   if (payload !== undefined) {
@@ -145,7 +162,7 @@ export async function acme(env, { root = KEYS.root, revocations = REVOCATIONS } 
     ok(await call(env, "alice", "PUT", "/orgs/acme/root-key", { json: { public_key: root, revocations } }), "root key");
   }
   for (const [login, role] of [["bob", "reviewer"], ["carol", "developer"], ["dan", "recipient"]]) {
-    const inv = ok(await call(env, "alice", "POST", "/orgs/acme/invites", { json: { login, role } }), `invite ${login}`);
+    const inv = ok(await call(env, "alice", "POST", "/orgs/acme/invites", { json: { github: login, role } }), `invite ${login}`);
     ok(await call(env, login, "POST", `/orgs/acme/invites/${inv.body.code}/accept`), `accept ${login}`);
   }
 }

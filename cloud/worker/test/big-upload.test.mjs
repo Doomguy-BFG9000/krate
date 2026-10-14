@@ -9,6 +9,7 @@
  *   node cloud/worker/test/big-upload.test.mjs
  */
 import assert from "node:assert";
+import "./github-stub.mjs";
 import worker from "../src/index.js";
 import { r2Mock, sha256Hex } from "./r2-mock.mjs";
 
@@ -89,7 +90,7 @@ function judgement(name = "Big") {
   };
 }
 
-async function start(e, bytes, extra = {}, who = "krs_alice") {
+async function start(e, bytes, extra = {}, who = "gho_alice") {
   const res = await worker.fetch(
     req("POST", "/publish/big/start", {
       headers: { authorization: `Bearer ${who}`, "content-type": "application/json" },
@@ -169,6 +170,11 @@ async function publishBig(e, bytes, name = "Big") {
   const e = env();
   const bytes = noise(12 * MiB + 123, 7);
   const hash = await sha256Hex(bytes);
+  // The big tier is for GitHub logins (K-1085), and the first sign-in with
+  // a GitHub token caches the identity: one write a returning publisher
+  // does not pay again within six hours. Warm it so the count below is
+  // the publish itself.
+  await worker.fetch(req("POST", "/publish/big/start", { headers: { authorization: "Bearer gho_alice" }, body: "{}" }), e);
   const before = { ...e._ops };
   const { res, body: up } = await start(e, bytes);
   assert.strictEqual(res.status, 200, String(up));
@@ -317,7 +323,7 @@ async function publishBig(e, bytes, name = "Big") {
   const e = env();
   const res = await worker.fetch(
     req("POST", "/publish/big/start", {
-      headers: { authorization: "Bearer krs_alice", "content-type": "application/json" },
+      headers: { authorization: "Bearer gho_alice", "content-type": "application/json" },
       body: JSON.stringify({ kind: "bundle", size: 1024 * MiB + 1, sha256: "a".repeat(64) }),
     }),
     e,
@@ -362,7 +368,7 @@ async function publishBig(e, bytes, name = "Big") {
       e,
     );
   e.BIG_PUBLISHERS = "alice,bob";
-  assert.strictEqual((await ask("krs_bob")).status, 403, "only the app's publisher attaches its source");
+  assert.strictEqual((await ask("gho_bob")).status, 403, "only the app's publisher attaches its source");
   const { res, body: up } = await start(e, source, { kind: "source", for: hash });
   assert.strictEqual(res.status, 200, String(up));
   assert.strictEqual(up.parts, 1, "a small file is one part");
@@ -378,7 +384,7 @@ async function publishBig(e, bytes, name = "Big") {
 
   // Unpublishing the app removes its big bytes and its source too.
   const gone = await worker.fetch(
-    req("DELETE", `/app/${hash}`, { headers: { authorization: "Bearer krs_alice" } }),
+    req("DELETE", `/app/${hash}`, { headers: { authorization: "Bearer gho_alice" } }),
     e,
   );
   assert.strictEqual(gone.status, 200);
@@ -397,6 +403,8 @@ async function publishBig(e, bytes, name = "Big") {
   const asked = [];
   const realFetch = globalThis.fetch;
   globalThis.fetch = async (url, init) => {
+    // The sign-in (a stubbed GitHub token) is not the build service.
+    if (String((url && url.url) || url).startsWith("https://api.github.com/")) return realFetch(url, init);
     asked.push({ url: String(url), secret: init.headers["x-krate-builder"], body: JSON.parse(init.body) });
     return new Response("{}", { status: 202 });
   };
