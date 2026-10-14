@@ -49,6 +49,12 @@ export const MATRIX = {
   "release.set-current": { owner: "yes", admin: "yes" },
   "group.manage": { owner: "yes", admin: "yes" },
   "release.audience": { owner: "yes", admin: "yes" },
+  // SCIM provisioning and audit export (IC-955): org-scim.js and
+  // org-audit-export.js. An owner sets them up; an admin may watch the
+  // export's delivery, as an admin reads the audit.
+  "scim.manage": { owner: "yes" },
+  "audit-export.manage": { owner: "yes" },
+  "audit-export.view": { owner: "yes", admin: "yes" },
 };
 
 /// What `role` may do for `action`: "yes", a narrower rule, or null.

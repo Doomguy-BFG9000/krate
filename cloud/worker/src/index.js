@@ -48,6 +48,8 @@ import { leaseRoute, leaseKeyRoute } from "./org-lease.js";
 import { orgReleaseRoute } from "./org-releases.js";
 // What an approver sees and must confirm (IC-950); after release control.
 import { judgementCaps } from "./org-review.js";
+// SCIM 2.0 provisioning (IC-955); after release control, whose groups it fills.
+import { scimRoute, orgScimRoute } from "./org-scim.js";
 // The organisation store (IC-946), one SQLite-backed Durable Object per
 // organisation; wrangler.toml binds it as ORGS.
 export { Org };
@@ -158,6 +160,9 @@ const RATE_LIMITS = {
   // cannot grow its audit -- and this bounds what they cost. A person
   // opening a private link before signing in sends one.
   "org/anonymous": 20,
+  // Requests to /scim/v2/ with no token or a wrong one (IC-955). They are
+  // never audited, so this is what bounds them.
+  "scim/refused": 20,
 };
 
 /// Who is asking, as far as the edge can tell.
@@ -681,6 +686,10 @@ export default {
       }
       if (request.method === "GET" && pathname.startsWith("/c/")) {
         return cors(await resolveChannel(request, url, pathname.slice(3), env));
+      }
+      // SCIM 2.0 provisioning (IC-955): server to server, so no CORS.
+      if (pathname.startsWith("/scim/v2/")) {
+        return await scimRoute(request, url, env, { orgAsk, readBounded, noteOrgOf, rateLimited, slugOk: (s) => SLUG.test(s) });
       }
       // Organisations (IC-946).
       if (pathname === "/orgs" || pathname.startsWith("/orgs/")) {
@@ -7413,7 +7422,8 @@ async function orgRouteCore(request, url, env, identity) {
     request, url, env, slug, rest, method, principals, identity, site, base,
     askRaw, mutateRaw, orgAsk, orgAnswer, json, readBody, isAdmin, smtpSend, fetchBundle,
   };
-  const routed = (await orgLifecycleRoute(h)) || (await orgBillingRoute(h)) || (await orgReleaseRoute(h));
+  const routed =
+    (await orgLifecycleRoute(h)) || (await orgBillingRoute(h)) || (await orgReleaseRoute(h)) || (await orgScimRoute(h));
   if (routed) return routed;
   return text("not found", 404);
 }
