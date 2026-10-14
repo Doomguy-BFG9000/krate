@@ -91,7 +91,12 @@ async function startRecovery(h) {
     notify: answer.body.notify,
     site: h.site,
   });
-  return h.json({ recovery: answer.body.recovery, mailed: mail.mailed, not_mailed: mail.not_mailed }, 201);
+  const noted = await h.orgAsk(h.env, h.slug, {
+    op: "recover-noted",
+    args: { id: answer.body.recovery.id, not_mailed: mail.not_mailed },
+  });
+  const recovery = (noted.body && noted.body.recovery) || answer.body.recovery;
+  return h.json({ recovery, mailed: mail.mailed, not_mailed: mail.not_mailed }, 201);
 }
 
 // --------------------------------------------------------------- export

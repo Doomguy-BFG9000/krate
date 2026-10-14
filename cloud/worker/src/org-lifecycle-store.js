@@ -76,7 +76,7 @@ const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS recoveries (
      id TEXT PRIMARY KEY, state TEXT NOT NULL, principal TEXT NOT NULL, by TEXT NOT NULL,
      reason TEXT NOT NULL, requested_at INTEGER NOT NULL, effective_at INTEGER NOT NULL,
-     closed_by TEXT, closed_at INTEGER)`,
+     closed_by TEXT, closed_at INTEGER, not_mailed TEXT)`,
   `CREATE TABLE IF NOT EXISTS billing (
      id INTEGER PRIMARY KEY CHECK (id = 1),
      plan TEXT NOT NULL, status TEXT, customer TEXT, subscription TEXT,
@@ -143,6 +143,8 @@ function recoveryView(r) {
     requested_at: r.requested_at,
     effective_at: r.effective_at,
     state: r.state,
+    // Who the notice could not reach, for the owners' banner.
+    not_mailed: r.not_mailed ? JSON.parse(r.not_mailed) : [],
   };
 }
 
@@ -487,6 +489,14 @@ const ops = {
     this.audit(`krate-support:${admin}`, "member.recover.request", `member:${p.principal}`, "allowed", reason);
     const notify = this.rows("SELECT principal, role FROM members WHERE state = 'active' AND role IN ('owner', 'admin')").map((m) => m.principal);
     return this.ok({ recovery: recoveryView(this.row("SELECT * FROM recoveries WHERE id = ?", id)), notify, org_name: this.org().name }, 201);
+  },
+
+  /// After the notices went: who could not be told, kept with the recovery
+  /// so the owners' banner can say so. From the door only.
+  "recover-noted"(ctx) {
+    const list = (Array.isArray(ctx.args.not_mailed) ? ctx.args.not_mailed : []).map(String).slice(0, 200);
+    this.sql.exec("UPDATE recoveries SET not_mailed = ? WHERE id = ?", JSON.stringify(list), String(ctx.args.id || ""));
+    return this.ok({ recovery: recoveryView(this.row("SELECT * FROM recoveries WHERE id = ?", String(ctx.args.id || ""))) });
   },
 
   /// POST /orgs/<slug>/recover/<id>/object (Addendum 4, D6): any current
