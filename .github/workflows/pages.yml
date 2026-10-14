@@ -258,6 +258,12 @@ jobs:
           # every refusal in words, approve the exact digest shown, and
           # name a private app's organisation only to its own people.
           node docs/landing/studio/org-pages-test.mjs
+          # And the second layer: an invitation says whether it was mailed,
+          # a root key is replaced only with a public key, closing waits for
+          # a second owner, billing shows no price the hub did not send,
+          # company sign-in never auto-joins an owner, and a private app
+          # names its exact offline date before it is first opened.
+          node docs/landing/studio/org-layer2-test.mjs
           # And that the homepage's prompt bar starts a build only from its
           # own fresh handoff, once, and never from a link (K-885).
           node docs/landing/studio/frontpage-test.mjs

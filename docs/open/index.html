@@ -35,6 +35,7 @@
 .theirapp.refused .ta-kicker::before { background: var(--warn); box-shadow: 0 0 0 4px var(--warn-soft); }
 #taMore .stack { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 14px; }
 #taMore .fine { margin-top: 10px; font-size: 13px; color: var(--ink-3); }
+#taMore .offline-note { margin-top: 12px; padding: 10px 12px; border-radius: 12px; font-size: 13.5px; line-height: 1.5; color: var(--ink-2); background: var(--soft); }
 #taGet[aria-busy="true"] { opacity: .6; }
 
 /* the steps */
@@ -517,7 +518,12 @@ document.querySelectorAll("[data-copy]").forEach(function (b) {
           ? (b.size < 1024 * 1024 ? Math.round(b.size / 1024) + " KB" : (b.size / (1024 * 1024)).toFixed(1) + " MB") + ". "
           : "";
         document.getElementById("pageHead").textContent = (org || "Someone") + " sent you " + name + ".";
-        state(org ? "From " + org : "Private app", name + (b.version ? " " + b.version : ""), size + "It runs on Mac, Windows and Linux.", [], false);
+        // The exact offline terms, before the first open (Addendum 3 G).
+        var terms = document.createElement("p");
+        terms.className = "offline-note";
+        terms.id = "offlineNote";
+        terms.textContent = K.offlineNotice(b.offline);
+        state(org ? "From " + org : "Private app", name + (b.version ? " " + b.version : ""), size + "It runs on Mac, Windows and Linux.", [terms], false);
         if (!phone) {
           var get = document.getElementById("taGet");
           var file = K.fileName(name);
@@ -528,8 +534,10 @@ document.querySelectorAll("[data-copy]").forEach(function (b) {
             get.setAttribute("aria-busy", "true");
             K.download(K.hub() + "/a/" + hash, file).then(function (out) {
               get.removeAttribute("aria-busy");
-              more.textContent = "";
+              var old = document.getElementById("savedNote");
+              if (old) old.remove();
               more.appendChild(document.createElement("p")).className = "fine";
+              more.lastChild.id = "savedNote";
               more.lastChild.textContent = out.ok
                 ? "Saved as " + file + ". Double-click it to open it in Krate."
                 : K.refusal(out.body.error, { here: here }).title + ". Reload this page to try again.";

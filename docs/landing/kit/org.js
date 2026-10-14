@@ -128,6 +128,14 @@
     "candidate.approve": { owner: "yes", reviewer: "yes" },
     "release.download": { owner: "yes", admin: "yes", developer: "yes", reviewer: "yes", recipient: "yes" },
     "audit.read": { owner: "yes", admin: "yes" },
+    // Addendum 3: the organisation's lifecycle, billing, SSO and offline
+    // access are an owner's; admins read billing.
+    "org.close": { owner: "yes" },
+    "org.export": { owner: "yes" },
+    "billing.read": { owner: "yes", admin: "yes" },
+    "billing.checkout": { owner: "yes" },
+    "sso.set": { owner: "yes" },
+    "offline.set": { owner: "yes" },
   };
 
   function can(role, action) {
@@ -143,6 +151,8 @@
     if (can(role, "candidate.publish") || can(role, "candidate.approve") || can(role, "audit.read")) out.push("waiting");
     out.push("people");
     if (can(role, "audit.read")) out.push("activity");
+    // Billing is the owners' and admins' (Addendum 3 E: GET billing).
+    if (can(role, "billing.read")) out.push("billing");
     if (role && role !== "recipient") out.push("settings");
     return out;
   }
@@ -236,6 +246,40 @@
         return { title: "There is no organisation called " + (ctx.slug || "that"), body: "Check the link you were sent.", action: mine };
       case "offline":
         return { title: "Krate could not be reached", body: "Check your connection and try again. Nothing changed.", action: null };
+      case "org-closing":
+        return { title: org + " is closing", body: "Its apps still open until it closes, but nothing new can be sent or approved. An owner can cancel the closing in Settings.", action: null };
+      case "org-closed":
+        return { title: org + " is closed", body: "Its apps no longer open. Former owners can still download its export from Settings until the export window ends.", action: mine };
+      case "org-suspended":
+        return { title: org + " is paused for billing", body: "Apps already released still open. Sending new apps, extra seats and company sign-in come back when an owner settles billing.", action: null };
+      case "close-statement-mismatch":
+        return { title: "The closing changed while you were looking", body: "Nothing was approved. Look at the closing again and approve what it says now.", action: null };
+      case "close-confirm-mismatch":
+        return { title: "That is not the short name", body: "Nothing changed. Type " + (ctx.slug || "the organisation's short name") + " exactly to close it.", action: null };
+      case "export-not-ready":
+        return { title: "The export is still being built", body: "It is usually ready in a minute. This list refreshes by itself.", action: null };
+      case "billing-not-open":
+        return { title: "Card billing is not open yet", body: "Krate invoices pilot organisations directly: write to yashraj@krate.tech.", action: { label: "Write to yashraj@krate.tech", href: "mailto:yashraj@krate.tech" } };
+      case "sso-required":
+        return {
+          title: org + " asks for its company sign-in",
+          body: "Your address belongs to " + org + "'s company, so it asks you to sign in through the company. You come straight back here.",
+          action: { label: "Use company sign-in", href: "/login/?org=" + encodeURIComponent(ctx.slug || "") + "&next=" + encodeURIComponent(ctx.here || "/orgs/") },
+        };
+      case "rate-limited":
+        return { title: "Too many refused attempts", body: "Wait a minute, then try again. Nothing changed.", action: null };
+      case "domain-not-verified":
+        return { title: "The domain is not verified yet", body: (ctx.message ? String(ctx.message) + ". " : "") + "Add the TXT record below at your DNS provider, wait a few minutes, then press Verify again.", action: null };
+      case "sso-not-set-up":
+        return { title: "Company sign-in is not set up", body: "An owner of " + org + " sets it up in Settings. Until then, sign in with GitHub, Google or email.", action: null };
+      case "sso-unverified-email":
+        return { title: "Your company did not confirm your email", body: "Company sign-in needs an address your company has verified. Ask your IT team, or sign in another way.", action: null };
+      case "sso-wrong-domain":
+        return { title: "That address is not at " + org + "'s domain", body: "Company sign-in takes addresses at the domain " + org + " verified. Sign in with your work account, or another way.", action: null };
+      case "recovery-not-waiting":
+        return { title: "That recovery is not waiting any more", body: "It was already cancelled or has taken effect. The banner is gone once the page refreshes.", action: null };
+      case "sso-failed":
+        return { title: "Company sign-in did not finish", body: "Nothing changed. Try again, or sign in another way.", action: null };
       default:
         return { title: "That did not work", body: (ctx.message ? String(ctx.message) + ". " : "") + "Nothing changed. Try again in a moment.", action: null };
     }
@@ -363,6 +407,41 @@
     return v ? n + " " + v : n;
   }
 
+  // ------------------------------------------------- offline, SSO, money
+
+  /// Offline classes (Addendum 3 G). Nothing longer than 30 days exists.
+  var OFFLINE = [
+    ["online", "Online only", "Checks with the organisation every time it opens."],
+    ["days-7", "7 days offline", "Opens without a connection for up to 7 days."],
+    ["days-30", "30 days offline", "Opens without a connection for up to 30 days."],
+  ];
+  function offlineName(c) {
+    for (var i = 0; i < OFFLINE.length; i++) if (OFFLINE[i][0] === c) return OFFLINE[i][1];
+    return "7 days offline";
+  }
+  /// The exact terms a person reads before the first private open.
+  function offlineNotice(off) {
+    if (!off || off.class === "online" || !off.until) {
+      return "Needs a connection every time it opens. If you are removed, it stops at once.";
+    }
+    return "Works offline until " + day(off.until) + ", then needs a connection. If you are removed, it stops when it next connects.";
+  }
+
+  /// The company sign-in providers the page names, with the issuer each
+  /// one uses (Addendum 3 F: each is one issuer URL).
+  var PROVIDERS = [
+    ["Google Workspace", "https://accounts.google.com"],
+    ["Okta", "https://<your-company>.okta.com"],
+    ["Microsoft Entra", "https://login.microsoftonline.com/<tenant-id>/v2.0"],
+  ];
+
+  /// Money only as the hub sent it: Stripe's minor units and currency.
+  function money(amount, currency) {
+    if (typeof amount !== "number" || !currency) return "";
+    var c = String(currency).toUpperCase();
+    try { return new Intl.NumberFormat("en", { style: "currency", currency: c }).format(amount / 100); } catch (e) { return (amount / 100).toFixed(2) + " " + c; }
+  }
+
   /// The join link for an invitation answer (`join_url`, Addendum 2).
   function joinUrl(answer) {
     return (answer && answer.join_url) || "";
@@ -456,6 +535,7 @@
     can: can, tabsFor: tabsFor, invitable: invitable, memberActions: memberActions,
     refusal: refusal, signInHref: signInHref, eventWords: eventWords, fingerprint: fingerprint,
     day: day, moment: moment, appName: appName, joinUrl: joinUrl, fileName: fileName,
+    OFFLINE: OFFLINE, offlineName: offlineName, offlineNotice: offlineNotice, PROVIDERS: PROVIDERS, money: money,
     el: el, refusalBlock: refusalBlock, signInChoices: signInChoices, copy: copy, download: download,
   };
 })(typeof window !== "undefined" ? window : globalThis);

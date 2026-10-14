@@ -21,8 +21,12 @@
     waiting: { long: "Waiting for approval", short: "Waiting" },
     people: { long: "People" },
     activity: { long: "Activity" },
+    billing: { long: "Billing" },
     settings: { long: "Settings" },
   };
+  // Filled in at the bottom: the Addendum 3 parts (parts.js).
+  var P = null;
+  function tabList() { var t = K.tabsFor(roleOf()); return P ? P.tabs(t) : t; }
 
   // --------------------------------------------------------------- frame
   function signedOut() {
@@ -77,7 +81,7 @@
   function drawTabs() {
     var bar = $("tabs");
     bar.textContent = "";
-    K.tabsFor(roleOf()).forEach(function (id) {
+    tabList().forEach(function (id) {
       var t = TAB[id];
       var b = el("button", {
         class: "tab", type: "button", role: "tab", id: "tab-" + id,
@@ -94,7 +98,7 @@
   }
 
   function show(id) {
-    var tabs = K.tabsFor(roleOf());
+    var tabs = tabList();
     if (tabs.indexOf(id) < 0) id = tabs[0];
     S.tab = id;
     try { history.replaceState(null, "", HERE + "&tab=" + id); } catch (e) {}
@@ -103,7 +107,7 @@
     pane.textContent = "";
     pane.setAttribute("aria-labelledby", "tab-" + id);
     pane.appendChild(el("p", { class: "loading", text: "Loading" }));
-    ({ releases: releases, waiting: waiting, people: people, activity: activity, settings: settings })[id](pane);
+    ({ releases: releases, waiting: waiting, people: people, activity: activity, settings: settings, billing: P && P.panes.billing })[id](pane);
   }
 
   function head(pane, title, sub) {
@@ -125,8 +129,12 @@
     $("sheetP").textContent = opts.body;
     var dg = $("sheetDigest");
     dg.textContent = "";
+    var box = $("sheetIn"), inp = $("sheetInput");
+    box.hidden = !opts.input;
+    inp.value = "";
+    if (opts.input) { $("sheetInLabel").textContent = opts.input.label; inp.placeholder = opts.input.placeholder || ""; }
     if (opts.digest) {
-      dg.appendChild(el("span", { text: "Exact bytes (sha256)" }));
+      dg.appendChild(el("span", { text: opts.digestLabel || "Exact bytes (sha256)" }));
       dg.appendChild(document.createTextNode(opts.digest));
       dg.hidden = false;
     } else dg.hidden = true;
@@ -139,7 +147,7 @@
     yes.onclick = function () {
       yes.disabled = true;
       yes.textContent = opts.busy || "Working";
-      opts.act().then(function (res) {
+      opts.act(inp.value).then(function (res) {
         yes.disabled = false;
         yes.textContent = opts.yes;
         if (res.ok) { d.close(); opts.done(res); return; }
@@ -152,6 +160,7 @@
     yes.hidden = false;
     $("sheetNo").onclick = function () { d.close(); };
     if (typeof d.showModal === "function") d.showModal(); else d.setAttribute("open", "");
+    if (opts.input) inp.focus();
   }
 
   // ---------------------------------------------------------- releases
@@ -172,6 +181,7 @@
       list.forEach(function (r) {
         S.names[r.digest] = K.appName(r);
         var note = el("p", { class: "note", hidden: true });
+        var offline = P ? P.releaseOffline(r, note) : null;
         var open = el("button", { class: "btn dark sm", type: "button", text: "Open in Krate" });
         var copyBtn = el("button", { class: "btn ghost sm", type: "button", text: "Copy link" });
         open.addEventListener("click", function () {
@@ -200,7 +210,7 @@
             el("small", { text: "Sent by " + K.who(r.uploaded_by).label + " · approved by " + K.who(r.approved_by).label + " · " + K.day(r.at) }),
             note,
           ]),
-          el("div", { class: "ra" }, [open, copyBtn]),
+          el("div", { class: "ra" }, [open, copyBtn, offline]),
         ]));
       });
     });
@@ -499,9 +509,12 @@
         box.appendChild(K.refusalBlock(words(res, { what: "withdraw invitations" }), "bad"));
       });
     });
-    box.appendChild(el("b", { text: "Invitation for " + whoLabel + " as " + (K.ROLE_NAME[sent.role] || sent.role).toLowerCase() }));
+    // Mailed or not (Addendum 3 A): say which, and why not.
+    var mail = P.inviteMail(ans, sent);
+    box.appendChild(el("p", { class: "invfor", text: "Invitation for " + whoLabel + " as " + (K.ROLE_NAME[sent.role] || sent.role).toLowerCase() }));
+    box.appendChild(el("b", { text: mail.title }));
+    box.appendChild(el("p", { text: mail.body }));
     box.appendChild(el("div", { class: "linkbox" }, [inp, cp]));
-    box.appendChild(el("p", { text: "Send them this link. It works once, only for " + whoLabel + (sent.email ? " signed in with that inbox" : " signed in with GitHub") + ", until " + K.day(ans.expires_at) + "." }));
     box.appendChild(withdraw);
     return box;
   }
@@ -556,6 +569,11 @@
       if (!res.ok) return failed(pane, res, {});
       take(res.body);
       var o = S.org, owner = roleOf() === "owner";
+      if (o.state === "closed") {
+        head(pane, "Settings", (o.name || slug) + " is closed. Its export is what remains.");
+        P.settings(pane, null);
+        return;
+      }
       var key = el("div", { class: "card" }, [el("h3", { text: "Root key" })]);
       if (o.root_key) {
         key.appendChild(el("p", { text: "Every app sent here is signed by this key, or by a release key it delegated. Compare the fingerprint with the owner's copy." }));
@@ -564,7 +582,7 @@
           el("dt", { text: "Set" }), el("dd", { text: (K.moment(o.root_key_set_at) || "Unknown") + (o.root_key_set_by ? " by " + K.who(o.root_key_set_by).label : "") }),
           el("dt", { text: "Full key" }), el("dd", { class: "dg", text: o.root_key }),
         ]));
-        if (owner) key.appendChild(el("p", { class: "sub", text: "To replace it, run the command below with the new key. The change is recorded in Activity." }));
+        if (owner) key.appendChild(el("p", { class: "sub", text: "Replace it here, or run the command below with the new key. Activity records the change." }));
       } else {
         key.appendChild(el("p", { text: "No root key yet. Until an owner registers one, nothing can be sent to " + (o.name || slug) + "." }));
       }
@@ -592,6 +610,7 @@
           el("dt", { text: "Created" }), el("dd", { text: K.day(o.created_at) + (o.created_by ? " by " + K.who(o.created_by).label : "") }),
         ]),
       ]));
+      P.settings(pane, key);
     });
   }
 
@@ -600,7 +619,23 @@
     S.org = body.org || S.org;
     S.me = body.me || S.me;
     S.members = Array.isArray(body.members) ? body.members : S.members;
+    if (P) P.banner($("banner"));
   }
+
+  /// Ask the store again after a change to the organisation itself
+  /// (closing, cancelling, an objection): the banner and tabs follow.
+  function refresh() {
+    K.api("GET", "/orgs/" + slug).then(function (res) {
+      if (!res.ok) { stop(res.body.error, res.body.message); return; }
+      take(res.body);
+      show(S.tab);
+    });
+  }
+
+  P = window.KrateOrgParts({
+    S: S, slug: slug, words: words, confirmSheet: confirmSheet, head: head, failed: failed,
+    toast: toast, show: function (id) { show(id); }, refresh: refresh, roleOf: roleOf, isMe: isMe,
+  });
 
   if (!slug) { location.replace("/orgs/"); return; }
   if (!/^[a-z][a-z0-9-]{1,38}$/.test(slug)) { stop("no-such-org"); return; }
