@@ -21652,3 +21652,522 @@ fn create_writes_a_build_record_that_inspect_shows_and_signing_covers() {
     krate_bundle::add_build_provenance(&kept, &record).unwrap();
     assert!(!holds(&kept), "a changed build record breaks the signature");
 }
+
+// ---------------------------------------------------------------------------
+// The starter apps (IC-958): Team Notes, Expenses and Stock, the three an
+// organisation releases in its first minute. Each is released to acme from
+// the very bundle the site serves (docs/landing/orgs/starters/), then two
+// people on two computers use it through its own window, the way a person
+// does: `krate run --task`, pressing what the app tells the screen reader is
+// on screen and typing into it. KRATE_STARTER_SHOTS=<dir> keeps a picture of
+// each screen the steps name.
+// ---------------------------------------------------------------------------
+
+/// A starter as the site serves it, signed for acme by Carol, published and
+/// approved by Bob: the bundle and its digest.
+fn released_starter(world: &OrgWorld, root: &std::path::Path, file: &str) -> (PathBuf, String) {
+    let shipped = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../docs/landing/orgs/starters")
+        .join(file);
+    let bundle = world.dir.path().join(file);
+    std::fs::copy(&shipped, &bundle).unwrap_or_else(|e| panic!("{}: {e}", shipped.display()));
+    world.sign_delegated(root, "carol", &bundle);
+    let digest = OrgWorld::digest_in(&world.says(
+        "carol",
+        &["publish", bundle.to_str().unwrap(), "--org", "acme"],
+        true,
+    ));
+    world.says("bob", &["org", "approve", "acme", &digest], true);
+    (bundle, digest)
+}
+
+/// `who` opens their own copy of `bundle` and does `steps`, each a step of
+/// krate-check.toml as (kind, value). A `shoot` step names a picture, kept
+/// only under KRATE_STARTER_SHOTS; `look` is "dark", "phone" or both.
+/// Fails with what was on screen when a step cannot be done.
+fn use_starter(
+    world: &OrgWorld,
+    who: &str,
+    bundle: &std::path::Path,
+    look: Option<&str>,
+    steps: &[(&str, &str)],
+) {
+    use_starter_while(world, who, bundle, look, steps, None);
+}
+
+/// [`use_starter`], with `meanwhile` done three seconds into the run, while
+/// the window is open: what someone else does as this person works.
+fn use_starter_while(
+    world: &OrgWorld,
+    who: &str,
+    bundle: &std::path::Path,
+    look: Option<&str>,
+    steps: &[(&str, &str)],
+    meanwhile: Option<&dyn Fn()>,
+) {
+    static RUNS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let n = RUNS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    let name = bundle.file_name().unwrap().to_string_lossy().to_string();
+    let copy = world.homes[who].path().join(&name);
+    std::fs::copy(bundle, &copy).expect("copy");
+    let shots = std::env::var_os("KRATE_STARTER_SHOTS").map(PathBuf::from);
+    let mut task = format!("name = \"{who} uses {name}\"\n");
+    for (kind, value) in steps {
+        match *kind {
+            "shoot" => {
+                let Some(dir) = &shots else { continue };
+                std::fs::create_dir_all(dir).expect("shots dir");
+                task.push_str(&format!(
+                    "[[step]]\nshoot = {:?}\n",
+                    dir.join(value).to_string_lossy()
+                ));
+            }
+            "wait_ms" => task.push_str(&format!("[[step]]\nwait_ms = {value}\n")),
+            _ => task.push_str(&format!("[[step]]\n{kind} = {value:?}\n")),
+        }
+    }
+    let file = world.dir.path().join(format!("task-{n}.toml"));
+    std::fs::write(&file, &task).expect("task");
+    let first = world.dir.path().join(format!("first-{n}.png"));
+    let mut command = org_command(
+        world,
+        who,
+        &[
+            "run",
+            copy.to_str().unwrap(),
+            "--auto-grant",
+            "--task",
+            file.to_str().unwrap(),
+            "--shoot",
+            first.to_str().unwrap(),
+        ],
+    );
+    // "dark" is the person's look; "phone" a phone held upright.
+    if let Some(look) = look {
+        if look.contains("dark") {
+            command.env("KRATE_APPEARANCE", "dark");
+        }
+        if look.contains("phone") {
+            command.env("KRATE_SCREEN", "390x844");
+        }
+    }
+    let child = command
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("run");
+    if let Some(meanwhile) = meanwhile {
+        // Time to open and check in; the refusal can land at any point
+        // after that, so the steps must not depend on when.
+        thread::sleep(Duration::from_secs(3));
+        meanwhile();
+    }
+    let out = child.wait_with_output().expect("run");
+    assert!(
+        out.status.success(),
+        "{who} using {name}: {}\n{task}",
+        stderr_of(&out)
+    );
+}
+
+/// Team Notes, two people: Carol writes the first note while her computer
+/// is still being let in; once Alice's computer has passed the key, it
+/// reaches the team; Dan's new computer waits, then sees it with who
+/// changed it, pins it and adds his own; Carol sees Dan's, finds hers by
+/// search, deletes it and brings it back. Narrowed to finance, the app
+/// tells Dan in words that it is not shared with him.
+#[test]
+fn starter_team_notes_is_shared_by_two_people_through_its_window() {
+    let Some(world) = OrgWorld::new(&["alice", "bob", "carol", "dan"]) else {
+        eprintln!("skipping starter_team_notes_...: no local port");
+        return;
+    };
+    let root = world.acme();
+    let (notes, digest) = released_starter(&world, &root, "team-notes.krate");
+    let title = "Order chairs for the hall";
+    use_starter(
+        &world,
+        "carol",
+        &notes,
+        None,
+        &[
+            ("expect_text", "Your team's notes are on their way"),
+            ("shoot", "team-notes-waiting.png"),
+            ("click", "Write a note"),
+            ("type", title),
+            ("key", "Enter"),
+            ("type", "Twelve, stackable. Bob has the budget."),
+            ("wait_ms", "900"),
+            ("expect_text", title),
+            ("expect_text", "Waiting to be let in"),
+        ],
+    );
+    keys_show(&world, "alice");
+    use_starter(
+        &world,
+        "carol",
+        &notes,
+        None,
+        &[
+            ("expect_text", title),
+            ("expect_text", "Synced"),
+            ("shoot", "team-notes-one-note.png"),
+        ],
+    );
+    use_starter(
+        &world,
+        "dan",
+        &notes,
+        None,
+        &[("expect_text", "Your team's notes are on their way")],
+    );
+    // Carol's computer, online again, lets Dan's in.
+    use_starter(&world, "carol", &notes, None, &[("expect_text", title)]);
+    use_starter(
+        &world,
+        "dan",
+        &notes,
+        Some("dark"),
+        &[
+            ("expect_text", title),
+            ("expect_text", "changed by carol"),
+            ("click", title),
+            ("expect_text", "Changed by carol"),
+            ("click", "Pin"),
+            ("expect_text", "PINNED"),
+            ("click", "New note"),
+            ("type", "Wifi for guests"),
+            ("key", "Enter"),
+            ("type", "Network acme-guest, the password is on the fridge."),
+            ("wait_ms", "900"),
+            ("expect_text", "Wifi for guests"),
+            ("shoot", "team-notes-dark.png"),
+        ],
+    );
+    use_starter(
+        &world,
+        "carol",
+        &notes,
+        None,
+        &[
+            ("expect_text", "Wifi for guests"),
+            ("expect_text", "changed by dan"),
+            ("expect_text", "PINNED"),
+            ("shoot", "team-notes-two-people.png"),
+            ("click", "Search notes"),
+            ("type", "chairs"),
+            ("expect_text", title),
+            ("expect_no_text", "Wifi for guests"),
+            ("click", title),
+            ("click", "Delete"),
+            ("expect_text", "Undo"),
+            ("expect_text", "Deleted"),
+            ("click", "Undo"),
+            ("expect_text", "Changed by carol"),
+        ],
+    );
+    // On a phone: one column, the note fills the screen, Back returns.
+    use_starter(
+        &world,
+        "carol",
+        &notes,
+        Some("phone"),
+        &[
+            ("expect_text", "Wifi for guests"),
+            ("shoot", "team-notes-phone.png"),
+            ("click", "Wifi for guests"),
+            ("expect_text", "Back"),
+            ("shoot", "team-notes-phone-note.png"),
+            ("click", "Back"),
+            ("expect_text", "New note"),
+        ],
+    );
+    world.says(
+        "alice",
+        &["org", "group", "create", "acme", "finance"],
+        true,
+    );
+    world.says(
+        "alice",
+        &["org", "group", "add", "acme", "finance", "carol"],
+        true,
+    );
+    // Narrowed to finance while Dan has it open: the app says so, in words,
+    // and offers nothing to edit.
+    let narrow = || {
+        world.says(
+            "alice",
+            &[
+                "org", "release", "audience", "acme", &digest, "--groups", "finance",
+            ],
+            true,
+        );
+    };
+    use_starter_while(
+        &world,
+        "dan",
+        &notes,
+        None,
+        &[
+            ("wait_ms", "10000"),
+            ("expect_text", "has not shared Team Notes with you"),
+            ("expect_no_text", "New note"),
+            ("shoot", "team-notes-not-shared.png"),
+        ],
+        Some(&narrow),
+    );
+    // Opened from now on, it is refused before the window, in words; the
+    // app's own "not shared with you" screen is for a narrowing that lands
+    // while it is open.
+    let copy = world.homes["dan"].path().join("team-notes.krate");
+    let refused = org_command(
+        &world,
+        "dan",
+        &["run", copy.to_str().unwrap(), "--auto-grant", "--headless"],
+    )
+    .output()
+    .expect("run");
+    assert!(!refused.status.success());
+    assert!(
+        stderr_of(&refused).contains("this app is only for the finance group in Acme"),
+        "{}",
+        stderr_of(&refused)
+    );
+}
+
+/// Expenses, two people: a form that says what is missing; Carol's expense
+/// reaches Dan with who is owed; Dan logs his own and marks Carol's paid
+/// back; Carol sees both, corrects Dan's amount, and a delete comes back
+/// with Undo.
+#[test]
+fn starter_expenses_is_shared_by_two_people_through_its_window() {
+    let Some(world) = OrgWorld::new(&["alice", "bob", "carol", "dan"]) else {
+        eprintln!("skipping starter_expenses_...: no local port");
+        return;
+    };
+    let root = world.acme();
+    let (expenses, _) = released_starter(&world, &root, "expenses.krate");
+    use_starter(
+        &world,
+        "carol",
+        &expenses,
+        None,
+        &[
+            ("expect_text", "Your team's expenses are on their way"),
+            ("click", "Log an expense"),
+            ("click", "Save expense"),
+            ("expect_text", "Enter how much it was"),
+            ("shoot", "expenses-form-error.png"),
+            ("type", "42.50"),
+            ("click", "EUR"),
+            ("click", "What was it for"),
+            ("type", "Train to Leeds"),
+            ("click", "Receipt note"),
+            ("type", "Client visit"),
+            ("click", "Save expense"),
+            ("expect_text", "Train to Leeds, \u{20ac}42.50"),
+        ],
+    );
+    keys_show(&world, "alice");
+    use_starter(
+        &world,
+        "carol",
+        &expenses,
+        None,
+        &[
+            ("expect_text", "Synced"),
+            ("expect_text", "You are owed \u{20ac}42.50"),
+        ],
+    );
+    use_starter(
+        &world,
+        "dan",
+        &expenses,
+        None,
+        &[("expect_text", "Your team's expenses are on their way")],
+    );
+    use_starter(
+        &world,
+        "carol",
+        &expenses,
+        None,
+        &[("expect_text", "Train to Leeds")],
+    );
+    use_starter(
+        &world,
+        "dan",
+        &expenses,
+        Some("dark"),
+        &[
+            ("expect_text", "carol is owed \u{20ac}42.50"),
+            ("click", "Log an expense"),
+            ("type", "18"),
+            ("click", "EUR"),
+            ("click", "What was it for"),
+            ("type", "Printer ink"),
+            ("key", "Enter"),
+            ("expect_text", "You are owed \u{20ac}18.00"),
+            ("click", "Mark paid back: Train to Leeds"),
+            ("expect_text", "Paid back: Train to Leeds"),
+            ("expect_no_text", "carol is owed"),
+            ("shoot", "expenses-dark.png"),
+        ],
+    );
+    use_starter(
+        &world,
+        "carol",
+        &expenses,
+        None,
+        &[
+            ("expect_text", "Paid back: Train to Leeds"),
+            // Dan marked it, and it is still Carol's.
+            ("expect_text", "Paid by you \u{b7} Client visit"),
+            ("expect_text", "dan is owed \u{20ac}18.00"),
+            ("click", "Printer ink"),
+            ("expect_text", "Change this expense"),
+            ("click", "Amount"),
+            ("type", ".40"),
+            ("click", "Save changes"),
+            ("expect_text", "Printer ink, \u{20ac}18.40"),
+            ("shoot", "expenses-two-people.png"),
+            ("click", "Printer ink"),
+            ("click", "Delete"),
+            ("expect_text", "Undo"),
+            ("expect_no_text", "Printer ink,"),
+            ("click", "Undo"),
+            ("expect_text", "Printer ink, \u{20ac}18.40"),
+        ],
+    );
+    use_starter(
+        &world,
+        "dan",
+        &expenses,
+        Some("phone"),
+        &[
+            ("expect_text", "Printer ink, \u{20ac}18.40"),
+            ("expect_text", "Paid back: Train to Leeds"),
+            ("expect_text", "Paid by carol \u{b7} Client visit"),
+            ("shoot", "expenses-phone.png"),
+            ("click", "Log"),
+            ("expect_text", "Log an expense"),
+            ("shoot", "expenses-phone-form.png"),
+            ("click", "Cancel"),
+        ],
+    );
+}
+
+/// Stock List, two people: Carol adds an item from a suggestion; Dan counts
+/// two out and it is running low; Carol counts one in on top of Dan's, then
+/// sets the count after a stocktake; Dan sees the same number.
+#[test]
+fn starter_stock_list_is_shared_by_two_people_through_its_window() {
+    let Some(world) = OrgWorld::new(&["alice", "bob", "carol", "dan"]) else {
+        eprintln!("skipping starter_stock_list_...: no local port");
+        return;
+    };
+    let root = world.acme();
+    let (stock, _) = released_starter(&world, &root, "stock-list.krate");
+    use_starter(
+        &world,
+        "carol",
+        &stock,
+        None,
+        &[
+            ("expect_text", "Your team's stock list is on its way"),
+            ("click", "Printer paper"),
+            ("expect_text", "Add an item"),
+            ("type", "1"),
+            ("shoot", "stock-list-form.png"),
+            ("click", "Add item"),
+            ("expect_text", "Printer paper, 3 left"),
+        ],
+    );
+    keys_show(&world, "alice");
+    use_starter(
+        &world,
+        "carol",
+        &stock,
+        None,
+        &[
+            ("expect_text", "Synced"),
+            ("expect_text", "Printer paper, 3 left"),
+        ],
+    );
+    use_starter(
+        &world,
+        "dan",
+        &stock,
+        None,
+        &[("expect_text", "Your team's stock list is on its way")],
+    );
+    use_starter(
+        &world,
+        "carol",
+        &stock,
+        None,
+        &[("expect_text", "Printer paper")],
+    );
+    use_starter(
+        &world,
+        "dan",
+        &stock,
+        Some("dark"),
+        &[
+            ("expect_text", "Printer paper, 3 left"),
+            ("click", "Add an item"),
+            ("type", "Coffee beans"),
+            ("key", "Tab"),
+            ("type", "6"),
+            ("key", "Tab"),
+            ("type", "2"),
+            ("key", "Enter"),
+            ("expect_text", "Coffee beans, 6 left"),
+            ("click", "One fewer Printer paper"),
+            ("click", "One fewer Printer paper"),
+            ("expect_text", "Printer paper, 1 left, Running low"),
+            ("expect_text", "Running low (1)"),
+            ("shoot", "stock-list-dark.png"),
+        ],
+    );
+    use_starter(
+        &world,
+        "carol",
+        &stock,
+        None,
+        &[
+            ("expect_text", "Printer paper, 1 left"),
+            ("click", "Running low (1)"),
+            ("expect_no_text", "Coffee beans"),
+            ("shoot", "stock-list-running-low.png"),
+            ("click", "One more Printer paper"),
+            ("expect_text", "Nothing is running low"),
+            ("click", "Everything (2)"),
+            ("expect_text", "Printer paper, 2 left"),
+            ("click", "Printer paper, 2 left"),
+            ("expect_text", "Change this item"),
+            ("click", "How many there are"),
+            ("key", "Backspace"),
+            ("type", "12"),
+            ("click", "Save changes"),
+            ("expect_text", "Printer paper, 12 left"),
+            ("shoot", "stock-list-two-people.png"),
+        ],
+    );
+    use_starter(
+        &world,
+        "dan",
+        &stock,
+        Some("phone"),
+        &[
+            ("expect_text", "Printer paper, 12 left"),
+            ("expect_text", "Coffee beans, 6 left"),
+            ("shoot", "stock-list-phone.png"),
+            ("click", "One more Coffee beans"),
+            ("expect_text", "Coffee beans, 7 left"),
+            // Left alone past several background syncs and one of its own.
+            ("wait_ms", "25000"),
+            ("expect_text", "Coffee beans, 7 left"),
+            ("expect_text", "Synced"),
+        ],
+    );
+}

@@ -1,0 +1,20 @@
+# Expenses: what the team spent, who is owed, what each month cost (a
+# starter an organisation releases in its first minute on Krate, IC-958).
+# Its data is the team's, kept with store.org, and it asks for nothing else.
+
+[app]
+id = "dev.krate.expenses"
+name = "Expenses"
+version = "1.0.0"
+entry = "target/wasm32-wasip1/release/krate_expenses.wasm"
+world = "krate:app/gui@0.2.0"
+
+[[capabilities]]
+cap = "ui.window:create"
+rationale = "Show your team's expenses"
+required = true
+
+[[capabilities]]
+cap = "store.org"
+rationale = "Keep the expenses with your team, encrypted, so everyone in it sees the same totals"
+required = true

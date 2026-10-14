@@ -351,9 +351,12 @@ enum Command {
         #[arg(long, hide = true, value_name = "FILE")]
         usability_report: Option<PathBuf>,
 
-        /// The app's primary task as steps, to complete after the usability
-        /// checks (see `krate-check.toml` in the authoring guide). Used with
-        /// --usability-report; `check-app` reads it from beside the manifest.
+        /// The app's primary task as steps (see `krate-check.toml` in the
+        /// authoring guide). With --usability-report it runs after the
+        /// usability checks, as `check-app` does; on its own it is the whole
+        /// run: headless, the steps done one by one, then the window closed,
+        /// and the run fails naming the step that could not be done. Implies
+        /// --headless.
         #[arg(long, value_name = "FILE")]
         task: Option<PathBuf>,
 
@@ -2009,7 +2012,8 @@ fn run() -> Result<u8> {
             // usability run is headless for the same reason -- it compares
             // frames it paints itself, and must run the same way in CI as on a
             // laptop with a display attached.
-            ui_mode: if headless || shoot.is_some() || usability_report.is_some() {
+            ui_mode: if headless || shoot.is_some() || usability_report.is_some() || task.is_some()
+            {
                 krate_runtime::phase3_ui::Phase3HostUiMode::HeadlessDraft
             } else if native_window {
                 krate_runtime::phase3_ui::Phase3HostUiMode::NativePrototype
@@ -15425,6 +15429,42 @@ fn run_target_from_link(url: &str, asked: &str, insecure_http: bool) -> Result<R
 
 /// Read a task file (`krate-check.toml`): the app's primary task as steps
 /// the usability driver can do (IC-743, test 1506).
+/// Where a `--task`-only run keeps what its driver saw, for this process.
+fn task_only_report() -> PathBuf {
+    std::env::temp_dir().join(format!("krate-task-{}.json", std::process::id()))
+}
+
+/// Why a `--task`-only run did not complete its task, or None when it did.
+fn task_only_outcome() -> Option<String> {
+    let path = task_only_report();
+    let report = krate_runtime::usability::UsabilityReport::read(&path);
+    let _ = fs::remove_file(&path);
+    let name = |r: &krate_runtime::usability::UsabilityReport| {
+        r.task_name
+            .clone()
+            .unwrap_or_else(|| "the task".to_string())
+    };
+    match report {
+        Ok(r) => match &r.task {
+            Some(krate_runtime::usability::Observation::Held) => None,
+            Some(krate_runtime::usability::Observation::Broke { detail }) => {
+                Some(format!("the task did not complete: {detail}"))
+            }
+            Some(krate_runtime::usability::Observation::Unobserved { reason }) => {
+                Some(format!("{} could not be run: {reason}", name(&r)))
+            }
+            None => Some(format!(
+                "{} did not finish: the app closed after {} of its steps",
+                name(&r),
+                r.task_steps_done
+            )),
+        },
+        Err(_) => {
+            Some("the task did not run: the app never opened a window to do it in".to_string())
+        }
+    }
+}
+
 fn load_task(path: &Path) -> Result<krate_runtime::usability::Task> {
     let text = fs::read_to_string(path)
         .with_context(|| format!("could not read the task file {}", path.display()))?;
@@ -16314,16 +16354,27 @@ fn run_component_inner(request: RunRequest) -> Result<u8> {
         // `[runtime] interpreter = true` (IC-949): every app on the
         // portable interpreter, from the policy rather than an environment.
         interpreter: fleet::interpreter(),
-        usability_plan: match request.usability_report.as_ref() {
-            Some(path) => Some(krate_runtime::usability::UsabilityPlan {
+        usability_plan: match (request.usability_report.as_ref(), request.task.as_deref()) {
+            (Some(path), task) => Some(krate_runtime::usability::UsabilityPlan {
                 report_path: path.clone(),
                 check_resize: true,
                 check_click: true,
                 check_keyboard: true,
                 check_stay_open: true,
-                task: request.task.as_deref().map(load_task).transpose()?,
+                task: task.map(load_task).transpose()?,
             }),
-            None => None,
+            // `--task` on its own: the steps and nothing else, so a scripted
+            // use of the app (two people taking turns in a team app) is not
+            // disturbed by the usability checks pressing its first button.
+            (None, Some(task)) => Some(krate_runtime::usability::UsabilityPlan {
+                report_path: task_only_report(),
+                check_resize: false,
+                check_click: false,
+                check_keyboard: false,
+                check_stay_open: false,
+                task: Some(load_task(task)?),
+            }),
+            (None, None) => None,
         },
     };
     krate_runtime::stage_mark("cli: config built");
@@ -16388,6 +16439,12 @@ fn run_component_inner(request: RunRequest) -> Result<u8> {
             // produced no file, and every caller that trusted the exit code
             // believed a picture had been painted. check-app's painting
             // stage was one of them: it proved only that the run ended.
+            if request.usability_report.is_none() && request.task.is_some() {
+                if let Some(failed) = task_only_outcome() {
+                    eprintln!("{failed}");
+                    return Ok(1);
+                }
+            }
             if let Some(path) = request.screenshot_path.as_ref() {
                 let painted = fs::metadata(path).map(|m| m.len()).unwrap_or(0);
                 if painted == 0 {
