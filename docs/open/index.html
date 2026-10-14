@@ -27,6 +27,15 @@
 .ta-sub { margin-top: 4px; font-size: 14px; color: var(--mute); }
 .dlrow { margin-top: 16px; display: flex; flex-wrap: wrap; gap: 10px; }
 .theirapp .dlrow { margin-top: 14px; }
+/* a private app (?private=1): sign-in choices or a refusal inside the card */
+.theirapp.private { box-shadow: 0 0 0 1px var(--hair), var(--sh-1); }
+.theirapp.private .ta-kicker { color: var(--accent); }
+.theirapp.private .ta-kicker::before { background: var(--accent); box-shadow: 0 0 0 4px var(--accent-soft); }
+.theirapp.refused .ta-kicker { color: var(--warn); }
+.theirapp.refused .ta-kicker::before { background: var(--warn); box-shadow: 0 0 0 4px var(--warn-soft); }
+#taMore .stack { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 14px; }
+#taMore .fine { margin-top: 10px; font-size: 13px; color: var(--ink-3); }
+#taGet[aria-busy="true"] { opacity: .6; }
 
 /* the steps */
 .osteps { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; }
@@ -73,7 +82,7 @@
   .ta-doc { margin: 8px 0 0 6px; height: 60px; }
   .ta-text { padding: 0 6px; }
   .ostep { grid-template-columns: minmax(0, 1fr); gap: 14px; }
-  .dlrow .btn { width: 100%; }
+  .dlrow .btn, #taMore .stack .btn { width: 100%; }
   /* the command gets the whole width; Copy below it, 44px tall */
   .termbox { flex-direction: column; align-items: stretch; gap: 6px; padding: 10px 12px; }
   .termbox button { align-self: flex-start; min-height: 44px; }
@@ -123,15 +132,16 @@
     <img id="taShot" alt="" hidden>
     <img class="ta-doc" src="/krate-doc.png" alt="">
     <div class="ta-text">
-      <p class="ta-kicker">Waiting for you</p>
+      <p class="ta-kicker" id="taKick">Waiting for you</p>
       <h2 id="taName">Your app</h2>
       <p class="ta-sub" id="taSize"></p>
       <p class="dlrow" id="taRow" hidden><a class="btn dark" id="taGet" href="#">Download the app</a></p>
+      <div id="taMore" hidden></div>
     </div>
   </div>
 </section>
 
-<section class="sec t wrap n">
+<section class="sec t wrap n" id="steps">
   <div class="osteps">
     <div class="card ostep rv">
       <div class="stepn">1</div>
@@ -207,6 +217,7 @@
   <div class="copy"><span>Krate © 2026 Krate Labs</span><span>Open source under MIT or Apache-2.0</span></div>
 </footer>
 <script src="/kit/site.js"></script>
+<script src="/kit/org.js"></script>
 <script>
 document.querySelectorAll("[data-copy]").forEach(function (b) {
   b.addEventListener("click", function () {
@@ -406,6 +417,10 @@ document.querySelectorAll("[data-copy]").forEach(function (b) {
   var hash;
   try { hash = new URLSearchParams(location.search).get("a"); } catch (e) { return; }
   if (!hash || !/^[0-9a-f]{8,64}$/.test(hash)) return;
+  // An organisation's private release (IC-947, CONTRACT.md Addendum 2):
+  // the hub sends a browser here with private=1 and tells nobody what the
+  // app is until the person's own sign-in proves they may open it.
+  if (new URLSearchParams(location.search).get("private") === "1") { privateApp(hash); return; }
   fetch("https://hub.krate.tech/meta/" + hash)
     .then(function (r) { return r.ok ? r.json() : null; })
     .then(function (d) {
@@ -457,12 +472,111 @@ document.querySelectorAll("[data-copy]").forEach(function (b) {
       if (g) g.hidden = true;
     })
     .catch(function () { /* the generic page is a correct fallback */ });
+
+  /* The four states of a private app: signed out, not shared with this
+   * account, removed from the organisation, and a member, who gets the
+   * app. The organisation is named only to a member, or to someone who
+   * was removed from it (R8). */
+  function privateApp(hash) {
+    var K = window.KrateOrg;
+    if (!K) return;
+    var here = "/open/?a=" + hash + "&private=1";
+    var card = document.getElementById("theirApp");
+    var more = document.getElementById("taMore");
+    var phone = /Android|iPhone|iPad|iPod/.test(navigator.userAgent);
+    document.getElementById("galleryCard").hidden = true;
+    card.classList.add("private");
+    function state(kick, title, sub, kids, refused) {
+      document.getElementById("taKick").textContent = kick;
+      document.getElementById("taName").textContent = title;
+      document.getElementById("taSize").textContent = sub;
+      more.textContent = "";
+      (kids || []).forEach(function (k) { if (k) more.appendChild(k); });
+      more.hidden = !(kids && kids.length);
+      card.classList.toggle("refused", !!refused);
+      // The steps are how to open an app you have; a refusal has none.
+      document.getElementById("steps").hidden = !!refused;
+      var lede = document.querySelector(".pagesub");
+      if (lede) lede.hidden = !!refused;
+      card.hidden = false;
+    }
+    function signedOut() {
+      document.getElementById("pageHead").textContent = "Someone sent you a private app.";
+      state("Private app", "Sign in to open it",
+        "It opens only for the people it was sent to. Sign in with the account they sent it to, and you come straight back here.",
+        [K.signInChoices(here)]);
+    }
+    if (!K.token()) { signedOut(); return; }
+    state("Private app", "Checking it is yours", "One moment.", []);
+    K.api("GET", "/a/" + hash, null, { accept: "application/json" }).then(function (res) {
+      var b = res.body || {};
+      if (res.ok) {
+        var name = (b.name || "").trim() || "the app";
+        var org = (b.org && (b.org.name || b.org.slug)) || "";
+        var size = typeof b.size === "number" && b.size > 0
+          ? (b.size < 1024 * 1024 ? Math.round(b.size / 1024) + " KB" : (b.size / (1024 * 1024)).toFixed(1) + " MB") + ". "
+          : "";
+        document.getElementById("pageHead").textContent = (org || "Someone") + " sent you " + name + ".";
+        state(org ? "From " + org : "Private app", name + (b.version ? " " + b.version : ""), size + "It runs on Mac, Windows and Linux.", [], false);
+        if (!phone) {
+          var get = document.getElementById("taGet");
+          var file = K.fileName(name);
+          get.textContent = "Download " + name;
+          get.href = "#";
+          get.addEventListener("click", function (ev) {
+            ev.preventDefault();
+            get.setAttribute("aria-busy", "true");
+            K.download(K.hub() + "/a/" + hash, file).then(function (out) {
+              get.removeAttribute("aria-busy");
+              more.textContent = "";
+              more.appendChild(document.createElement("p")).className = "fine";
+              more.lastChild.textContent = out.ok
+                ? "Saved as " + file + ". Double-click it to open it in Krate."
+                : K.refusal(out.body.error, { here: here }).title + ". Reload this page to try again.";
+              more.hidden = false;
+            });
+          });
+          document.getElementById("taRow").hidden = false;
+          document.getElementById("openTitle").textContent = "Double-click " + name;
+          document.getElementById("openBody").textContent = "Find it in your downloads and double-click it, "
+            + "the same as a document or a photo. Nothing to unzip, nothing to install per app.";
+        }
+        return;
+      }
+      if (b.error === "not-signed-in") { K.forget(); signedOut(); return; }
+      var again = el("a", { class: "btn ghost", href: K.signInHref(here), text: "Sign in with another account" });
+      if (b.error === "removed") {
+        // The hub names the organisation a removed member left: its name
+        // as org_name, its short name as org.
+        var from = b.org_name || (b.org && (b.org.name || b.org.slug || b.org)) || "the organisation";
+        document.getElementById("pageHead").textContent = "This app no longer opens for you.";
+        state("Private app", "You were removed from " + from, "Its apps no longer open for you. Your own apps and your account are untouched. If this is a mistake, ask one of its owners.", [], true);
+        return;
+      }
+      if (b.error === "not-a-member" || b.error === "role-cannot") {
+        document.getElementById("pageHead").textContent = "This app is private.";
+        state("Private app", "It is not shared with you", "It was sent to the people of an organisation, and this account is not one of them. If you expected it, ask the person who sent it to invite you.", [stack(again)], true);
+        return;
+      }
+      if (b.error === "digest-mismatch" || res.status === 404) {
+        document.getElementById("pageHead").textContent = "This app is not out yet.";
+        state("Private app", "There is no app at this link yet", "It may still be waiting for approval, or the link was cut short. Check the link you were sent.", [], true);
+        return;
+      }
+      var w = K.refusal(b.error, { here: here, message: b.message });
+      state("Private app", w.title, w.body, [], true);
+    });
+    function el(tag, a, t) { return K.el(tag, a, t); }
+    function stack(x) { return K.el("div", { class: "stack" }, [x]); }
+  }
 })();
 </script>
 <script>
 // Count the visit, and nothing about the visitor. No cookie, no stored id,
-// no referrer -- the page path and the day, sent to our own hub.
+// no referrer -- the page path and the day, sent to our own hub. A copy
+// of the site served from this machine counts nothing.
 (function () {
+  if (/^(127\.0\.0\.1|localhost|\[::1\])$/.test(location.hostname)) return;
   try {
     fetch("https://hub.krate.tech/view", {
       method: "POST",

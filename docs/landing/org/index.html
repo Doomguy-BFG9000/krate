@@ -1,0 +1,210 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="robots" content="noindex" />
+<title>Organisation</title>
+<meta name="description" content="An organisation's releases, approvals, people, activity and settings on Krate.">
+<link rel="icon" href="/krate-favicon.png" />
+<meta name="theme-color" content="#fbfbfd" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#08080a" media="(prefers-color-scheme: dark)">
+<script>(() => { const d = document.documentElement; d.classList.add('js'); let t = null; try { t = localStorage.getItem('krate-theme'); } catch (e) {} if (t !== 'light' && t !== 'dark') t = null; d.dataset.theme = t || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'); })();</script>
+<link rel="preload" href="/fonts/geist-var-latin.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="/kit/site.css">
+<style>
+.orgp { padding-top: 48px; }
+.back { display: inline-flex; align-items: center; gap: 6px; min-height: 36px; font-size: 14px; color: var(--ink-3); transition: color .2s; }
+.back:hover { color: var(--ink); }
+.back svg { width: 12px; height: 12px; transform: scaleX(-1); }
+.ohead { display: flex; align-items: center; gap: 16px; margin-top: 10px; }
+.otile { flex: none; width: 52px; height: 52px; border-radius: 15px; display: grid; place-items: center; font-weight: 600; font-size: 21px; color: var(--accent); background: var(--accent-soft); }
+.ohead .t { min-width: 0; }
+.ohead h1 { margin: 0; font-size: clamp(28px, 3.2vw, 38px); letter-spacing: -.045em; overflow-wrap: anywhere; }
+.ohead p { margin-top: 2px; font-size: 14.5px; color: var(--mute); }
+/* tabs: one row, scrolls sideways inside itself on a narrow phone */
+.tabs { display: flex; gap: 4px; margin: 26px 0 22px; padding: 4px; border-radius: 14px; background: var(--soft); overflow-x: auto; scrollbar-width: none; }
+.tabs::-webkit-scrollbar { display: none; }
+.tab { flex: none; display: inline-flex; align-items: center; gap: 7px; height: 38px; padding: 0 14px; border-radius: 10px; font-size: 14px; font-weight: 500; color: var(--ink-2); white-space: nowrap; transition: background .2s, color .2s, box-shadow .2s; }
+.tab:hover { color: var(--ink); }
+.tab[aria-selected="true"] { color: var(--ink); background: var(--s1); box-shadow: var(--sh-1); }
+.tab .n { min-width: 20px; height: 20px; padding: 0 6px; border-radius: 99px; display: inline-grid; place-items: center; font-size: 12px; font-weight: 600; color: var(--btn-ink); background: var(--accent); }
+.tab .short { display: none; }
+/* a pane: a heading line, then cards */
+.pane > * + * { margin-top: 14px; }
+.phd h2 { font-size: 21px; letter-spacing: -.03em; }
+.phd p { margin-top: 4px; font-size: 14.5px; color: var(--mute); text-wrap: pretty; }
+.card h3 { font-size: 16.5px; letter-spacing: -.02em; }
+.card h3 + p, .card .sub { margin-top: 4px; font-size: 14px; color: var(--mute); text-wrap: pretty; }
+.rows { padding: 4px 18px; }
+.rw { display: flex; align-items: center; align-content: flex-start; gap: 14px; padding: 14px 0; }
+.rw + .rw { border-top: 1px solid var(--line); }
+.rw .t { flex: 1; min-width: 0; }
+.rw b { font-weight: 500; font-size: 15.5px; overflow-wrap: anywhere; }
+.rw small { display: block; margin-top: 2px; font-size: 13px; line-height: 1.45; color: var(--ink-3); overflow-wrap: anywhere; }
+.rw .ra { flex: none; display: flex; align-items: center; gap: 8px; }
+.rw .note { margin-top: 6px; font-size: 13px; color: var(--ink-2); }
+.who { flex: none; width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; font-size: 13.5px; font-weight: 600; color: var(--ink-2); background: var(--s2); }
+.kind { margin-left: 6px; vertical-align: 1px; height: 20px; padding: 0 7px; font-size: 12px; }
+.dg { font: 500 12px ui-monospace, "SF Mono", Menlo, monospace; color: var(--ink-3); }
+.empty { padding: 22px 0; text-align: center; }
+.empty b { display: block; font-size: 16px; font-weight: 500; }
+.empty p { margin: 6px auto 0; max-width: 460px; font-size: 14px; color: var(--mute); text-wrap: pretty; }
+.loading { padding: 18px 0; font-size: 14px; color: var(--ink-3); }
+.sel { height: 36px; padding: 0 30px 0 12px; border-radius: 10px; border: 0; outline: 0; font-size: 13.5px; background: var(--s1) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' fill='none' stroke='%238a8a92' stroke-width='1.5'%3E%3Cpath d='M1 1l4 4 4-4'/%3E%3C/svg%3E") no-repeat right 11px center; box-shadow: inset 0 0 0 1px var(--line-2); appearance: none; -webkit-appearance: none; color: var(--ink); }
+.sel:focus-visible { box-shadow: inset 0 0 0 1.5px var(--accent); }
+.btn.quiet { color: var(--ink-2); background: transparent; box-shadow: inset 0 0 0 1px var(--line-2); }
+.btn.quiet:hover { color: var(--danger); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--danger) 40%, transparent); }
+.btn.soft-off { opacity: .55; }
+.btn.soft-off:hover { color: var(--ink-2); box-shadow: inset 0 0 0 1px var(--line-2); }
+.grp { margin: 14px 0 0; font-size: 12.5px; font-weight: 500; color: var(--ink-3); }
+.org-why b { display: block; font-weight: 500; color: var(--ink); }
+.org-why p { margin-top: 2px; }
+.org-why .btn { margin-top: 10px; }
+/* invite */
+.seg { display: inline-flex; padding: 3px; border-radius: 11px; background: var(--soft); }
+.seg button { height: 34px; padding: 0 12px; border-radius: 8px; font-size: 13.5px; font-weight: 500; color: var(--ink-2); }
+.seg button[aria-pressed="true"] { color: var(--ink); background: var(--s1); box-shadow: var(--sh-1); }
+.invrow { display: grid; grid-template-columns: minmax(0, 1fr) 160px auto; gap: 10px; margin-top: 14px; }
+.invrow .btn { height: 46px; }
+.invrow .rsays { grid-column: 1 / -1; order: 4; margin-top: 0; }
+.invrow .sel { height: 46px; font-size: 15px; border-radius: 12px; }
+.rsays { margin-top: 8px; font-size: 13px; color: var(--ink-3); }
+.invres { margin-top: 16px; padding: 16px; border-radius: 16px; background: var(--green-soft); }
+.invres b { font-weight: 500; }
+.invres .linkbox { display: flex; gap: 8px; margin-top: 10px; }
+.invres .linkbox .inp { flex: 1; min-width: 0; height: 42px; font-size: 13.5px; color: var(--ink-2); }
+.invres .linkbox .btn { height: 42px; flex: none; }
+.invres p { margin-top: 8px; font-size: 13.5px; color: var(--ink-2); }
+.invres .btn.link { height: 32px; margin-top: 4px; padding: 0; font-size: 13.5px; color: var(--ink-2); text-decoration: underline; text-underline-offset: 3px; }
+/* activity */
+.chain { display: inline-flex; align-items: center; gap: 7px; }
+.chain::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+.ev { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 14px; padding: 13px 0; }
+.ev + .ev { border-top: 1px solid var(--line); }
+.ev p { font-size: 14.5px; line-height: 1.5; color: var(--ink); overflow-wrap: anywhere; }
+.ev time { font-size: 12.5px; color: var(--ink-3); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.ev.denied p { color: var(--ink-2); }
+.ev .tag { margin-right: 6px; height: 20px; font-size: 12px; vertical-align: 1px; }
+/* settings */
+.fp { margin-top: 12px; font: 500 22px/1.2 ui-monospace, "SF Mono", Menlo, monospace; letter-spacing: .02em; overflow-wrap: anywhere; }
+.kv { display: grid; grid-template-columns: 130px minmax(0, 1fr); gap: 8px 16px; margin-top: 12px; font-size: 14px; }
+.kv dt { color: var(--ink-3); }
+.kv dd { color: var(--ink); overflow-wrap: anywhere; }
+.cmds { margin-top: 12px; display: grid; gap: 14px; }
+.cmds li { list-style: none; }
+.cmds li > span { display: block; font-size: 14px; color: var(--ink-2); }
+.cmds pre.k { margin-top: 6px; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12.5px; }
+/* the confirm sheet */
+dialog.sheet { width: min(460px, 100% - 32px); margin: auto; padding: 26px 24px 22px; border: 0; border-radius: 22px; color: var(--ink); background: var(--s1); box-shadow: var(--sh-2); }
+dialog.sheet::backdrop { background: rgba(8,8,10,.42); }
+dialog.sheet h2 { font-size: 21px; letter-spacing: -.03em; }
+dialog.sheet p { margin-top: 8px; font-size: 14.5px; color: var(--mute); text-wrap: pretty; }
+dialog.sheet .dgbox { margin-top: 14px; padding: 12px 14px; border-radius: 12px; background: var(--soft); font: 500 12.5px/1.5 ui-monospace, "SF Mono", Menlo, monospace; overflow-wrap: anywhere; color: var(--ink); }
+dialog.sheet .dgbox span { display: block; margin-bottom: 4px; font: 500 12px Geist, sans-serif; color: var(--ink-3); }
+dialog.sheet .acts2 { display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px; flex-wrap: wrap; }
+dialog.sheet #sheetWhy { margin-top: 14px; }
+.toast { margin-bottom: 14px; }
+.signedout { width: min(440px, 100%); margin-top: 8px; }
+@media (max-width: 680px) {
+  .orgp { padding-top: 28px; }
+  .tab .long { display: none; } .tab .short { display: inline; }
+  .tab { padding: 0 12px; }
+  .rows { padding: 2px 16px; }
+  .rw { flex-wrap: wrap; }
+  .rw { gap: 10px 14px; }
+  .rw .ra { width: 100%; padding-left: 48px; }
+  .rw.flat .ra { padding-left: 0; }
+  .rw .ra .btn.quiet { margin-left: auto; }
+  .rw.flat .ra .btn { flex: 1; }
+  .invrow { grid-template-columns: minmax(0, 1fr); }
+  .invrow .rsays { order: 0; margin: -2px 0 4px; }
+  .kv { grid-template-columns: minmax(0, 1fr); gap: 2px; }
+  .kv dd { margin-bottom: 8px; }
+  .fp { font-size: 19px; }
+  dialog.sheet .acts2 .btn { flex: 1; }
+  /* a thumb's 44px on a narrow screen, whatever the pointer reports */
+  .tab, .sel, .seg button, .rw .btn.sm, .btn.sm { min-height: 44px; }
+  .panel.signedout { padding: 30px 20px 26px; }
+}
+@media (pointer: coarse) { .sel, .seg button, .tab { min-height: 44px; } .invres .btn.link { min-height: 44px; } }
+</style>
+</head>
+<body>
+<header class="hd">
+  <a class="brand" href="/"><img src="/krate-mark-3d-96.png" alt="" width="26" height="26">Krate</a>
+  <nav class="menu" id="menu" aria-label="Main">
+    <a class="mi" href="/" data-set="product">Product</a>
+    <a class="mi" href="/studio/" data-set="studio">Studio</a>
+    <a class="mi" href="/cloud/" data-set="apps">Apps</a>
+    <a class="mi" href="/docs/" data-set="docs">Docs</a>
+    <a class="mi" href="/download/">Download</a>
+    <div class="drawer" id="drawer" role="menu">
+      <div class="set" data-set="product"><a href="/">Overview</a><a href="/reports/">Measurements</a><a href="/progress/">Progress</a><a href="/faq/">Questions</a><a href="https://github.com/incyashraj/krate/releases" target="_blank" rel="noopener">Changelog <span class="ext">↗</span></a></div>
+      <div class="set" data-set="studio"><a href="/studio/">Krate Studio</a><a href="/app/">Make an app in your browser</a><a href="/download/">Download Studio</a></div>
+      <div class="set" data-set="apps"><a href="/cloud/">Apps</a><a href="/open/">Received an app?</a><a href="/publish/">Publish an app</a></div>
+      <div class="set" data-set="docs"><a href="/docs/">Docs</a><a href="/docs/quickstart.html">Quickstart</a><a href="/docs/pages/make-an-app-with-ai.html">Make an app with AI</a><a href="https://github.com/incyashraj/krate" target="_blank" rel="noopener">GitHub <span class="ext">↗</span></a></div>
+    </div>
+  </nav>
+  <div class="hr">
+    <button class="thm" id="thm" aria-label="Switch between light and dark"><svg class="sun" width="17" height="17" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="9" cy="9" r="3.4"/><path d="M9 1.8v1.6M9 14.6v1.6M1.8 9h1.6M14.6 9h1.6M3.9 3.9l1.1 1.1M13 13l1.1 1.1M3.9 14.1L5 13M13 5l1.1-1.1"/></svg><svg class="moon" width="16" height="16" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><path d="M15.2 11.2A6.6 6.6 0 0 1 6.8 2.8a6.6 6.6 0 1 0 8.4 8.4z"/></svg></button>
+    <a class="signin" href="/login/">Sign in</a>
+    <a class="cta" href="/app/">Try Krate</a>
+    <button class="burger" id="burger" aria-label="Menu" aria-expanded="false"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M3 6.5h12M3 11.5h12"/></svg></button>
+  </div>
+</header>
+<nav class="mnav" id="mnav" aria-label="Menu">
+  <h6>Krate</h6><a href="/">Overview</a><a href="/studio/">Studio</a><a href="/app/">Make an app in your browser</a><a href="/cloud/">Apps</a><a href="/download/">Download</a>
+  <h6>Help</h6><a href="/docs/">Docs</a><a href="/faq/">Questions</a><a href="/open/">Received an app?</a><a href="/contact/">Contact</a><a href="/login/">Sign in</a>
+</nav>
+
+<main>
+<section class="orgp wrap n">
+  <div class="panel signedout" id="out" hidden>
+    <img class="mk" src="/krate-mark-3d-96.png" alt="">
+    <h1>Sign in to open this organisation</h1>
+    <p>Its releases, approvals and people are for its members. Sign in and you come straight back here.</p>
+    <div id="outChoices"></div>
+  </div>
+
+  <div id="stop" hidden></div>
+
+  <div id="in" hidden>
+    <a class="back" href="/orgs/"><svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4.5 2.5L8 6l-3.5 3.5"/></svg>Organisations</a>
+    <div class="ohead">
+      <div class="otile" id="oTile" aria-hidden="true"></div>
+      <div class="t"><h1 class="page" id="oName">Loading</h1><p id="oMeta"></p></div>
+    </div>
+    <div class="tabs" role="tablist" id="tabs" aria-label="Organisation"></div>
+    <div id="toast" class="toast" hidden></div>
+    <div class="pane" role="tabpanel" id="pane"></div>
+  </div>
+  <noscript><div class="panel"><h1>Organisation</h1><p>This page talks to the organisation through Krate's hub, which needs JavaScript. The command line does all of it too: <code class="k">krate org show</code>.</p></div></noscript>
+</section>
+</main>
+
+<dialog class="sheet" id="sheet" aria-labelledby="sheetH">
+  <h2 id="sheetH"></h2>
+  <p id="sheetP"></p>
+  <div class="dgbox" id="sheetDigest" hidden></div>
+  <div id="sheetWhy" hidden></div>
+  <div class="acts2">
+    <button class="btn ghost" type="button" id="sheetNo">Cancel</button>
+    <button class="btn dark" type="button" id="sheetYes"></button>
+  </div>
+</dialog>
+
+<footer class="foot">
+  <div class="fm"><img src="/krate-mark-3d-96.png" alt="Krate" width="30" height="30"></div>
+  <div><h5>Krate</h5><a href="/studio/">Studio</a><a href="/app/">Make in your browser</a><a href="/cloud/">Apps</a><a href="/download/">Download</a><a href="/about/">About</a></div>
+  <div><h5>Developers</h5><a href="/docs/">Docs</a><a href="/docs/quickstart.html">Quickstart</a><a href="https://github.com/incyashraj/krate" target="_blank" rel="noopener">GitHub</a><a href="https://github.com/incyashraj/krate/releases" target="_blank" rel="noopener">Changelog</a></div>
+  <div><h5>Ship an app</h5><a href="/how-to-distribute-a-desktop-app.html">Ship a desktop app</a><a href="/krate-vs-electron.html">Krate vs Electron</a><a href="/krate-vs-tauri.html">Krate vs Tauri</a><a href="/electron-alternatives.html">Electron alternatives</a><a href="/answers/">All answers</a><a href="/facts/">Facts</a></div>
+  <div><h5>Help</h5><a href="/faq/">Questions</a><a href="/open/">Received an app?</a><a href="/contact/">Contact</a><a href="/account/">Account</a></div>
+  <div><h5>Terms &amp; policies</h5><a href="/terms/">Terms</a><a href="/privacy/">Privacy</a><a href="/copyright/">Copyright</a><a href="/reports/">Measurements</a></div>
+  <div class="copy"><span>Krate © 2026 Krate Labs</span><span>Open source under MIT or Apache-2.0</span></div>
+</footer>
+<script src="/kit/site.js"></script>
+<script src="/kit/org.js"></script>
+<script src="/org/dashboard.js"></script>
+</body>
+</html>

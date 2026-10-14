@@ -251,6 +251,13 @@ jobs:
           # nonce this browser started with comes back beside it, and /make
           # takes no session from its URL at all.
           node docs/landing/studio/signin-test.mjs
+          # And that sign-in comes back to the page that sent the person,
+          # and only to a page on this site: ?next= is no open redirect.
+          node docs/landing/studio/login-next-test.mjs
+          # And that the organisation pages follow the role matrix, say
+          # every refusal in words, approve the exact digest shown, and
+          # name a private app's organisation only to its own people.
+          node docs/landing/studio/org-pages-test.mjs
           # And that the homepage's prompt bar starts a build only from its
           # own fresh handoff, once, and never from a link (K-885).
           node docs/landing/studio/frontpage-test.mjs

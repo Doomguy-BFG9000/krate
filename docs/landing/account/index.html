@@ -36,6 +36,8 @@
 .row > .tag { flex: none; align-self: flex-start; }
 .tag.on { color: var(--green); background: var(--green-soft); }
 .plan-acts { margin-top: 16px; flex-wrap: wrap; }
+.orgrow { flex-wrap: wrap; }
+.orgrow .grow { min-width: 220px; }
 .plan-acts:empty { display: none; }
 /* invite */
 .refbox { display: flex; gap: 8px; margin-top: 16px; }
@@ -128,6 +130,14 @@
         </div>
         <div class="row plan-acts" id="planActs"></div>
         <p class="note hidden" id="planNote"></p>
+      </div>
+
+      <div class="card">
+        <div class="row orgrow">
+          <div class="grow"><h2>Organisations</h2>
+            <p class="sub">Send apps privately to your team. Each release goes out only after a second person approves it.</p></div>
+          <a class="btn ghost sm" href="/orgs/">Your organisations</a>
+        </div>
       </div>
 
       <div class="card">
