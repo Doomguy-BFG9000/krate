@@ -13510,3 +13510,2101 @@ fn setup_installs_a_verified_wasi_sdk_into_krates_folder_and_refuses_a_bad_one()
         "a build now finds it: {line}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// The organisation pilot (IC-946), driven through the CLI against a fake hub
+// that keeps Plan/org-pilot/CONTRACT.md: its routes, its JSON shapes, its
+// stable reasons and its role matrix. The real hub is tested on its own
+// side; this proves what the CLI sends and what a person reads.
+// ---------------------------------------------------------------------------
+
+/// One organisation in the fake hub. Its behaviour follows the real hub's
+/// organisation store (cloud/worker/src/org.js): the same reasons, status
+/// codes, ordering of checks, and JSON shapes.
+#[derive(Default)]
+struct FakeOrg {
+    name: String,
+    /// login -> (role, state), state "active" or "removed". A removed
+    /// member's row stays, so history keeps naming them.
+    members: std::collections::BTreeMap<String, (String, String)>,
+    invites: std::collections::BTreeMap<String, FakeInvite>,
+    root: Option<String>,
+    /// Release keys the root withdrew.
+    revoked: std::collections::BTreeSet<String>,
+    candidates: std::collections::BTreeMap<String, FakeCandidate>,
+    audit: Vec<serde_json::Value>,
+}
+
+struct FakeInvite {
+    login: String,
+    role: String,
+    expires: u64,
+    state: &'static str,
+}
+
+struct FakeCandidate {
+    bytes: Vec<u8>,
+    uploader: String,
+    uploaded_at: u64,
+    name: String,
+    version: String,
+    signer: String,
+    state: &'static str,
+    approver: Option<String>,
+    approved_at: Option<u64>,
+}
+
+/// A big-file upload in flight (IC-945's path, carrying an organisation).
+struct FakeBigUpload {
+    org: String,
+    who: String,
+    parts: std::collections::BTreeMap<usize, Vec<u8>>,
+}
+
+#[derive(Default)]
+struct FakeOrgHub {
+    base: String,
+    now: u64,
+    orgs: std::collections::BTreeMap<String, FakeOrg>,
+    /// Idempotency-Key -> (what the request was, the answer it got). Only
+    /// successful answers are remembered, as on the hub.
+    keys: std::collections::BTreeMap<String, (String, (u16, Vec<u8>))>,
+    keyless_mutations: Vec<String>,
+    /// Every request: method, path, the Authorization header if any.
+    seen: Vec<(String, String, Option<String>)>,
+    /// Every request body, so a test can see what left the machine.
+    bodies: Vec<Vec<u8>>,
+    big: Option<FakeBigUpload>,
+    served: usize,
+    next_invite: u32,
+    /// The next request is answered with this reason, whatever it was.
+    force_next: Option<(u16, String)>,
+}
+
+type FakeAnswer = (u16, Vec<(String, String)>, Vec<u8>);
+
+/// The hub's status for each stable reason (org.js STATUS).
+fn fake_status(reason: &str) -> u16 {
+    match reason {
+        "not-signed-in" => 401,
+        "last-owner" | "slug-taken" | "idempotency-key-reused" | "bytes-held-elsewhere" => 409,
+        "digest-mismatch" | "no-such-org" => 404,
+        "not-signed-for-this-org" | "invalid-bundle" => 422,
+        "invite-expired" | "invite-used" | "invite-revoked" => 410,
+        "slug-invalid" | "bad-request" => 400,
+        _ => 403,
+    }
+}
+
+fn fake_refuse_with(status: u16, reason: &str, message: &str) -> FakeAnswer {
+    (
+        status,
+        vec![("content-type".into(), "application/json".into())],
+        serde_json::json!({ "error": reason, "message": message })
+            .to_string()
+            .into_bytes(),
+    )
+}
+
+fn fake_refuse(status: u16, reason: &str) -> FakeAnswer {
+    fake_refuse_with(status, reason, &format!("refused: {reason}"))
+}
+
+fn fake_json(status: u16, value: serde_json::Value) -> FakeAnswer {
+    (
+        status,
+        vec![("content-type".into(), "application/json".into())],
+        value.to_string().into_bytes(),
+    )
+}
+
+fn fake_event_hash(event: &serde_json::Value, prev: &str) -> String {
+    let mut body = event.clone();
+    if let Some(map) = body.as_object_mut() {
+        map.remove("hash");
+    }
+    format!("{:x}", Sha256::digest(format!("{}{prev}", body).as_bytes()))
+}
+
+fn fake_chain_ok(events: &[serde_json::Value]) -> bool {
+    let mut prev = String::new();
+    for event in events {
+        if event["prev_hash"].as_str() != Some(prev.as_str()) {
+            return false;
+        }
+        let hash = fake_event_hash(event, &prev);
+        if event["hash"].as_str() != Some(hash.as_str()) {
+            return false;
+        }
+        prev = hash;
+    }
+    true
+}
+
+impl FakeOrg {
+    fn role_of(&self, who: &str) -> Option<&str> {
+        self.members
+            .get(who)
+            .filter(|(_, state)| state == "active")
+            .map(|(role, _)| role.as_str())
+    }
+
+    fn was_removed(&self, who: &str) -> bool {
+        self.members
+            .get(who)
+            .is_some_and(|(_, state)| state == "removed")
+    }
+
+    fn owners(&self) -> usize {
+        self.members
+            .values()
+            .filter(|(role, state)| role == "owner" && state == "active")
+            .count()
+    }
+
+    fn record(
+        &mut self,
+        at: u64,
+        actor: &str,
+        action: &str,
+        target: &str,
+        result: &str,
+        reason: Option<&str>,
+    ) {
+        let prev = self
+            .audit
+            .last()
+            .and_then(|e| e["hash"].as_str())
+            .unwrap_or("")
+            .to_string();
+        let mut event = serde_json::json!({
+            "seq": self.audit.len() + 1,
+            "at": at,
+            "actor": actor,
+            "action": action,
+            "target": target,
+            "result": result,
+            "reason": reason,
+            "prev_hash": prev,
+        });
+        let hash = fake_event_hash(&event, &prev);
+        event["hash"] = serde_json::json!(hash);
+        self.audit.push(event);
+    }
+}
+
+/// The candidate judge: why these bytes are not signed for the
+/// organisation, or the app's name, version and signing key.
+fn fake_signed_for(
+    bytes: &[u8],
+    root: Option<&str>,
+    revoked: &std::collections::BTreeSet<String>,
+) -> Result<(String, String, String), String> {
+    let opened = krate_bundle::open_bytes(bytes).map_err(|err| format!("{err}"))?;
+    let envelope = opened
+        .signature_envelope()
+        .map_err(|err| format!("{err}"))?
+        .ok_or("it is not signed")?;
+    let verdict = opened
+        .full_verdict(&krate_bundle::delegation::RevocationState::Known(Vec::new()))
+        .map_err(|err| format!("{err}"))?
+        .ok_or("it is not signed")?;
+    let authority = opened
+        .signing_authority()
+        .map_err(|err| format!("{err}"))?
+        .ok_or("it is not signed")?;
+    if !verdict.is_trustworthy() {
+        return Err("its signature does not verify".into());
+    }
+    if Some(authority.as_str()) != root {
+        return Err(
+            "it needs the organisation's root key or a release key that root delegated".into(),
+        );
+    }
+    if revoked.contains(&envelope.public_key) {
+        return Err("its release key was withdrawn by the organisation's root".into());
+    }
+    let app = &opened.manifest().app;
+    Ok((app.name.clone(), app.version.clone(), envelope.public_key))
+}
+
+impl FakeOrgHub {
+    fn handle(
+        &mut self,
+        method: &str,
+        path: &str,
+        headers: &[(String, String)],
+        body: &[u8],
+    ) -> FakeAnswer {
+        let header = |name: &str| {
+            headers
+                .iter()
+                .find(|(k, _)| k == name)
+                .map(|(_, v)| v.clone())
+        };
+        let auth = header("authorization");
+        self.seen
+            .push((method.to_string(), path.to_string(), auth.clone()));
+        self.bodies.push(body.to_vec());
+        let who = auth
+            .as_deref()
+            .and_then(|a| a.strip_prefix("Bearer tok-"))
+            .map(|login| login.to_ascii_lowercase());
+        if let Some((status, reason)) = self.force_next.take() {
+            return fake_refuse(status, &reason);
+        }
+        let mutation = method != "GET";
+        if mutation && path.starts_with("/orgs") {
+            let Some(key) = header("idempotency-key") else {
+                self.keyless_mutations.push(format!("{method} {path}"));
+                return self.route(method, path, who, body);
+            };
+            let fingerprint = format!("{method} {path} {:x}", Sha256::digest(body));
+            if let Some((was, (status, answer))) = self.keys.get(&key) {
+                if *was != fingerprint {
+                    return fake_refuse(409, "idempotency-key-reused");
+                }
+                return (*status, vec![], answer.clone());
+            }
+            let answer = self.route(method, path, who, body);
+            if answer.0 < 300 {
+                self.keys
+                    .insert(key, (fingerprint, (answer.0, answer.2.clone())));
+            }
+            return answer;
+        }
+        self.route(method, path, who, body)
+    }
+
+    fn route(&mut self, method: &str, path: &str, who: Option<String>, body: &[u8]) -> FakeAnswer {
+        let now = self.now;
+        let base = self.base.clone();
+        let parts: Vec<&str> = path.trim_start_matches('/').split('/').collect();
+
+        // A private release: the organisation is read on every fetch, and
+        // every refusal is a 403.
+        if method == "GET" && parts.len() == 2 && parts[0] == "a" {
+            let digest = parts[1];
+            let Some(org) = self
+                .orgs
+                .values_mut()
+                .find(|org| org.candidates.contains_key(digest))
+            else {
+                return (404, vec![], b"not found".to_vec());
+            };
+            let target = format!("release:{digest}");
+            let Some(who) = who else {
+                // Refused before the store is asked: not audited.
+                return fake_refuse(403, "not-signed-in");
+            };
+            let reason = if org.was_removed(&who) {
+                Some("removed")
+            } else if org.role_of(&who).is_none() {
+                Some("not-a-member")
+            } else if org.candidates[digest].state != "released" {
+                Some("digest-mismatch")
+            } else {
+                None
+            };
+            if let Some(reason) = reason {
+                org.record(
+                    now,
+                    &who,
+                    "release.download",
+                    &target,
+                    "denied",
+                    Some(reason),
+                );
+                return fake_refuse(403, reason);
+            }
+            org.record(now, &who, "release.download", &target, "allowed", None);
+            self.served += 1;
+            return (200, vec![], org.candidates[digest].bytes.clone());
+        }
+
+        // The big-file path, carrying the organisation (IC-945 + IC-946).
+        if parts.first() == Some(&"publish") && parts.get(1) == Some(&"big") {
+            return self.big_path(method, &parts, who, body);
+        }
+
+        if parts.first() != Some(&"orgs") {
+            return (404, vec![], b"not found".to_vec());
+        }
+        let json: serde_json::Value = serde_json::from_slice(body).unwrap_or_default();
+
+        if method == "POST" && parts.len() == 1 {
+            let slug = json["slug"].as_str().unwrap_or("").to_string();
+            let valid = slug.len() >= 2
+                && slug.len() <= 39
+                && slug.as_bytes()[0].is_ascii_lowercase()
+                && slug
+                    .bytes()
+                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-');
+            if !valid {
+                return fake_refuse(400, "slug-invalid");
+            }
+            let Some(who) = who else {
+                return fake_refuse(401, "not-signed-in");
+            };
+            if self.orgs.contains_key(&slug) {
+                return fake_refuse(409, "slug-taken");
+            }
+            let mut org = FakeOrg {
+                name: json["name"].as_str().unwrap_or(&slug).to_string(),
+                ..Default::default()
+            };
+            org.members
+                .insert(who.clone(), ("owner".into(), "active".into()));
+            org.record(
+                now,
+                &who,
+                "org.create",
+                &format!("org:{slug}"),
+                "allowed",
+                None,
+            );
+            org.record(
+                now,
+                &who,
+                "member.add",
+                &format!("member:{who}"),
+                "allowed",
+                Some("owner"),
+            );
+            let name = org.name.clone();
+            self.orgs.insert(slug.clone(), org);
+            return fake_json(
+                201,
+                serde_json::json!({ "org": { "slug": slug, "name": name, "root_key": null } }),
+            );
+        }
+
+        let slug = parts.get(1).copied().unwrap_or("").to_string();
+        let Some(who) = who else {
+            return fake_refuse(401, "not-signed-in");
+        };
+        let Some(org) = self.orgs.get_mut(&slug) else {
+            return fake_refuse(404, "no-such-org");
+        };
+        let action = match (method, parts.get(2).copied(), parts.len()) {
+            ("GET", None, 2) => "org.view",
+            ("POST", Some("invites"), 3) => "invite.create",
+            ("DELETE", Some("invites"), 4) => "invite.revoke",
+            ("POST", Some("invites"), 5) => "invite.accept",
+            ("PUT", Some("members"), 4) => "member.role",
+            ("DELETE", Some("members"), 4) => "member.remove",
+            ("PUT", Some("root-key"), 3) => "root-key.set",
+            ("POST", Some("candidates"), 3) => "candidate.publish",
+            ("GET", Some("candidates"), 3) => "candidate.list",
+            ("POST", Some("candidates"), 5) => "candidate.approve",
+            ("GET", Some("releases"), 3) => "release.list",
+            ("GET", Some("audit"), 3) => "audit.read",
+            _ => return (404, vec![], b"not found".to_vec()),
+        };
+        let target = match action {
+            "member.role" | "member.remove" => format!("member:{}", parts[3]),
+            "candidate.approve" => format!("candidate:{}", parts[3]),
+            "invite.create" => format!(
+                "invite:{}/{}",
+                json["login"].as_str().unwrap_or(""),
+                json["role"].as_str().unwrap_or("")
+            ),
+            _ => format!("org:{slug}"),
+        };
+        let deny_with = |org: &mut FakeOrg, reason: &str, message: &str| {
+            org.record(now, &who, action, &target, "denied", Some(reason));
+            fake_refuse_with(fake_status(reason), reason, message)
+        };
+        let deny =
+            |org: &mut FakeOrg, reason: &str| deny_with(org, reason, &format!("refused: {reason}"));
+
+        // Accepting is the one route a non-member may take.
+        if action == "invite.accept" {
+            let code = parts[3];
+            let Some(invite) = org.invites.get(code) else {
+                return deny(org, "invite-revoked");
+            };
+            let refusal = if invite.login != who {
+                Some("invite-for-someone-else")
+            } else if invite.state == "revoked" {
+                Some("invite-revoked")
+            } else if invite.state == "used" {
+                Some("invite-used")
+            } else if now >= invite.expires {
+                Some("invite-expired")
+            } else {
+                None
+            };
+            if let Some(reason) = refusal {
+                return deny(org, reason);
+            }
+            let invite = org.invites.get_mut(code).unwrap();
+            invite.state = "used";
+            let role = invite.role.clone();
+            org.members
+                .insert(who.clone(), (role.clone(), "active".into()));
+            org.record(now, &who, "invite.accept", code, "allowed", None);
+            return fake_json(
+                200,
+                serde_json::json!({ "membership": {
+                    "org": slug, "login": who, "role": role, "state": "active",
+                } }),
+            );
+        }
+
+        let Some(role) = org.role_of(&who).map(str::to_string) else {
+            if org.was_removed(&who) {
+                return deny(org, "removed");
+            }
+            return deny(org, "not-a-member");
+        };
+        let is = |names: &[&str]| names.contains(&role.as_str());
+        let high = |r: &str| r == "owner" || r == "admin";
+        match action {
+            "org.view" => {
+                let members: Vec<serde_json::Value> = org
+                    .members
+                    .iter()
+                    .filter(|(login, _)| role != "recipient" || **login == who)
+                    .map(|(login, (role, state))| {
+                        serde_json::json!({ "org": slug, "login": login, "role": role, "state": state })
+                    })
+                    .collect();
+                fake_json(
+                    200,
+                    serde_json::json!({
+                        "org": { "slug": slug, "name": org.name, "root_key": org.root },
+                        "me": { "org": slug, "login": who, "role": role, "state": "active" },
+                        "members": members,
+                    }),
+                )
+            }
+            "invite.create" => {
+                let login = json["login"].as_str().unwrap_or("").to_ascii_lowercase();
+                let invited = json["role"].as_str().unwrap_or("").to_string();
+                let allowed = role == "owner" || (role == "admin" && !high(&invited));
+                if !allowed {
+                    return deny(org, "role-cannot");
+                }
+                self.next_invite += 1;
+                let code = format!("inv{:04}", self.next_invite);
+                let expires = now + 7 * 86_400;
+                org.invites.insert(
+                    code.clone(),
+                    FakeInvite {
+                        login: login.clone(),
+                        role: invited.clone(),
+                        expires,
+                        state: "open",
+                    },
+                );
+                org.record(now, &who, "invite.create", &target, "allowed", None);
+                fake_json(
+                    201,
+                    serde_json::json!({ "code": code, "expires_at": expires, "login": login, "role": invited }),
+                )
+            }
+            "invite.revoke" => {
+                let code = parts[3];
+                let Some(invite) = org.invites.get(code) else {
+                    return deny(org, "invite-revoked");
+                };
+                if !(role == "owner" || (role == "admin" && !high(&invite.role))) {
+                    return deny(org, "role-cannot");
+                }
+                if invite.state == "used" {
+                    return deny(org, "invite-used");
+                }
+                org.invites.get_mut(code).unwrap().state = "revoked";
+                org.record(now, &who, "invite.revoke", code, "allowed", None);
+                (204, vec![], vec![])
+            }
+            "member.role" => {
+                let login = parts[3].to_string();
+                let new = json["role"].as_str().unwrap_or("").to_string();
+                let Some(old) = org.role_of(&login).map(str::to_string) else {
+                    return deny(org, "not-a-member");
+                };
+                // Anything touching an owner or an admin is an owner's.
+                let allowed = role == "owner" || (role == "admin" && !high(&old) && !high(&new));
+                if !allowed {
+                    return deny(org, "role-cannot");
+                }
+                if old == "owner" && new != "owner" && org.owners() <= 1 {
+                    return deny(org, "last-owner");
+                }
+                org.members
+                    .insert(login.clone(), (new.clone(), "active".into()));
+                org.record(
+                    now,
+                    &who,
+                    "member.role",
+                    &target,
+                    "allowed",
+                    Some(&format!("{old}->{new}")),
+                );
+                fake_json(
+                    200,
+                    serde_json::json!({ "membership": {
+                        "org": slug, "login": login, "role": new, "state": "active",
+                    } }),
+                )
+            }
+            "member.remove" => {
+                let login = parts[3].to_string();
+                let Some(theirs) = org.role_of(&login).map(str::to_string) else {
+                    return deny(org, "not-a-member");
+                };
+                let allowed =
+                    role == "owner" || login == who || (role == "admin" && theirs != "owner");
+                if !allowed {
+                    return deny(org, "role-cannot");
+                }
+                if theirs == "owner" && org.owners() <= 1 {
+                    return deny(org, "last-owner");
+                }
+                org.members
+                    .insert(login.clone(), (theirs.clone(), "removed".into()));
+                org.record(
+                    now,
+                    &who,
+                    "member.remove",
+                    &target,
+                    "allowed",
+                    Some(&theirs),
+                );
+                (204, vec![], vec![])
+            }
+            "root-key.set" => {
+                if role != "owner" {
+                    return deny(org, "role-cannot");
+                }
+                let key = json["public_key"]
+                    .as_str()
+                    .unwrap_or("")
+                    .to_ascii_lowercase();
+                let mut withdrawn = Vec::new();
+                if !json["revocations"].is_null() {
+                    let list = &json["revocations"]["list"];
+                    if list["root"].as_str() != Some(key.as_str()) {
+                        return deny_with(
+                            org,
+                            "not-signed-for-this-org",
+                            &format!(
+                                "this app is not signed for {slug}: the revocation list is \
+                                 signed by a different root than the key being registered"
+                            ),
+                        );
+                    }
+                    for r in list["revocations"].as_array().cloned().unwrap_or_default() {
+                        withdrawn.push(r["key"].as_str().unwrap_or("").to_string());
+                    }
+                }
+                let previous = org.root.replace(key.clone());
+                if previous.as_deref() != Some(key.as_str()) {
+                    let what = if previous.is_some() {
+                        "root-key.rotate"
+                    } else {
+                        "root-key.register"
+                    };
+                    org.record(
+                        now,
+                        &who,
+                        what,
+                        &format!("root-key:{}", &key[..16.min(key.len())]),
+                        "allowed",
+                        None,
+                    );
+                }
+                let mut added = 0;
+                for k in withdrawn {
+                    if org.revoked.insert(k.clone()) {
+                        org.record(
+                            now,
+                            &who,
+                            "release-key.revoke",
+                            &format!("release-key:{}", &k[..16.min(k.len())]),
+                            "allowed",
+                            None,
+                        );
+                        added += 1;
+                    }
+                }
+                fake_json(
+                    200,
+                    serde_json::json!({ "key": {
+                        "public_key": key,
+                        "set_at": now,
+                        "set_by": who,
+                        "previous": previous.filter(|p| *p != key),
+                        "revoked_keys": org.revoked.len(),
+                        "revoked_now": added,
+                    } }),
+                )
+            }
+            "candidate.publish" => {
+                if !is(&["owner", "developer"]) {
+                    return deny(org, "role-cannot");
+                }
+                let digest = format!("{:x}", Sha256::digest(body));
+                let (name, version, signer) =
+                    match fake_signed_for(body, org.root.as_deref(), &org.revoked) {
+                        Ok(app) => app,
+                        Err(why) => {
+                            return deny_with(
+                                org,
+                                "not-signed-for-this-org",
+                                &format!("this app is not signed for {slug}: {why}"),
+                            )
+                        }
+                    };
+                if let Some(existing) = org.candidates.get(&digest) {
+                    return fake_json(
+                        200,
+                        serde_json::json!({
+                            "digest": digest, "state": existing.state,
+                            "name": existing.name, "version": existing.version,
+                        }),
+                    );
+                }
+                org.candidates.insert(
+                    digest.clone(),
+                    FakeCandidate {
+                        bytes: body.to_vec(),
+                        uploader: who.clone(),
+                        uploaded_at: now,
+                        name: name.clone(),
+                        version: version.clone(),
+                        signer,
+                        state: "waiting-for-approval",
+                        approver: None,
+                        approved_at: None,
+                    },
+                );
+                org.record(
+                    now,
+                    &who,
+                    "candidate.publish",
+                    &format!("candidate:{digest}"),
+                    "allowed",
+                    None,
+                );
+                fake_json(
+                    201,
+                    serde_json::json!({
+                        "digest": digest, "state": "waiting-for-approval",
+                        "name": name, "version": version,
+                    }),
+                )
+            }
+            "candidate.approve" => {
+                let digest = parts[3].to_string();
+                // Separation first, whatever the role: the uploader hears
+                // that someone else must approve it.
+                if org
+                    .candidates
+                    .get(&digest)
+                    .is_some_and(|c| c.uploader == who)
+                {
+                    return deny(org, "self-approval");
+                }
+                if !is(&["owner", "reviewer"]) {
+                    return deny(org, "role-cannot");
+                }
+                let Some(candidate) = org.candidates.get(&digest) else {
+                    return deny(org, "digest-mismatch");
+                };
+                if candidate.state != "released" && org.revoked.contains(&candidate.signer) {
+                    return deny_with(
+                        org,
+                        "not-signed-for-this-org",
+                        &format!(
+                            "this app is not signed for {slug}: its release key was withdrawn \
+                             by the organisation's root after it was uploaded"
+                        ),
+                    );
+                }
+                if candidate.state != "released" {
+                    let candidate = org.candidates.get_mut(&digest).unwrap();
+                    candidate.state = "released";
+                    candidate.approver = Some(who.clone());
+                    candidate.approved_at = Some(now);
+                    org.record(now, &who, "candidate.approve", &target, "allowed", None);
+                }
+                fake_json(
+                    200,
+                    serde_json::json!({ "release": {
+                        "digest": digest, "url": format!("{base}/a/{digest}")
+                    } }),
+                )
+            }
+            "release.list" => {
+                let list: Vec<serde_json::Value> = org
+                    .candidates
+                    .iter()
+                    .filter(|(_, c)| c.state == "released")
+                    .map(|(digest, c)| {
+                        serde_json::json!({
+                            "name": c.name, "version": c.version, "digest": digest,
+                            "url": format!("{base}/a/{digest}"),
+                            "uploaded_by": c.uploader, "approved_by": c.approver,
+                            "at": c.approved_at,
+                        })
+                    })
+                    .collect();
+                fake_json(200, serde_json::json!(list))
+            }
+            "candidate.list" => {
+                if role == "recipient" {
+                    return deny(org, "role-cannot");
+                }
+                let list: Vec<serde_json::Value> = org
+                    .candidates
+                    .iter()
+                    .map(|(digest, c)| {
+                        serde_json::json!({
+                            "digest": digest, "name": c.name, "version": c.version,
+                            "state": c.state, "uploaded_by": c.uploader,
+                            "uploaded_at": c.uploaded_at, "approved_by": c.approver,
+                            "approved_at": c.approved_at,
+                        })
+                    })
+                    .collect();
+                fake_json(200, serde_json::json!(list))
+            }
+            "audit.read" => {
+                if !is(&["owner", "admin"]) {
+                    return deny(org, "role-cannot");
+                }
+                let chain_ok = fake_chain_ok(&org.audit);
+                fake_json(
+                    200,
+                    serde_json::json!({ "events": org.audit, "chain_ok": chain_ok }),
+                )
+            }
+            _ => (404, vec![], b"not found".to_vec()),
+        }
+    }
+
+    fn big_path(
+        &mut self,
+        method: &str,
+        parts: &[&str],
+        who: Option<String>,
+        body: &[u8],
+    ) -> FakeAnswer {
+        let now = self.now;
+        match (method, parts.len()) {
+            ("POST", 3) if parts[2] == "start" => {
+                let Some(who) = who else {
+                    return fake_refuse(401, "not-signed-in");
+                };
+                let ask: serde_json::Value = serde_json::from_slice(body).unwrap_or_default();
+                let slug = ask["org"].as_str().unwrap_or("").to_string();
+                let Some(org) = self.orgs.get_mut(&slug) else {
+                    return fake_refuse(404, "no-such-org");
+                };
+                if !matches!(org.role_of(&who), Some("owner" | "developer")) {
+                    org.record(
+                        now,
+                        &who,
+                        "candidate.publish",
+                        &format!("org:{slug}"),
+                        "denied",
+                        Some("role-cannot"),
+                    );
+                    return fake_refuse(403, "role-cannot");
+                }
+                let size = ask["size"].as_u64().unwrap_or(0) as usize;
+                let part_size = 5 * 1024 * 1024usize;
+                self.big = Some(FakeBigUpload {
+                    org: slug,
+                    who,
+                    parts: Default::default(),
+                });
+                fake_json(
+                    200,
+                    serde_json::json!({
+                        "id": "orgup1", "parts": size.div_ceil(part_size),
+                        "part_size": part_size, "token": "uptok",
+                    }),
+                )
+            }
+            ("PUT", 5) if parts[3] == "part" => {
+                let n: usize = parts[4].parse().unwrap_or(0);
+                if let Some(big) = self.big.as_mut() {
+                    big.parts.insert(n, body.to_vec());
+                }
+                fake_json(
+                    200,
+                    serde_json::json!({ "part": n, "etag": format!("e{n}") }),
+                )
+            }
+            ("POST", 4) if parts[3] == "finish" => fake_json(
+                202,
+                serde_json::json!({ "id": "orgup1", "kind": "bundle", "status": "judging" }),
+            ),
+            ("GET", 3) => {
+                let Some(big) = self.big.take() else {
+                    return (404, vec![], vec![]);
+                };
+                let bytes: Vec<u8> = big.parts.values().flatten().copied().collect();
+                let digest = format!("{:x}", Sha256::digest(&bytes));
+                let slug = big.org.clone();
+                let org = self.orgs.get_mut(&slug).unwrap();
+                let (name, version, signer) = match fake_signed_for(
+                    &bytes,
+                    org.root.as_deref(),
+                    &org.revoked,
+                ) {
+                    Ok(app) => app,
+                    Err(why) => {
+                        org.record(
+                            now,
+                            &big.who,
+                            "candidate.publish",
+                            &format!("candidate:{digest}"),
+                            "denied",
+                            Some("not-signed-for-this-org"),
+                        );
+                        return fake_json(
+                            200,
+                            serde_json::json!({
+                                "id": "orgup1", "kind": "bundle", "status": "refused", "org": slug,
+                                "problem": format!(
+                                    "not-signed-for-this-org: this app is not signed for {slug}: {why}"
+                                ),
+                            }),
+                        );
+                    }
+                };
+                org.candidates.insert(
+                    digest.clone(),
+                    FakeCandidate {
+                        bytes,
+                        uploader: big.who.clone(),
+                        uploaded_at: now,
+                        name,
+                        version,
+                        signer,
+                        state: "waiting-for-approval",
+                        approver: None,
+                        approved_at: None,
+                    },
+                );
+                org.record(
+                    now,
+                    &big.who,
+                    "candidate.publish",
+                    &format!("candidate:{digest}"),
+                    "allowed",
+                    None,
+                );
+                fake_json(
+                    200,
+                    serde_json::json!({
+                        "id": "orgup1", "kind": "bundle", "status": "candidate", "org": slug,
+                        "digest": digest, "state": "waiting-for-approval",
+                    }),
+                )
+            }
+            _ => (404, vec![], vec![]),
+        }
+    }
+}
+
+/// A fake organisation hub on a local port, and one signed-in home per
+/// person (`tok-<login>` is each one's GitHub token as the hub sees it).
+struct OrgWorld {
+    hub: std::sync::Arc<std::sync::Mutex<FakeOrgHub>>,
+    addr: SocketAddr,
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    homes: std::collections::BTreeMap<String, tempfile::TempDir>,
+    dir: tempfile::TempDir,
+}
+
+impl Drop for OrgWorld {
+    fn drop(&mut self) {
+        self.stop.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+impl OrgWorld {
+    /// `None` when this machine will not bind a local port (announced by
+    /// `bind_local_fixture_listener`).
+    fn new(people: &[&str]) -> Option<OrgWorld> {
+        let hub = std::sync::Arc::new(std::sync::Mutex::new(FakeOrgHub {
+            now: 1_760_400_000,
+            ..Default::default()
+        }));
+        let state = hub.clone();
+        let (addr, stop) =
+            spawn_fake_hub(std::sync::Arc::new(move |method, path, headers, body| {
+                state.lock().unwrap().handle(method, path, headers, body)
+            }))?;
+        hub.lock().unwrap().base = format!("http://{addr}");
+        let mut homes = std::collections::BTreeMap::new();
+        for login in people.iter().chain(["nobody"].iter()) {
+            let home = tempfile::tempdir().expect("home");
+            std::fs::create_dir_all(home.path().join(".krate")).expect("krate home");
+            if *login != "nobody" {
+                std::fs::write(
+                    home.path().join(".krate/github.json"),
+                    serde_json::json!({
+                        "login": login, "name": null, "avatar_url": null,
+                        "token": format!("tok-{login}"),
+                    })
+                    .to_string(),
+                )
+                .expect("sign-in");
+            }
+            homes.insert(login.to_string(), home);
+        }
+        Some(OrgWorld {
+            hub,
+            addr,
+            stop,
+            homes,
+            dir: tempfile::tempdir().expect("dir"),
+        })
+    }
+
+    fn url(&self) -> String {
+        format!("http://{}", self.addr)
+    }
+
+    /// `krate <args>` as `who` ("nobody" is signed out), with the fake as
+    /// the hub.
+    fn krate_as(&self, who: &str, args: &[&str]) -> std::process::Output {
+        let home = self.homes[who].path();
+        krate()
+            .args(args)
+            .env("HOME", home)
+            .env("USERPROFILE", home)
+            .env("KRATE_HUB_URL", self.url())
+            .env("KRATE_CACHE_DIR", home.join("cache"))
+            .env("KRATE_NO_OPEN_CACHE", "1")
+            .output()
+            .expect("krate")
+    }
+
+    /// Run it, and give back everything it printed; `ok` says whether it
+    /// must succeed or must fail.
+    fn says(&self, who: &str, args: &[&str], ok: bool) -> String {
+        let output = self.krate_as(who, args);
+        let said = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            output.status.success(),
+            ok,
+            "`krate {}` as {who}: {said}",
+            args.join(" ")
+        );
+        // Never a raw JSON error, whatever happened.
+        assert!(
+            !said.contains("{\"error\""),
+            "raw JSON reached a person: {said}"
+        );
+        said
+    }
+
+    /// The code in a `krate org join <slug> <code>` line.
+    fn invite(&self, by: &str, login: &str, role: &str) -> String {
+        let said = self.says(by, &["org", "invite", "acme", login, "--role", role], true);
+        said.lines()
+            .find_map(|line| line.trim().strip_prefix("krate org join acme "))
+            .unwrap_or_else(|| panic!("no join line: {said}"))
+            .trim()
+            .to_string()
+    }
+
+    /// Alice's acme: its root key registered, Bob reviewer, Carol
+    /// developer and Dan recipient, each joined.
+    fn acme(&self) -> PathBuf {
+        self.says("alice", &["org", "create", "acme", "--name", "Acme"], true);
+        let root = self.dir.path().join("acme-root.pkcs8");
+        std::fs::write(
+            &root,
+            krate_bundle::signing::SigningKey::generate_pkcs8().expect("root"),
+        )
+        .expect("root key");
+        self.says(
+            "alice",
+            &["org", "root-key", "acme", root.to_str().unwrap()],
+            true,
+        );
+        for (login, role) in [
+            ("bob", "reviewer"),
+            ("carol", "developer"),
+            ("dan", "recipient"),
+        ] {
+            if !self.homes.contains_key(login) {
+                continue;
+            }
+            let code = self.invite("alice", login, role);
+            let said = self.says(login, &["org", "join", "acme", &code], true);
+            assert!(
+                said.contains(&format!("you joined acme as {role}")),
+                "{said}"
+            );
+        }
+        root
+    }
+
+    /// A bundle named `name` at `version`, padded with `noise` incompressible
+    /// bytes, packed by the CLI.
+    fn bundle(&self, file: &str, version: &str, noise: usize) -> PathBuf {
+        let dir = self.dir.path().join(format!("src-{file}"));
+        std::fs::create_dir_all(dir.join("assets")).expect("dir");
+        let wasm = dir.join("code.wasm");
+        std::fs::write(
+            &wasm,
+            include_bytes!("../../bundle/tests/fixtures/minimal-run.wasm"),
+        )
+        .expect("component");
+        let manifest = dir.join("manifest.toml");
+        std::fs::write(
+            &manifest,
+            format!(
+                "[app]\nid = \"dev.acme.demo\"\nname = \"Acme Demo\"\nversion = \"{version}\"\n\
+                 entry = \"code.wasm\"\nworld = \"krate:app/cli@0.1.0\"\n"
+            ),
+        )
+        .expect("manifest");
+        let mut x = 0x9e37_79b9_7f4a_7c15u64 ^ noise as u64;
+        let noise: Vec<u8> = (0..noise.max(1))
+            .map(|_| {
+                x ^= x << 13;
+                x ^= x >> 7;
+                x ^= x << 17;
+                (x >> 24) as u8
+            })
+            .collect();
+        std::fs::write(dir.join("assets/noise.bin"), noise).expect("noise");
+        let bundle = self.dir.path().join(file);
+        let packed = krate()
+            .arg("pack")
+            .arg(&wasm)
+            .arg("--manifest")
+            .arg(&manifest)
+            .arg("-o")
+            .arg(&bundle)
+            .output()
+            .expect("pack");
+        assert!(
+            packed.status.success(),
+            "{}",
+            String::from_utf8_lossy(&packed.stderr)
+        );
+        bundle
+    }
+
+    /// `who` signs `bundle` with a release key that acme's root (held by
+    /// Alice) delegated.
+    fn sign_delegated(&self, root: &std::path::Path, who: &str, bundle: &std::path::Path) {
+        let release = self.dir.path().join(format!("{who}-release.pkcs8"));
+        if !release.exists() {
+            std::fs::write(
+                &release,
+                krate_bundle::signing::SigningKey::generate_pkcs8().expect("release"),
+            )
+            .expect("release key");
+        }
+        let delegation = self.dir.path().join(format!("{who}-acme.json"));
+        self.says(
+            "alice",
+            &[
+                "delegate",
+                "--root",
+                root.to_str().unwrap(),
+                "--key",
+                release.to_str().unwrap(),
+                "--namespace",
+                "acme/*",
+                "-o",
+                delegation.to_str().unwrap(),
+            ],
+            true,
+        );
+        self.says(
+            who,
+            &[
+                "sign",
+                bundle.to_str().unwrap(),
+                "--key",
+                release.to_str().unwrap(),
+                "--namespace",
+                "acme/demo",
+                "--delegation",
+                delegation.to_str().unwrap(),
+            ],
+            true,
+        );
+    }
+
+    /// The 64-hex digest a `krate publish --org` printed.
+    fn digest_in(said: &str) -> String {
+        said.lines()
+            .find_map(|line| line.trim().strip_prefix("digest "))
+            .map(|d| d.trim().to_string())
+            .unwrap_or_else(|| panic!("no digest line: {said}"))
+    }
+
+    fn run_link(&self, who: &str, url: &str) -> std::process::Output {
+        self.krate_as(
+            who,
+            &["run", url, "--insecure-http", "--auto-grant", "--headless"],
+        )
+    }
+}
+
+/// `krate org create`: the creator is its owner and is told what to do
+/// next; a taken slug and an invalid one are refused in words.
+#[test]
+fn org_create_makes_you_the_owner_and_refuses_taken_or_invalid_names() {
+    let Some(world) = OrgWorld::new(&["alice", "bob"]) else {
+        eprintln!("skipping org_create_makes_you_the_owner_and_refuses_taken_or_invalid_names: no local port");
+        return;
+    };
+    let said = world.says("alice", &["org", "create", "acme", "--name", "Acme"], true);
+    assert!(
+        said.contains("created acme (\"Acme\"). You are its owner."),
+        "{said}"
+    );
+    assert!(said.contains("krate org root-key acme"), "{said}");
+
+    let said = world.says("bob", &["org", "create", "acme"], false);
+    assert!(
+        said.contains("an organisation called acme already exists")
+            && said.contains("pick another name"),
+        "{said}"
+    );
+    let said = world.says("bob", &["org", "create", "Acme!"], false);
+    assert!(
+        said.contains("cannot name an organisation") && said.contains("lower-case letters"),
+        "{said}"
+    );
+    let hub = world.hub.lock().unwrap();
+    assert!(
+        hub.keyless_mutations.is_empty(),
+        "{:?}",
+        hub.keyless_mutations
+    );
+    assert_eq!(hub.orgs["acme"].role_of("alice"), Some("owner"));
+}
+
+/// `krate org show`: members and roles; a recipient sees only their own
+/// entry; an organisation that is not there, and a stranger, in words.
+#[test]
+fn org_show_lists_members_and_refuses_strangers_in_words() {
+    let Some(world) = OrgWorld::new(&["alice", "bob", "carol", "dan", "erin"]) else {
+        eprintln!("skipping org_show_lists_members_and_refuses_strangers_in_words: no local port");
+        return;
+    };
+    world.acme();
+    let said = world.says("alice", &["org", "show", "acme"], true);
+    assert!(said.contains("acme -- Acme"), "{said}");
+    assert!(said.contains("you are alice, owner"), "{said}");
+    for (login, role) in [
+        ("bob", "reviewer"),
+        ("carol", "developer"),
+        ("dan", "recipient"),
+    ] {
+        assert!(
+            said.lines().any(|l| l.contains(login) && l.contains(role)),
+            "{login} {role}: {said}"
+        );
+    }
+    let said = world.says("dan", &["org", "show", "acme"], true);
+    assert!(
+        said.contains("1 person:") && !said.contains("carol"),
+        "{said}"
+    );
+
+    let said = world.says("erin", &["org", "show", "acme"], false);
+    assert!(
+        said.contains("erin is not a member of acme: ask an owner or admin of acme to invite erin"),
+        "{said}"
+    );
+    let said = world.says("alice", &["org", "show", "globex"], false);
+    assert!(
+        said.contains("there is no organisation called globex")
+            && said.contains("krate org create globex"),
+        "{said}"
+    );
+}
+
+/// `krate org invite`: prints the one command the invited person runs;
+/// an admin cannot invite an owner (role-cannot, in words).
+#[test]
+fn org_invite_prints_the_join_command_and_an_admin_cannot_invite_an_owner() {
+    let Some(world) = OrgWorld::new(&["alice", "bob", "erin"]) else {
+        eprintln!("skipping org_invite_prints_the_join_command_and_an_admin_cannot_invite_an_owner: no local port");
+        return;
+    };
+    world.says("alice", &["org", "create", "acme"], true);
+    let said = world.says(
+        "alice",
+        &["org", "invite", "acme", "Bob", "--role", "admin"],
+        true,
+    );
+    assert!(said.contains("invited bob to acme as admin."), "{said}");
+    assert!(said.contains("only for bob, until 2025-10-21"), "{said}");
+    let code = said
+        .lines()
+        .find_map(|l| l.trim().strip_prefix("krate org join acme "))
+        .expect("join line")
+        .to_string();
+    world.says("bob", &["org", "join", "acme", &code], true);
+
+    let said = world.says(
+        "bob",
+        &["org", "invite", "acme", "erin", "--role", "owner"],
+        false,
+    );
+    assert!(
+        said.contains("your role in acme cannot invite an owner or admin: ask an owner of acme"),
+        "{said}"
+    );
+    // An admin may invite a developer.
+    let said = world.says(
+        "bob",
+        &["org", "invite", "acme", "erin", "--role", "developer"],
+        true,
+    );
+    assert!(
+        said.contains("invited erin to acme as developer."),
+        "{said}"
+    );
+}
+
+/// `krate org join` and `krate org cancel-invite`: an invitation works once,
+/// only for its login, before it expires, and not after it is cancelled --
+/// each refusal in words.
+#[test]
+fn org_join_takes_an_invitation_once_and_only_for_its_login() {
+    let Some(world) = OrgWorld::new(&["alice", "bob", "erin"]) else {
+        eprintln!(
+            "skipping org_join_takes_an_invitation_once_and_only_for_its_login: no local port"
+        );
+        return;
+    };
+    world.says("alice", &["org", "create", "acme"], true);
+
+    let code = world.invite("alice", "bob", "reviewer");
+    let said = world.says("erin", &["org", "join", "acme", &code], false);
+    assert!(
+        said.contains("that invitation is for a different GitHub account, not erin")
+            && said.contains("krate account login"),
+        "{said}"
+    );
+    let said = world.says("bob", &["org", "join", "acme", &code], true);
+    assert!(said.contains("you joined acme as reviewer."), "{said}");
+    let said = world.says("bob", &["org", "join", "acme", &code], false);
+    assert!(said.contains("that invitation was already used"), "{said}");
+
+    let code = world.invite("alice", "erin", "developer");
+    world.hub.lock().unwrap().now += 8 * 86_400;
+    let said = world.says("erin", &["org", "join", "acme", &code], false);
+    assert!(
+        said.contains("that invitation has run out (they last 7 days)"),
+        "{said}"
+    );
+
+    let code = world.invite("alice", "erin", "developer");
+    let said = world.says("alice", &["org", "cancel-invite", "acme", &code], true);
+    assert!(said.contains("cancelled that invitation to acme"), "{said}");
+    let said = world.says("erin", &["org", "join", "acme", &code], false);
+    assert!(said.contains("that invitation was cancelled"), "{said}");
+}
+
+/// `krate org role`: a role changes; the last owner cannot be demoted.
+#[test]
+fn org_role_changes_a_role_and_never_leaves_no_owner() {
+    let Some(world) = OrgWorld::new(&["alice", "bob"]) else {
+        eprintln!("skipping org_role_changes_a_role_and_never_leaves_no_owner: no local port");
+        return;
+    };
+    world.acme();
+    let said = world.says("alice", &["org", "role", "acme", "bob", "admin"], true);
+    assert!(said.contains("bob is now admin in acme."), "{said}");
+    let said = world.says("bob", &["org", "role", "acme", "bob", "owner"], false);
+    assert!(
+        said.contains("your role in acme cannot make bob an owner: ask an owner of acme"),
+        "{said}"
+    );
+    let said = world.says("alice", &["org", "role", "acme", "alice", "admin"], false);
+    assert!(
+        said.contains("that would leave acme with no owner, so nothing changed")
+            && said.contains("krate org role acme <login> owner"),
+        "{said}"
+    );
+}
+
+/// `krate org remove`: a removed member is told so on their next command;
+/// a reviewer cannot remove others; the last owner cannot leave.
+#[test]
+fn org_remove_ends_membership_and_keeps_an_owner() {
+    let Some(world) = OrgWorld::new(&["alice", "bob", "carol"]) else {
+        eprintln!("skipping org_remove_ends_membership_and_keeps_an_owner: no local port");
+        return;
+    };
+    world.acme();
+    let said = world.says("bob", &["org", "remove", "acme", "carol"], false);
+    assert!(
+        said.contains("your role in acme cannot remove carol: ask an owner or admin of acme"),
+        "{said}"
+    );
+    let said = world.says("alice", &["org", "remove", "acme", "carol"], true);
+    assert!(
+        said.contains("removed carol from acme.") && said.contains("untouched"),
+        "{said}"
+    );
+    let said = world.says("carol", &["org", "show", "acme"], false);
+    assert!(said.contains("you were removed from acme"), "{said}");
+
+    let said = world.says("bob", &["org", "remove", "acme", "bob"], true);
+    assert!(said.contains("you left acme."), "{said}");
+    let said = world.says("alice", &["org", "remove", "acme", "alice"], false);
+    assert!(
+        said.contains("that would leave acme with no owner"),
+        "{said}"
+    );
+}
+
+/// `krate org root-key`: only the public half of a root key file leaves the
+/// machine; a non-owner is refused; a second key is a recorded rotation.
+#[test]
+fn org_root_key_sends_only_the_public_half() {
+    let Some(world) = OrgWorld::new(&["alice", "bob"]) else {
+        eprintln!("skipping org_root_key_sends_only_the_public_half: no local port");
+        return;
+    };
+    let root = world.acme();
+    let private = std::fs::read(&root).expect("root");
+    let public: String = krate_bundle::signing::SigningKey::from_pkcs8(&private)
+        .expect("key")
+        .public_key()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    {
+        let hub = world.hub.lock().unwrap();
+        assert_eq!(hub.orgs["acme"].root.as_deref(), Some(public.as_str()));
+        // What was sent is the public key and nothing else.
+        let sent = hub
+            .seen
+            .iter()
+            .zip(&hub.bodies)
+            .find(|((method, path, _), _)| method == "PUT" && path == "/orgs/acme/root-key")
+            .map(|(_, body)| serde_json::from_slice::<serde_json::Value>(body).unwrap())
+            .expect("the root key was sent");
+        assert_eq!(sent, serde_json::json!({ "public_key": public }));
+    }
+    let said = world.says(
+        "bob",
+        &["org", "root-key", "acme", root.to_str().unwrap()],
+        false,
+    );
+    assert!(
+        said.contains("your role in acme cannot set acme's root key: ask an owner of acme"),
+        "{said}"
+    );
+    // A public key file: 64 hex characters.
+    let next = world.dir.path().join("next.pub");
+    std::fs::write(&next, format!("{}\n", "ab".repeat(32))).expect("pub");
+    let said = world.says(
+        "alice",
+        &["org", "root-key", "acme", next.to_str().unwrap()],
+        true,
+    );
+    assert!(
+        said.contains("acme's root key is now abababababab"),
+        "{said}"
+    );
+    assert!(said.contains("replaced the previous key"), "{said}");
+}
+
+/// `krate publish --org`: an unsigned bundle is turned back before anything
+/// is uploaded, with the exact commands that sign it.
+#[test]
+fn publish_to_an_org_refuses_an_unsigned_bundle_before_uploading() {
+    let Some(world) = OrgWorld::new(&["alice", "carol"]) else {
+        eprintln!(
+            "skipping publish_to_an_org_refuses_an_unsigned_bundle_before_uploading: no local port"
+        );
+        return;
+    };
+    world.acme();
+    let bundle = world.bundle("plain.krate", "1.0.0", 64);
+    let before = world.hub.lock().unwrap().seen.len();
+    let said = world.says(
+        "carol",
+        &["publish", bundle.to_str().unwrap(), "--org", "acme"],
+        false,
+    );
+    assert!(
+        said.contains("is not signed, so nothing was uploaded"),
+        "{said}"
+    );
+    assert!(
+        said.contains(
+            "krate delegate --root <acme-root.pkcs8> --key <release.pkcs8> --namespace 'acme/*'"
+        ),
+        "{said}"
+    );
+    assert!(
+        said.contains("--namespace acme/demo --delegation acme-release.json"),
+        "{said}"
+    );
+    assert_eq!(
+        world.hub.lock().unwrap().seen.len(),
+        before,
+        "nothing was sent"
+    );
+}
+
+/// `krate publish --org`: a signed bundle becomes a candidate, its digest
+/// printed with the approve command; a bundle signed by a key acme's root
+/// never delegated is refused in words; a reviewer cannot publish.
+#[test]
+fn publish_to_an_org_uploads_a_signed_candidate_and_prints_its_digest() {
+    let Some(world) = OrgWorld::new(&["alice", "bob", "carol"]) else {
+        eprintln!("skipping publish_to_an_org_uploads_a_signed_candidate_and_prints_its_digest: no local port");
+        return;
+    };
+    let root = world.acme();
+    let bundle = world.bundle("app.krate", "1.0.0", 64);
+    world.sign_delegated(&root, "carol", &bundle);
+    let said = world.says(
+        "carol",
+        &["publish", bundle.to_str().unwrap(), "--org", "acme"],
+        true,
+    );
+    let digest = OrgWorld::digest_in(&said);
+    let sha = format!("{:x}", Sha256::digest(std::fs::read(&bundle).unwrap()));
+    assert_eq!(digest, sha, "the digest is the bytes' sha256");
+    assert!(said.contains("waits for approval"), "{said}");
+    assert!(
+        said.contains(&format!("krate org approve acme {sha}")),
+        "{said}"
+    );
+    assert!(said.contains("app     Acme Demo 1.0.0"), "{said}");
+    assert_eq!(
+        world.hub.lock().unwrap().orgs["acme"].candidates[&sha].state,
+        "waiting-for-approval",
+        "nothing is released by uploading"
+    );
+
+    // Signed, but by a key of its own: not acme's.
+    let stray = world.bundle("stray.krate", "1.0.1", 64);
+    let key = world.dir.path().join("stray.pkcs8");
+    world.says(
+        "carol",
+        &[
+            "sign",
+            stray.to_str().unwrap(),
+            "--key",
+            key.to_str().unwrap(),
+            "--generate-key",
+            "--namespace",
+            "acme/demo",
+        ],
+        true,
+    );
+    let said = world.says(
+        "carol",
+        &["publish", stray.to_str().unwrap(), "--org", "acme"],
+        false,
+    );
+    assert!(
+        said.contains("acme did not take it: this app is not signed for acme"),
+        "{said}"
+    );
+    let said = world.says(
+        "bob",
+        &["publish", bundle.to_str().unwrap(), "--org", "acme"],
+        false,
+    );
+    assert!(
+        said.contains("your role in acme cannot publish to acme: ask an owner or admin of acme to make you a developer"),
+        "{said}"
+    );
+}
+
+/// `krate org root-key --revocations`: the list `krate revoke` wrote goes
+/// to the hub with the root key; a candidate whose key was withdrawn after
+/// upload cannot be approved, and the withdrawn key cannot upload again --
+/// each refusal in words that say why.
+#[test]
+fn a_withdrawn_release_key_can_neither_upload_nor_be_approved() {
+    let Some(world) = OrgWorld::new(&["alice", "bob", "carol"]) else {
+        eprintln!(
+            "skipping a_withdrawn_release_key_can_neither_upload_nor_be_approved: no local port"
+        );
+        return;
+    };
+    let root = world.acme();
+    let bundle = world.bundle("app.krate", "1.0.0", 64);
+    world.sign_delegated(&root, "carol", &bundle);
+    let digest = OrgWorld::digest_in(&world.says(
+        "carol",
+        &["publish", bundle.to_str().unwrap(), "--org", "acme"],
+        true,
+    ));
+    let release = world.dir.path().join("carol-release.pkcs8");
+    let list = world.dir.path().join("acme-revocations.json");
+    world.says(
+        "alice",
+        &[
+            "revoke",
+            "--root",
+            root.to_str().unwrap(),
+            "--key",
+            release.to_str().unwrap(),
+            "--reason",
+            "laptop lost",
+            "-o",
+            list.to_str().unwrap(),
+        ],
+        true,
+    );
+    let said = world.says(
+        "alice",
+        &[
+            "org",
+            "root-key",
+            "acme",
+            root.to_str().unwrap(),
+            "--revocations",
+            list.to_str().unwrap(),
+        ],
+        true,
+    );
+    assert!(said.contains("Withdrew 1 release key"), "{said}");
+    let said = world.says("bob", &["org", "approve", "acme", &digest], false);
+    assert!(
+        said.contains(
+            "nothing was approved: this app is not signed for acme: its release key was withdrawn"
+        ) && said.contains("sign it again with a current release key"),
+        "{said}"
+    );
+    let next = world.bundle("app-v2.krate", "1.0.1", 64);
+    world.sign_delegated(&root, "carol", &next);
+    let said = world.says(
+        "carol",
+        &["publish", next.to_str().unwrap(), "--org", "acme"],
+        false,
+    );
+    assert!(
+        said.contains(
+            "acme did not take it: this app is not signed for acme: its release key was withdrawn"
+        ),
+        "{said}"
+    );
+    // A list from some other root is turned back before it is sent.
+    let stranger = world.dir.path().join("other-root.pkcs8");
+    std::fs::write(
+        &stranger,
+        krate_bundle::signing::SigningKey::generate_pkcs8().expect("root"),
+    )
+    .expect("key");
+    let said = world.says(
+        "alice",
+        &[
+            "org",
+            "root-key",
+            "acme",
+            stranger.to_str().unwrap(),
+            "--revocations",
+            list.to_str().unwrap(),
+        ],
+        false,
+    );
+    assert!(said.contains("was signed by a different root"), "{said}");
+}
+
+/// `krate publish --org` over the publish door's 5 MiB: the candidate goes
+/// through the big-file path, carrying the organisation, and still prints
+/// its digest and waits for approval.
+#[test]
+fn a_big_candidate_goes_through_the_big_file_path() {
+    let Some(world) = OrgWorld::new(&["alice", "carol"]) else {
+        eprintln!("skipping a_big_candidate_goes_through_the_big_file_path: no local port");
+        return;
+    };
+    let root = world.acme();
+    let bundle = world.bundle("big.krate", "2.0.0", 6 * 1024 * 1024);
+    world.sign_delegated(&root, "carol", &bundle);
+    let said = world.says(
+        "carol",
+        &["publish", bundle.to_str().unwrap(), "--org", "acme"],
+        true,
+    );
+    let sha = format!("{:x}", Sha256::digest(std::fs::read(&bundle).unwrap()));
+    assert_eq!(OrgWorld::digest_in(&said), sha);
+    let hub = world.hub.lock().unwrap();
+    assert!(
+        !hub.seen
+            .iter()
+            .any(|(_, path, _)| path == "/orgs/acme/candidates"),
+        "never the one-request door"
+    );
+    let start = hub
+        .seen
+        .iter()
+        .zip(&hub.bodies)
+        .find(|((_, path, _), _)| path == "/publish/big/start")
+        .map(|(_, body)| serde_json::from_slice::<serde_json::Value>(body).unwrap())
+        .expect("the big-file path started");
+    assert_eq!(start["org"], "acme", "the start names the organisation");
+    assert_eq!(start["sha256"], sha.as_str());
+    assert_eq!(
+        hub.orgs["acme"].candidates[&sha].state,
+        "waiting-for-approval"
+    );
+}
+
+/// `krate org approve`: the uploader cannot approve their own upload; a
+/// recipient cannot approve; a digest that is not the current candidate
+/// approves nothing; a reviewer's approval releases exactly that digest.
+#[test]
+fn org_approve_releases_the_exact_digest_and_never_your_own() {
+    let Some(world) = OrgWorld::new(&["alice", "bob", "carol", "dan"]) else {
+        eprintln!(
+            "skipping org_approve_releases_the_exact_digest_and_never_your_own: no local port"
+        );
+        return;
+    };
+    let root = world.acme();
+    let bundle = world.bundle("app.krate", "1.0.0", 64);
+    world.sign_delegated(&root, "carol", &bundle);
+    let digest = OrgWorld::digest_in(&world.says(
+        "carol",
+        &["publish", bundle.to_str().unwrap(), "--org", "acme"],
+        true,
+    ));
+    let said = world.says("carol", &["org", "approve", "acme", &digest], false);
+    assert!(
+        said.contains("you can't approve your own upload: ask a reviewer in acme"),
+        "{said}"
+    );
+    let said = world.says("dan", &["org", "approve", "acme", &digest], false);
+    assert!(
+        said.contains("your role in acme cannot approve uploads: ask a reviewer in acme"),
+        "a recipient has no approve authority: {said}"
+    );
+    let other = "ab".repeat(32);
+    let said = world.says("bob", &["org", "approve", "acme", &other], false);
+    assert!(
+        said.contains("nothing was approved: acme has no candidate with the digest abababababab"),
+        "{said}"
+    );
+    assert_eq!(
+        world.hub.lock().unwrap().orgs["acme"].candidates[&digest].state,
+        "waiting-for-approval"
+    );
+    let said = world.says("bob", &["org", "approve", "acme", &digest], true);
+    assert!(
+        said.contains(&format!(
+            "approved. {} is now a release of acme.",
+            &digest[..12]
+        )),
+        "{said}"
+    );
+    assert!(
+        said.contains(&format!("krate run {}/a/{digest}", world.url())),
+        "{said}"
+    );
+    let hub = world.hub.lock().unwrap();
+    assert_eq!(hub.orgs["acme"].candidates[&digest].state, "released");
+    assert_eq!(
+        hub.orgs["acme"].candidates[&digest].approver.as_deref(),
+        Some("bob")
+    );
+}
+
+/// `krate org releases`: each release with who uploaded and who approved.
+#[test]
+fn org_releases_lists_who_uploaded_and_who_approved() {
+    let Some(world) = OrgWorld::new(&["alice", "bob", "carol", "dan"]) else {
+        eprintln!("skipping org_releases_lists_who_uploaded_and_who_approved: no local port");
+        return;
+    };
+    let root = world.acme();
+    let said = world.says("dan", &["org", "releases", "acme"], true);
+    assert!(said.contains("acme has no releases yet"), "{said}");
+    let bundle = world.bundle("app.krate", "1.0.0", 64);
+    world.sign_delegated(&root, "carol", &bundle);
+    let digest = OrgWorld::digest_in(&world.says(
+        "carol",
+        &["publish", bundle.to_str().unwrap(), "--org", "acme"],
+        true,
+    ));
+    world.says("bob", &["org", "approve", "acme", &digest], true);
+    let said = world.says("dan", &["org", "releases", "acme"], true);
+    assert!(said.contains("acme: 1 release"), "{said}");
+    assert!(
+        said.contains(&format!("Acme Demo 1.0.0  {}", &digest[..12])),
+        "{said}"
+    );
+    assert!(
+        said.contains("uploaded by carol, approved by bob, 2025-10-14"),
+        "{said}"
+    );
+
+    // `krate org candidates`: the history, for those who publish or approve.
+    let said = world.says("carol", &["org", "candidates", "acme"], true);
+    assert!(said.contains("acme: 1 candidate"), "{said}");
+    assert!(
+        said.contains(&format!("Acme Demo 1.0.0  {digest}  released")),
+        "{said}"
+    );
+    assert!(
+        said.contains("uploaded by carol 2025-10-14 00:00 UTC, approved by bob"),
+        "{said}"
+    );
+    let said = world.says("dan", &["org", "candidates", "acme"], false);
+    assert!(
+        said.contains("your role in acme cannot list acme's candidates"),
+        "{said}"
+    );
+}
+
+/// `krate org audit`: every event and every denial, the chain's verdict;
+/// a tampered event fails the command; a developer cannot read it.
+#[test]
+fn org_audit_shows_every_event_and_a_broken_chain_fails() {
+    let Some(world) = OrgWorld::new(&["alice", "bob", "carol"]) else {
+        eprintln!("skipping org_audit_shows_every_event_and_a_broken_chain_fails: no local port");
+        return;
+    };
+    world.acme();
+    world.says("bob", &["org", "remove", "acme", "carol"], false);
+    let said = world.says("alice", &["org", "audit", "acme"], true);
+    for action in ["create", "root-key", "invite", "accept"] {
+        assert!(said.contains(action), "{action}: {said}");
+    }
+    assert!(said.contains("denied: role-cannot"), "{said}");
+    assert!(said.contains("chain intact"), "{said}");
+    let said = world.says("carol", &["org", "audit", "acme"], false);
+    assert!(
+        said.contains("your role in acme cannot read acme's audit: ask an owner or admin of acme"),
+        "{said}"
+    );
+    world
+        .hub
+        .lock()
+        .unwrap()
+        .orgs
+        .get_mut("acme")
+        .unwrap()
+        .audit[1]["actor"] = serde_json::json!("mallory");
+    let said = world.says("alice", &["org", "audit", "acme"], false);
+    assert!(said.contains("THE CHAIN IS BROKEN"), "{said}");
+}
+
+/// Every mutation carries an Idempotency-Key; a key the hub saw with a
+/// different request, and a token the hub does not know, come back in words.
+#[test]
+fn org_commands_carry_an_idempotency_key_and_hub_refusals_are_worded() {
+    let Some(world) = OrgWorld::new(&["alice", "bob"]) else {
+        eprintln!("skipping org_commands_carry_an_idempotency_key_and_hub_refusals_are_worded: no local port");
+        return;
+    };
+    world.acme();
+    {
+        let hub = world.hub.lock().unwrap();
+        assert!(
+            hub.keyless_mutations.is_empty(),
+            "{:?}",
+            hub.keyless_mutations
+        );
+        assert!(
+            hub.keys.len() >= 4,
+            "one key per mutation: {}",
+            hub.keys.len()
+        );
+    }
+    world.hub.lock().unwrap().force_next = Some((409, "idempotency-key-reused".into()));
+    let said = world.says(
+        "alice",
+        &["org", "invite", "acme", "erin", "--role", "developer"],
+        false,
+    );
+    assert!(
+        said.contains("under this command's key, so nothing changed: run the command again"),
+        "{said}"
+    );
+    for (status, reason, words) in [
+        (422, "invalid-bundle", "could not read this as a Krate app"),
+        (
+            409,
+            "bytes-held-elsewhere",
+            "already on the hub outside acme",
+        ),
+        (413, "too-large", "would not take it in one request"),
+        (500, "store-failed", "could not store it"),
+        (400, "bad-request", "could not read the request"),
+        (
+            503,
+            "orgs-off",
+            "organisations are switched off on this hub",
+        ),
+    ] {
+        world.hub.lock().unwrap().force_next = Some((status, reason.into()));
+        let said = world.says("bob", &["org", "show", "acme"], false);
+        assert!(said.contains(words), "{reason}: {said}");
+    }
+    world.hub.lock().unwrap().force_next = Some((401, "not-signed-in".into()));
+    let said = world.says("bob", &["org", "show", "acme"], false);
+    assert!(
+        said.contains("you are not signed in: run `krate account login`, then run this again"),
+        "{said}"
+    );
+    // Signed out on this machine: refused before anything is sent.
+    let before = world.hub.lock().unwrap().seen.len();
+    let said = world.says("nobody", &["org", "show", "acme"], false);
+    assert!(said.contains("you are not signed in"), "{said}");
+    assert_eq!(world.hub.lock().unwrap().seen.len(), before);
+}
+
+/// `krate run <private link>`: a member's session opens it; with no
+/// session, as a stranger, and once removed, nothing runs and the person is
+/// told why. The session goes only to the hub, never to another host.
+#[test]
+fn a_private_link_runs_only_with_a_current_members_session() {
+    let Some(world) = OrgWorld::new(&["alice", "bob", "carol", "dan", "erin"]) else {
+        eprintln!(
+            "skipping a_private_link_runs_only_with_a_current_members_session: no local port"
+        );
+        return;
+    };
+    let root = world.acme();
+    let bundle = world.bundle("app.krate", "1.0.0", 64);
+    world.sign_delegated(&root, "carol", &bundle);
+    let digest = OrgWorld::digest_in(&world.says(
+        "carol",
+        &["publish", bundle.to_str().unwrap(), "--org", "acme"],
+        true,
+    ));
+    world.says("bob", &["org", "approve", "acme", &digest], true);
+    let link = format!("{}/a/{digest}", world.url());
+
+    let opened = world.run_link("dan", &link);
+    assert!(
+        opened.status.success(),
+        "{}",
+        String::from_utf8_lossy(&opened.stderr)
+    );
+    assert_eq!(world.hub.lock().unwrap().served, 1);
+
+    let copied = world.run_link("nobody", &link);
+    let said = String::from_utf8_lossy(&copied.stderr);
+    assert!(!copied.status.success());
+    assert!(
+        said.contains("you are not signed in, so nothing was downloaded or run")
+            && said.contains("krate account login"),
+        "{said}"
+    );
+    let stranger = world.run_link("erin", &link);
+    let said = String::from_utf8_lossy(&stranger.stderr);
+    assert!(!stranger.status.success());
+    assert!(
+        said.contains("this app is private to the organisation that sent it, and erin is not one of its members"),
+        "{said}"
+    );
+
+    world.says("alice", &["org", "remove", "acme", "dan"], true);
+    let removed = world.run_link("dan", &link);
+    let said = String::from_utf8_lossy(&removed.stderr);
+    assert!(!removed.status.success());
+    assert!(
+        said.contains("you were removed from the organisation that sent it, so this app no longer opens for you"),
+        "{said}"
+    );
+    assert_eq!(
+        world.hub.lock().unwrap().served,
+        1,
+        "only Dan's first run was served"
+    );
+
+    // A hub that is not this machine's: the session is not sent to it.
+    let home = world.homes["bob"].path();
+    let elsewhere = krate()
+        .args([
+            "run",
+            &link,
+            "--insecure-http",
+            "--auto-grant",
+            "--headless",
+        ])
+        .env("HOME", home)
+        .env("USERPROFILE", home)
+        .env("KRATE_HUB_URL", "https://hub.example")
+        .output()
+        .expect("run");
+    let said = String::from_utf8_lossy(&elsewhere.stderr);
+    assert!(!elsewhere.status.success());
+    assert!(said.contains("Krate did not send your sign-in"), "{said}");
+    let hub = world.hub.lock().unwrap();
+    let (_, _, auth) = hub.seen.last().expect("a request");
+    assert!(
+        auth.is_none(),
+        "no session went to a host that is not the hub"
+    );
+}
+
+/// IC-946's proof, end to end through the CLI against the fake hub: Alice
+/// creates acme and registers its root key; Bob (reviewer), Carol
+/// (developer) and Dan (recipient) join; Carol publishes a delegated-key
+/// candidate and cannot approve it; Bob approves its exact digest; Dan runs
+/// the private link, a stranger and a copied link cannot; new bytes are not
+/// released and approving the old digest does not release them; Alice
+/// removes Dan and his next run is refused while the release and Carol's
+/// history stay; two racing removals of the last two owners leave one; the
+/// audit lists every step and denial with its chain intact.
+#[test]
+fn the_org_pilot_proof_runs_end_to_end_through_the_cli() {
+    let Some(world) = OrgWorld::new(&["alice", "bob", "carol", "dan", "erin"]) else {
+        eprintln!("skipping the_org_pilot_proof_runs_end_to_end_through_the_cli: no local port");
+        return;
+    };
+    // 1. Create, register the root key, invite, join.
+    let root = world.acme();
+
+    // 2. Carol's candidate, signed by a release key acme's root delegated.
+    let bundle = world.bundle("app.krate", "1.0.0", 64);
+    world.sign_delegated(&root, "carol", &bundle);
+    let first = OrgWorld::digest_in(&world.says(
+        "carol",
+        &["publish", bundle.to_str().unwrap(), "--org", "acme"],
+        true,
+    ));
+    let said = world.says("carol", &["org", "approve", "acme", &first], false);
+    assert!(
+        said.contains("you can't approve your own upload: ask a reviewer in acme"),
+        "{said}"
+    );
+    let said = world.says("bob", &["org", "approve", "acme", &first], true);
+    assert!(said.contains("is now a release of acme"), "{said}");
+    let link = format!("{}/a/{first}", world.url());
+
+    // 3. Dan opens it; a stranger and a copied link do not.
+    assert!(world.run_link("dan", &link).status.success());
+    assert!(!world.run_link("erin", &link).status.success());
+    assert!(!world.run_link("nobody", &link).status.success());
+
+    // 4. New bytes are a new candidate, not a release; approving the old
+    //    digest does nothing to it.
+    let changed = world.bundle("app-v2.krate", "1.0.1", 64);
+    world.sign_delegated(&root, "carol", &changed);
+    let second = OrgWorld::digest_in(&world.says(
+        "carol",
+        &["publish", changed.to_str().unwrap(), "--org", "acme"],
+        true,
+    ));
+    assert_ne!(first, second);
+    // Approving the old digest again answers for the old digest only.
+    world.says("bob", &["org", "approve", "acme", &first], true);
+    let said = world.says("dan", &["org", "releases", "acme"], true);
+    assert!(
+        said.contains("acme: 1 release") && !said.contains(&second[..12]),
+        "{said}"
+    );
+    let said = world.says("carol", &["org", "candidates", "acme"], true);
+    assert!(
+        said.lines()
+            .any(|l| l.contains(&second) && l.contains("waiting for approval")),
+        "{said}"
+    );
+    let unreleased = world.run_link("dan", &format!("{}/a/{second}", world.url()));
+    assert!(!unreleased.status.success(), "a candidate is never served");
+    assert!(
+        String::from_utf8_lossy(&unreleased.stderr).contains("has not approved"),
+        "{}",
+        String::from_utf8_lossy(&unreleased.stderr)
+    );
+
+    // 5. Alice removes Dan: his next run is refused; the release and
+    //    Carol's history remain.
+    world.says("alice", &["org", "remove", "acme", "dan"], true);
+    let refused = world.run_link("dan", &link);
+    assert!(!refused.status.success());
+    assert!(
+        String::from_utf8_lossy(&refused.stderr).contains("you were removed from"),
+        "{}",
+        String::from_utf8_lossy(&refused.stderr)
+    );
+    let said = world.says("alice", &["org", "releases", "acme"], true);
+    assert!(
+        said.contains("uploaded by carol, approved by bob"),
+        "{said}"
+    );
+
+    // 6. Bob becomes a second owner; Alice and Bob each leave at once.
+    world.says("alice", &["org", "role", "acme", "bob", "owner"], true);
+    let (a, b) = std::thread::scope(|scope| {
+        let a = scope.spawn(|| world.krate_as("alice", &["org", "remove", "acme", "alice"]));
+        let b = scope.spawn(|| world.krate_as("bob", &["org", "remove", "acme", "bob"]));
+        (a.join().unwrap(), b.join().unwrap())
+    });
+    let outcomes = [&a, &b].map(|o| {
+        (
+            o.status.success(),
+            format!(
+                "{}{}",
+                String::from_utf8_lossy(&o.stdout),
+                String::from_utf8_lossy(&o.stderr)
+            ),
+        )
+    });
+    assert_eq!(
+        outcomes.iter().filter(|(ok, _)| *ok).count(),
+        1,
+        "exactly one leaves: {outcomes:?}"
+    );
+    let (_, lost) = outcomes.iter().find(|(ok, _)| !ok).unwrap();
+    assert!(
+        lost.contains("that would leave acme with no owner"),
+        "{lost}"
+    );
+    let owner = if a.status.success() { "bob" } else { "alice" };
+    assert_eq!(world.hub.lock().unwrap().orgs["acme"].owners(), 1);
+
+    // 7. The audit lists every step and denial, and the chain holds.
+    let said = world.says(owner, &["org", "audit", "acme"], true);
+    for step in [
+        "create",
+        "root-key",
+        "invite",
+        "accept",
+        "publish",
+        "approve",
+        "download",
+        "remove",
+        "role",
+        "denied: self-approval",
+        "denied: digest-mismatch",
+        "allowed",
+        "denied: not-a-member",
+        "denied: removed",
+        "denied: last-owner",
+    ] {
+        assert!(said.contains(step), "the audit lacks {step}: {said}");
+    }
+    assert!(said.contains("chain intact"), "{said}");
+    world
+        .hub
+        .lock()
+        .unwrap()
+        .orgs
+        .get_mut("acme")
+        .unwrap()
+        .audit[3]["target"] = serde_json::json!("someone-else");
+    let said = world.says(owner, &["org", "audit", "acme"], false);
+    assert!(said.contains("THE CHAIN IS BROKEN"), "{said}");
+}
