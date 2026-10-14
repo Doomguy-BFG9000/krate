@@ -230,6 +230,11 @@ export async function streamExport(env, slug, id, data) {
   await addSmall("candidates", "candidates.json", asJson(data.candidates));
   const chain = await chainOk(data.audit);
   await addSmall("audit", "audit.json", asJson({ chain_ok: chain, events: data.audit }));
+  // The apps' team data (store.org, IC-951): every row, who wrote it, when.
+  if (Array.isArray(data.app_data)) await addSmall("app data", "app-data.json", asJson(data.app_data));
+  // The keyring (F-316): public keys and sealed envelopes; opening any of it
+  // needs a member device or the recovery code.
+  if (data.keyring) await addSmall("keyring", "keyring.json", asJson(data.keyring));
 
   // The releases: their digests are their sha256 (content-addressed), and
   // their sizes are the store's, so the manifest can be written first.

@@ -415,6 +415,19 @@ macOS, Windows, and Linux -- there is no kind that works on one system only.
 - `net::ws::send_binary(handle: u64, bytes: &[u8]) -> Result<(), NetError>`
 - `net::ws::send_text(handle: u64, text: &str) -> Result<(), NetError>`
 
+### `org`
+
+- `org::all(collection: &str) -> Result<Vec<Entry>, OrgError>`
+- `org::delete(collection: &str, id: &str) -> Result<(), OrgError>`
+- `org::field(entry: &'a Entry, name: &str) -> Option<&'a Value>`
+- `org::get(collection: &str, id: &str) -> Result<Option<Entry>, OrgError>`
+- `org::put(collection: &str, id: &str, fields: &[(&str, Value)]) -> Result<(), OrgError>`
+- `org::put_text(collection: &str, id: &str, field: &str, text: &str) -> Result<(), OrgError>`
+- `org::records(collection: &str, since: Option<&str>) -> Result<Page, OrgError>`
+- `org::sync() -> Result<SyncState, OrgError>`
+- `org::text(entry: &'a Entry, name: &str) -> Option<&'a str>`
+- `org::who() -> Result<Option<Member>, OrgError>`
+
 ### `random`
 
 - `random::below(bound: u64) -> Result<u64, RandomError>`
@@ -525,6 +538,7 @@ to exactly what the app needs, e.g. `fs.read:notes/**`.
 | `store.sql` | no | the app's own SQL database |
 | `store.secret` | no | secrets encrypted at rest (passwords, tokens); not the OS keychain |
 | `store.shared` | no | share a key-value bucket with everyone holding its invite code |
+| `store.org` | no | keep records for the whole team in its organisation's store, with no backend |
 | `store.group:<group-name>` | no | share a key-value store with the same publisher's other apps, in a named group its signed list admits |
 | `memory.budget:<MiB>` | no | more memory than the default, in MiB (up to 3584); the person sees it at consent |
 | `random.bytes` | no | entropy (also what getrandom/rand need) |
@@ -863,6 +877,12 @@ The same modules earlier sections describe in prose, but as the exact interfaces
 - `group::set: func(group: string, key: string, value: list<u8>) -> result<_, group-error>`
 - `group::delete: func(group: string, key: string) -> result<_, group-error>`
 - `group::keys: func(group: string) -> result<list<string>, group-error>`
+- `org::put: func(collection: string, id: string, fields: list<tuple<string, value>>) -> result<_, org-error>`
+- `org::get: func(collection: string, id: string) -> result<option<entry>, org-error>`
+- `org::delete: func(collection: string, id: string) -> result<_, org-error>`
+- `org::records: func(collection: string, since: option<cursor>) -> result<page, org-error>`
+- `org::sync: func() -> result<sync-state, org-error>`
+- `org::who: func() -> result<option<member>, org-error>`
 
 ## `time`
 

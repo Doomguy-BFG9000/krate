@@ -1,0 +1,98 @@
+{
+  "about": "store.org merge vectors (IC-951). One file, read by the hub's tests (cloud/worker/test/org-data.test.mjs) and the runtime's (crates/runtime/src/org_merge.rs), so the device and the hub apply the same rule. Stamps are wall-ms (16 digits), counter (8 digits), device (16 hex).",
+  "parse": [
+    { "text": "0001760400000000-00000007-aaaaaaaaaaaaaaaa", "ok": true },
+    { "text": "9007199254740991-00000000-aaaaaaaaaaaaaaaa", "ok": true },
+    { "text": "9999999999999999-00000000-aaaaaaaaaaaaaaaa", "ok": false },
+    { "text": "1760400000000-0-aaaaaaaaaaaaaaaa", "ok": false },
+    { "text": "0001760400000000-00000007-AAAAAAAAAAAAAAAA", "ok": false },
+    { "text": "0001760400000000-00000007-aaaaaaaaaaaaaaa", "ok": false },
+    { "text": "000176040000000x-00000007-aaaaaaaaaaaaaaaa", "ok": false },
+    { "text": "0001760400000000_00000007_aaaaaaaaaaaaaaaa", "ok": false },
+    { "text": "", "ok": false }
+  ],
+  "compare": [
+    ["0000000000001000-00000000-aaaaaaaaaaaaaaaa", "0000000000001000-00000000-bbbbbbbbbbbbbbbb", -1],
+    ["0000000000001001-00000000-aaaaaaaaaaaaaaaa", "0000000000001000-00000005-bbbbbbbbbbbbbbbb", 1],
+    ["0000000000001000-00000002-aaaaaaaaaaaaaaaa", "0000000000001000-00000010-aaaaaaaaaaaaaaaa", -1],
+    ["0000000000001000-00000002-aaaaaaaaaaaaaaaa", "0000000000001000-00000002-aaaaaaaaaaaaaaaa", 0]
+  ],
+  "next": [
+    { "last": null, "phys": 5000, "device": "aaaaaaaaaaaaaaaa", "expect": "0000000000005000-00000000-aaaaaaaaaaaaaaaa" },
+    { "last": "0000000000005000-00000000-bbbbbbbbbbbbbbbb", "phys": 5000, "device": "aaaaaaaaaaaaaaaa", "expect": "0000000000005000-00000001-aaaaaaaaaaaaaaaa" },
+    { "last": "0000000000009000-00000003-bbbbbbbbbbbbbbbb", "phys": 5000, "device": "aaaaaaaaaaaaaaaa", "expect": "0000000000009000-00000004-aaaaaaaaaaaaaaaa" },
+    { "last": "0000000000004000-00000009-bbbbbbbbbbbbbbbb", "phys": 5000, "device": "aaaaaaaaaaaaaaaa", "expect": "0000000000005000-00000000-aaaaaaaaaaaaaaaa" },
+    { "last": "0000000000005000-99999999-bbbbbbbbbbbbbbbb", "phys": 5000, "device": "aaaaaaaaaaaaaaaa", "expect": "0000000000005001-00000000-aaaaaaaaaaaaaaaa" }
+  ],
+  "rebase": [
+    { "why": "a clock within the drift is left alone", "stamp": "0001760400000000-00000002-aaaaaaaaaaaaaaaa", "device_now": 1760400001500, "hub_now": 1760400000500, "expect": "0001760400000000-00000002-aaaaaaaaaaaaaaaa" },
+    { "why": "a clock a day fast: the edit lands when it was made", "stamp": "0001760486400000-00000000-bbbbbbbbbbbbbbbb", "device_now": 1760486430000, "hub_now": 1760400030000, "expect": "0001760400000000-00000000-bbbbbbbbbbbbbbbb" },
+    { "why": "a clock a day slow: the edit is not lost to older ones", "stamp": "0001760313610000-00000003-bbbbbbbbbbbbbbbb", "device_now": 1760313620000, "hub_now": 1760400020000, "expect": "0001760400010000-00000003-bbbbbbbbbbbbbbbb" },
+    { "why": "a stamp from the future is held to the hub's now plus the drift", "stamp": "0001761399999999-00000000-cccccccccccccccc", "device_now": 1760400000000, "hub_now": 1760400000000, "expect": "0001760400002000-00000000-cccccccccccccccc" },
+    { "why": "a stamp never goes below zero", "stamp": "0000000000001000-00000000-aaaaaaaaaaaaaaaa", "device_now": 10000000, "hub_now": 5000, "expect": "0000000000000000-00000000-aaaaaaaaaaaaaaaa" }
+  ],
+  "merge": [
+    {
+      "name": "two people, two fields: both survive",
+      "rows": [
+        { "c": "c", "i": "r1", "f": "title", "v": { "t": "Plan" }, "s": "0000000000001000-00000000-aaaaaaaaaaaaaaaa" },
+        { "c": "c", "i": "r1", "f": "done", "v": { "b": true }, "s": "0000000000001001-00000000-bbbbbbbbbbbbbbbb" },
+        { "c": "c", "i": "r1", "f": "blob", "v": { "x": "AAH+/w==" }, "s": "0000000000001002-00000000-bbbbbbbbbbbbbbbb" }
+      ],
+      "expect": { "r1": { "title": { "t": "Plan" }, "done": { "b": true }, "blob": { "x": "AAH+/w==" } } }
+    },
+    {
+      "name": "one field: the greater stamp wins",
+      "rows": [
+        { "c": "c", "i": "r1", "f": "title", "v": { "t": "A" }, "s": "0000000000002000-00000000-aaaaaaaaaaaaaaaa" },
+        { "c": "c", "i": "r1", "f": "title", "v": { "t": "B" }, "s": "0000000000001999-00000009-bbbbbbbbbbbbbbbb" }
+      ],
+      "expect": { "r1": { "title": { "t": "A" } } }
+    },
+    {
+      "name": "the same moment: the device id decides",
+      "rows": [
+        { "c": "c", "i": "r1", "f": "title", "v": { "t": "A" }, "s": "0000000000002000-00000000-aaaaaaaaaaaaaaaa" },
+        { "c": "c", "i": "r1", "f": "title", "v": { "t": "B" }, "s": "0000000000002000-00000000-bbbbbbbbbbbbbbbb" }
+      ],
+      "expect": { "r1": { "title": { "t": "B" } } }
+    },
+    {
+      "name": "a delete hides every older field",
+      "rows": [
+        { "c": "c", "i": "r1", "f": "title", "v": { "t": "Plan" }, "s": "0000000000001000-00000000-aaaaaaaaaaaaaaaa" },
+        { "c": "c", "i": "r1", "f": "", "v": null, "s": "0000000000001500-00000000-bbbbbbbbbbbbbbbb" },
+        { "c": "c", "i": "r2", "f": "title", "v": { "t": "Keep" }, "s": "0000000000001000-00000000-aaaaaaaaaaaaaaaa" }
+      ],
+      "expect": { "r1": null, "r2": { "title": { "t": "Keep" } } }
+    },
+    {
+      "name": "a write after the delete brings back only itself",
+      "rows": [
+        { "c": "c", "i": "r1", "f": "title", "v": { "t": "Plan" }, "s": "0000000000001000-00000000-aaaaaaaaaaaaaaaa" },
+        { "c": "c", "i": "r1", "f": "done", "v": { "b": true }, "s": "0000000000001600-00000000-aaaaaaaaaaaaaaaa" },
+        { "c": "c", "i": "r1", "f": "", "v": null, "s": "0000000000001500-00000000-bbbbbbbbbbbbbbbb" }
+      ],
+      "expect": { "r1": { "done": { "b": true } } }
+    },
+    {
+      "name": "null removes one field",
+      "rows": [
+        { "c": "c", "i": "r1", "f": "title", "v": { "t": "Plan" }, "s": "0000000000001000-00000000-aaaaaaaaaaaaaaaa" },
+        { "c": "c", "i": "r1", "f": "note", "v": { "t": "x" }, "s": "0000000000001000-00000001-aaaaaaaaaaaaaaaa" },
+        { "c": "c", "i": "r1", "f": "note", "v": null, "s": "0000000000001200-00000000-bbbbbbbbbbbbbbbb" }
+      ],
+      "expect": { "r1": { "title": { "t": "Plan" } } }
+    },
+    {
+      "name": "a record's size is its live names and values",
+      "rows": [
+        { "c": "c", "i": "r1", "f": "title", "v": { "t": "Plan" }, "s": "0000000000001000-00000000-aaaaaaaaaaaaaaaa" },
+        { "c": "c", "i": "r1", "f": "count", "v": { "n": 2.5 }, "s": "0000000000001000-00000001-aaaaaaaaaaaaaaaa" },
+        { "c": "c", "i": "r1", "f": "flag", "v": { "b": false }, "s": "0000000000001000-00000002-aaaaaaaaaaaaaaaa" }
+      ],
+      "expect": { "r1": { "title": { "t": "Plan" }, "count": { "n": 2.5 }, "flag": { "b": false } } },
+      "size": 27
+    }
+  ]
+}

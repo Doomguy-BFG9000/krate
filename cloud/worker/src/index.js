@@ -46,6 +46,10 @@ import { leaseRoute, leaseKeyRoute } from "./org-lease.js";
 // Release control and groups (IC-949, R). After org-lease.js: it guards
 // the lease command too.
 import { orgReleaseRoute } from "./org-releases.js";
+// The organisation keyring (F-316) and the apps' team data sealed with it
+// (IC-951, store.org).
+import { orgKeysRoute } from "./org-keys.js";
+import { orgDataRoute } from "./org-data.js";
 // The organisation store (IC-946), one SQLite-backed Durable Object per
 // organisation; wrangler.toml binds it as ORGS.
 export { Org };
@@ -7406,9 +7410,12 @@ async function orgRouteCore(request, url, env, identity) {
   }
   const h = {
     request, url, env, slug, rest, method, principals, identity, site, base,
-    askRaw, mutateRaw, orgAsk, orgAnswer, json, readBody, isAdmin, smtpSend, fetchBundle,
+    askRaw, mutateRaw, orgAsk, orgAnswer, json, readBody, readBounded, isAdmin, smtpSend, fetchBundle,
   };
-  const routed = (await orgLifecycleRoute(h)) || (await orgBillingRoute(h)) || (await orgReleaseRoute(h));
+  const routed =
+    (await orgLifecycleRoute(h)) || (await orgBillingRoute(h)) || (await orgReleaseRoute(h)) ||
+    (await orgKeysRoute(h)) ||
+    (await orgDataRoute(h));
   if (routed) return routed;
   return text("not found", 404);
 }

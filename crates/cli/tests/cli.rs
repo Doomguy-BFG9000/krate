@@ -13524,6 +13524,43 @@ fn setup_installs_a_verified_wasi_sdk_into_krates_folder_and_refuses_a_bad_one()
 // side; this proves what the CLI sends and what a person reads.
 // ---------------------------------------------------------------------------
 
+/// One stored field of an app's team data: (app id, opaque record name,
+/// opaque field name). The fake, like the hub, never sees the real ones.
+type FakeDataKey = (String, String, String);
+
+/// A sealed row as the hub keeps it.
+#[derive(Clone)]
+struct FakeDataRow {
+    kind: String,
+    ct: String,
+    ver: u64,
+    s: String,
+    by: String,
+    size: u64,
+    seq: u64,
+}
+
+/// A device registered with an organisation's keyring.
+#[derive(Clone)]
+struct FakeDevice {
+    principal: String,
+    public_key: String,
+    name: String,
+    state: String,
+}
+
+/// An organisation's keyring as the hub keeps it (F-316): public halves,
+/// opaque envelopes, the recovery envelope.
+#[derive(Default)]
+struct FakeKeys {
+    devices: std::collections::BTreeMap<String, FakeDevice>,
+    /// (version, public key, state: current | stale | old).
+    versions: Vec<(u64, String, String)>,
+    /// device id -> (version, envelope, granted by, granting device).
+    envelopes: std::collections::BTreeMap<String, (u64, String, String, String)>,
+    recovery: Option<serde_json::Value>,
+}
+
 /// One organisation in the fake hub. Its behaviour follows the real hub's
 /// organisation store (cloud/worker/src/org.js): the same reasons, status
 /// codes, ordering of checks, and JSON shapes.
@@ -13543,6 +13580,11 @@ struct FakeOrg {
     groups: std::collections::BTreeMap<String, std::collections::BTreeSet<String>>,
     /// The release each app id opens, once one was chosen or approved.
     current: std::collections::BTreeMap<String, String>,
+    /// The apps' team data (store.org, IC-951), sealed.
+    data: std::collections::BTreeMap<FakeDataKey, FakeDataRow>,
+    data_seq: u64,
+    /// The keyring (F-316).
+    keys: FakeKeys,
 }
 
 struct FakeInvite {
@@ -13606,6 +13648,15 @@ struct FakeOrgHub {
     lease_class: String,
     lease_shift: i64,
     leases_issued: usize,
+    /// The per-app data quota (store.org); 0 is the hub's 50 MiB.
+    data_quota: u64,
+    /// While true every request answers 503: the hub is out of reach, as
+    /// on a train. A private app then opens on its lease, offline.
+    down: bool,
+    /// While true only the check-in and the lease answer 503, so an app
+    /// opens offline on its lease while its data still reaches the hub:
+    /// what the store itself refuses, mid-run, can be seen.
+    checkin_down: bool,
 }
 
 type FakeAnswer = (u16, Vec<(String, String)>, Vec<u8>);
@@ -13697,6 +13748,39 @@ fn fake_chain_ok(events: &[serde_json::Value]) -> bool {
 }
 
 impl FakeOrg {
+    /// What a removal does to the keyring, applied when next asked: the
+    /// removed member's devices lose their envelopes and the key is stale.
+    fn sweep_keys(&mut self, now: u64) {
+        let gone: Vec<String> = self
+            .keys
+            .devices
+            .iter()
+            .filter(|(_, d)| d.state == "active" && self.role_of(&d.principal).is_none())
+            .map(|(id, _)| id.clone())
+            .collect();
+        for id in &gone {
+            if let Some(d) = self.keys.devices.get_mut(id) {
+                d.state = "removed".into();
+            }
+            self.keys.envelopes.remove(id);
+            self.record(
+                now,
+                "system",
+                "key.device.remove",
+                &format!("device:{id}"),
+                "allowed",
+                Some("member removed"),
+            );
+        }
+        if !gone.is_empty() {
+            if let Some(last) = self.keys.versions.last_mut() {
+                if last.2 == "current" {
+                    last.2 = "stale".into();
+                }
+            }
+        }
+    }
+
     fn role_of(&self, who: &str) -> Option<&str> {
         self.members
             .get(who)
@@ -13834,6 +13918,489 @@ fn fake_marked_for(bytes: &[u8], slug: &str) -> bool {
 }
 
 impl FakeOrgHub {
+    /// The organisation keyring routes, as cloud/worker/src/org-keys.js
+    /// answers them: devices under principals, one envelope per device
+    /// (opaque here), grants by holders only, stale after a removal.
+    fn keys_route(
+        &mut self,
+        method: &str,
+        slug: &str,
+        rest: &[&str],
+        query: &str,
+        who: Option<String>,
+        body: &[u8],
+    ) -> FakeAnswer {
+        let now = self.now;
+        let Some(who) = who else {
+            return fake_refuse(401, "not-signed-in");
+        };
+        let Some(org) = self.orgs.get_mut(slug) else {
+            return fake_refuse(404, "no-such-org");
+        };
+        if org.was_removed(&who) {
+            return fake_refuse(403, "removed");
+        }
+        let Some(role) = org.role_of(&who).map(str::to_string) else {
+            return fake_refuse(403, "not-a-member");
+        };
+        org.sweep_keys(now);
+        let ask: serde_json::Value = serde_json::from_slice(body).unwrap_or_default();
+        let current = org.keys.versions.last().cloned();
+        let mine = |org: &FakeOrg, id: &str| {
+            org.keys
+                .devices
+                .get(id)
+                .filter(|d| d.principal == who && d.state == "active")
+                .cloned()
+        };
+        match (method, rest) {
+            ("GET", []) => {
+                let id = query.strip_prefix("device=").unwrap_or("");
+                let me = mine(org, id);
+                let envelope = me
+                    .as_ref()
+                    .and_then(|_| org.keys.envelopes.get(id).cloned());
+                let holds = matches!((&current, &envelope), (Some(c), Some(e)) if c.0 == e.0);
+                let live: Vec<(String, FakeDevice)> = org
+                    .keys
+                    .devices
+                    .iter()
+                    .filter(|(_, d)| d.state == "active" && org.role_of(&d.principal).is_some())
+                    .map(|(id, d)| (id.clone(), d.clone()))
+                    .collect();
+                let mut out = serde_json::json!({
+                    "current": current.as_ref().map(|c| serde_json::json!({ "version": c.0, "public_key": c.1, "state": c.2 })),
+                    "device": me.as_ref().map(|_| serde_json::json!({ "device_id": id, "state": "active" })),
+                    "envelope": envelope.as_ref().map(|e| serde_json::json!({ "version": e.0, "blob": e.1, "granted_by": e.2, "granted_device": e.3 })),
+                    "requests": [], "seal_to": [], "recovery": null,
+                    "devices": org.keys.devices.iter().filter(|(_, d)| role == "owner" || role == "admin" || d.principal == who).map(|(id, d)| serde_json::json!({
+                        "device_id": id, "principal": d.principal,
+                        "display": d.principal.split_once(':').map_or(d.principal.as_str(), |(_, v)| v),
+                        "name": d.name, "state": d.state,
+                        "holds": org.keys.envelopes.get(id).map(|e| e.0),
+                    })).collect::<Vec<_>>(),
+                });
+                if holds {
+                    let c = current.clone().unwrap();
+                    out["requests"] = serde_json::json!(live
+                        .iter()
+                        .filter(|(id, _)| org.keys.envelopes.get(id).is_none_or(|e| e.0 != c.0))
+                        .map(|(id, d)| serde_json::json!({ "device_id": id, "principal": d.principal, "public_key": d.public_key, "name": d.name }))
+                        .collect::<Vec<_>>());
+                    if c.2 == "stale" {
+                        out["seal_to"] = serde_json::json!(live
+                            .iter()
+                            .map(|(id, d)| serde_json::json!({ "device_id": id, "principal": d.principal, "public_key": d.public_key }))
+                            .collect::<Vec<_>>());
+                    }
+                    if let Some(r) = &org.keys.recovery {
+                        out["recovery"] = serde_json::json!({ "version": r["version"], "public_key": r["public_key"], "params": r["params"] });
+                    }
+                }
+                fake_json(200, out)
+            }
+            ("PUT", ["devices", id]) => {
+                let public = ask["public_key"].as_str().unwrap_or("").to_string();
+                let expected = format!("{:x}", Sha256::digest(public.as_bytes()));
+                if public.len() != 64 || expected[..16] != **id {
+                    return fake_refuse(400, "bad-request");
+                }
+                if let Some(d) = org.keys.devices.get(*id) {
+                    if d.principal != who {
+                        return fake_refuse(403, "role-cannot");
+                    }
+                }
+                let name = ask["name"].as_str().unwrap_or("").to_string();
+                if org
+                    .keys
+                    .devices
+                    .get(*id)
+                    .is_none_or(|d| d.state != "active")
+                {
+                    org.keys.devices.insert(
+                        id.to_string(),
+                        FakeDevice {
+                            principal: who.clone(),
+                            public_key: public,
+                            name,
+                            state: "active".into(),
+                        },
+                    );
+                    org.record(
+                        now,
+                        &who,
+                        "key.device.add",
+                        &format!("device:{id}"),
+                        "allowed",
+                        None,
+                    );
+                }
+                fake_json(
+                    200,
+                    serde_json::json!({ "device_id": id, "state": "active" }),
+                )
+            }
+            ("POST", ["init"]) => {
+                if role != "owner" {
+                    return fake_refuse(403, "role-cannot");
+                }
+                if current.is_some() {
+                    return fake_refuse(409, "key-exists");
+                }
+                let id = ask["device_id"].as_str().unwrap_or("").to_string();
+                if mine(org, &id).is_none() {
+                    return fake_refuse(404, "device-unknown");
+                }
+                org.keys.versions.push((
+                    1,
+                    ask["public_key"].as_str().unwrap_or("").to_string(),
+                    "current".into(),
+                ));
+                org.keys.envelopes.insert(
+                    id.clone(),
+                    (
+                        1,
+                        ask["envelope"].as_str().unwrap_or("").to_string(),
+                        who.clone(),
+                        id.clone(),
+                    ),
+                );
+                let mut recovery = ask["recovery"].clone();
+                recovery["version"] = serde_json::json!(1);
+                org.keys.recovery = Some(recovery);
+                org.record(
+                    now,
+                    &who,
+                    "key.init",
+                    "key:v1",
+                    "allowed",
+                    Some(&format!("on {id}")),
+                );
+                fake_json(201, serde_json::json!({ "version": 1 }))
+            }
+            ("GET", ["recovery"]) => {
+                if role != "owner" && role != "admin" {
+                    return fake_refuse(403, "role-cannot");
+                }
+                let Some(r) = org.keys.recovery.clone() else {
+                    return fake_refuse(409, "no-org-key");
+                };
+                org.record(
+                    now,
+                    &who,
+                    "key.recovery.read",
+                    &format!("org:{slug}"),
+                    "allowed",
+                    None,
+                );
+                fake_json(200, r)
+            }
+            ("POST", ["grants"]) => {
+                let Some(c) = current else {
+                    return fake_refuse(409, "no-org-key");
+                };
+                if ask["version"].as_u64() != Some(c.0) {
+                    return fake_refuse(409, "key-rotated");
+                }
+                let id = ask["device_id"].as_str().unwrap_or("").to_string();
+                let Some(to) = org.keys.devices.get(&id).cloned() else {
+                    return fake_refuse(404, "device-unknown");
+                };
+                if to.state != "active" || org.role_of(&to.principal).is_none() {
+                    return fake_refuse(404, "device-unknown");
+                }
+                let by = ask["by_device"].as_str().unwrap_or("").to_string();
+                let (action, how) = if by == "recovery" {
+                    if (role != "owner" && role != "admin") || to.principal != who {
+                        return fake_refuse(403, "role-cannot");
+                    }
+                    ("key.recover", "recovery code".to_string())
+                } else {
+                    let holds = mine(org, &by).is_some()
+                        && org.keys.envelopes.get(&by).is_some_and(|e| e.0 == c.0);
+                    if !holds {
+                        return fake_refuse(403, "key-not-held");
+                    }
+                    ("key.grant", by.clone())
+                };
+                org.keys.envelopes.insert(
+                    id.clone(),
+                    (
+                        c.0,
+                        ask["blob"].as_str().unwrap_or("").to_string(),
+                        who.clone(),
+                        how.clone(),
+                    ),
+                );
+                org.record(
+                    now,
+                    &who,
+                    action,
+                    &format!("device:{id}"),
+                    "allowed",
+                    Some(&format!("v{} to {} by {how}", c.0, to.principal)),
+                );
+                fake_json(200, serde_json::json!({ "device_id": id, "version": c.0 }))
+            }
+            ("POST", ["rotate"]) => {
+                let Some(c) = current else {
+                    return fake_refuse(409, "no-org-key");
+                };
+                if c.2 != "stale" {
+                    return fake_refuse(409, "key-rotated");
+                }
+                let by = ask["by_device"].as_str().unwrap_or("").to_string();
+                if mine(org, &by).is_none()
+                    || org.keys.envelopes.get(&by).is_none_or(|e| e.0 != c.0)
+                {
+                    return fake_refuse(403, "key-not-held");
+                }
+                let next = c.0 + 1;
+                if ask["version"].as_u64() != Some(next) {
+                    return fake_refuse(400, "bad-request");
+                }
+                let holders: Vec<String> = org.keys.envelopes.keys().cloned().collect();
+                if holders
+                    .iter()
+                    .any(|id| ask["envelopes"][id].as_str().is_none())
+                {
+                    return fake_refuse(400, "bad-request");
+                }
+                if let Some(last) = org.keys.versions.last_mut() {
+                    last.2 = "old".into();
+                }
+                org.keys.versions.push((
+                    next,
+                    ask["public_key"].as_str().unwrap_or("").to_string(),
+                    "current".into(),
+                ));
+                let live: Vec<String> = org
+                    .keys
+                    .devices
+                    .iter()
+                    .filter(|(_, d)| d.state == "active" && org.role_of(&d.principal).is_some())
+                    .map(|(id, _)| id.clone())
+                    .collect();
+                org.keys.envelopes.clear();
+                for id in live {
+                    if let Some(blob) = ask["envelopes"][&id].as_str() {
+                        org.keys
+                            .envelopes
+                            .insert(id, (next, blob.to_string(), who.clone(), by.clone()));
+                    }
+                }
+                if let Some(r) = org.keys.recovery.as_mut() {
+                    r["blob"] = ask["recovery_blob"].clone();
+                    r["version"] = serde_json::json!(next);
+                }
+                org.record(
+                    now,
+                    &who,
+                    "key.rotate",
+                    &format!("key:v{next}"),
+                    "allowed",
+                    Some(&format!("by {by}")),
+                );
+                fake_json(200, serde_json::json!({ "version": next }))
+            }
+            _ => (404, vec![], b"not found".to_vec()),
+        }
+    }
+
+    /// `POST /orgs/<slug>/data/<digest>/sync`, as cloud/worker/src/org-data.js
+    /// answers it: standing, a release of this organisation, not withdrawn,
+    /// in its audience, writes under the current key version; then the
+    /// sealed rows merge per opaque field by the shared rule (the device's
+    /// own `org_merge`, which the hub's JS matches vector for vector), and
+    /// what changed since the cursor comes back. Nothing here can open a
+    /// row: it holds what the device sent.
+    fn data_sync(
+        &mut self,
+        slug: &str,
+        digest: &str,
+        who: Option<String>,
+        body: &[u8],
+    ) -> FakeAnswer {
+        use krate_runtime::org_merge::{self, Stamp};
+        let hub_now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+        let quota = if self.data_quota == 0 {
+            50 * 1024 * 1024
+        } else {
+            self.data_quota
+        };
+        let now = self.now;
+        let Some(who) = who else {
+            return fake_refuse(401, "not-signed-in");
+        };
+        let Some(org) = self.orgs.get_mut(slug) else {
+            return fake_refuse(404, "no-such-org");
+        };
+        org.sweep_keys(now);
+        let target = format!("release:{digest}");
+        let deny = |org: &mut FakeOrg, reason: &str| {
+            org.record(now, &who, "data.sync", &target, "denied", Some(reason));
+            let status = match reason {
+                "release-withdrawn" => 410,
+                "too-large" | "over-quota" => 413,
+                "key-rotated" | "no-org-key" => 409,
+                _ => 403,
+            };
+            fake_refuse(status, reason)
+        };
+        if org.was_removed(&who) {
+            return deny(org, "removed");
+        }
+        let Some(role) = org.role_of(&who).map(str::to_string) else {
+            return deny(org, "not-a-member");
+        };
+        let Some((state, audience, app)) = org
+            .candidates
+            .get(digest)
+            .map(|c| (c.state, c.audience.clone(), c.app_id.to_ascii_lowercase()))
+        else {
+            return deny(org, "not-released");
+        };
+        if state == "withdrawn" {
+            return deny(org, "release-withdrawn");
+        }
+        if state != "released" {
+            return deny(org, "not-released");
+        }
+        if !org.in_audience(&who, &role, &audience) {
+            return deny(org, "not-in-audience");
+        }
+        let ask: serde_json::Value = serde_json::from_slice(body).unwrap_or_default();
+        let writes = ask["writes"].as_array().cloned().unwrap_or_default();
+        let key_version = org.keys.versions.last().map(|v| v.0);
+        if !writes.is_empty() {
+            let Some(current) = key_version else {
+                return deny(org, "no-org-key");
+            };
+            if writes.iter().any(|w| w["ver"].as_u64() != Some(current)) {
+                return deny(org, "key-rotated");
+            }
+        }
+        let device_now = ask["now"].as_u64().unwrap_or(hub_now);
+        let since: u64 = ask["since"]
+            .as_str()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0);
+        let ct_bytes = |ct: &str| krate_orgkeys::b64_decode(ct).map(|b| b.len());
+        let mut data = org.data.clone();
+        let mut seq = org.data_seq;
+        let mut lost = Vec::new();
+        let mut accepted = 0;
+        for w in &writes {
+            let (Some(r), Some(k), Some(kind), Some(s), Some(ct)) = (
+                w["r"].as_str(),
+                w["k"].as_str(),
+                w["kind"].as_str(),
+                w["s"].as_str().and_then(Stamp::parse),
+                w["ct"].as_str(),
+            ) else {
+                return fake_refuse(400, "bad-request");
+            };
+            let Some(n) = ct_bytes(ct).filter(|n| *n >= 40) else {
+                return fake_refuse(400, "bad-request");
+            };
+            let s = org_merge::rebase(&s, device_now, hub_now);
+            let key = (app.clone(), r.to_string(), k.to_string());
+            let tomb = data
+                .iter()
+                .filter(|(kk, row)| kk.0 == app && kk.1 == r && row.kind == "t")
+                .filter_map(|(_, row)| Stamp::parse(&row.s))
+                .max();
+            let held = data.get(&key).and_then(|row| Stamp::parse(&row.s));
+            let dead = kind != "t" && !org_merge::alive(&s, tomb.as_ref());
+            if dead || !org_merge::wins(&s, held.as_ref()) {
+                lost.push((r.to_string(), if dead { None } else { Some(k.to_string()) }));
+                continue;
+            }
+            accepted += 1;
+            seq += 1;
+            data.insert(
+                key,
+                FakeDataRow {
+                    kind: kind.to_string(),
+                    ct: ct.to_string(),
+                    ver: w["ver"].as_u64().unwrap_or(0),
+                    s: s.to_string(),
+                    by: who.clone(),
+                    size: n as u64 + 160,
+                    seq,
+                },
+            );
+            if kind == "t" {
+                data.retain(|kk, row| {
+                    !(kk.0 == app && kk.1 == r && row.kind != "t")
+                        || Stamp::parse(&row.s).is_some_and(|x| x > s)
+                });
+            }
+        }
+        // The sealed record bound, and the quota, refuse the whole push.
+        let mut records: std::collections::BTreeMap<String, (u64, u64)> = Default::default();
+        let mut used = 0u64;
+        for (kk, row) in &data {
+            if kk.0 != app {
+                continue;
+            }
+            used += row.size;
+            if row.kind == "v" {
+                let e = records.entry(kk.1.clone()).or_default();
+                e.0 += row.size - 160;
+                e.1 += 1;
+            }
+        }
+        if records
+            .values()
+            .any(|(bytes, fields)| *bytes > 64 * 1024 + 512 * fields)
+        {
+            return deny(org, "too-large");
+        }
+        if accepted > 0 && used > quota {
+            return deny(org, "over-quota");
+        }
+        org.data = data;
+        org.data_seq = seq;
+        let view = |k: &FakeDataKey, row: &FakeDataRow| {
+            let by = row.by.split_once(':').map_or(row.by.as_str(), |(_, v)| v);
+            serde_json::json!({ "r": k.1, "k": k.2, "kind": row.kind, "s": row.s, "ver": row.ver, "ct": row.ct, "by": by })
+        };
+        let mut changed: Vec<(u64, serde_json::Value)> = org
+            .data
+            .iter()
+            .filter(|(k, row)| k.0 == app && row.seq > since)
+            .map(|(k, row)| (row.seq, view(k, row)))
+            .collect();
+        changed.sort_by_key(|r| r.0);
+        let cursor = changed.last().map(|r| r.0).unwrap_or(since);
+        let mut rows: Vec<serde_json::Value> = changed.into_iter().map(|r| r.1).collect();
+        for (r, k) in lost {
+            for (kk, row) in org.data.iter().filter(|(kk, row)| {
+                kk.0 == app && kk.1 == r && k.as_ref().map_or(row.kind == "t", |k| &kk.2 == k)
+            }) {
+                rows.push(view(kk, row));
+            }
+        }
+        let display = who
+            .split_once(':')
+            .map_or(who.as_str(), |(_, v)| v)
+            .to_string();
+        fake_json(
+            200,
+            serde_json::json!({
+                "v": 1, "now": hub_now, "accepted": accepted, "key_version": key_version, "rows": rows,
+                "cursor": cursor.to_string(), "more": false, "full": false,
+                "me": { "name": display, "role": role },
+                "org": { "slug": slug, "name": org.name },
+                "quota": { "used": used, "limit": quota },
+            }),
+        )
+    }
+
     fn handle(
         &mut self,
         method: &str,
@@ -13867,6 +14434,39 @@ impl FakeOrgHub {
             });
         if let Some((status, reason)) = self.force_next.take() {
             return fake_refuse(status, &reason);
+        }
+        if self.down
+            || (self.checkin_down && (path.starts_with("/a/") || path.contains("/leases/")))
+        {
+            return fake_refuse(503, "unavailable");
+        }
+        // The apps' team data (IC-951): one POST per sync, which takes no
+        // Idempotency-Key -- a stamped write applied twice is applied once.
+        {
+            let parts: Vec<&str> = path.trim_start_matches('/').split('/').collect();
+            if method == "POST"
+                && parts.len() == 5
+                && parts[0] == "orgs"
+                && parts[2] == "data"
+                && parts[4] == "sync"
+            {
+                let (slug, digest) = (parts[1].to_string(), parts[3].to_string());
+                return self.data_sync(&slug, &digest, who, body);
+            }
+        }
+        // The keyring (F-316).
+        {
+            let (bare, query) = path.split_once('?').unwrap_or((path, ""));
+            let parts: Vec<String> = bare
+                .trim_start_matches('/')
+                .split('/')
+                .map(str::to_string)
+                .collect();
+            if parts.len() >= 3 && parts[0] == "orgs" && parts[2] == "keys" {
+                let rest: Vec<&str> = parts[3..].iter().map(String::as_str).collect();
+                let slug = parts[1].clone();
+                return self.keys_route(method, &slug, &rest, query, who, body);
+            }
         }
         let mutation = method != "GET";
         if mutation && path.starts_with("/orgs") {
@@ -14958,6 +15558,8 @@ struct OrgWorld {
     stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
     homes: std::collections::BTreeMap<String, tempfile::TempDir>,
     dir: tempfile::TempDir,
+    /// What `krate org create` printed: it carries the recovery code.
+    created: std::sync::Mutex<String>,
 }
 
 impl Drop for OrgWorld {
@@ -15006,6 +15608,7 @@ impl OrgWorld {
             stop,
             homes,
             dir: tempfile::tempdir().expect("dir"),
+            created: Default::default(),
         })
     }
 
@@ -15118,6 +15721,8 @@ impl OrgWorld {
         match name {
             "dan" => "dan@acme.example".to_string(),
             "alice-mail" => "alice@corp.example".to_string(),
+            // Alice on a second, new computer.
+            "alice-laptop" => "alice".to_string(),
             other => other.to_string(),
         }
     }
@@ -15151,7 +15756,8 @@ impl OrgWorld {
     /// Alice's acme: its root key registered, Bob reviewer, Carol
     /// developer and Dan recipient, each joined.
     fn acme(&self) -> PathBuf {
-        self.says("alice", &["org", "create", "acme", "--name", "Acme"], true);
+        let said = self.says("alice", &["org", "create", "acme", "--name", "Acme"], true);
+        *self.created.lock().unwrap() = said;
         let root = self.dir.path().join("acme-root.pkcs8");
         std::fs::write(
             &root,
@@ -18638,4 +19244,839 @@ fn a_member_outside_the_audience_is_refused_and_an_owner_passes() {
         true,
     );
     assert!(out.contains("carol (GitHub) is out of finance"), "{out}");
+}
+
+// ---------------------------------------------------------------------------
+// store.org (IC-951), end to end encrypted (F-316): an organisation's team
+// data, through the binary. The probe is apps/krate-orgstore-probe built
+// (fixtures/orgstore-probe.wasm): `put`, `get`, `delete`, `list`, `sync` and
+// `who` steps joined by `then`, one line each. The fake hub answers
+// /orgs/<slug>/keys and /orgs/<slug>/data/<digest>/sync the way
+// cloud/worker/src/org-keys.js and org-data.js do, holding only what the
+// devices send; with KRATE_ORG_E2E_HUB set, the online test runs against a
+// real hub, and with KRATE_ORG_E2E_STATE naming its --persist-to directory,
+// that hub's stored bytes are searched for the plaintext too.
+// ---------------------------------------------------------------------------
+
+/// The probe, packed as `dev.acme.tasks` at `version`, as Carol builds it.
+fn probe_bundle(world: &OrgWorld, file: &str, version: &str) -> PathBuf {
+    let dir = world.dir.path().join(format!("probe-{file}"));
+    std::fs::create_dir_all(&dir).expect("dir");
+    let wasm = dir.join("code.wasm");
+    std::fs::write(&wasm, include_bytes!("fixtures/orgstore-probe.wasm")).expect("probe");
+    let manifest = dir.join("manifest.toml");
+    std::fs::write(
+        &manifest,
+        format!(
+            "[app]\nid = \"dev.acme.tasks\"\nname = \"Acme Tasks\"\nversion = \"{version}\"\n\
+             entry = \"code.wasm\"\nworld = \"krate:app/cli@0.1.0\"\n\n\
+             [[capabilities]]\ncap = \"io.stdout\"\nrationale = \"print\"\nrequired = true\n\n\
+             [[capabilities]]\ncap = \"io.args\"\nrationale = \"steps\"\nrequired = true\n\n\
+             [[capabilities]]\ncap = \"store.org\"\nrationale = \"the team's records\"\nrequired = true\n"
+        ),
+    )
+    .expect("manifest");
+    let bundle = world.dir.path().join(file);
+    let packed = krate()
+        .arg("pack")
+        .arg(&wasm)
+        .arg("--manifest")
+        .arg(&manifest)
+        .arg("-o")
+        .arg(&bundle)
+        .output()
+        .expect("pack");
+    assert!(
+        packed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&packed.stderr)
+    );
+    bundle
+}
+
+/// Carol's probe, signed for acme, published, approved by Bob: the bundle
+/// and its digest.
+fn released_probe(world: &OrgWorld, root: &std::path::Path, version: &str) -> (PathBuf, String) {
+    let bundle = probe_bundle(world, &format!("tasks-{version}.krate"), version);
+    world.sign_delegated(root, "carol", &bundle);
+    let digest = OrgWorld::digest_in(&world.says(
+        "carol",
+        &["publish", bundle.to_str().unwrap(), "--org", "acme"],
+        true,
+    ));
+    world.says("bob", &["org", "approve", "acme", &digest], true);
+    (bundle, digest)
+}
+
+/// Run the probe from `who`'s own copy of `bundle` with these steps;
+/// stdout's lines, and stderr.
+fn probe(
+    world: &OrgWorld,
+    who: &str,
+    bundle: &std::path::Path,
+    steps: &[&str],
+    env: &[(&str, &str)],
+) -> (Vec<String>, String) {
+    let copy = world.homes[who].path().join("Acme Tasks.krate");
+    std::fs::copy(bundle, &copy).expect("copy");
+    let mut args = vec![
+        "run",
+        copy.to_str().unwrap(),
+        "--headless",
+        "--auto-grant",
+        "--",
+    ];
+    args.extend_from_slice(steps);
+    let mut command = org_command(world, who, &args);
+    for (k, v) in env {
+        command.env(k, v);
+    }
+    let out = command.output().expect("run");
+    let stdout = String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .map(str::to_string)
+        .collect();
+    (stdout, stderr_of(&out))
+}
+
+/// `who` runs `krate org keys show acme`: their computer does its share of
+/// the keyring (registers, takes the key, passes it on) and says so.
+fn keys_show(world: &OrgWorld, who: &str) -> String {
+    world.says(who, &["org", "keys", "show", "acme"], true)
+}
+
+/// The organisation-data files on `who`'s machine.
+fn org_data_files(world: &OrgWorld, who: &str) -> Vec<PathBuf> {
+    let dir = world.homes[who].path().join(".krate/org-data/acme");
+    std::fs::read_dir(dir)
+        .map(|entries| {
+            entries
+                .flatten()
+                .map(|e| e.path())
+                .filter(|p| p.extension().is_some_and(|e| e == "json"))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Every file under `dir`, read whole.
+fn all_bytes_under(dir: &std::path::Path, out: &mut Vec<u8>) {
+    for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            all_bytes_under(&path, out);
+        } else if let Ok(bytes) = std::fs::read(&path) {
+            out.extend_from_slice(&bytes);
+        }
+    }
+}
+
+fn contains(haystack: &[u8], needle: &str) -> bool {
+    haystack
+        .windows(needle.len())
+        .any(|w| w == needle.as_bytes())
+}
+
+/// Two members on two computers each edit one record, each a different
+/// field; once both have synced, both see both, with who changed it. The
+/// key reaches Dan's computer from Carol's, with no owner involved, and the
+/// audit says so; no plaintext ever reaches the hub; a second release of
+/// the same app reads the same data; the recovery code restores Alice's
+/// key on a new computer; and after Dan is removed the key is replaced, so
+/// what is written next is under a version he never had. Online only, so
+/// it also runs against a real hub (KRATE_ORG_E2E_HUB).
+#[test]
+fn org_team_data_is_sealed_shared_by_two_members_and_its_key_travels_device_to_device() {
+    let Some(world) = OrgWorld::new(&["alice", "alice-laptop", "bob", "carol", "dan"]) else {
+        eprintln!("skipping org_team_data_is_sealed_...: no local port");
+        return;
+    };
+    let fake = world.real_hub().is_none();
+    let root = world.acme();
+    let created = world.created.lock().unwrap().clone();
+    assert!(
+        created.contains("made acme's key (version 1) on this computer"),
+        "{created}"
+    );
+    let code = created
+        .lines()
+        .find_map(|l| l.strip_prefix("recovery code: "))
+        .expect("the recovery code is shown once")
+        .to_string();
+    let (bundle, _) = released_probe(&world, &root, "1.0.0");
+    let title = "Order chairs for the hall";
+    let id = "task-0001-xyz";
+
+    // Carol's computer registers and waits for the key: her write waits too.
+    let (out, err) = probe(
+        &world,
+        "carol",
+        &bundle,
+        &[
+            "put",
+            "tasks",
+            id,
+            &format!("title={title}"),
+            "then",
+            "sync",
+        ],
+        &[],
+    );
+    assert_eq!(out[0], format!("put {id} ok"), "{err}");
+    assert_eq!(out[1], "sync online=true changed=false pending=1", "{err}");
+    // Alice's computer is online once (any of acme's apps would do): it
+    // passes the key to Carol's.
+    let shown = keys_show(&world, "alice");
+    assert!(
+        shown.contains("this computer holds acme's key, version 1"),
+        "{shown}"
+    );
+    let (out, err) = probe(&world, "carol", &bundle, &["sync", "then", "who"], &[]);
+    assert!(out[0].ends_with("pending=0"), "{out:?} {err}");
+    assert_eq!(out[1], "who carol developer Acme");
+
+    // Dan (a recipient, by email) joins later: his computer registers,
+    // and his own field waits for the key.
+    let (out, err) = probe(
+        &world,
+        "dan",
+        &bundle,
+        &[
+            "put",
+            "tasks",
+            id,
+            "done?=true",
+            "then",
+            "sync",
+            "then",
+            "get",
+            "tasks",
+            id,
+        ],
+        &[],
+    );
+    assert_eq!(out[1], "sync online=true changed=false pending=1", "{err}");
+    assert_eq!(out[2], format!("get {id} done=true by=dan@acme.example"));
+    // Carol's computer -- not an owner's -- passes him the key.
+    let (out, _) = probe(&world, "carol", &bundle, &["sync"], &[]);
+    assert!(out[0].starts_with("sync online=true"));
+    let (out, err) = probe(
+        &world,
+        "dan",
+        &bundle,
+        &["sync", "then", "get", "tasks", id],
+        &[],
+    );
+    assert_eq!(
+        out[1],
+        format!("get {id} done=true;title={title} by=dan@acme.example"),
+        "{out:?} {err}"
+    );
+    let (out, err) = probe(
+        &world,
+        "carol",
+        &bundle,
+        &["sync", "then", "get", "tasks", id, "then", "list", "tasks"],
+        &[],
+    );
+    assert_eq!(
+        out[1],
+        format!("get {id} done=true;title={title} by=dan@acme.example"),
+        "{out:?} {err}"
+    );
+    assert_eq!(out[2], format!("list {id}"));
+
+    // The audit names each grant: Dan's from Carol's computer.
+    if fake {
+        let hub = world.hub.lock().unwrap();
+        let acme = &hub.orgs["acme"];
+        let carols: Vec<&String> = acme
+            .keys
+            .devices
+            .iter()
+            .filter(|(_, d)| d.principal == "github:carol")
+            .map(|(id, _)| id)
+            .collect();
+        let dans = acme
+            .audit
+            .iter()
+            .find(|e| {
+                e["action"] == "key.grant"
+                    && e["reason"]
+                        .as_str()
+                        .is_some_and(|r| r.contains("email:dan@acme.example"))
+            })
+            .expect("a grant to Dan");
+        assert_eq!(dans["actor"], "github:carol", "no owner involved: {dans}");
+        assert!(
+            dans["reason"]
+                .as_str()
+                .unwrap()
+                .ends_with(&format!("by {}", carols[0])),
+            "{dans}"
+        );
+        // Nothing the devices sent carries the record's id or value, as
+        // text or inside a ciphertext.
+        for row in acme.data.values() {
+            let inside = krate_orgkeys::b64_decode(&row.ct).expect("base64");
+            assert!(
+                !contains(&inside, title) && !contains(&inside, id),
+                "plaintext inside a ciphertext"
+            );
+        }
+        for body in &hub.bodies {
+            assert!(
+                !contains(body, title) && !contains(body, id),
+                "plaintext left a device: {}",
+                String::from_utf8_lossy(body)
+            );
+        }
+        // And what the hub stores is opaque: no collection, id, field or value.
+        for (key, row) in &acme.data {
+            // The app id is the hub's to know; the rest is opaque.
+            let stored = format!("{} {} {} {} {}", key.1, key.2, row.kind, row.ct, row.s);
+            for plain in [title, id, "tasks", "title", "done"] {
+                assert!(!stored.contains(plain), "{plain} in {stored}");
+            }
+        }
+    }
+    if let Ok(state) = std::env::var("KRATE_ORG_E2E_STATE") {
+        let mut stored = Vec::new();
+        all_bytes_under(std::path::Path::new(&state), &mut stored);
+        assert!(
+            !stored.is_empty(),
+            "the hub's state directory has its store"
+        );
+        assert!(
+            !contains(&stored, title) && !contains(&stored, id),
+            "the hub's stored bytes hold plaintext"
+        );
+    }
+
+    // A delete reaches the other computer.
+    let (out, err) = probe(
+        &world,
+        "carol",
+        &bundle,
+        &["put", "tasks", "temp-2", "title=gone soon", "then", "sync"],
+        &[],
+    );
+    assert!(out[1].ends_with("pending=0"), "{out:?} {err}");
+    let (out, _) = probe(
+        &world,
+        "dan",
+        &bundle,
+        &["sync", "then", "get", "tasks", "temp-2"],
+        &[],
+    );
+    assert_eq!(out[1], "get temp-2 title=gone soon by=carol");
+    let (out, _) = probe(
+        &world,
+        "carol",
+        &bundle,
+        &["delete", "tasks", "temp-2", "then", "sync"],
+        &[],
+    );
+    assert_eq!(out[0], "delete temp-2 ok");
+    let (out, err) = probe(
+        &world,
+        "dan",
+        &bundle,
+        &["sync", "then", "get", "tasks", "temp-2"],
+        &[],
+    );
+    assert_eq!(out[1], "get temp-2 none", "{out:?} {err}");
+
+    // The next release of the same app id: the same data.
+    let (v2, _) = released_probe(&world, &root, "1.0.1");
+    let (out, err) = probe(
+        &world,
+        "carol",
+        &v2,
+        &["sync", "then", "get", "tasks", id],
+        &[],
+    );
+    assert_eq!(
+        out[1],
+        format!("get {id} done=true;title={title} by=dan@acme.example"),
+        "{out:?} {err}"
+    );
+
+    // Alice's new laptop: the recovery code restores her key, and she
+    // reads the data with no other device involved.
+    let restored = world.says(
+        "alice-laptop",
+        &["org", "keys", "recover", "acme", "--code", &code],
+        true,
+    );
+    assert!(
+        restored.contains("restored acme's key (version 1)"),
+        "{restored}"
+    );
+    let wrong = world.krate_as(
+        "alice-laptop",
+        &[
+            "org",
+            "keys",
+            "recover",
+            "acme",
+            "--code",
+            "0000000000-0000000000-000000",
+        ],
+    );
+    assert!(!wrong.status.success());
+    assert!(
+        stderr_of(&wrong).contains("does not open acme's key"),
+        "{}",
+        stderr_of(&wrong)
+    );
+    let (out, err) = probe(
+        &world,
+        "alice-laptop",
+        &v2,
+        &["sync", "then", "get", "tasks", id],
+        &[],
+    );
+    assert_eq!(
+        out[1],
+        format!("get {id} done=true;title={title} by=dan@acme.example"),
+        "{out:?} {err}"
+    );
+
+    // An unmarked copy of the same code is not the organisation's app.
+    let unmarked = probe_bundle(&world, "unmarked.krate", "1.0.0");
+    let before = world.hub.lock().unwrap().seen.len();
+    let (out, err) = probe(
+        &world,
+        "carol",
+        &unmarked,
+        &[
+            "put", "tasks", "t2", "title=x", "then", "sync", "then", "get", "tasks", id,
+        ],
+        &[],
+    );
+    assert_eq!(
+        out,
+        vec![
+            "put t2 error=not-an-org-app",
+            "sync error=not-an-org-app",
+            &format!("get {id} error=not-an-org-app")
+        ],
+        "{err}"
+    );
+    if fake {
+        assert_eq!(
+            world.hub.lock().unwrap().seen.len(),
+            before,
+            "an unmarked app sends nothing"
+        );
+    }
+
+    // Dan is removed: the app no longer opens for him and the
+    // organisation's data leaves his computer. Carol's computer replaces
+    // the key; what she writes next is under a version Dan never held.
+    assert!(!org_data_files(&world, "dan").is_empty(), "Dan had a copy");
+    world.says(
+        "alice",
+        &["org", "remove", "acme", "dan@acme.example"],
+        true,
+    );
+    let (out, err) = probe(&world, "dan", &v2, &["get", "tasks", id], &[]);
+    assert!(
+        out.is_empty() && err.contains("removed from acme"),
+        "{out:?} {err}"
+    );
+    assert!(
+        org_data_files(&world, "dan").is_empty(),
+        "the data left with him"
+    );
+    let (out, err) = probe(
+        &world,
+        "carol",
+        &v2,
+        &[
+            "sync",
+            "then",
+            "put",
+            "tasks",
+            "after-removal-7",
+            "title=Payroll moves to Friday",
+            "then",
+            "sync",
+        ],
+        &[],
+    );
+    assert!(out[2].ends_with("pending=0"), "{out:?} {err}");
+    let shown = keys_show(&world, "carol");
+    assert!(
+        shown.contains("this computer holds acme's key, version 2"),
+        "{shown}"
+    );
+    if fake {
+        let hub = world.hub.lock().unwrap();
+        let acme = &hub.orgs["acme"];
+        let dans: Vec<&String> = acme
+            .keys
+            .devices
+            .iter()
+            .filter(|(_, d)| d.principal == "email:dan@acme.example")
+            .map(|(id, _)| id)
+            .collect();
+        assert!(
+            dans.iter().all(|d| !acme.keys.envelopes.contains_key(*d)),
+            "Dan's computer holds no envelope"
+        );
+        let newest = acme.data.values().max_by_key(|r| r.seq).unwrap();
+        assert_eq!(newest.ver, 2, "written after the removal under version 2");
+    }
+    // Everyone still in sees it.
+    let (out, err) = probe(
+        &world,
+        "alice-laptop",
+        &v2,
+        &["sync", "then", "get", "tasks", "after-removal-7"],
+        &[],
+    );
+    assert_eq!(
+        out[1], "get after-removal-7 title=Payroll moves to Friday by=carol",
+        "{out:?} {err}"
+    );
+}
+
+/// The rest needs a hub that can be switched off or changed: offline edits
+/// by two people merge per field, a device with a wrong clock does not win,
+/// a tampered ciphertext is refused, the store's own refusals mid-run
+/// (removed, outside the audience, withdrawn), and the limits.
+#[test]
+fn org_team_data_offline_wrong_clock_tampering_refusals_and_limits() {
+    let Some(world) = OrgWorld::new(&["alice", "bob", "carol", "dan"]) else {
+        eprintln!("skipping org_team_data_offline_...: no local port");
+        return;
+    };
+    if world.real_hub().is_some() {
+        eprintln!("skipping org_team_data_offline_...: a real hub cannot be switched off");
+        return;
+    }
+    let root = world.acme();
+    let (bundle, digest) = released_probe(&world, &root, "1.0.0");
+    let set = |f: &dyn Fn(&mut FakeOrgHub)| f(&mut world.hub.lock().unwrap());
+    // Each opens it once (a lease, a registered computer), Alice's computer
+    // passes the key, and each takes it.
+    for who in ["bob", "carol", "dan"] {
+        probe(&world, who, &bundle, &["sync"], &[]);
+    }
+    keys_show(&world, "alice");
+    for who in ["bob", "carol", "dan"] {
+        let (out, err) = probe(&world, who, &bundle, &["sync"], &[]);
+        assert_eq!(
+            out[0], "sync online=true changed=false pending=0",
+            "{who}: {err}"
+        );
+    }
+
+    // Offline: Carol and Dan each edit t1, a different field each.
+    set(&|h| h.down = true);
+    let (out, err) = probe(
+        &world,
+        "carol",
+        &bundle,
+        &[
+            "put",
+            "tasks",
+            "t1",
+            "title=Order chairs",
+            "then",
+            "sync",
+            "then",
+            "get",
+            "tasks",
+            "t1",
+        ],
+        &[],
+    );
+    assert_eq!(
+        out,
+        vec![
+            "put t1 ok",
+            "sync online=false changed=false pending=1",
+            "get t1 title=Order chairs by=carol"
+        ],
+        "{err}"
+    );
+    assert!(err.contains("offline"), "it opened on its lease: {err}");
+    let (out, err) = probe(
+        &world,
+        "dan",
+        &bundle,
+        &["put", "tasks", "t1", "n#=4", "then", "sync"],
+        &[],
+    );
+    assert_eq!(
+        out,
+        vec!["put t1 ok", "sync online=false changed=false pending=1"],
+        "{err}"
+    );
+    set(&|h| h.down = false);
+    let (out, err) = probe(&world, "carol", &bundle, &["sync"], &[]);
+    assert!(out[0].ends_with("pending=0"), "{out:?} {err}");
+    let (out, err) = probe(
+        &world,
+        "dan",
+        &bundle,
+        &["sync", "then", "get", "tasks", "t1"],
+        &[],
+    );
+    assert_eq!(
+        out[1], "get t1 n=4;title=Order chairs by=dan@acme.example",
+        "{out:?} {err}"
+    );
+    let (out, err) = probe(
+        &world,
+        "carol",
+        &bundle,
+        &["sync", "then", "get", "tasks", "t1"],
+        &[],
+    );
+    assert_eq!(
+        out[1], "get t1 n=4;title=Order chairs by=dan@acme.example",
+        "{out:?} {err}"
+    );
+
+    // A wrong clock does not win. Bob's clock jumps a day ahead and he
+    // renames t1 offline; later (by the real clock) Carol renames it
+    // online. When Bob reconnects, Carol's later edit stays.
+    let day = "86400000";
+    set(&|h| h.down = true);
+    let (out, err) = probe(
+        &world,
+        "bob",
+        &bundle,
+        &["put", "tasks", "t1", "title=Bob's title"],
+        &[("KRATE_TEST_ORG_CLOCK_SKEW_MS", day)],
+    );
+    assert_eq!(out, vec!["put t1 ok"], "{err}");
+    std::thread::sleep(Duration::from_millis(1500));
+    set(&|h| h.down = false);
+    let (out, err) = probe(
+        &world,
+        "carol",
+        &bundle,
+        &["put", "tasks", "t1", "title=Carol's title", "then", "sync"],
+        &[],
+    );
+    assert!(out[1].ends_with("pending=0"), "{out:?} {err}");
+    let (out, err) = probe(
+        &world,
+        "bob",
+        &bundle,
+        &["sync", "then", "get", "tasks", "t1"],
+        &[("KRATE_TEST_ORG_CLOCK_SKEW_MS", day)],
+    );
+    assert_eq!(
+        out[1], "get t1 n=4;title=Carol's title by=carol",
+        "the later edit won on Bob's computer: {out:?} {err}"
+    );
+    let (out, _) = probe(
+        &world,
+        "carol",
+        &bundle,
+        &["sync", "then", "get", "tasks", "t1"],
+        &[],
+    );
+    assert_eq!(
+        out[1], "get t1 n=4;title=Carol's title by=carol",
+        "and on Carol's"
+    );
+    let (out, _) = probe(
+        &world,
+        "bob",
+        &bundle,
+        &["put", "tasks", "t1", "title=Bob again", "then", "sync"],
+        &[("KRATE_TEST_ORG_CLOCK_SKEW_MS", day)],
+    );
+    assert!(out[1].ends_with("pending=0"), "{out:?}");
+    let (out, _) = probe(
+        &world,
+        "carol",
+        &bundle,
+        &["sync", "then", "get", "tasks", "t1"],
+        &[],
+    );
+    assert_eq!(out[1], "get t1 n=4;title=Bob again by=bob");
+
+    let (out, _) = probe(
+        &world,
+        "dan",
+        &bundle,
+        &["sync", "then", "get", "tasks", "t1"],
+        &[],
+    );
+    assert_eq!(out[1], "get t1 n=4;title=Bob again by=bob");
+    // A tampered ciphertext is refused. The hub changes one byte of the
+    // stored title and serves it as new: Dan's computer does not apply it.
+    {
+        let mut hub = world.hub.lock().unwrap();
+        let acme = hub.orgs.get_mut("acme").unwrap();
+        acme.data_seq += 1;
+        let seq = acme.data_seq;
+        let row = acme
+            .data
+            .values_mut()
+            .filter(|r| r.kind == "v")
+            .max_by(|a, b| a.s.cmp(&b.s))
+            .unwrap();
+        let mut bytes = krate_orgkeys::b64_decode(&row.ct).unwrap();
+        bytes[30] ^= 1;
+        row.ct = krate_orgkeys::b64_encode(&bytes);
+        row.s = format!("0002{}", &row.s[4..]);
+        row.seq = seq;
+    }
+    let (out, err) = probe(
+        &world,
+        "dan",
+        &bundle,
+        &["sync", "then", "get", "tasks", "t1"],
+        &[],
+    );
+    assert_eq!(
+        out[1], "get t1 n=4;title=Bob again by=bob",
+        "the tampered row was not applied: {out:?} {err}"
+    );
+    let mirror: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&org_data_files(&world, "dan")[0]).unwrap())
+            .unwrap();
+    assert!(
+        mirror["rejected"].as_u64().unwrap_or(0) >= 1,
+        "and it was counted: {}",
+        mirror["rejected"]
+    );
+
+    // Limits, on the device: names, the record, the quota the hub states.
+    let long = "i".repeat(129);
+    let (out, _) = probe(
+        &world,
+        "carol",
+        &bundle,
+        &[
+            "put", "tasks", &long, "a=b", "then", "fill", "tasks", "big", "body", "70000", "then",
+            "fill", "tasks", "ok", "body", "60000",
+        ],
+        &[],
+    );
+    assert!(
+        out[0].starts_with(&format!(
+            "put {long} error=invalid a record id is at most 128 bytes"
+        )),
+        "{out:?}"
+    );
+    assert_eq!(out[1], "fill big error=too-large");
+    assert_eq!(out[2], "fill ok ok");
+    set(&|h| h.data_quota = 70_000);
+    let (out, err) = probe(
+        &world,
+        "carol",
+        &bundle,
+        &["sync", "then", "fill", "tasks", "more", "body", "20000"],
+        &[],
+    );
+    assert_eq!(out[1], "fill more error=over-quota", "{out:?} {err}");
+
+    // The store's own refusals, while the app is open offline on its lease
+    // and its data still reaches the hub.
+    set(&|h| h.checkin_down = true);
+    world.says(
+        "alice",
+        &["org", "group", "create", "acme", "finance"],
+        true,
+    );
+    world.says(
+        "alice",
+        &[
+            "org", "release", "audience", "acme", &digest, "--groups", "finance",
+        ],
+        true,
+    );
+    let (out, err) = probe(
+        &world,
+        "dan",
+        &bundle,
+        &["sync", "then", "get", "tasks", "t1"],
+        &[],
+    );
+    assert_eq!(
+        out,
+        vec![
+            "sync error=refused reason=not-in-audience",
+            "get t1 error=refused reason=not-in-audience"
+        ],
+        "{err}"
+    );
+    world.says(
+        "alice",
+        &["org", "release", "audience", "acme", &digest, "--everyone"],
+        true,
+    );
+    world.says(
+        "alice",
+        &["org", "remove", "acme", "dan@acme.example"],
+        true,
+    );
+    assert!(!org_data_files(&world, "dan").is_empty());
+    let (out, err) = probe(
+        &world,
+        "dan",
+        &bundle,
+        &["sync", "then", "get", "tasks", "t1"],
+        &[],
+    );
+    assert_eq!(
+        out,
+        vec![
+            "sync error=refused reason=removed",
+            "get t1 error=refused reason=removed"
+        ],
+        "{err}"
+    );
+    assert!(
+        org_data_files(&world, "dan").is_empty(),
+        "the data left Dan's computer"
+    );
+    world.says(
+        "bob",
+        &[
+            "org",
+            "release",
+            "withdraw",
+            "acme",
+            &digest,
+            "--reason",
+            "wrong totals",
+        ],
+        true,
+    );
+    let (out, err) = probe(
+        &world,
+        "carol",
+        &bundle,
+        &["sync", "then", "put", "tasks", "t9", "a=b"],
+        &[],
+    );
+    assert_eq!(
+        out,
+        vec![
+            "sync error=refused reason=release-withdrawn",
+            "put t9 error=refused reason=release-withdrawn"
+        ],
+        "{err}"
+    );
+    let hub = world.hub.lock().unwrap();
+    let denied: Vec<&str> = hub.orgs["acme"]
+        .audit
+        .iter()
+        .filter(|e| e["action"] == "data.sync" && e["result"] == "denied")
+        .filter_map(|e| e["reason"].as_str())
+        .collect();
+    for reason in ["not-in-audience", "release-withdrawn"] {
+        assert!(denied.contains(&reason), "{reason}: {denied:?}");
+    }
 }

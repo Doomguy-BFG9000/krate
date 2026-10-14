@@ -15510,6 +15510,7 @@ fn run_component_inner(request: RunRequest) -> Result<u8> {
     // An organisation's private app opens only for a current member, and
     // offline only on a lease that holds (IC-948 G). A preview picture is
     // Krate looking at the app, not a person opening it.
+    let mut org_opened = None;
     if let Some(opened) = bundle.as_ref().filter(|_| !request.for_screenshot) {
         let bytes = match fetched_sha256.as_deref() {
             Some(sha256) => access::Bytes::Fetched {
@@ -15518,7 +15519,7 @@ fn run_component_inner(request: RunRequest) -> Result<u8> {
             },
             None => access::Bytes::File(Path::new(&request.target)),
         };
-        fleet::org_gate(&subject, bytes, access::mark_of(opened), door)?;
+        org_opened = fleet::org_gate_opened(&subject, bytes, access::mark_of(opened), door)?;
     }
 
     if !file.exists() {
@@ -16048,6 +16049,35 @@ fn run_component_inner(request: RunRequest) -> Result<u8> {
             .collect(),
         _ => std::collections::BTreeMap::new(),
     };
+    // The organisation's team data (store.org, IC-951): only for the
+    // private app the gate above just let through, as that release, for
+    // the person signed in. Anything else is not an org app.
+    let app_org = Some(match (org_opened.as_ref(), manifest) {
+        (Some(opened), Some(manifest)) => krate_runtime::org_store::OrgAccess::Granted(Box::new(
+            krate_runtime::org_store::OrgGrant {
+                slug: opened.slug.clone(),
+                hub: opened.hub.clone(),
+                digest: opened.digest.clone(),
+                authorization: opened.authorization.clone(),
+                me: opened
+                    .principal
+                    .as_deref()
+                    .map(|p| p.split_once(':').map_or(p, |(_, v)| v).to_string()),
+                mirror: access::org_data_path(
+                    &opened.slug,
+                    &manifest.app.id.to_ascii_lowercase(),
+                    opened.principal.as_deref(),
+                ),
+                clock_skew_ms: org_clock_skew_ms(),
+                app_id: manifest.app.id.to_ascii_lowercase(),
+                device_secret: krate_runtime::org_store::DeviceSecret(
+                    *access::org_device_key()?.secret(),
+                ),
+                device_name: access::device_name(opened.principal.as_deref()),
+            },
+        )),
+        _ => krate_runtime::org_store::OrgAccess::NotAnOrgApp,
+    });
     // The run starts now: the open record says so, with what the app was
     // given and what it was not (IC-949 A). A picture is Krate looking, not
     // a person opening.
@@ -16143,6 +16173,7 @@ fn run_component_inner(request: RunRequest) -> Result<u8> {
             )
         }),
         app_groups,
+        app_org,
         phase3_ui_mode: request.ui_mode,
         screenshot_path: request.screenshot_path.clone(),
         screenshot_scale: request.screenshot_scale,
@@ -19998,6 +20029,7 @@ fn manifest_overreach(manifest: &krate_manifest::Manifest, imports: &[String]) -
             "store.sql" => Some(":store/sql"),
             "store.secret" => Some(":store/secret"),
             "store.shared" => Some(":store/shared"),
+            "store.org" => Some(":store/org"),
             "random.bytes" => Some(":random/"),
             "audio.playback" => Some(":audio/playback"),
             "audio.capture" => Some(":audio/capture"),
@@ -23723,6 +23755,22 @@ fn take_agent_session(files: &[PathBuf], provider: &str) -> Option<String> {
 fn shared_hub_url() -> String {
     org::hub_url(None)
         .unwrap_or_else(|_| fleet::pinned_hub().unwrap_or(DEFAULT_HUB_URL).to_string())
+}
+
+/// The env var a debug build reads to move the clock an app's organisation
+/// data is stamped with, so a test can be a device whose clock is wrong.
+const ORG_CLOCK_SKEW_ENV: &str = "KRATE_TEST_ORG_CLOCK_SKEW_MS";
+
+/// How far a test moves this device's clock for `store.org`. Zero in a
+/// release build, whatever the environment says.
+fn org_clock_skew_ms() -> i64 {
+    if !cfg!(debug_assertions) {
+        return 0;
+    }
+    std::env::var(ORG_CLOCK_SKEW_ENV)
+        .ok()
+        .and_then(|v| v.trim().parse().ok())
+        .unwrap_or(0)
 }
 
 /// This computer's key, generated once and kept private to the user.

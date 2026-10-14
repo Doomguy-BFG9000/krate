@@ -1316,6 +1316,7 @@ fn plain_capability(cap: &str) -> Option<String> {
         "store.kv" | "store.sql" => "remember things between runs",
         "store.secret" => "use your keychain for passwords",
         "store.shared" => "share its data with anyone who has its invite code, through krate.tech",
+        "store.org" => "keep its data in your organisation's store on Krate's hub, shared with the people in your organisation who use it",
         // The size, in the units people buy computers in (K-416).
         "memory.budget" => {
             return Some(match scope.and_then(|mib| mib.parse::<u64>().ok()) {

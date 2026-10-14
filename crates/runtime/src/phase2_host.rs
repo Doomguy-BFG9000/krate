@@ -41,6 +41,9 @@ pub struct Phase2Host<'a> {
     shared: Option<crate::shared_host::AppShared>,
     /// The shared groups this run may reach (IC-738), decided by the caller.
     groups: std::collections::BTreeMap<String, crate::store_host::GroupGrant>,
+    /// An organisation's team data for this app (IC-951). `None` unless the
+    /// run granted `store.org`; inside, whether this is an org app at all.
+    org: Option<crate::org_store::AppOrg>,
     /// Files the person chose in a dialog this run.
     ///
     /// Shared with the GUI host, which is what shows the dialog: the picker
@@ -91,6 +94,7 @@ impl<'a> Phase2Host<'a> {
             secrets: None,
             shared: None,
             groups: std::collections::BTreeMap::new(),
+            org: None,
             chosen_files: Default::default(),
             random_granted: false,
             watches: Default::default(),
@@ -192,6 +196,23 @@ impl<'a> Phase2Host<'a> {
     ) -> Self {
         self.groups = groups;
         self
+    }
+
+    /// The organisation's team data for this run (IC-951), when the run
+    /// granted `store.org`. Without the grant every call is `denied`;
+    /// with it, an app the caller did not find to be an organisation's
+    /// release is `not-an-org-app`.
+    pub fn with_org(mut self, access: Option<crate::org_store::OrgAccess>, granted: bool) -> Self {
+        self.org = granted.then(|| {
+            crate::org_store::AppOrg::open(
+                access.unwrap_or(crate::org_store::OrgAccess::NotAnOrgApp),
+            )
+        });
+        self
+    }
+
+    fn org(&self) -> Result<&crate::org_store::AppOrg, store::org::OrgError> {
+        self.org.as_ref().ok_or(store::org::OrgError::Denied)
     }
 
     /// Open a group for one call.
@@ -577,6 +598,142 @@ impl store::group::Host for Phase2Host<'_> {
         Ok(self
             .group_store(&group)
             .and_then(|store| store.keys().map_err(group_error_to_wit)))
+    }
+}
+
+fn org_error_to_wit(error: crate::org_store::OrgError) -> store::org::OrgError {
+    use crate::org_store::OrgError;
+    match error {
+        OrgError::Denied => store::org::OrgError::Denied,
+        OrgError::NotAnOrgApp => store::org::OrgError::NotAnOrgApp,
+        OrgError::Invalid(words) => store::org::OrgError::Invalid(words),
+        OrgError::TooLarge => store::org::OrgError::TooLarge,
+        OrgError::OverQuota => store::org::OrgError::OverQuota,
+        OrgError::Refused { reason, message } => {
+            store::org::OrgError::Refused(store::org::Refusal { reason, message })
+        }
+        OrgError::Unsupported => store::org::OrgError::Unsupported,
+        OrgError::Io(words) => store::org::OrgError::Io(words),
+    }
+}
+
+fn org_value_from_wit(value: store::org::Value) -> crate::org_merge::Value {
+    use crate::org_merge::Value;
+    match value {
+        store::org::Value::Null => Value::Null,
+        store::org::Value::Text(text) => Value::Text(text),
+        store::org::Value::Number(n) => Value::Number(n),
+        store::org::Value::Boolean(b) => Value::Boolean(b),
+        store::org::Value::Bytes(bytes) => Value::Bytes(bytes),
+    }
+}
+
+fn org_value_to_wit(value: crate::org_merge::Value) -> store::org::Value {
+    use crate::org_merge::Value;
+    match value {
+        Value::Null => store::org::Value::Null,
+        Value::Text(text) => store::org::Value::Text(text),
+        Value::Number(n) => store::org::Value::Number(n),
+        Value::Boolean(b) => store::org::Value::Boolean(b),
+        Value::Bytes(bytes) => store::org::Value::Bytes(bytes),
+    }
+}
+
+fn org_entry_to_wit(entry: crate::org_store::Entry) -> store::org::Entry {
+    store::org::Entry {
+        id: entry.id,
+        fields: entry
+            .fields
+            .into_iter()
+            .map(|(name, value)| (name, org_value_to_wit(value)))
+            .collect(),
+        changed_by: entry.changed_by,
+        changed_at: entry.changed_at,
+    }
+}
+
+impl store::org::Host for Phase2Host<'_> {
+    fn put(
+        &mut self,
+        collection: String,
+        id: String,
+        fields: Vec<(String, store::org::Value)>,
+    ) -> wasmtime::Result<Result<(), store::org::OrgError>> {
+        let fields = fields
+            .into_iter()
+            .map(|(name, value)| (name, org_value_from_wit(value)))
+            .collect();
+        Ok(self
+            .org()
+            .and_then(|org| org.put(&collection, &id, fields).map_err(org_error_to_wit)))
+    }
+
+    fn get(
+        &mut self,
+        collection: String,
+        id: String,
+    ) -> wasmtime::Result<Result<Option<store::org::Entry>, store::org::OrgError>> {
+        Ok(self.org().and_then(|org| {
+            org.get(&collection, &id)
+                .map(|entry| entry.map(org_entry_to_wit))
+                .map_err(org_error_to_wit)
+        }))
+    }
+
+    fn delete(
+        &mut self,
+        collection: String,
+        id: String,
+    ) -> wasmtime::Result<Result<(), store::org::OrgError>> {
+        Ok(self
+            .org()
+            .and_then(|org| org.delete(&collection, &id).map_err(org_error_to_wit)))
+    }
+
+    fn records(
+        &mut self,
+        collection: String,
+        since: Option<String>,
+    ) -> wasmtime::Result<Result<store::org::Page, store::org::OrgError>> {
+        Ok(self.org().and_then(|org| {
+            org.records(&collection, since.as_deref())
+                .map(|page| store::org::Page {
+                    entries: page.entries.into_iter().map(org_entry_to_wit).collect(),
+                    removed: page.removed,
+                    next: page.next,
+                    more: page.more,
+                })
+                .map_err(org_error_to_wit)
+        }))
+    }
+
+    fn sync(&mut self) -> wasmtime::Result<Result<store::org::SyncState, store::org::OrgError>> {
+        Ok(self.org().and_then(|org| {
+            org.sync()
+                .map(|state| store::org::SyncState {
+                    online: state.online,
+                    changed: state.changed,
+                    pending: state.pending,
+                    last_synced: state.last_synced,
+                })
+                .map_err(org_error_to_wit)
+        }))
+    }
+
+    fn who(
+        &mut self,
+    ) -> wasmtime::Result<Result<Option<store::org::Member>, store::org::OrgError>> {
+        Ok(self.org().and_then(|org| {
+            org.who()
+                .map(|member| {
+                    member.map(|m| store::org::Member {
+                        name: m.name,
+                        role: m.role,
+                        org: m.org,
+                    })
+                })
+                .map_err(org_error_to_wit)
+        }))
     }
 }
 

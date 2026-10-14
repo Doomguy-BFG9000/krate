@@ -1,0 +1,31 @@
+[package]
+name = "krate-orgkeys"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+description = "An organisation's keyring (F-316): device keys, the versioned organisation key sealed per device with HPKE, the recovery code, and the keys an app's team data and a connection's credential are sealed with."
+
+# Vetted implementations only, versions pinned: RFC 9180 HPKE from RustCrypto
+# (rozbb/rust-hpke) and RustCrypto's AEAD, KDF, MAC and Argon2. Nothing here
+# implements a primitive.
+[dependencies]
+hpke = { version = "=0.13.0", default-features = false, features = ["alloc", "x25519"] }
+chacha20poly1305 = "=0.10.1"
+hkdf = "0.12.4"
+hmac = "0.12.1"
+sha2 = "0.10.9"
+argon2 = { version = "=0.5.3", default-features = false, features = ["alloc"] }
+rand_core = { version = "0.9", features = ["os_rng"] }
+zeroize = "1.8"
+serde_json.workspace = true
+# The device's side of the protocol with the hub (`agent`): only for hosts
+# with a network stack.
+ureq = { workspace = true, optional = true }
+krate-http = { path = "../http", optional = true }
+
+[features]
+default = []
+agent = ["dep:ureq", "dep:krate-http"]

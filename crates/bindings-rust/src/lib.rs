@@ -702,6 +702,102 @@ pub mod io {
     }
 }
 
+/// An organisation's team data, for its own private app (IC-951).
+///
+/// Records in collections, kept in the organisation's store on its hub and
+/// shared with everyone in the organisation who uses the app -- no server,
+/// no database, no sign-in code. Requires `store.org`, and works only in an
+/// app marked and signed for an organisation (`krate sign --org`) and
+/// opened as its approved release; anything else is `NotAnOrgApp`.
+///
+/// Every call works on this device's copy and never waits for the network.
+/// The runtime syncs every few seconds and on close; `sync` asks for one
+/// now and says whether anything changed, so the app can redraw. Records
+/// merge per field. Limits: names and ids up to 128 bytes, a record up to
+/// 64 KiB, an app's data in an organisation up to 50 MiB by default. End to
+/// end encrypted: the hub holds ciphertext, the members' devices the key.
+pub mod org {
+    pub use crate::bindings::krate::store::org::{
+        Entry, Member, OrgError, Page, Refusal, SyncState, Value,
+    };
+    use alloc::string::{String, ToString};
+    use alloc::vec::Vec;
+
+    /// Write some fields of one record; the others keep their values. A
+    /// field given `Value::Null` is removed.
+    pub fn put(collection: &str, id: &str, fields: &[(&str, Value)]) -> Result<(), OrgError> {
+        let fields: Vec<(String, Value)> = fields
+            .iter()
+            .map(|(name, value)| (name.to_string(), value.clone()))
+            .collect();
+        crate::bindings::krate::store::org::put(collection, id, &fields)
+    }
+
+    /// Write one text field of one record.
+    pub fn put_text(collection: &str, id: &str, field: &str, text: &str) -> Result<(), OrgError> {
+        put(collection, id, &[(field, Value::Text(text.to_string()))])
+    }
+
+    /// Read one record, or `None` when it was never written or was deleted.
+    pub fn get(collection: &str, id: &str) -> Result<Option<Entry>, OrgError> {
+        crate::bindings::krate::store::org::get(collection, id)
+    }
+
+    /// Delete one record everywhere.
+    pub fn delete(collection: &str, id: &str) -> Result<(), OrgError> {
+        crate::bindings::krate::store::org::delete(collection, id)
+    }
+
+    /// One page of a collection: from the start with `None`, or what changed
+    /// after the `next` of an earlier page.
+    pub fn records(collection: &str, since: Option<&str>) -> Result<Page, OrgError> {
+        crate::bindings::krate::store::org::records(collection, since)
+    }
+
+    /// Every record in a collection, all pages.
+    pub fn all(collection: &str) -> Result<Vec<Entry>, OrgError> {
+        let mut out = Vec::new();
+        let mut since: Option<String> = None;
+        loop {
+            let page = records(collection, since.as_deref())?;
+            out.extend(page.entries);
+            if !page.more {
+                return Ok(out);
+            }
+            since = Some(page.next);
+        }
+    }
+
+    /// Sync with the organisation now. Offline is not an error: `online`
+    /// is false and the changes wait.
+    pub fn sync() -> Result<SyncState, OrgError> {
+        crate::bindings::krate::store::org::sync()
+    }
+
+    /// The signed-in person and their role, once a sync has reached the
+    /// organisation.
+    pub fn who() -> Result<Option<Member>, OrgError> {
+        crate::bindings::krate::store::org::who()
+    }
+
+    /// One field of a record, by name.
+    pub fn field<'a>(entry: &'a Entry, name: &str) -> Option<&'a Value> {
+        entry
+            .fields
+            .iter()
+            .find(|(field, _)| field == name)
+            .map(|(_, value)| value)
+    }
+
+    /// One text field of a record, by name.
+    pub fn text<'a>(entry: &'a Entry, name: &str) -> Option<&'a str> {
+        match field(entry, name) {
+            Some(Value::Text(text)) => Some(text.as_str()),
+            _ => None,
+        }
+    }
+}
+
 /// Storage shared between the same publisher's apps, in a named group
 /// (IC-738).
 ///

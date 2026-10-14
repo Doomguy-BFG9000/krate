@@ -314,14 +314,95 @@ fn notice(org_name: &str, class: &str, expires_at: Option<u64>) -> String {
     }
 }
 
+/// What an open that passed knows about an organisation's private app: the
+/// organisation, the hub it checked in with, the bytes, and who is opening
+/// it. The run gives these to the app's team data (`store.org`, IC-951).
+#[derive(Debug, Clone)]
+pub struct Opened {
+    pub slug: String,
+    pub hub: String,
+    pub digest: String,
+    /// `Bearer <token>`, only when the hub is a Krate hub.
+    pub authorization: Option<String>,
+    /// The signed-in person as a principal (`github:<login>`).
+    pub principal: Option<String>,
+}
+
+/// Where this person's copy of one app's data in one organisation lives:
+/// `~/.krate/org-data/<slug>/<digest of app id and principal>.json`. The
+/// file name says neither who nor which app.
+pub fn org_data_path(slug: &str, app_id: &str, principal: Option<&str>) -> PathBuf {
+    let key = format!("{app_id}\n{}", principal.unwrap_or("signed-out"));
+    let name = krate_bundle::sha256_hex(key.as_bytes());
+    org_data_dir(slug).join(format!("{}.json", &name[..32]))
+}
+
+fn org_data_dir(slug: &str) -> PathBuf {
+    crate::krate_home().join("org-data").join(slug)
+}
+
+/// This device's key for organisations' keyrings (F-316): an X25519 key
+/// pair made once, its private half kept in `~/.krate/org-keys/device.json`
+/// sealed with this computer's machine key (the one store.secret uses), so
+/// a copied file does not carry it to another computer. Only the public
+/// half is ever sent.
+pub fn org_device_key() -> Result<krate_orgkeys::KeyPair> {
+    const CONTEXT: &str = "krate org device key v1";
+    let path = crate::krate_home().join("org-keys").join("device.json");
+    let machine = crate::machine_key();
+    if let Ok(text) = std::fs::read_to_string(&path) {
+        let stored: Value = serde_json::from_str(&text).unwrap_or_default();
+        if let Some(sealed) = stored["sealed"].as_str() {
+            match krate_orgkeys::open_local(&machine, CONTEXT, sealed) {
+                Ok(secret) => {
+                    return krate_orgkeys::KeyPair::from_secret(&secret)
+                        .map_err(|err| anyhow::anyhow!("this computer's organisation key: {err}"))
+                }
+                Err(_) => anyhow::bail!(
+                    "this computer's organisation key at {} does not open with this computer's                      machine key (was it copied from another computer?): move it aside and open                      the app again to make a new one, which another member's device then passes                      the key to",
+                    path.display()
+                ),
+            }
+        }
+    }
+    let pair = krate_orgkeys::KeyPair::generate();
+    let sealed = krate_orgkeys::seal_local(&machine, CONTEXT, pair.secret())
+        .map_err(|err| anyhow::anyhow!("could not keep this computer's organisation key: {err}"))?;
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let staged = path.with_extension(format!("json.{}", std::process::id()));
+    std::fs::write(
+        &staged,
+        serde_json::json!({ "v": 1, "public_key": pair.public_hex(), "sealed": sealed })
+            .to_string(),
+    )?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&staged, std::fs::Permissions::from_mode(0o600));
+    }
+    std::fs::rename(&staged, &path)?;
+    Ok(pair)
+}
+
+/// What an organisation's device list calls this computer.
+pub fn device_name(principal: Option<&str>) -> String {
+    let who = principal
+        .map(|p| p.split_once(':').map_or(p, |(_, v)| v))
+        .unwrap_or("someone");
+    format!("{who}'s {} computer", std::env::consts::OS)
+}
+
 /// May these bytes open? `Ok` at once, with no request anywhere, for any
 /// bundle without an organisation's mark; for a marked one, `Ok` only when
-/// this person may open it now.
-pub fn gate(bytes: Bytes, mark: Mark, door: Door) -> Result<()> {
+/// this person may open it now, with what is known about the private app
+/// it let through (`None` for an unmarked app).
+pub fn gate_opened(bytes: Bytes, mark: Mark, door: Door) -> Result<Option<Opened>> {
     let slug = match mark {
-        Mark::None => return Ok(()),
+        Mark::None => return Ok(None),
         Mark::Broken(slug) => {
-            return refuse(
+            return refuse_opened(
                 door,
                 "broken-mark",
                 &format!(
@@ -333,6 +414,7 @@ pub fn gate(bytes: Bytes, mark: Mark, door: Door) -> Result<()> {
         }
         Mark::Signed(slug) => slug,
     };
+    let slug_of_mark = slug.clone();
     let (digest, link) = match bytes {
         Bytes::Fetched { sha256, link } => (sha256.to_string(), Some(link)),
         Bytes::File(path) => match std::fs::read(path) {
@@ -375,7 +457,14 @@ pub fn gate(bytes: Bytes, mark: Mark, door: Door) -> Result<()> {
         })
     });
 
-    match check_in(&hub, &digest, authorization.as_deref()) {
+    let opened = Opened {
+        slug: slug.clone(),
+        hub: hub.clone(),
+        digest: digest.clone(),
+        authorization: authorization.clone(),
+        principal: me.clone(),
+    };
+    let result = match check_in(&hub, &digest, authorization.as_deref()) {
         CheckIn::NotReleased => {
             save_record(&digest, &known);
             forget(&digest);
@@ -407,6 +496,11 @@ pub fn gate(bytes: Bytes, mark: Mark, door: Door) -> Result<()> {
                 save_record(&digest, &known);
                 forget(&digest);
             }
+            // Someone no longer in the organisation keeps none of its apps'
+            // data (store.org, IC-951): it is the organisation's, not theirs.
+            if matches!(reason.as_str(), "removed" | "not-a-member") {
+                let _ = std::fs::remove_dir_all(org_data_dir(&slug_of_mark));
+            }
             let org = org.or(Some(slug));
             let words = org::download_refusal(
                 &format!("{hub}/a/{digest}"),
@@ -426,7 +520,12 @@ pub fn gate(bytes: Bytes, mark: Mark, door: Door) -> Result<()> {
             me.as_deref(),
             door,
         ),
-    }
+    };
+    result.map(|()| Some(opened))
+}
+
+fn refuse_opened(door: Door, reason: &str, words: &str) -> Result<Option<Opened>> {
+    refuse(door, reason, words).map(|()| None)
 }
 
 /// Refuse at the door with a stable reason for the open record. The error

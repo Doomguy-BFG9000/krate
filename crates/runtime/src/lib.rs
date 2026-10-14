@@ -70,6 +70,8 @@ pub mod desktop_host;
 pub mod embed;
 mod fs_watch;
 mod gamepad;
+pub mod org_merge;
+pub mod org_store;
 #[cfg(feature = "phase2-bindings")]
 pub mod phase2_bindings;
 #[cfg(feature = "phase2-bindings")]
@@ -201,6 +203,10 @@ pub struct Config {
     /// The shared groups this run may reach, as the caller decided them
     /// (IC-738). A group missing here is refused as `denied`.
     pub app_groups: std::collections::BTreeMap<String, store_host::GroupGrant>,
+    /// Whether this run reaches an organisation's team data (IC-951), as
+    /// the caller decided it: only the CLI knows the bundle's mark, its
+    /// check-in and the sign-in. `None` is the same as not an org app.
+    pub app_org: Option<org_store::OrgAccess>,
     /// The name the person consented to -- the manifest's `app.name` -- for
     /// anything the OS shows outside the app's own window (IC-271). A
     /// notification carries it as the sender. It is optional because the
@@ -246,6 +252,7 @@ impl Default for Config {
             bundle_assets_root: None,
             app_store_path: None,
             app_groups: std::collections::BTreeMap::new(),
+            app_org: None,
             app_database_path: None,
             app_secrets: None,
             app_shared: None,
@@ -1579,6 +1586,7 @@ impl Runtime {
         link_phase2!(store::secret);
         link_phase2!(store::shared);
         link_phase2!(store::group);
+        link_phase2!(store::org);
         link_phase2!(random::bytes);
 
         // The two that differ.
@@ -1877,7 +1885,13 @@ impl HostState {
                         .expect("store.shared"),
                 ),
             )
-            .with_groups(config.app_groups.clone()),
+            .with_groups(config.app_groups.clone())
+            .with_org(
+                config.app_org.clone(),
+                config.session_policy.allows(
+                    &krate_manifest::Capability::new("store", "org", None).expect("store.org"),
+                ),
+            ),
             #[cfg(feature = "phase2-bindings")]
             phase3_gui: None,
             #[cfg(feature = "phase2-bindings")]

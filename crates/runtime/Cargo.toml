@@ -44,6 +44,9 @@ tungstenite.workspace = true
 # The computer's trust store and proxy settings for an app's connections
 # and websockets (IC-949 N).
 krate-http = { path = "../http" }
+# The organisation keyring (F-316): store.org seals and opens with it, and
+# keeps this device's hold of the key current.
+krate-orgkeys = { path = "../orgkeys", features = ["agent"] }
 rusqlite.workspace = true
 cpal = "0.18.1"
 # Gamepads. Pulls libudev-sys on Linux, which is why every Linux build got the

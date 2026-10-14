@@ -10,7 +10,7 @@ See also: [UAPI Freeze Lock](uapi-freeze-lock.md). The lock records the exact WI
 
 - App package: `krate:app@0.1.0`
 - World: `cli`
-- Imported interfaces: 24
+- Imported interfaces: 25
 - Packages: 9
 
 ## Checks Passed
@@ -56,6 +56,7 @@ See also: [UAPI Freeze Lock](uapi-freeze-lock.md). The lock records the exact WI
 - `krate:resources/assets@0.1.0`
 - `krate:store/group@0.1.0`
 - `krate:store/kv@0.1.0`
+- `krate:store/org@0.1.0`
 - `krate:store/secret@0.1.0`
 - `krate:store/shared@0.1.0`
 - `krate:store/sql@0.1.0`
