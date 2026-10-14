@@ -2903,6 +2903,94 @@ echo '   '"#,
         );
     }
 
+    /// IC-958 D: "Publish to Acme" asks the engine not to wait, and says
+    /// each state in the engine's words -- released at once (an owner alone),
+    /// waiting for a reviewer, waiting for an owner's computer to approve
+    /// this person as a publisher (exit 75) -- never a key or a hex string.
+    #[test]
+    fn publishing_to_an_organisation_says_each_state_in_words() {
+        let t = TestHome::new();
+        let app = t.root().join("notes.krate");
+        std::fs::write(&app, "x").unwrap();
+        let digest = "cd".repeat(32);
+        t.engine(&format!(
+            "env | grep -q '^KRATE_PUBLISH_WAIT_SECONDS=0$' || exit 9; echo 'Signed for acme.'; echo 'released Team Notes 1.0 to acme. Everyone in acme can use it now.'; echo '  digest  {digest}'; echo '  open it: krate run https://hub.krate.tech/a/{digest}'"
+        ));
+        let sent = block(send_to_org(app.display().to_string(), "acme".into())).unwrap();
+        assert_eq!(sent["state"], "released", "{sent}");
+        assert_eq!(sent["url"], format!("https://hub.krate.tech/a/{digest}"));
+        assert!(!sent["words"].as_str().unwrap().contains(&digest[..8]));
+
+        t.engine(&format!(
+            "echo 'uploaded to acme as a candidate. It waits for approval and opens for nobody yet.'; echo '  digest  {digest}'; echo 'Waiting for bob or another reviewer to approve it: https://krate.tech/org/?o=acme&tab=waiting'"
+        ));
+        let sent = block(send_to_org(app.display().to_string(), "acme".into())).unwrap();
+        assert_eq!(sent["state"], "waiting-for-approval");
+        assert_eq!(
+            sent["words"],
+            "Waiting for bob or another reviewer to approve it"
+        );
+
+        t.engine(
+            "echo 'Getting you ready to publish to Acme...'; echo \"Waiting for an owner's computer to approve you as a publisher -- alice and 2 others can.\"; exit 75",
+        );
+        let sent = block(send_to_org(app.display().to_string(), "acme".into())).unwrap();
+        assert_eq!(sent["state"], "waiting-for-publisher");
+        assert_eq!(
+            sent["words"],
+            "Waiting for an owner's computer to approve you as a publisher -- alice and 2 others can."
+        );
+        assert!(sent.get("digest").is_none());
+    }
+
+    /// The dashboard's krate://org/ links are routed, not taken for a
+    /// sign-in hand-off; anything else is not an org link.
+    #[test]
+    fn org_links_are_told_apart_from_sign_in_hand_offs() {
+        assert_eq!(
+            org_link("krate://org/setup?org=acme"),
+            Some(("setup".into(), "acme".into()))
+        );
+        assert_eq!(
+            org_link("krate://org/apps?org=Acme-Labs"),
+            Some(("apps".into(), "acme-labs".into()))
+        );
+        for other in [
+            "krate://signed-in?token=x&login=y",
+            "krate://org/delete?org=acme",
+            "krate://org/setup",
+            "krate://org/setup?org=a",
+            "krate://org/setup?org=../x",
+            "https://org/setup?org=acme",
+        ] {
+            assert_eq!(org_link(other), None, "{other}");
+        }
+    }
+
+    #[test]
+    fn studio_setup_for_an_org_says_what_this_computer_now_does() {
+        let t = TestHome::new();
+        t.engine("echo 'recovery code: ABCDE-FGHJK-MNPQR-STVWX-YZ012-3'; echo \"This computer is set up for Acme: it signs Acme's apps and passes Acme's keys to new devices, by itself, while Krate is open.\"");
+        let done = block(org_setup("acme".into())).unwrap();
+        assert_eq!(t.args(), vec!["org", "setup", "acme"]);
+        assert_eq!(done["recovery_code"], "ABCDE-FGHJK-MNPQR-STVWX-YZ012-3");
+        assert!(done["words"]
+            .as_str()
+            .unwrap()
+            .starts_with("This computer is set up for Acme"));
+        t.engine("echo 'This computer approved carol to publish to acme.'");
+        assert_eq!(
+            block(org_sync()).unwrap(),
+            vec!["This computer approved carol to publish to acme.".to_string()]
+        );
+        assert_eq!(t.args(), vec!["org", "sync", "--quiet"]);
+        t.engine("echo 'error: you are not signed in' >&2; exit 1");
+        assert!(
+            block(org_sync()).unwrap().is_empty(),
+            "signed out says nothing"
+        );
+    }
+
     #[test]
     fn sending_without_a_release_key_uploads_nothing_and_says_how_to_get_one() {
         let t = TestHome::new();

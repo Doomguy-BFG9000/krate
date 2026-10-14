@@ -2881,17 +2881,25 @@ fn waiting_url(slug: &str) -> String {
     format!("https://krate.tech/org/?o={slug}&tab=waiting")
 }
 
-/// "Send to <org> for approval" (IC-948 I): the engine signs the app with
-/// this machine's delegated release key for the organisation and uploads
-/// it as a candidate. Without a key it uploads nothing, and its words --
-/// the `krate org release-key` and `krate delegate` lines -- come back as
-/// the refusal. On success: the digest and the Waiting tab's link.
+/// "Publish to <org>" (IC-948 I, IC-958 D): the engine does everything --
+/// gets this computer permission to publish (asked for and approved in the
+/// background by an owner's computer), marks and signs the app as the
+/// organisation's, uploads it, and releases it at once when its owner is
+/// the only one who can approve. The engine is told not to wait for the
+/// approval: Studio shows the waiting words and asks again by itself.
+///
+/// Answers `{org, state, words, digest?, url?, waiting_url}`, `state` one
+/// of `released`, `waiting-for-approval` or `waiting-for-publisher`.
 #[tauri::command]
 async fn send_to_org(path: String, slug: String) -> Result<serde_json::Value, String> {
     tauri::async_runtime::spawn_blocking(move || send_to_org_blocking(&path, &slug))
         .await
         .map_err(|err| err.to_string())?
 }
+
+/// `krate publish --org` exits 75 while it waits for the organisation to
+/// approve this person as a publisher (crates/cli/src/org/signing.rs).
+const EXIT_WAITING_FOR_PUBLISHER: i32 = 75;
 
 fn send_to_org_blocking(path: &str, slug: &str) -> Result<serde_json::Value, String> {
     let path = existing(path)?;
@@ -2901,6 +2909,7 @@ fn send_to_org_blocking(path: &str, slug: &str) -> Result<serde_json::Value, Str
         .arg(&path)
         .arg("--org")
         .arg(slug)
+        .env("KRATE_PUBLISH_WAIT_SECONDS", "0")
         .output()
         .map_err(|err| err.to_string())?;
     let text = format!(
@@ -2908,7 +2917,33 @@ fn send_to_org_blocking(path: &str, slug: &str) -> Result<serde_json::Value, Str
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     );
-    if !out.status.success() {
+    publish_answer(slug, out.status.code(), &text)
+}
+
+/// What Studio says for the engine's answer to a publish.
+fn publish_answer(slug: &str, code: Option<i32>, text: &str) -> Result<serde_json::Value, String> {
+    let waiting_url = waiting_url(slug);
+    // The engine's own "Waiting for ..." sentence, without a link after it.
+    let waiting = text
+        .lines()
+        .map(str::trim)
+        .find(|l| l.starts_with("Waiting for "))
+        .map(|l| {
+            l.split(": http")
+                .next()
+                .unwrap_or(l)
+                .trim_end_matches(':')
+                .to_string()
+        });
+    if code == Some(EXIT_WAITING_FOR_PUBLISHER) {
+        return Ok(serde_json::json!({
+            "org": slug,
+            "state": "waiting-for-publisher",
+            "words": waiting.unwrap_or_else(|| "Waiting for an owner's computer to approve you as a publisher.".to_string()),
+            "waiting_url": waiting_url,
+        }));
+    }
+    if code != Some(0) {
         // The engine's own sentence, without its "error:" label.
         let words = text.trim().trim_start_matches("error:").trim().to_string();
         return Err(if words.is_empty() {
@@ -2922,11 +2957,129 @@ fn send_to_org_blocking(path: &str, slug: &str) -> Result<serde_json::Value, Str
         .find_map(|line| line.trim().strip_prefix("digest "))
         .map(|d| d.trim().to_string())
         .ok_or_else(|| "sent, but the engine named no digest".to_string())?;
+    if text.lines().any(|l| l.starts_with("released ")) {
+        let url = text
+            .lines()
+            .find_map(|l| l.trim().strip_prefix("open it: krate run "))
+            .map(|u| u.trim().to_string());
+        return Ok(serde_json::json!({
+            "org": slug,
+            "state": "released",
+            "words": format!("Released. Everyone in {slug} can use it now."),
+            "digest": digest,
+            "url": url,
+            "waiting_url": waiting_url,
+        }));
+    }
     Ok(serde_json::json!({
         "org": slug,
+        "state": "waiting-for-approval",
+        "words": waiting.unwrap_or_else(|| format!("Waiting for a reviewer in {slug} to approve it")),
         "digest": digest,
-        "waiting_url": waiting_url(slug),
+        "waiting_url": waiting_url,
     }))
+}
+
+/// Studio's periodic check (IC-958): this computer's share for every
+/// organisation -- pass keys on, approve people waiting to publish,
+/// withdraw the rights of people who left. Answers what was done, in
+/// sentences, empty when nothing was.
+#[tauri::command]
+async fn org_sync() -> Result<Vec<String>, String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        let engine = engine()?;
+        let out = silent_cmd(&engine)
+            .args(["org", "sync", "--quiet"])
+            .output()
+            .map_err(|err| err.to_string())?;
+        // Signed out, offline, no organisations: nothing to say.
+        if !out.status.success() {
+            return Ok(Vec::new());
+        }
+        Ok(String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty())
+            .map(str::to_string)
+            .collect())
+    })
+    .await
+    .map_err(|err| err.to_string())?
+}
+
+/// A krate://org/... link the dashboard opened (IC-958 B step 5):
+/// `krate://org/setup?org=<slug>` makes this computer one of the
+/// organisation's devices; `krate://org/apps?org=<slug>` opens Studio on
+/// the organisation's apps. Answers (what, slug), or None for any other
+/// krate:// link (a sign-in hand-off).
+fn org_link(uri: &str) -> Option<(String, String)> {
+    let url = url::Url::parse(uri).ok()?;
+    if url.scheme() != "krate" || url.host_str() != Some("org") {
+        return None;
+    }
+    let what = url.path().trim_matches('/').to_string();
+    if what != "setup" && what != "apps" {
+        return None;
+    }
+    let slug = url
+        .query_pairs()
+        .find(|(k, _)| k == "org")
+        .map(|(_, v)| v.to_ascii_lowercase())?;
+    let valid = slug.len() >= 2
+        && slug.len() <= 39
+        && slug.as_bytes()[0].is_ascii_lowercase()
+        && slug
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-');
+    valid.then_some((what, slug))
+}
+
+/// A krate://org/ link that arrived before the window could hear it (on
+/// Windows and Linux it comes as an argument to a fresh Studio): kept here
+/// until the page asks.
+fn pending_org_link_path() -> PathBuf {
+    studio_dir().join("pending-org-link.json")
+}
+
+#[tauri::command]
+fn take_org_link() -> Option<serde_json::Value> {
+    let path = pending_org_link_path();
+    let text = std::fs::read_to_string(&path).ok()?;
+    let _ = std::fs::remove_file(&path);
+    serde_json::from_str(&text).ok()
+}
+
+/// `krate org setup <slug>`: this computer becomes one of the
+/// organisation's devices. Answers the engine's words, and the recovery
+/// code when this computer made the organisation's keys (shown once).
+#[tauri::command]
+async fn org_setup(slug: String) -> Result<serde_json::Value, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let engine = engine()?;
+        let out = silent_cmd(&engine)
+            .args(["org", "setup", &slug])
+            .output()
+            .map_err(|err| err.to_string())?;
+        let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+        if !out.status.success() {
+            let said = String::from_utf8_lossy(&out.stderr);
+            return Err(said.trim().trim_start_matches("error:").trim().to_string());
+        }
+        let code = stdout
+            .lines()
+            .find_map(|l| l.trim().strip_prefix("recovery code: "))
+            .map(|c| c.trim().to_string());
+        let words = stdout
+            .lines()
+            .rev()
+            .map(str::trim)
+            .find(|l| l.starts_with("This computer"))
+            .unwrap_or("Done.")
+            .to_string();
+        Ok(serde_json::json!({ "org": slug, "words": words, "recovery_code": code }))
+    })
+    .await
+    .map_err(|err| err.to_string())?
 }
 
 /// Everything knowable about one app, for the details screen.
@@ -5528,8 +5681,18 @@ fn main() {
         .nth(1)
         .filter(|a| a.starts_with("krate://"))
     {
-        adopt_from_uri(&uri);
-        return;
+        // A dashboard's krate://org/ link opens Studio on it; the page
+        // takes it when it loads. Every other krate:// link is a sign-in.
+        if let Some((what, slug)) = org_link(&uri) {
+            let _ = std::fs::create_dir_all(studio_dir());
+            let _ = std::fs::write(
+                pending_org_link_path(),
+                serde_json::json!({ "what": what, "org": slug }).to_string(),
+            );
+        } else {
+            adopt_from_uri(&uri);
+            return;
+        }
     }
 
     #[cfg(not(target_os = "macos"))]
@@ -5710,6 +5873,9 @@ fn main() {
             publish,
             org_targets,
             send_to_org,
+            org_sync,
+            org_setup,
+            take_org_link,
             make_card,
             make_wrap,
             share_file,
@@ -5825,6 +5991,13 @@ fn main() {
                     if url.scheme() == "krate" {
                         DOC_CLAIMED.store(true, std::sync::atomic::Ordering::SeqCst);
                         show_main_window(app);
+                        // The dashboard's krate://org/ links (IC-958), before
+                        // the sign-in hand-off every other krate:// link is.
+                        if let Some((what, slug)) = org_link(url.as_str()) {
+                            let _ = app
+                                .emit("org-link", serde_json::json!({ "what": what, "org": slug }));
+                            continue;
+                        }
                         // A hand-off that is refused (a nonce this Studio did
                         // not start or that expired) or that the engine could
                         // not store says so: the window is waiting on it, and

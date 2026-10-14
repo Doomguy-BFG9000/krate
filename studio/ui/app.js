@@ -5690,7 +5690,7 @@ async function openSendSheet(which, version, anchor) {
   // up signed, as a candidate, and someone else approves it.
   for (const org of orgs) {
     const name = org.name || org.slug;
-    items.push({ label: `Send to ${name} for approval`, value: "a second person approves it first", run: (row, label) => { sendToOrg(app, org, row, label); return true; } });
+    items.push({ label: `Publish to ${name}`, value: org.role === "owner" ? "signed by " + name : "signed by " + name + ", approved by a reviewer", run: (row, label) => { sendToOrg(app, org, row, label); return true; } });
   }
   // The third way: a gift file that installs Krate once and then opens the
   // app. Only the krate binary on this computer can make one, so in a tab
@@ -5718,11 +5718,13 @@ async function openSendSheet(which, version, anchor) {
   popMenu(anchor || $("barShare"), items);
 }
 
-/* "Send to <org> for approval": signed with this machine's delegated
- * release key for the organisation, uploaded as a candidate. Without a key
- * nothing goes up, and the row says exactly how to get one -- the engine's
- * own `krate org release-key` / `krate delegate` lines. After sending:
- * "Waiting for approval in <org>", and the row opens the Waiting tab. */
+/* "Publish to <org>" (IC-958 D): the engine does everything -- this
+ * computer's permission to publish (asked for, and approved in the
+ * background by an owner's computer), signing as the organisation, the
+ * upload, and the release itself when the owner is the only one who can
+ * approve. Nothing here says "key". While the organisation has not approved
+ * this person yet, the row says who can, and Studio asks again by itself
+ * every 20 seconds for ten minutes. */
 async function sendToOrg(app, org, row, label) {
   const name = org.name || org.slug;
   if (row.dataset.waiting) {
@@ -5730,19 +5732,89 @@ async function sendToOrg(app, org, row, label) {
     return;
   }
   const was = label.textContent;
-  label.textContent = `Signing and sending to ${name}…`;
+  label.textContent = `Getting ${app.name || "it"} ready for ${name}…`;
+  const value = row.querySelector(".pop-val");
+  const said = (sent) => {
+    label.textContent = sent.words;
+    if (value && value !== label) value.textContent = sent.state === "released" ? "open it" : "see it in the dashboard";
+  };
   try {
-    const sent = await invoke("send_to_org", { path: app.path, slug: org.slug });
-    row.dataset.waiting = sent.waiting_url;
-    label.textContent = `Waiting for approval in ${name}`;
-    const value = row.querySelector(".pop-val");
-    if (value && value !== label) value.textContent = "open the Waiting tab";
-    toastish(`Waiting for approval in ${name}. A reviewer approves digest ${String(sent.digest).slice(0, 12)}.`);
+    let sent = await invoke("send_to_org", { path: app.path, slug: org.slug });
+    said(sent);
+    if (sent.state === "waiting-for-publisher") {
+      toastish(sent.words);
+      const until = Date.now() + 10 * 60 * 1000;
+      while (sent.state === "waiting-for-publisher" && Date.now() < until) {
+        await new Promise((r) => setTimeout(r, 20000));
+        sent = await invoke("send_to_org", { path: app.path, slug: org.slug });
+      }
+      said(sent);
+    }
+    row.dataset.waiting = sent.state === "released" && sent.url ? sent.url : sent.waiting_url;
+    if (sent.state === "released") toastish(`${app.name || "It"} is released. Everyone in ${name} can use it now.`);
+    else if (sent.state === "waiting-for-approval") toastish(`Sent to ${name}. ${sent.words}.`);
+    else toastish(`${sent.words} Publish again once one of them has Krate open.`);
   } catch (err) {
     label.textContent = was;
-    // The engine's words carry the exact commands to get a release key.
     toastish(String(err && err.message ? err.message : err || "").replace(/^error:\s*/i, ""));
   }
+}
+
+/* This computer's share for its organisations (IC-958), while Studio is
+ * open: on start and every minute. Quiet unless it did something. */
+function startOrgSync() {
+  if (!tauri) return;
+  const once = () => invoke("org_sync").then((lines) => {
+    for (const line of lines || []) toastish(line);
+  }).catch(() => {});
+  setTimeout(once, 5000);
+  setInterval(once, 60000);
+}
+
+/* krate://org/setup?org=<slug> and krate://org/apps?org=<slug>, from the
+ * dashboard (IC-958 B step 5). Setup makes this computer one of the
+ * organisation's devices; apps opens Studio's apps. */
+async function onOrgLink(link) {
+  if (!link || !link.org) return;
+  if (link.what === "apps") {
+    showView("apps");
+    loadAppsPage();
+    return;
+  }
+  toastish(`Setting this computer up for ${link.org}…`);
+  try {
+    const done = await invoke("org_setup", { slug: link.org });
+    toastish(done.words);
+    if (done.recovery_code) showRecoveryCode(link.org, done.recovery_code);
+  } catch (err) {
+    toastish(String(err && err.message ? err.message : err || ""));
+  }
+}
+
+/* The recovery code, shown once, with Copy: what brings the organisation's
+ * keys back if every computer and browser that holds them is lost. */
+function showRecoveryCode(org, code) {
+  const box = document.createElement("div");
+  box.className = "recovery-once";
+  box.setAttribute("role", "dialog");
+  box.setAttribute("aria-label", `${org}'s recovery code`);
+  box.style.cssText = "position:fixed;right:16px;bottom:16px;max-width:360px;padding:16px;border-radius:12px;background:var(--surface,#fff);color:var(--text,#111);box-shadow:0 8px 30px rgba(0,0,0,.25);z-index:9999";
+  const title = document.createElement("b");
+  title.textContent = `${org}'s recovery code`;
+  const p = document.createElement("p");
+  p.textContent = "Shown once. Keep it where your company keeps passwords: with it, an owner gets the organisation back on a new computer.";
+  const codeEl = document.createElement("code");
+  codeEl.textContent = code;
+  const copy = document.createElement("button");
+  copy.type = "button";
+  copy.textContent = "Copy";
+  copy.addEventListener("click", () => navigator.clipboard.writeText(code).then(() => { copy.textContent = "Copied"; }).catch(() => {}));
+  const done = document.createElement("button");
+  done.type = "button";
+  done.textContent = "I kept it";
+  done.addEventListener("click", () => box.remove());
+  box.append(title, p, codeEl, copy, done);
+  document.body.appendChild(box);
 }
 
 async function sendCard(app, label) {
@@ -8565,6 +8637,12 @@ if (tauri) {
     .catch((err) => onEngineLine(`(!) event channel failed: ${err}`));
   tauri.event.listen("login-step", (e) => onLoginStep(e.payload))
     .catch(() => {});
+  // The dashboard's krate://org/ links (IC-958): one that arrived while
+  // Studio was open, and one that started it.
+  tauri.event.listen("org-link", (e) => onOrgLink(e.payload))
+    .catch(() => {});
+  invoke("take_org_link").then((link) => { if (link) onOrgLink(link); }).catch(() => {});
+  startOrgSync();
   tauri.event.listen("build-shot", (e) => onBuildShot(e.payload))
     .catch(() => {});
   // Install progress, so a two-minute npm run is not a frozen button. The
