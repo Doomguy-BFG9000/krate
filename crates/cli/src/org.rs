@@ -131,6 +131,78 @@ pub enum OrgCommand {
     /// The organisation's audit: who did what, and every refusal, with the
     /// hub's check that the chain of events is unbroken.
     Audit { slug: String },
+    /// Withdraw a release, choose which release of an app opens, or limit
+    /// who may open one.
+    Release {
+        #[command(subcommand)]
+        command: ReleaseCommand,
+    },
+    /// Groups of members, like `finance`, that a release can be limited to.
+    Group {
+        #[command(subcommand)]
+        command: GroupCommand,
+    },
+}
+
+/// `krate org release ...` (IC-949 R).
+#[derive(Debug, Subcommand)]
+pub enum ReleaseCommand {
+    /// Withdraw a release. Downloads and offline renewals stop at once, and
+    /// every computer refuses it when it next connects; offline access
+    /// already given out holds until it runs out. Not undone.
+    Withdraw {
+        slug: String,
+        digest: String,
+        /// Why, in a few words: the people who had it are shown this.
+        #[arg(long)]
+        reason: String,
+    },
+    /// Which release of an app opens. With a digest, make that approved
+    /// release the one that opens (an older one is the rollback).
+    Current {
+        slug: String,
+        /// The app's id, from its manifest (e.g. com.acme.ledger).
+        app_id: String,
+        digest: Option<String>,
+    },
+    /// Who may open a release: some groups, or everyone. Owners, admins and
+    /// reviewers always may.
+    Audience {
+        slug: String,
+        digest: String,
+        /// The groups, comma-separated: --groups finance,ops.
+        #[arg(
+            long,
+            value_delimiter = ',',
+            required_unless_present = "everyone",
+            conflicts_with = "everyone"
+        )]
+        groups: Vec<String>,
+        /// Everyone in the organisation again.
+        #[arg(long)]
+        everyone: bool,
+    },
+}
+
+/// `krate org group ...` (IC-949 R).
+#[derive(Debug, Subcommand)]
+pub enum GroupCommand {
+    /// Make a group: lower-case letters, digits and dashes, like finance.
+    Create { slug: String, name: String },
+    /// Put a member in a group. Name them by GitHub login or by email.
+    Add {
+        slug: String,
+        name: String,
+        login: String,
+    },
+    /// Take a member out of a group.
+    Remove {
+        slug: String,
+        name: String,
+        login: String,
+    },
+    /// The organisation's groups and who is in each.
+    List { slug: String },
 }
 
 /// The hub's refusal: the contract's stable reason, and the hub's
@@ -359,6 +431,10 @@ pub enum Action<'a> {
     Releases,
     Candidates,
     Audit,
+    Withdraw,
+    SetCurrent,
+    Audience,
+    Groups,
 }
 
 /// A refusal in plain words: what the reason means here, and the next step.
@@ -421,6 +497,19 @@ pub fn words(refusal: &HubRefusal, org: &str, me: &str, action: Action) -> Strin
                 Action::Releases => (format!("list {org}'s releases"), owner_or_admin.clone()),
                 Action::Candidates => (format!("list {org}'s candidates"), owner_or_admin.clone()),
                 Action::Audit => (format!("read {org}'s audit"), owner_or_admin.clone()),
+                Action::Withdraw => (
+                    format!("withdraw {org}'s releases"),
+                    format!("an owner, admin or reviewer of {org}"),
+                ),
+                Action::SetCurrent => (
+                    "choose which release of an app opens".to_string(),
+                    owner_or_admin.clone(),
+                ),
+                Action::Audience => (
+                    "choose who may open a release".to_string(),
+                    owner_or_admin.clone(),
+                ),
+                Action::Groups => (format!("manage {org}'s groups"), owner_or_admin.clone()),
             };
             format!("your role in {org} cannot {what}: ask {who}")
         }
@@ -539,8 +628,54 @@ pub fn words(refusal: &HubRefusal, org: &str, me: &str, action: Action) -> Strin
             "there is no organisation called {org} on this hub: check the name, or create it \
              with `krate org create {org}`"
         ),
+        "release-withdrawn" => match action {
+            Action::Withdraw => format!(
+                "nothing changed: that release is already withdrawn ({}). A withdrawal is not \
+                 undone; to release the app again, publish a new version and approve it",
+                hub_detail(refusal)
+            ),
+            Action::Approve(_) => format!(
+                "nothing was approved: these bytes were withdrawn, and a withdrawal is not \
+                 undone. Publish a new version with `krate publish app.krate --org {org}` and \
+                 approve that"
+            ),
+            _ => format!(
+                "that release was withdrawn, so it cannot be chosen: pick another approved \
+                 release (`krate org releases {org}` lists them). The hub said: {}",
+                hub_detail(refusal)
+            ),
+        },
+        "not-in-audience" => format!(
+            "{}: ask {owner_or_admin} to add you to one of its groups (krate org group add {org} \
+             <group> {me})",
+            // The hub's sentence ends in its own next step; this one says it.
+            hub_detail(refusal).split(" -- ").next().unwrap_or_default()
+        ),
+        "reason-required" => "nothing was withdrawn: say why with --reason \"...\", in up to \
+             300 characters. The people who had it are shown the reason"
+            .to_string(),
+        "no-such-group" => format!(
+            "nothing changed: {}. Make it first with `krate org group create {org} <name>`",
+            hub_detail(refusal)
+        ),
+        "group-taken" => format!(
+            "nothing changed: {org} already has a group by that name. Add people to it with \
+             `krate org group add {org} <name> <login>`"
+        ),
+        "group-invalid" => "nothing changed: a group name is 1 to 39 lower-case letters, \
+             digits and dashes, starting with a letter (like finance or field-ops)"
+            .to_string(),
         _ => format!("the hub refused: {}", refusal.message),
     }
+}
+
+/// The hub's own sentence for a refusal, or a placeholder when it gave
+/// none.
+fn hub_detail(refusal: &HubRefusal) -> String {
+    Some(refusal.message.trim())
+        .filter(|m| !m.is_empty() && *m != "no reason was given")
+        .map(str::to_string)
+        .unwrap_or_else(|| "the hub gave no detail".to_string())
 }
 
 /// An audit target with any digest in it shortened: `candidate:<64 hex>`
@@ -761,6 +896,15 @@ pub fn run(command: OrgCommand, hub_override: Option<&str>) -> Result<u8> {
                 .filter(|s| !s.is_empty())
                 .unwrap_or(&slug);
             println!("{slug} -- {name}");
+            // The whole key, for a machine policy's `[trust] roots` (IC-949
+            // P2): the short form is for reading, this is for copying.
+            match org["root_key"].as_str().filter(|k| !k.is_empty()) {
+                Some(key) => println!("  root key {key}"),
+                None => println!(
+                    "  no root key yet: an owner registers one with `krate org root-key {slug} \
+                     <root.pub>`"
+                ),
+            }
             let my_role = text(&answer["me"], "role");
             if !my_role.is_empty() {
                 let mine = spoken_principal(&answer["me"]);
@@ -967,7 +1111,9 @@ pub fn run(command: OrgCommand, hub_override: Option<&str>) -> Result<u8> {
                     key.display()
                 );
             }
-            println!("{slug}'s root key is now {}...", short(&public_key));
+            // In full: a machine policy's `[trust] roots` takes the whole
+            // 64-hex key (IC-949 P2).
+            println!("{slug}'s root key is now {public_key}");
             let key = &answer["key"];
             let replaced = key["rotated"].as_bool() == Some(true)
                 || key["previous"].as_str().is_some_and(|p| !p.is_empty());
@@ -1059,6 +1205,13 @@ pub fn run(command: OrgCommand, hub_override: Option<&str>) -> Result<u8> {
                         format!(", {at}")
                     }
                 );
+                if release["current"].as_bool() == Some(true) {
+                    println!("    opens now for its app ({})", text(release, "app_id"));
+                }
+                if let Some(groups) = release["audience"].as_array().filter(|g| !g.is_empty()) {
+                    let groups: Vec<&str> = groups.iter().filter_map(|g| g.as_str()).collect();
+                    println!("    only for: {}", groups.join(", "));
+                }
                 let url = text(release, "url");
                 if !url.is_empty() {
                     println!("    krate run {url}");
@@ -1125,6 +1278,8 @@ pub fn run(command: OrgCommand, hub_override: Option<&str>) -> Result<u8> {
             }
             Ok(0)
         }
+        OrgCommand::Release { command } => release_command(&client, &me, command),
+        OrgCommand::Group { command } => group_command(&client, &me, command),
         OrgCommand::Audit { slug } => {
             let answer = worded(
                 client.send("GET", &format!("/orgs/{}/audit", seg(&slug)?), &Body::Empty),
@@ -1574,8 +1729,266 @@ pub fn download_refusal(url: &str, reason: &str, message: &str, org: Option<&str
         "orgs-off" => "organisations are switched off on this hub, so its private apps do \
              not open: ask whoever runs it"
             .to_string(),
+        "release-withdrawn" => match Some(message.trim()).filter(|m| !m.is_empty()) {
+            Some(said) => {
+                format!("this app no longer opens, here or anywhere it next connects: {said}")
+            }
+            None => format!(
+                "{org_name} withdrew this version, so it no longer opens: ask an admin of \
+                 {org_name} which version to use now"
+            ),
+        },
+        "not-in-audience" => match Some(message.trim()).filter(|m| !m.is_empty()) {
+            Some(said) => format!("this app does not open for you: {said}"),
+            None => format!(
+                "this app is only for some groups in {org_name}, and you are in none of them: \
+                 ask an admin of {org_name} to add you"
+            ),
+        },
         _ => format!("the hub would not hand this app over: {message}"),
     }
+}
+
+/// `krate org release ...` (IC-949 R).
+fn release_command(client: &Client, me: &str, command: ReleaseCommand) -> Result<u8> {
+    match command {
+        ReleaseCommand::Withdraw {
+            slug,
+            digest,
+            reason,
+        } => {
+            let digest = digest.trim().to_ascii_lowercase();
+            let answer = worded(
+                client.send(
+                    "POST",
+                    &format!("/orgs/{}/releases/{}/withdraw", seg(&slug)?, seg(&digest)?),
+                    &Body::Json(serde_json::json!({ "reason": reason.trim() })),
+                ),
+                &slug,
+                me,
+                Action::Withdraw,
+            )?;
+            let release = &answer["release"];
+            println!(
+                "withdrew {} {} ({}). From now on nobody downloads it or renews offline \
+                 access to it, and every computer refuses it when it next connects.",
+                text(release, "name"),
+                text(release, "version"),
+                short(&digest)
+            );
+            let leases = &answer["leases"];
+            match leases["active"].as_u64().unwrap_or(0) {
+                0 => println!("Nobody holds offline access to it, so it stops everywhere now."),
+                n => {
+                    println!(
+                    "Offline access already given out holds without a connection until it runs \
+                     out: {n} {} it, the last until {}.",
+                    if n == 1 { "person holds" } else { "people hold" },
+                    when(&leases["until"])
+                )
+                }
+            }
+            let current = &answer["current"];
+            let app = text(current, "app_id");
+            match current["digest"].as_str() {
+                Some(now) if now != digest => {
+                    println!("{} opens {} now.", app, short(now));
+                }
+                _ if current["digest"].is_null() && !app.is_empty() => println!(
+                    "No release of {app} opens now. Approve a new one, or choose an older \
+                     one with `krate org release current {slug} {app} <digest>`."
+                ),
+                _ => {}
+            }
+            Ok(0)
+        }
+        ReleaseCommand::Current {
+            slug,
+            app_id,
+            digest,
+        } => {
+            let path = format!("/orgs/{}/apps/{}/current", seg(&slug)?, seg(&app_id)?);
+            let link = format!("{}{path}", client.hub);
+            let Some(digest) = digest else {
+                let answer = worded(
+                    client.send("GET", &path, &Body::Empty),
+                    &slug,
+                    me,
+                    Action::Releases,
+                )?;
+                println!(
+                    "{app_id} opens {} {} ({}).",
+                    text(&answer, "name"),
+                    text(&answer, "version"),
+                    short(text(&answer, "digest"))
+                );
+                println!("Its link always opens the current release:");
+                println!("  krate run {link}");
+                return Ok(0);
+            };
+            let digest = digest.trim().to_ascii_lowercase();
+            let answer = worded(
+                client.send(
+                    "PUT",
+                    &path,
+                    &Body::Json(serde_json::json!({ "digest": digest })),
+                ),
+                &slug,
+                me,
+                Action::SetCurrent,
+            )?;
+            let current = &answer["current"];
+            println!(
+                "{app_id} now opens {} {} ({}); the change is in {slug}'s audit.",
+                text(current, "name"),
+                text(current, "version"),
+                short(&digest)
+            );
+            println!("Its link opens it for everyone it is for:");
+            println!("  krate run {link}");
+            Ok(0)
+        }
+        ReleaseCommand::Audience {
+            slug,
+            digest,
+            groups,
+            everyone,
+        } => {
+            let digest = digest.trim().to_ascii_lowercase();
+            let body = if everyone {
+                serde_json::json!({ "everyone": true })
+            } else {
+                let groups: Vec<String> = groups
+                    .iter()
+                    .map(|g| g.trim().to_ascii_lowercase())
+                    .filter(|g| !g.is_empty())
+                    .collect();
+                serde_json::json!({ "groups": groups })
+            };
+            let answer = worded(
+                client.send(
+                    "PUT",
+                    &format!("/orgs/{}/releases/{}/audience", seg(&slug)?, seg(&digest)?),
+                    &Body::Json(body),
+                ),
+                &slug,
+                me,
+                Action::Audience,
+            )?;
+            match answer["audience"].as_array().filter(|g| !g.is_empty()) {
+                Some(groups) => {
+                    let groups: Vec<&str> = groups.iter().filter_map(|g| g.as_str()).collect();
+                    println!(
+                        "{} opens only for {} in {slug}, and always for its owners, admins and \
+                         reviewers. Anyone else is refused.",
+                        short(&digest),
+                        groups.join(", ")
+                    );
+                }
+                None => println!("{} opens for everyone in {slug}.", short(&digest)),
+            }
+            Ok(0)
+        }
+    }
+}
+
+/// `krate org group ...` (IC-949 R).
+fn group_command(client: &Client, me: &str, command: GroupCommand) -> Result<u8> {
+    match command {
+        GroupCommand::Create { slug, name } => {
+            let name = name.trim().to_ascii_lowercase();
+            worded(
+                client.send(
+                    "POST",
+                    &format!("/orgs/{}/groups", seg(&slug)?),
+                    &Body::Json(serde_json::json!({ "name": name })),
+                ),
+                &slug,
+                me,
+                Action::Groups,
+            )?;
+            println!("made the group {name} in {slug}. Put people in it with:");
+            println!("  krate org group add {slug} {name} <login or email>");
+            Ok(0)
+        }
+        GroupCommand::Add { slug, name, login } => {
+            group_member(client, me, &slug, &name, &login, true)
+        }
+        GroupCommand::Remove { slug, name, login } => {
+            group_member(client, me, &slug, &name, &login, false)
+        }
+        GroupCommand::List { slug } => {
+            let answer = worded(
+                client.send(
+                    "GET",
+                    &format!("/orgs/{}/groups", seg(&slug)?),
+                    &Body::Empty,
+                ),
+                &slug,
+                me,
+                Action::Groups,
+            )?;
+            let groups = answer["groups"].as_array().cloned().unwrap_or_default();
+            if groups.is_empty() {
+                println!(
+                    "{slug} has no groups yet. An owner or admin makes one with \
+                     `krate org group create {slug} <name>`."
+                );
+                return Ok(0);
+            }
+            for group in &groups {
+                let members: Vec<String> = group["members"]
+                    .as_array()
+                    .map(|m| m.iter().map(spoken_principal).collect())
+                    .unwrap_or_default();
+                println!(
+                    "  {}  {}",
+                    text(group, "name"),
+                    if members.is_empty() {
+                        "nobody yet".to_string()
+                    } else {
+                        members.join(", ")
+                    }
+                );
+            }
+            Ok(0)
+        }
+    }
+}
+
+/// Put a member in a group, or take them out.
+fn group_member(
+    client: &Client,
+    me: &str,
+    slug: &str,
+    name: &str,
+    login: &str,
+    adding: bool,
+) -> Result<u8> {
+    let name = name.trim().to_ascii_lowercase();
+    let principal = principal_of(login);
+    let who = spoken_principal(&serde_json::json!(principal));
+    worded(
+        client.send(
+            if adding { "PUT" } else { "DELETE" },
+            &format!(
+                "/orgs/{}/groups/{}/members/{}",
+                seg(slug)?,
+                seg(&name)?,
+                seg(&principal)?
+            ),
+            &Body::Empty,
+        ),
+        slug,
+        me,
+        Action::Groups,
+    )?;
+    if adding {
+        println!("{who} is in {name}: releases for {name} open for them.");
+    } else {
+        println!("{who} is out of {name}: releases only for {name} no longer open for them.");
+    }
+    Ok(0)
 }
 
 #[cfg(test)]
@@ -1611,6 +2024,12 @@ mod tests {
             "store-failed",
             "bad-request",
             "orgs-off",
+            "release-withdrawn",
+            "not-in-audience",
+            "reason-required",
+            "no-such-group",
+            "group-taken",
+            "group-invalid",
         ];
         for reason in reasons {
             let refusal = HubRefusal {

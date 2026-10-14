@@ -13539,6 +13539,10 @@ struct FakeOrg {
     revoked: std::collections::BTreeSet<String>,
     candidates: std::collections::BTreeMap<String, FakeCandidate>,
     audit: Vec<serde_json::Value>,
+    /// Groups and their members (IC-949 R).
+    groups: std::collections::BTreeMap<String, std::collections::BTreeSet<String>>,
+    /// The release each app id opens, once one was chosen or approved.
+    current: std::collections::BTreeMap<String, String>,
 }
 
 struct FakeInvite {
@@ -13559,6 +13563,12 @@ struct FakeCandidate {
     state: &'static str,
     approver: Option<String>,
     approved_at: Option<u64>,
+    /// The manifest's app id (IC-949 R: the current release is per app).
+    app_id: String,
+    /// Why it was withdrawn, once it was (state "withdrawn").
+    withdraw_reason: Option<String>,
+    /// The groups it is only for; `None` is everyone.
+    audience: Option<Vec<String>>,
 }
 
 /// A big-file upload in flight (IC-945's path, carrying an organisation).
@@ -13607,8 +13617,10 @@ fn fake_status(reason: &str) -> u16 {
         "last-owner" | "slug-taken" | "idempotency-key-reused" | "bytes-held-elsewhere" => 409,
         "digest-mismatch" | "no-such-org" => 404,
         "not-signed-for-this-org" | "not-marked-for-this-org" | "invalid-bundle" => 422,
-        "invite-expired" | "invite-used" | "invite-revoked" => 410,
-        "slug-invalid" | "bad-request" => 400,
+        "invite-expired" | "invite-used" | "invite-revoked" | "release-withdrawn" => 410,
+        "slug-invalid" | "bad-request" | "reason-required" | "group-invalid" => 400,
+        "no-such-group" => 404,
+        "group-taken" => 409,
         _ => 403,
     }
 }
@@ -13771,6 +13783,46 @@ fn fake_signed_for(
     Ok((app.name.clone(), app.version.clone(), envelope.public_key))
 }
 
+/// The manifest's app id.
+fn fake_app_id(bytes: &[u8]) -> String {
+    krate_bundle::open_bytes(bytes)
+        .map(|opened| opened.manifest().app.id.to_ascii_lowercase())
+        .unwrap_or_default()
+}
+
+impl FakeOrg {
+    /// What an app's link opens: the chosen release while it is released,
+    /// else the newest approval.
+    fn current_of(&self, app: &str) -> Option<String> {
+        if let Some(d) = self.current.get(app) {
+            if self
+                .candidates
+                .get(d)
+                .is_some_and(|c| c.state == "released")
+            {
+                return Some(d.clone());
+            }
+        }
+        self.candidates
+            .iter()
+            .filter(|(_, c)| c.state == "released" && c.app_id == app)
+            .max_by_key(|(_, c)| c.approved_at)
+            .map(|(d, _)| d.clone())
+    }
+
+    /// Whether `who` (with `role`) may open a release with this audience:
+    /// owners, admins and reviewers always may.
+    fn in_audience(&self, who: &str, role: &str, audience: &Option<Vec<String>>) -> bool {
+        match audience {
+            None => true,
+            Some(_) if matches!(role, "owner" | "admin" | "reviewer") => true,
+            Some(groups) => groups
+                .iter()
+                .any(|g| self.groups.get(g).is_some_and(|m| m.contains(who))),
+        }
+    }
+}
+
 /// Addendum 5: a candidate carries a mark naming its organisation, under
 /// the signature `fake_signed_for` has already found to hold.
 fn fake_marked_for(bytes: &[u8], slug: &str) -> bool {
@@ -13849,8 +13901,26 @@ impl FakeOrgHub {
             .collect();
         let parts: Vec<&str> = decoded.iter().map(String::as_str).collect();
 
+        // The organisation's link for an app (IC-949 R): what it opens now.
+        // Its bytes come through every check /a/<digest> makes.
+        if method == "GET"
+            && parts.len() == 5
+            && parts[0] == "orgs"
+            && parts[2] == "apps"
+            && parts[4] == "current"
+            && !self.accept.contains("application/json")
+        {
+            let current = self
+                .orgs
+                .get(parts[1])
+                .and_then(|org| org.current_of(&parts[3].to_ascii_lowercase()));
+            if let Some(digest) = current {
+                return self.route("GET", &format!("/a/{digest}"), who, body);
+            }
+        }
+
         // A private release: the organisation is read on every fetch, and
-        // every refusal is a 403.
+        // every refusal is a 403 (a withdrawn one 410).
         if (method == "GET" || method == "HEAD") && parts.len() == 2 && parts[0] == "a" {
             let digest = parts[1];
             let look = self.accept.contains("application/json");
@@ -13871,8 +13941,16 @@ impl FakeOrgHub {
                 Some("removed")
             } else if org.role_of(&who).is_none() {
                 Some("not-a-member")
+            } else if org.candidates[digest].state == "withdrawn" {
+                Some("release-withdrawn")
             } else if org.candidates[digest].state != "released" {
                 Some("digest-mismatch")
+            } else if !org.in_audience(
+                &who,
+                org.role_of(&who).unwrap_or(""),
+                &org.candidates[digest].audience,
+            ) {
+                Some("not-in-audience")
             } else {
                 None
             };
@@ -13886,11 +13964,42 @@ impl FakeOrgHub {
                     Some(reason),
                 );
                 // A removed member already knows which organisation sent it.
-                let mut refusal = serde_json::json!({ "error": reason, "message": "refused" });
+                let message =
+                    match reason {
+                        "release-withdrawn" => format!(
+                        "{} withdrew {} {}: \"{}\" -- ask an admin of {} which version to use now",
+                        org.name,
+                        org.candidates[digest].name,
+                        org.candidates[digest].version,
+                        org.candidates[digest].withdraw_reason.clone().unwrap_or_default(),
+                        org.name
+                    ),
+                        "not-in-audience" => format!(
+                        "this app is only for the {} group in {} -- ask an admin of {} to add you",
+                        org.candidates[digest]
+                            .audience
+                            .clone()
+                            .unwrap_or_default()
+                            .join(", "),
+                        org.name,
+                        org.name
+                    ),
+                        _ => "refused".to_string(),
+                    };
+                let mut refusal = serde_json::json!({ "error": reason, "message": message });
                 if reason == "removed" {
                     refusal["org"] = serde_json::json!(slug);
                 }
-                return (403, vec![], refusal.to_string().into_bytes());
+                let status = if reason == "release-withdrawn" {
+                    410
+                } else {
+                    403
+                };
+                return (
+                    status,
+                    vec![("content-type".into(), "application/json".into())],
+                    refusal.to_string().into_bytes(),
+                );
             }
             let candidate = &org.candidates[digest];
             if look {
@@ -14003,11 +14112,23 @@ impl FakeOrgHub {
             ("GET", Some("releases"), 3) => "release.list",
             ("GET", Some("audit"), 3) => "audit.read",
             ("GET", Some("leases"), 4) => "lease.issue",
+            ("POST", Some("releases"), 5) if parts[4] == "withdraw" => "release.withdraw",
+            ("PUT", Some("releases"), 5) if parts[4] == "audience" => "release.audience",
+            ("PUT", Some("apps"), 5) if parts[4] == "current" => "release.set-current",
+            ("GET", Some("apps"), 5) if parts[4] == "current" => "release.current-of",
+            ("GET", Some("groups"), 3) => "group.list",
+            ("POST", Some("groups"), 3) => "group.manage",
+            ("PUT", Some("groups"), 6) => "group.add",
+            ("DELETE", Some("groups"), 6) => "group.remove",
             _ => return (404, vec![], b"not found".to_vec()),
         };
         let target = match action {
             "member.role" | "member.remove" => format!("member:{}", parts[3]),
             "candidate.approve" => format!("candidate:{}", parts[3]),
+            "release.withdraw" | "release.audience" => format!("release:{}", parts[3]),
+            "release.set-current" | "release.current-of" => format!("app:{}", parts[3]),
+            "group.manage" => format!("group:{}", json["name"].as_str().unwrap_or("")),
+            "group.add" | "group.remove" => format!("group:{}/{}", parts[3], parts[5]),
             "invite.create" => format!(
                 "invite:{}/{}",
                 json["github"]
@@ -14294,6 +14415,7 @@ impl FakeOrgHub {
                         }),
                     );
                 }
+                let app_id = fake_app_id(body);
                 org.candidates.insert(
                     digest.clone(),
                     FakeCandidate {
@@ -14306,6 +14428,9 @@ impl FakeOrgHub {
                         state: "waiting-for-approval",
                         approver: None,
                         approved_at: None,
+                        app_id: app_id.clone(),
+                        withdraw_reason: None,
+                        audience: None,
                     },
                 );
                 org.record(
@@ -14341,6 +14466,9 @@ impl FakeOrgHub {
                 let Some(candidate) = org.candidates.get(&digest) else {
                     return deny(org, "digest-mismatch");
                 };
+                if candidate.state == "withdrawn" {
+                    return deny(org, "release-withdrawn");
+                }
                 if candidate.state != "released" && org.revoked.contains(&candidate.signer) {
                     return deny_with(
                         org,
@@ -14356,6 +14484,8 @@ impl FakeOrgHub {
                     candidate.state = "released";
                     candidate.approver = Some(who.clone());
                     candidate.approved_at = Some(now);
+                    let app = candidate.app_id.clone();
+                    org.current.insert(app, digest.clone());
                     org.record(now, &who, "candidate.approve", &target, "allowed", None);
                 }
                 fake_json(
@@ -14370,6 +14500,7 @@ impl FakeOrgHub {
                     .candidates
                     .iter()
                     .filter(|(_, c)| c.state == "released")
+                    .filter(|(_, c)| org.in_audience(&who, &role, &c.audience))
                     .map(|(digest, c)| {
                         serde_json::json!({
                             "name": c.name, "version": c.version, "digest": digest,
@@ -14377,6 +14508,9 @@ impl FakeOrgHub {
                             "uploaded_by": fake_principal(&c.uploader),
                             "approved_by": c.approver.as_deref().map(fake_principal),
                             "at": c.approved_at,
+                            "app_id": c.app_id,
+                            "current": org.current_of(&c.app_id).as_deref() == Some(digest.as_str()),
+                            "audience": c.audience,
                         })
                     })
                     .collect();
@@ -14403,8 +14537,14 @@ impl FakeOrgHub {
             }
             "lease.issue" => {
                 let digest = parts[3].to_string();
+                if org.candidates.get(&digest).map(|c| c.state) == Some("withdrawn") {
+                    return deny(org, "release-withdrawn");
+                }
                 if org.candidates.get(&digest).map(|c| c.state) != Some("released") {
                     return deny(org, "digest-mismatch");
+                }
+                if !org.in_audience(&who, &role, &org.candidates[&digest].audience) {
+                    return deny(org, "not-in-audience");
                 }
                 if self.lease_class == "online" {
                     return fake_json(200, serde_json::json!({ "class": "online" }));
@@ -14427,6 +14567,224 @@ impl FakeOrgHub {
                     200,
                     krate_lease::sign(&body, &self.lease_pkcs8).expect("signed"),
                 )
+            }
+            "release.withdraw" => {
+                if !is(&["owner", "admin", "reviewer"]) {
+                    return deny(org, "role-cannot");
+                }
+                let reason = json["reason"].as_str().unwrap_or("").trim().to_string();
+                if reason.is_empty() || reason.len() > 300 {
+                    return deny(org, "reason-required");
+                }
+                let digest = parts[3].to_string();
+                match org.candidates.get(&digest).map(|c| c.state) {
+                    Some("released") => {}
+                    Some("withdrawn") => return deny(org, "release-withdrawn"),
+                    _ => return deny(org, "digest-mismatch"),
+                }
+                let app = org.candidates[&digest].app_id.clone();
+                let was_current = org.current_of(&app).as_deref() == Some(digest.as_str());
+                let candidate = org.candidates.get_mut(&digest).unwrap();
+                candidate.state = "withdrawn";
+                candidate.withdraw_reason = Some(reason.clone());
+                let (name, version) = (candidate.name.clone(), candidate.version.clone());
+                org.record(
+                    now,
+                    &who,
+                    "release.withdraw",
+                    &target,
+                    "allowed",
+                    Some(&reason),
+                );
+                org.current.remove(&app);
+                let now_current = org.current_of(&app);
+                if let Some(d) = &now_current {
+                    org.current.insert(app.clone(), d.clone());
+                }
+                if was_current {
+                    let said = format!(
+                        "{} after withdrawing {digest}",
+                        now_current.as_deref().unwrap_or("none")
+                    );
+                    org.record(
+                        now,
+                        &who,
+                        "release.current",
+                        &format!("app:{app}"),
+                        "allowed",
+                        Some(&said),
+                    );
+                }
+                let lease_until = self.leases_issued.min(1) as u64 * (now + 7 * 86_400);
+                fake_json(
+                    200,
+                    serde_json::json!({
+                        "release": { "digest": digest, "name": name, "version": version, "state": "withdrawn" },
+                        "current": { "app_id": app, "digest": now_current },
+                        "leases": { "active": self.leases_issued.min(1), "until": if lease_until > 0 { serde_json::json!(lease_until) } else { serde_json::Value::Null } },
+                    }),
+                )
+            }
+            "release.set-current" => {
+                if !is(&["owner", "admin"]) {
+                    return deny(org, "role-cannot");
+                }
+                let app = parts[3].to_ascii_lowercase();
+                let digest = json["digest"].as_str().unwrap_or("").to_string();
+                let Some(candidate) = org.candidates.get(&digest).filter(|c| c.app_id == app)
+                else {
+                    return deny(org, "digest-mismatch");
+                };
+                if candidate.state == "withdrawn" {
+                    return deny(org, "release-withdrawn");
+                }
+                if candidate.state != "released" {
+                    return deny(org, "digest-mismatch");
+                }
+                let current = serde_json::json!({
+                    "digest": digest, "name": candidate.name, "version": candidate.version,
+                });
+                if org.current_of(&app).as_deref() != Some(digest.as_str()) {
+                    org.current.insert(app.clone(), digest.clone());
+                    org.record(
+                        now,
+                        &who,
+                        "release.current",
+                        &target,
+                        "allowed",
+                        Some(&digest),
+                    );
+                }
+                fake_json(
+                    200,
+                    serde_json::json!({ "app_id": app, "current": current }),
+                )
+            }
+            "release.current-of" => {
+                let app = parts[3].to_ascii_lowercase();
+                let Some(digest) = org.current_of(&app) else {
+                    return deny(org, "digest-mismatch");
+                };
+                let c = &org.candidates[&digest];
+                if !org.in_audience(&who, &role, &c.audience) {
+                    return deny(org, "not-in-audience");
+                }
+                fake_json(
+                    200,
+                    serde_json::json!({
+                        "app_id": app, "digest": digest, "name": c.name, "version": c.version,
+                        "url": format!("{base}/a/{digest}"),
+                    }),
+                )
+            }
+            "release.audience" => {
+                if !is(&["owner", "admin"]) {
+                    return deny(org, "role-cannot");
+                }
+                let digest = parts[3].to_string();
+                if !org.candidates.contains_key(&digest) {
+                    return deny(org, "digest-mismatch");
+                }
+                let audience = if json["everyone"].as_bool() == Some(true) {
+                    None
+                } else {
+                    let mut groups: Vec<String> = json["groups"]
+                        .as_array()
+                        .map(|g| {
+                            g.iter()
+                                .filter_map(|x| x.as_str().map(str::to_string))
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    groups.sort();
+                    if groups.is_empty() {
+                        return deny(org, "group-invalid");
+                    }
+                    if let Some(missing) = groups.iter().find(|g| !org.groups.contains_key(*g)) {
+                        let missing = missing.clone();
+                        return deny_with(
+                            org,
+                            "no-such-group",
+                            &format!("{slug} has no group called {missing}"),
+                        );
+                    }
+                    Some(groups)
+                };
+                org.candidates.get_mut(&digest).unwrap().audience = audience.clone();
+                let said = audience
+                    .as_ref()
+                    .map(|g| format!("groups:{}", g.join(",")))
+                    .unwrap_or_else(|| "everyone".into());
+                org.record(
+                    now,
+                    &who,
+                    "release.audience",
+                    &target,
+                    "allowed",
+                    Some(&said),
+                );
+                fake_json(
+                    200,
+                    serde_json::json!({ "digest": digest, "audience": audience }),
+                )
+            }
+            "group.list" => {
+                let groups: Vec<serde_json::Value> = org
+                    .groups
+                    .iter()
+                    .filter(|(_, m)| role != "recipient" || m.contains(&who))
+                    .map(|(name, members)| serde_json::json!({ "name": name, "members": members }))
+                    .collect();
+                fake_json(200, serde_json::json!({ "groups": groups }))
+            }
+            "group.manage" => {
+                if !is(&["owner", "admin"]) {
+                    return deny(org, "role-cannot");
+                }
+                let name = json["name"].as_str().unwrap_or("").to_string();
+                let valid = !name.is_empty()
+                    && name.len() <= 39
+                    && name.as_bytes()[0].is_ascii_lowercase()
+                    && name
+                        .bytes()
+                        .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-');
+                if !valid {
+                    return deny(org, "group-invalid");
+                }
+                if org.groups.contains_key(&name) {
+                    return deny(org, "group-taken");
+                }
+                org.groups.insert(name.clone(), Default::default());
+                org.record(now, &who, "group.create", &target, "allowed", None);
+                fake_json(
+                    201,
+                    serde_json::json!({ "group": { "name": name, "members": [] } }),
+                )
+            }
+            "group.add" | "group.remove" => {
+                if !is(&["owner", "admin"]) {
+                    return deny(org, "role-cannot");
+                }
+                let (name, principal) = (parts[3].to_string(), parts[5].to_string());
+                if !org.groups.contains_key(&name) {
+                    return deny(org, "no-such-group");
+                }
+                if action == "group.add" {
+                    if org.role_of(&principal).is_none() {
+                        return deny(org, "not-a-member");
+                    }
+                    if org.groups.get_mut(&name).unwrap().insert(principal.clone()) {
+                        org.record(now, &who, "group.add", &target, "allowed", None);
+                    }
+                    return fake_json(
+                        200,
+                        serde_json::json!({ "group": name, "principal": principal, "member": true }),
+                    );
+                }
+                if org.groups.get_mut(&name).unwrap().remove(&principal) {
+                    org.record(now, &who, "group.remove", &target, "allowed", None);
+                }
+                (204, vec![], vec![])
             }
             "audit.read" => {
                 if !is(&["owner", "admin"]) {
@@ -14553,6 +14911,7 @@ impl FakeOrgHub {
                         );
                     }
                 };
+                let app_id = fake_app_id(&bytes);
                 org.candidates.insert(
                     digest.clone(),
                     FakeCandidate {
@@ -14565,6 +14924,9 @@ impl FakeOrgHub {
                         state: "waiting-for-approval",
                         approver: None,
                         approved_at: None,
+                        app_id: app_id.clone(),
+                        withdraw_reason: None,
+                        audience: None,
                     },
                 );
                 org.record(
@@ -15248,6 +15610,20 @@ fn org_root_key_sends_only_the_public_half() {
         "{said}"
     );
     assert!(said.contains("replaced the previous key"), "{said}");
+    // In full, here and in `krate org show`: a machine policy's `[trust]
+    // roots` takes the whole 64-hex key (IC-949 P2).
+    let full = "ab".repeat(32);
+    assert!(
+        said.contains(&format!("acme's root key is now {full}\n")),
+        "{said}"
+    );
+    let shown = world.says("alice", &["org", "show", "acme"], true);
+    assert!(
+        shown
+            .lines()
+            .any(|l| l.trim() == format!("root key {full}")),
+        "{shown}"
+    );
 }
 
 /// `krate publish --org`: an unsigned bundle is turned back before anything
@@ -16953,4 +17329,274 @@ fn a_release_key_from_studio_signs_what_is_sent_for_approval() {
     let list: serde_json::Value = serde_json::from_str(said.trim()).expect("JSON");
     assert_eq!(list[0]["slug"], "acme");
     assert_eq!(list[0]["role"], "developer");
+}
+
+// ------------------------------------------------- release control (IC-949 R)
+
+/// R, proof item 7: a withdrawn release is refused at the next check-in and
+/// at download, the lease goes, and the words carry the reason. Withdraw
+/// needs a reason and the authority (owner, admin, reviewer).
+#[test]
+fn a_withdrawn_release_is_refused_at_the_next_check_in() {
+    let Some(world) = OrgWorld::new(&["alice", "bob", "carol", "dan"]) else {
+        eprintln!("skipping a_withdrawn_release_is_refused_at_the_next_check_in: no local port");
+        return;
+    };
+    let root = world.acme();
+    let (bundle, digest, link) = world.released_app(&root, "1.0.0");
+    let copy = dans_copy(&world, &bundle);
+    assert!(world.run_link("dan", &link).status.success());
+    assert!(world.lease_record("dan", &digest).unwrap()["answer"].is_object());
+
+    // No reason: clap refuses before anything is sent.
+    let bare = world.krate_as("bob", &["org", "release", "withdraw", "acme", &digest]);
+    assert!(!bare.status.success());
+    assert!(
+        stderr_of(&bare).contains("--reason"),
+        "{}",
+        stderr_of(&bare)
+    );
+    let blank = world.says(
+        "bob",
+        &[
+            "org", "release", "withdraw", "acme", &digest, "--reason", "  ",
+        ],
+        false,
+    );
+    assert!(blank.contains("say why with --reason"), "{blank}");
+    let carol = world.says(
+        "carol",
+        &[
+            "org", "release", "withdraw", "acme", &digest, "--reason", "x",
+        ],
+        false,
+    );
+    assert!(
+        carol.contains(
+            "your role in acme cannot withdraw acme's releases: ask an owner, admin or reviewer of acme"
+        ),
+        "{carol}"
+    );
+
+    let said = world.says(
+        "bob",
+        &[
+            "org",
+            "release",
+            "withdraw",
+            "acme",
+            &digest,
+            "--reason",
+            "it loses data on save",
+        ],
+        true,
+    );
+    assert!(said.contains("withdrew Acme Demo 1.0.0"), "{said}");
+    assert!(
+        said.contains("every computer refuses it when it next connects"),
+        "{said}"
+    );
+    assert!(
+        said.contains(
+            "Offline access already given out holds without a connection until it runs out: 1 person holds it"
+        ),
+        "{said}"
+    );
+    assert!(
+        said.contains("No release of dev.acme.demo opens now"),
+        "{said}"
+    );
+
+    // Dan's next check-in, from his own copy: refused, the lease gone.
+    let run_copy = org_command(
+        &world,
+        "dan",
+        &["run", copy.to_str().unwrap(), "--headless"],
+    )
+    .output()
+    .expect("run");
+    assert!(!run_copy.status.success());
+    let words = stderr_of(&run_copy);
+    assert!(words.contains("this app no longer opens"), "{words}");
+    assert!(words.contains("it loses data on save"), "{words}");
+    assert!(!words.contains("{\"error\""), "{words}");
+    let record = world.lease_record("dan", &digest).expect("still known");
+    assert!(record["answer"].is_null(), "the lease is gone: {record}");
+    // And the download is refused the same way.
+    let fetched = world.run_link("dan", &link);
+    assert!(!fetched.status.success());
+    assert!(
+        stderr_of(&fetched).contains("this app no longer opens"),
+        "{}",
+        stderr_of(&fetched)
+    );
+    // Not undone.
+    let again = world.says("bob", &["org", "approve", "acme", &digest], false);
+    assert!(again.contains("a withdrawal is not undone"), "{again}");
+}
+
+/// R: the newest approval is what the app's link opens; setting an older
+/// approved release current is the rollback, and the older one is what
+/// opens. Only owners and admins choose.
+#[test]
+fn setting_an_older_release_current_is_what_the_app_link_opens() {
+    let Some(world) = OrgWorld::new(&["alice", "bob", "carol", "dan"]) else {
+        eprintln!(
+            "skipping setting_an_older_release_current_is_what_the_app_link_opens: no local port"
+        );
+        return;
+    };
+    let root = world.acme();
+    let (_b1, d1, _l1) = world.released_app(&root, "1.0.0");
+    let (_b2, d2, _l2) = world.released_app(&root, "1.0.1");
+    let app_link = format!("{}/orgs/acme/apps/dev.acme.demo/current", world.url());
+
+    let now = world.says(
+        "dan",
+        &["org", "release", "current", "acme", "dev.acme.demo"],
+        true,
+    );
+    assert!(
+        now.contains(&format!(
+            "dev.acme.demo opens Acme Demo 1.0.1 ({})",
+            &d2[..12]
+        )),
+        "{now}"
+    );
+    assert!(now.contains(&format!("krate run {app_link}")), "{now}");
+    assert!(world.run_link("dan", &app_link).status.success());
+    assert!(world.lease_record("dan", &d2).is_some(), "1.0.1 opened");
+    assert!(world.lease_record("dan", &d1).is_none(), "1.0.0 did not");
+
+    let carol = world.says(
+        "carol",
+        &["org", "release", "current", "acme", "dev.acme.demo", &d1],
+        false,
+    );
+    assert!(
+        carol.contains("your role in acme cannot choose which release of an app opens"),
+        "{carol}"
+    );
+    let set = world.says(
+        "alice",
+        &["org", "release", "current", "acme", "dev.acme.demo", &d1],
+        true,
+    );
+    assert!(
+        set.contains("dev.acme.demo now opens Acme Demo 1.0.0"),
+        "{set}"
+    );
+    assert!(world.run_link("dan", &app_link).status.success());
+    assert!(
+        world.lease_record("dan", &d1).is_some(),
+        "the older release is what opens"
+    );
+
+    let listed = world.says("dan", &["org", "releases", "acme"], true);
+    let at_d1 = listed.find(&d1[..12]).expect("1.0.0 listed");
+    let opens = listed
+        .find("opens now for its app (dev.acme.demo)")
+        .expect("current marked");
+    assert!(opens > at_d1, "the current mark follows 1.0.0: {listed}");
+    let audit = world.says("alice", &["org", "audit", "acme"], true);
+    assert!(audit.contains("release.current"), "{audit}");
+}
+
+/// R: a release limited to a group refuses a member outside it, in words
+/// that name the group; owners and reviewers pass. Groups are owners' and
+/// admins'.
+#[test]
+fn a_member_outside_the_audience_is_refused_and_an_owner_passes() {
+    let Some(world) = OrgWorld::new(&["alice", "bob", "carol", "dan"]) else {
+        eprintln!(
+            "skipping a_member_outside_the_audience_is_refused_and_an_owner_passes: no local port"
+        );
+        return;
+    };
+    let root = world.acme();
+    let (_bundle, digest, link) = world.released_app(&root, "1.0.0");
+
+    let carol = world.says(
+        "carol",
+        &["org", "group", "create", "acme", "finance"],
+        false,
+    );
+    assert!(
+        carol.contains("your role in acme cannot manage acme's groups"),
+        "{carol}"
+    );
+    let made = world.says(
+        "alice",
+        &["org", "group", "create", "acme", "Finance"],
+        true,
+    );
+    assert!(made.contains("made the group finance in acme"), "{made}");
+    let added = world.says(
+        "alice",
+        &["org", "group", "add", "acme", "finance", "carol"],
+        true,
+    );
+    assert!(added.contains("carol (GitHub) is in finance"), "{added}");
+    let listed = world.says("alice", &["org", "group", "list", "acme"], true);
+    assert!(listed.contains("finance  carol (GitHub)"), "{listed}");
+    let missing = world.says(
+        "alice",
+        &[
+            "org", "release", "audience", "acme", &digest, "--groups", "legal",
+        ],
+        false,
+    );
+    assert!(
+        missing.contains("Make it first with `krate org group create acme <name>`"),
+        "{missing}"
+    );
+
+    let limited = world.says(
+        "alice",
+        &[
+            "org", "release", "audience", "acme", &digest, "--groups", "finance",
+        ],
+        true,
+    );
+    assert!(
+        limited.contains("opens only for finance in acme"),
+        "{limited}"
+    );
+
+    let refused = world.run_link("dan", &link);
+    assert!(!refused.status.success());
+    let words = stderr_of(&refused);
+    assert!(words.contains("this app does not open for you"), "{words}");
+    assert!(words.contains("finance"), "{words}");
+    assert!(
+        world.run_link("carol", &link).status.success(),
+        "in the group"
+    );
+    assert!(
+        world.run_link("alice", &link).status.success(),
+        "an owner passes"
+    );
+    assert!(
+        world.run_link("bob", &link).status.success(),
+        "a reviewer passes"
+    );
+    // Dan does not see it listed.
+    let dans = world.says("dan", &["org", "releases", "acme"], true);
+    assert!(!dans.contains(&digest[..12]), "{dans}");
+
+    world.says(
+        "alice",
+        &["org", "release", "audience", "acme", &digest, "--everyone"],
+        true,
+    );
+    assert!(
+        world.run_link("dan", &link).status.success(),
+        "everyone again"
+    );
+    let out = world.says(
+        "alice",
+        &["org", "group", "remove", "acme", "finance", "carol"],
+        true,
+    );
+    assert!(out.contains("carol (GitHub) is out of finance"), "{out}");
 }

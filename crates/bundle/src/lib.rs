@@ -4722,7 +4722,16 @@ fn fetch_get(url: &str, authorization: Option<&str>) -> Result<ureq::Response> {
         request = request.set("Authorization", value);
     }
     request.call().map_err(|err| match err {
-        ureq::Error::Status(403, response) => hub_refusal(url, response),
+        ureq::Error::Status(403, response) => hub_refusal(url, 403, response),
+        // A release its organisation withdrew answers 410 with the hub's
+        // stable reason (IC-949 R); any other 410 is an ordinary failure.
+        ureq::Error::Status(410, response) => match hub_refusal(url, 410, response) {
+            refused @ BundleError::HubRefused { .. } => refused,
+            _ => BundleError::Fetch {
+                url: url.to_string(),
+                message: "the server says this is gone (410)".to_string(),
+            },
+        },
         err => BundleError::Fetch {
             url: url.to_string(),
             message: map_fetch_error(url, err),
@@ -4730,16 +4739,17 @@ fn fetch_get(url: &str, authorization: Option<&str>) -> Result<ureq::Response> {
     })
 }
 
-/// A 403 from a hub: its stable reason when the body carries one
-/// (`{"error", "message"}`, IC-946), otherwise a plain refusal.
+/// A 403 (or a withdrawn release's 410) from a hub: its stable reason when
+/// the body carries one (`{"error", "message"}`, IC-946), otherwise a plain
+/// refusal.
 #[cfg(feature = "fetch")]
-fn hub_refusal(url: &str, response: ureq::Response) -> BundleError {
+fn hub_refusal(url: &str, status: u16, response: ureq::Response) -> BundleError {
     let body = response.into_string().unwrap_or_default();
     let answer: serde_json::Value = serde_json::from_str(&body).unwrap_or_default();
     match answer["error"].as_str() {
         Some(reason) => BundleError::HubRefused {
             url: url.to_string(),
-            status: 403,
+            status,
             reason: reason.to_string(),
             message: answer["message"]
                 .as_str()
@@ -4749,7 +4759,7 @@ fn hub_refusal(url: &str, response: ureq::Response) -> BundleError {
         },
         None => BundleError::Fetch {
             url: url.to_string(),
-            message: "the server refused to hand it over (403)".to_string(),
+            message: format!("the server refused to hand it over ({status})"),
         },
     }
 }
