@@ -576,7 +576,10 @@ document.querySelectorAll("[data-copy]").forEach(function (b) {
         state("Private app", "The organisation that sent it has closed", "Its apps stopped opening when it closed. If you still need this one, ask the person who sent it.", [], true);
         return;
       }
-      var w = K.refusal(b.error, { here: here, message: b.message });
+      // A withdrawn version and an app for other groups carry what the
+      // page says about them (IC-949, R).
+      if (b.error === "release-withdrawn") document.getElementById("pageHead").textContent = "This app no longer opens.";
+      var w = K.refusal(b.error, { here: here, message: b.message, org: b.org_name || undefined, withdrawn: b.withdrawn, groups: b.groups });
       state("Private app", w.title, w.body, [], true);
     });
     function el(tag, a, t) { return K.el(tag, a, t); }

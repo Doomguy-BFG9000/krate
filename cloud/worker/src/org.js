@@ -43,6 +43,12 @@ export const MATRIX = {
   "candidate.approve": { owner: "yes", reviewer: "yes" },
   "release.download": { owner: "yes", admin: "yes", developer: "yes", reviewer: "yes", recipient: "yes" },
   "audit.read": { owner: "yes", admin: "yes" },
+  // Release control and groups (IC-949, FLEET-CONTRACT.md R); the commands
+  // are in org-releases.js.
+  "release.withdraw": { owner: "yes", admin: "yes", reviewer: "yes" },
+  "release.set-current": { owner: "yes", admin: "yes" },
+  "group.manage": { owner: "yes", admin: "yes" },
+  "release.audience": { owner: "yes", admin: "yes" },
 };
 
 /// What `role` may do for `action`: "yes", a narrower rule, or null.

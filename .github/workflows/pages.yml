@@ -269,6 +269,11 @@ jobs:
           # company sign-in never auto-joins an owner, and a private app
           # names its exact offline date before it is first opened.
           node docs/landing/studio/org-layer2-test.mjs
+          # And release control: a withdraw sheet says what offline access
+          # already given out still does, nobody withdraws without a
+          # reason, Make current sends the exact digest, and each role is
+          # shown only the controls the matrix gives it (IC-949 R).
+          node docs/landing/studio/org-releases-test.mjs
           # And that the homepage's prompt bar starts a build only from its
           # own fresh handoff, once, and never from a link (K-885).
           node docs/landing/studio/frontpage-test.mjs

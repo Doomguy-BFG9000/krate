@@ -43,6 +43,9 @@ import { refusalsExhausted, noteRefusal, isRefusal, rateLimitedAnswer } from "./
 // Company sign-in and offline access for organisations (IC-948, F and G).
 import { ssoRoute, oidcStart, oidcCallback, ssoSlugsFor, ssoMarks } from "./org-sso.js";
 import { leaseRoute, leaseKeyRoute } from "./org-lease.js";
+// Release control and groups (IC-949, R). After org-lease.js: it guards
+// the lease command too.
+import { orgReleaseRoute } from "./org-releases.js";
 // The organisation store (IC-946), one SQLite-backed Durable Object per
 // organisation; wrangler.toml binds it as ORGS.
 export { Org };
@@ -7167,6 +7170,8 @@ function candidateArgs(judgement, digest, size, base) {
     digest,
     size,
     name: app.name || "",
+    // Which app it is a version of: the current release is per app id (IC-949, R).
+    app_id: app.id || "",
     version: (judgement.release && judgement.release.version) || app.version || "",
     namespace: (judgement.release && judgement.release.namespace) || "",
     signature: judgement.signature || { state: "absent" },
@@ -7401,9 +7406,9 @@ async function orgRouteCore(request, url, env, identity) {
   }
   const h = {
     request, url, env, slug, rest, method, principals, identity, site, base,
-    askRaw, mutateRaw, orgAsk, orgAnswer, json, readBody, isAdmin, smtpSend,
+    askRaw, mutateRaw, orgAsk, orgAnswer, json, readBody, isAdmin, smtpSend, fetchBundle,
   };
-  const routed = (await orgLifecycleRoute(h)) || (await orgBillingRoute(h));
+  const routed = (await orgLifecycleRoute(h)) || (await orgBillingRoute(h)) || (await orgReleaseRoute(h));
   if (routed) return routed;
   return text("not found", 404);
 }
@@ -7535,8 +7540,9 @@ async function fetchPrivate(request, url, hash, object, slug, big, env) {
           : reason === "digest-mismatch"
             ? { error: reason, message: "this app is not released yet" }
             : answer.body;
+    // A withdrawn release is gone, not forbidden (IC-949, R): 410.
     return new Response(JSON.stringify(body), {
-      status: 403,
+      status: reason === "release-withdrawn" ? 410 : 403,
       headers: { "content-type": "application/json", ...noStore },
     });
   }

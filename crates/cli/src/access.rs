@@ -141,7 +141,9 @@ fn check_in(hub: &str, digest: &str, authorization: Option<&str>) -> CheckIn {
             }
         }
         Err(ureq::Error::Status(404, _)) => CheckIn::NotReleased,
-        Err(ureq::Error::Status(status @ (401 | 403), response)) => {
+        // 410 is a release its organisation withdrew (IC-949 R): refused,
+        // never "offline", or a stored lease would open it.
+        Err(ureq::Error::Status(status @ (401 | 403 | 410), response)) => {
             let body = response.into_string().unwrap_or_default();
             let answer: Value = serde_json::from_str(&body).unwrap_or_default();
             CheckIn::Refused(krate_bundle::BundleError::HubRefused {
@@ -215,7 +217,9 @@ fn fetch_lease(
             let answer: Value = serde_json::from_str(&response.into_string().unwrap_or_default())
                 .unwrap_or_default();
             match answer["error"].as_str() {
-                Some(reason @ ("removed" | "not-a-member")) => Err(reason.to_string()),
+                Some(
+                    reason @ ("removed" | "not-a-member" | "release-withdrawn" | "not-in-audience"),
+                ) => Err(reason.to_string()),
                 _ => Ok(None),
             }
         }
@@ -393,7 +397,12 @@ pub fn gate(bytes: Bytes, mark: Mark, door: Door) -> Result<()> {
         }) => {
             if matches!(
                 reason.as_str(),
-                "removed" | "not-a-member" | "digest-mismatch" | "no-such-org"
+                "removed"
+                    | "not-a-member"
+                    | "digest-mismatch"
+                    | "no-such-org"
+                    | "release-withdrawn"
+                    | "not-in-audience"
             ) {
                 save_record(&digest, &known);
                 forget(&digest);
@@ -623,7 +632,12 @@ pub fn refused_words(err: &krate_bundle::BundleError, url: &str) -> Option<Strin
 pub fn refused_link(url: &str, reason: &str) {
     if !matches!(
         reason,
-        "removed" | "not-a-member" | "digest-mismatch" | "no-such-org"
+        "removed"
+            | "not-a-member"
+            | "digest-mismatch"
+            | "no-such-org"
+            | "release-withdrawn"
+            | "not-in-audience"
     ) {
         return;
     }

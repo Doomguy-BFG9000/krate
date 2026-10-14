@@ -141,6 +141,11 @@
     "billing.checkout": { owner: "yes" },
     "sso.set": { owner: "yes" },
     "offline.set": { owner: "yes" },
+    // Release control and groups (IC-949, FLEET-CONTRACT.md R).
+    "release.withdraw": { owner: "yes", admin: "yes", reviewer: "yes" },
+    "release.set-current": { owner: "yes", admin: "yes" },
+    "group.manage": { owner: "yes", admin: "yes" },
+    "release.audience": { owner: "yes", admin: "yes" },
   };
 
   function can(role, action) {
@@ -291,9 +296,38 @@
         return { title: "That recovery is not waiting any more", body: "It was already cancelled or has taken effect. The banner is gone once the page refreshes.", action: null };
       case "sso-failed":
         return { title: "Company sign-in did not finish", body: "Nothing changed. Try again, or sign in another way.", action: null };
+      case "release-withdrawn": {
+        var wd = ctx.withdrawn || {};
+        return {
+          title: "This version was withdrawn",
+          body: org + " withdrew it" + (wd.at ? " on " + day(wd.at) : "") + (wd.reason ? ": “" + wd.reason + "”" : "") + ". It no longer opens, here or on any computer that connects. Ask " + org + " which version to use now.",
+          action: null,
+        };
+      }
+      case "not-in-audience":
+        return {
+          title: "This app is only for " + (Array.isArray(ctx.groups) && ctx.groups.length ? groupsSaid(ctx.groups) : "some groups") + " in " + org,
+          body: "You are in " + org + ", but this app was sent only to certain groups, and you are not in them. Ask an admin of " + org + " to add you.",
+          action: null,
+        };
+      case "reason-required":
+        return { title: "Say why it is withdrawn", body: "The people who had it are shown the reason. Write a few words, up to 300 characters.", action: null };
+      case "no-such-group":
+        return { title: "That group does not exist", body: "Nothing changed. Make the group in People first.", action: null };
+      case "group-taken":
+        return { title: "There is already a group by that name", body: "Pick another name, or add people to the one there is.", action: null };
+      case "group-invalid":
+        return { title: "That group name will not work", body: "Use lower-case letters, digits and dashes, starting with a letter. For example finance or field-ops.", action: null };
       default:
         return { title: "That did not work", body: (ctx.message ? String(ctx.message) + ". " : "") + "Nothing changed. Try again in a moment.", action: null };
     }
+  }
+
+  /// "the finance group", "the finance and ops groups".
+  function groupsSaid(list) {
+    var l = (list || []).slice();
+    var said = l.length <= 1 ? l.join("") : l.slice(0, -1).join(", ") + " and " + l[l.length - 1];
+    return "the " + said + (l.length === 1 ? " group" : " groups");
   }
 
   // ------------------------------------------------------------ sign-in
@@ -335,6 +369,12 @@
     "close-confirm-mismatch": "the short name did not match",
     "sso-required": "company sign-in required",
     "recovery-not-waiting": "no recovery was waiting",
+    "release-withdrawn": "it was withdrawn",
+    "not-in-audience": "it is not for their groups",
+    "reason-required": "no reason was given",
+    "no-such-group": "no such group",
+    "group-taken": "the group exists already",
+    "group-invalid": "not a group name",
   };
 
   /// One audit event as a sentence. `names` maps a digest to "Ledger 1.2".
@@ -383,6 +423,15 @@
         export: "build an export",
         "billing-checkout": "open checkout",
         "recover-object": "object to a recovery",
+        // Release control and groups (IC-949, R).
+        "release.withdraw": "withdraw " + app(),
+        "release.set-current": "choose which version of " + (t.value || "an app") + " opens",
+        "release.audience": "choose who opens " + app(),
+        "group.manage": "make the group " + t.value,
+        "group.add": "add someone to a group",
+        "group.remove": "take someone out of a group",
+        "group.list": "see the groups",
+        "lease.issue": "get offline access to " + app(),
       }[ev.action] || "do " + ev.action;
       // Shown beside a Refused badge, so the sentence says why, not "refused" again.
       return a + " tried to " + tried + ": " + (SHORT_WHY[ev.reason] || ev.reason || "not allowed") + ".";
@@ -442,6 +491,28 @@
       case "sso.clear": return a + " turned off company sign-in.";
       case "sso.verify-domain": return a + " verified the domain " + (t.value || "") + ".";
       case "sso.join": return a + " joined through company sign-in as " + roleWord(ev.reason || "") + ".";
+      // Release control and groups (IC-949, R).
+      case "release.withdraw": return a + " withdrew " + app() + (ev.reason ? ": “" + ev.reason + "”" : "") + ".";
+      case "release.current": {
+        var cur = String(ev.reason || "").split(" after withdrawing ");
+        var ver = function (d) { return names[d] || "version " + String(d).slice(0, 12); };
+        var appId = t.value || "the app";
+        if (cur[0] === "none") return "Nothing of " + appId + " opens any more, after " + a + " withdrew " + ver(cur[1]) + ".";
+        return cur[1]
+          ? ver(cur[0]) + " became current, after " + a + " withdrew " + ver(cur[1]) + "."
+          : a + " made " + ver(cur[0]) + " the version of " + appId + " that opens.";
+      }
+      case "release.audience": {
+        var aud = String(ev.reason || "");
+        return aud === "everyone" ? a + " opened " + app() + " to everyone." : a + " limited " + app() + " to " + groupsSaid(aud.replace(/^groups:/, "").split(",")) + ".";
+      }
+      case "group.create": return a + " made the group " + t.value + ".";
+      case "group.add":
+      case "group.remove": {
+        var gs = t.value.indexOf("/"), g = gs > 0 ? t.value.slice(0, gs) : t.value, whom = who(gs > 0 ? t.value.slice(gs + 1) : "").label;
+        if (ev.action === "group.add") return a + " added " + whom + " to " + g + ".";
+        return ev.reason === "member removed" ? whom + " left " + g + ", on being removed from the organisation." : a + " took " + whom + " out of " + g + ".";
+      }
       default: return a + " " + ev.action + (ev.target ? " " + ev.target : "") + ".";
     }
   }
@@ -630,5 +701,6 @@
     ssoNotice: ssoNotice, takeSsoNotice: takeSsoNotice,
     OFFLINE: OFFLINE, offlineName: offlineName, offlineNotice: offlineNotice, PROVIDERS: PROVIDERS, money: money,
     el: el, refusalBlock: refusalBlock, signInChoices: signInChoices, copy: copy, download: download,
+    groupsSaid: groupsSaid,
   };
 })(typeof window !== "undefined" ? window : globalThis);
