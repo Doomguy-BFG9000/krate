@@ -97,7 +97,15 @@ const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS org_data_readers (
      day TEXT NOT NULL, app_id TEXT NOT NULL, principal TEXT NOT NULL,
      PRIMARY KEY (day, app_id, principal))`,
+  // Each finished day's line, kept 90 days for the insights (IC-959):
+  // the same two counts the audit line says, nothing else.
+  `CREATE TABLE IF NOT EXISTS org_data_days (
+     day TEXT NOT NULL, app_id TEXT NOT NULL, writes INTEGER NOT NULL, readers INTEGER NOT NULL,
+     PRIMARY KEY (day, app_id))`,
 ];
+
+/// How long a finished day's counts are kept.
+export const DATA_DAYS_KEPT = 90;
 
 const HEX64 = /^[0-9a-f]{64}$/;
 const B64 = /^[A-Za-z0-9+/]+={0,2}$/;
@@ -394,6 +402,14 @@ function tick(ctx) {
   for (const d of this.rows("SELECT * FROM org_data_daily WHERE day < ? ORDER BY day, app_id", today)) {
     const readers = this.row("SELECT COUNT(*) AS n FROM org_data_readers WHERE day = ? AND app_id = ?", d.day, d.app_id).n;
     this.audit("system:krate", "data.daily", `app:${d.app_id}`, "allowed", `${d.day}: ${d.writes} writes, ${readers} readers`);
+    this.sql.exec(
+      "INSERT OR REPLACE INTO org_data_days (day, app_id, writes, readers) VALUES (?, ?, ?, ?)",
+      d.day,
+      d.app_id,
+      d.writes,
+      readers,
+    );
+    this.sql.exec("DELETE FROM org_data_days WHERE day < ?", isoDay(ctx.now - DATA_DAYS_KEPT * DAY));
     this.sql.exec("DELETE FROM org_data_daily WHERE day = ? AND app_id = ?", d.day, d.app_id);
     this.sql.exec("DELETE FROM org_data_readers WHERE day = ? AND app_id = ?", d.day, d.app_id);
   }
@@ -438,7 +454,7 @@ function install(OrgClass) {
     const answer = swept.call(this, ctx);
     if (answer.status === 200) {
       const n = this.row("SELECT COUNT(*) AS n FROM org_data").n;
-      for (const t of ["org_data", "org_data_apps", "org_data_daily", "org_data_readers"]) this.sql.exec(`DELETE FROM ${t}`);
+      for (const t of ["org_data", "org_data_apps", "org_data_daily", "org_data_readers", "org_data_days"]) this.sql.exec(`DELETE FROM ${t}`);
       this.audit("system:krate", "data.deleted", `org:${ctx.slug}`, "allowed", `${n} rows`);
     }
     return answer;

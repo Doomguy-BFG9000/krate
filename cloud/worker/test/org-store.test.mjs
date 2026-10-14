@@ -67,6 +67,12 @@ test("the executable matrix is the contract's table", () => {
     "inventory.people": "y y - - -",
     "app.owner": "y y - - -",
     "usage.view": "y y - - -",
+    // IC-959: insights, a section per role; names only to owners and admins.
+    "insights.view": "y y y y y",
+    "insights.org": "y y - - -",
+    "insights.developer": "y - y - -",
+    "insights.reviewer": "y - - y -",
+    "insights.people": "y y - - -",
   };
   assert.deepStrictEqual(Object.keys(MATRIX).sort(), Object.keys(table).sort());
   for (const [action, row] of Object.entries(table)) {
