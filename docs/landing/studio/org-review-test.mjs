@@ -52,9 +52,9 @@ const ticksIn = (row) => row.all((n) => n.tagName === "INPUT" && n.getAttribute(
   check(/It asks for exactly the same as before\./.test(same.shown) && ticksIn(same).length === 0, "an update that asks for nothing new says so and needs no ticks");
 
   const upd = rowOf(p, "Expenses");
-  check(/Since 1\.0\.3, the version that opens now:/.test(t(upd.shown)), "an update says what it is compared with");
+  check(/Compared with 1\.0\.3, the version that opens now:/.test(t(upd.shown)), "an update says what it is compared with");
   check(/New, check each before approving: .*use your camera .*\(optional\) .*Its maker says: scan receipts/.test(t(upd.shown)), "the new capability stands out, with optional and its reason");
-  check(/2 unchanged/.test(upd.shown), "and how much is unchanged");
+  check(/Everything else is as before \(2 permissions\)\./.test(upd.shown), "and how much is unchanged");
   const ticks = ticksIn(upd);
   const approve = button(upd, "Approve");
   check(ticks.length === 1 && approve.disabled === true, "Approve waits until each new capability is ticked");

@@ -339,7 +339,9 @@
       if (asked.length) box.appendChild(el("ul", {}, asked.map(function (x) { return line(x); })));
       if (basic.length) box.appendChild(el("p", { class: "cl sub", text: "And what every app may do: " + basic.map(function (x) { return x.words || x.cap; }).join(", ") + "." }));
     } else {
-      var since = "Since " + (ch.against.version || "the version that opens now") + ", the version that opens now:";
+      var since = ch.against.version
+        ? "Compared with " + ch.against.version + ", the version that opens now:"
+        : "Compared with the version that opens now:";
       box.appendChild(el("p", { class: "cl", text: since }));
       var newAsked = ch.added.filter(function (x) { return x.asks; });
       var newBasic = ch.added.filter(function (x) { return !x.asks; });
@@ -357,7 +359,7 @@
       if (newBasic.length) box.appendChild(el("p", { class: "cl sub", text: "Also new, not asked about: " + newBasic.map(function (x) { return x.words || x.cap; }).join(", ") + "." }));
       if (ch.removed.length) box.appendChild(el("p", { class: "cl sub", text: "No longer asks to: " + ch.removed.map(function (x) { return x.words || x.cap; }).join(", ") + "." }));
       if (!ch.added.length && !ch.removed.length) box.appendChild(el("p", { class: "cl sub", text: "It asks for exactly the same as before." }));
-      else if (ch.kept) box.appendChild(el("p", { class: "cl sub", text: ch.kept + " unchanged." }));
+      else if (ch.kept) box.appendChild(el("p", { class: "cl sub", text: "Everything else is as before (" + ch.kept + (ch.kept === 1 ? " permission" : " permissions") + ")." }));
     }
     return {
       node: box,
