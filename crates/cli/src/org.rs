@@ -159,6 +159,30 @@ pub enum OrgCommand {
         #[command(subcommand)]
         command: connection::ConnectionCommand,
     },
+    /// The organisation's key: its apps' data is sealed with it, and only
+    /// its members' devices hold it. Krate's hub stores ciphertext only.
+    Keys {
+        #[command(subcommand)]
+        command: KeysCommand,
+    },
+}
+
+/// `krate org keys ...` (F-316).
+#[derive(Debug, Subcommand)]
+pub enum KeysCommand {
+    /// Make the organisation's key on this computer (an owner's), and show
+    /// its recovery code once. `krate org create` does this already.
+    Init { slug: String },
+    /// Which devices hold the organisation's key, and this one's standing.
+    Show { slug: String },
+    /// Restore the key on this computer from the recovery code (an owner
+    /// or admin, on a new computer). Without --code it is read from the
+    /// terminal.
+    Recover {
+        slug: String,
+        #[arg(long)]
+        code: Option<String>,
+    },
 }
 
 /// `krate org release ...` (IC-949 R).
@@ -893,6 +917,13 @@ pub fn run(command: OrgCommand, hub_override: Option<&str>) -> Result<u8> {
                 .filter(|s| !s.is_empty())
                 .unwrap_or(&name);
             println!("created {slug} (\"{name}\"). You are its owner.");
+            // The key its apps' data is sealed with, made here, on the
+            // owner's computer (F-316). A hub that cannot take it yet is
+            // not a failed create: the line to run is said.
+            if let Err(err) = keys_init(&client, slug) {
+                println!("The organisation's key was not made yet ({err}). Make it with:");
+                println!("  krate org keys init {slug}");
+            }
             println!("Next:");
             println!("  register its root key:  krate org root-key {slug} <publisher-root.pub>");
             println!(
@@ -1410,6 +1441,7 @@ pub fn run(command: OrgCommand, hub_override: Option<&str>) -> Result<u8> {
         OrgCommand::Release { command } => release_command(&client, &me, command),
         OrgCommand::Group { command } => group_command(&client, &me, command),
         OrgCommand::Connection { command } => connection::run(&client, &me, command),
+        OrgCommand::Keys { command } => keys_command(&client, command),
         OrgCommand::Audit { slug } => {
             let answer = worded(
                 client.send("GET", &format!("/orgs/{}/audit", seg(&slug)?), &Body::Empty),
@@ -2027,6 +2059,119 @@ fn release_command(client: &Client, me: &str, command: ReleaseCommand) -> Result
 }
 
 /// `krate org group ...` (IC-949 R).
+/// This computer's agent for one organisation's keyring.
+fn key_agent(client: &Client, slug: &str) -> Result<krate_orgkeys::agent::Agent> {
+    let device = crate::access::org_device_key()?;
+    let me = client.my_principal();
+    Ok(krate_orgkeys::agent::Agent::new(
+        &client.hub,
+        slug,
+        Some(format!("Bearer {}", client.identity.token)),
+        device,
+        &crate::access::device_name(Some(&me)),
+    ))
+}
+
+fn key_words(err: krate_orgkeys::agent::AgentError, slug: &str) -> anyhow::Error {
+    use krate_orgkeys::agent::AgentError;
+    match err {
+        AgentError::Offline => {
+            anyhow::anyhow!("could not reach the hub for {slug}'s key: try again when online")
+        }
+        AgentError::Refused {
+            reason, message, ..
+        } if reason == "key-exists" => {
+            anyhow::anyhow!("{slug} already has its key: {message}")
+        }
+        other => anyhow::anyhow!("{other}"),
+    }
+}
+
+/// Make the key and say the recovery code, once.
+fn keys_init(client: &Client, slug: &str) -> Result<()> {
+    let agent = key_agent(client, slug)?;
+    let (held, code) = agent.init().map_err(|err| key_words(err, slug))?;
+    println!(
+        "made {slug}'s key (version {}) on this computer. Its apps' data is sealed with it;          Krate's hub holds only ciphertext.",
+        held.keyring.current().0
+    );
+    println!("recovery code: {}", code.display());
+    println!(
+        "Keep the recovery code where your company keeps passwords: it is shown once. With it an          owner or admin restores the key on a new computer (`krate org keys recover {slug}`).          Without a member's computer or this code, the organisation's app data cannot be read by          anyone, Krate included."
+    );
+    Ok(())
+}
+
+fn keys_command(client: &Client, command: KeysCommand) -> Result<u8> {
+    use krate_orgkeys::agent::Status;
+    match command {
+        KeysCommand::Init { slug } => {
+            keys_init(client, &slug)?;
+            Ok(0)
+        }
+        KeysCommand::Show { slug } => {
+            let agent = key_agent(client, &slug)?;
+            // Showing is also this device doing its share: registering,
+            // taking the key, passing it on.
+            let status = agent.refresh(None).map_err(|err| key_words(err, &slug))?;
+            let view = agent.view().map_err(|err| key_words(err, &slug))?;
+            match status {
+                Status::NoKey => println!("{slug} has no key yet: an owner runs `krate org keys init {slug}`"),
+                Status::Waiting => println!(
+                    "this computer is waiting for {slug}'s key: the next time another member's                      computer is online with one of {slug}'s apps open, it passes the key on"
+                ),
+                Status::Holds(held) => {
+                    println!("this computer holds {slug}'s key, version {}", held.keyring.current().0)
+                }
+            }
+            for d in view["devices"].as_array().into_iter().flatten() {
+                let holds = d["holds"]
+                    .as_u64()
+                    .map(|v| format!("holds version {v}"))
+                    .unwrap_or_else(|| "waiting".to_string());
+                println!(
+                    "  {}  {}  {}  {}",
+                    text(d, "device_id"),
+                    text(d, "display"),
+                    text(d, "name"),
+                    if text(d, "state") == "active" {
+                        holds
+                    } else {
+                        text(d, "state").to_string()
+                    }
+                );
+            }
+            Ok(0)
+        }
+        KeysCommand::Recover { slug, code } => {
+            let code = match code {
+                Some(code) => code,
+                None => {
+                    eprint!("recovery code for {slug}: ");
+                    let mut line = String::new();
+                    std::io::stdin().read_line(&mut line)?;
+                    line
+                }
+            };
+            let code = krate_orgkeys::RecoveryCode::parse(&code).context(
+                "that is not a recovery code: 26 letters and digits, as it was shown when the key was made",
+            )?;
+            let agent = key_agent(client, &slug)?;
+            let held = agent.recover(&code).map_err(|err| match err {
+                krate_orgkeys::agent::AgentError::Key(_) => anyhow::anyhow!(
+                    "that recovery code does not open {slug}'s key: check it, character by character"
+                ),
+                other => key_words(other, &slug),
+            })?;
+            println!(
+                "restored {slug}'s key (version {}) on this computer from the recovery code",
+                held.keyring.current().0
+            );
+            Ok(0)
+        }
+    }
+}
+
 fn group_command(client: &Client, me: &str, command: GroupCommand) -> Result<u8> {
     match command {
         GroupCommand::Create { slug, name } => {

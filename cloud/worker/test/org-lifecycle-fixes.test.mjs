@@ -195,7 +195,8 @@ test("the streamed package is a zip other tools read", async () => {
     ["-c", "import sys, zipfile; z = zipfile.ZipFile(sys.argv[1]); print(z.testzip() or 'ok', len(z.namelist()))", path],
     { encoding: "utf8" },
   );
-  assert.match(said, /^ok 6/, said);
+  // The manifest, four data classes, the apps' data and keyring (IC-951, F-316), the release.
+  assert.match(said, /^ok 8/, said);
 });
 
 test("an organisation made before a column existed gets the column, and a recovery on it works", async () => {

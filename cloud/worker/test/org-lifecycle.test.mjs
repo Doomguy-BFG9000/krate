@@ -317,7 +317,7 @@ test("the standard export: a versioned manifest with digests and exclusions, the
   const files = unzip(got.bytes);
   const manifest = JSON.parse(new TextDecoder().decode(files["export-manifest.json"]));
   assert.strictEqual(manifest.format, "krate.org-export.v1");
-  assert.deepStrictEqual(manifest.classes.map((c) => c.class), ["organisation", "members and roles", "candidates", "audit", "releases"]);
+  assert.deepStrictEqual(manifest.classes.map((c) => c.class), ["organisation", "members and roles", "candidates", "audit", "app data", "keyring", "releases"]);
   for (const cls of manifest.classes) {
     for (const f of cls.files) {
       assert.strictEqual(await sha256Hex(files[f.path]), f.sha256, `${f.path} digest`);

@@ -18,6 +18,7 @@ members = [
     "crates/layout",
     "crates/bundle",
     "crates/lease",
+    "crates/orgkeys",
     "crates/http",
     "crates/validator-wasm",
     "crates/manifest",

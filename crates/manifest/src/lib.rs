@@ -80,6 +80,14 @@ const KRATE_CAPABILITY_SPECS: &[CapabilitySpec] = &[
     // exactly what a person must be asked about, and the consent wording
     // says who can see it (anyone with the code).
     CapabilitySpec::resource_free(CapabilityPhase::Phase2, "store", "shared", false),
+    // An organisation's team data for its own private app (IC-951): records
+    // kept in the organisation's store on its hub, shared with the
+    // organisation's people who use the app. Resource-free: the app names
+    // collections and records, never a location, and which organisation is
+    // the bundle's signed mark, not something the app chooses. Never
+    // default-granted: data leaving the machine for the organisation is
+    // what the consent line says.
+    CapabilitySpec::resource_free(CapabilityPhase::Phase2, "store", "org", false),
     // Storage shared between apps from one publisher, in a named group
     // (IC-738). Scoped to the group's name, because that is what a person
     // is told they are agreeing to share. Never default-granted: sharing

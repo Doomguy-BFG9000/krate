@@ -1456,6 +1456,29 @@ fn inspect_content(path: &str, text: &str, analysis: &mut Analysis) {
         "Krate's `store.shared` capability is a key-value bucket synced between every machine holding its invite code, through krate.tech -- no accounts, no backend to run. Ports that lean on a realtime service map their shared documents onto per-item keys there.",
         Some("store.shared"),
     );
+    // A company's internal tool whose data lives in a low-code backend or a
+    // team table (IC-951). Krate's answer is the organisation's own store:
+    // records per app, the organisation's roles and audience, no server.
+    detect_pattern(
+        analysis,
+        "org-data",
+        &[
+            "retool",
+            "powerapps",
+            "power apps",
+            "appsheet",
+            "airtable",
+            "sharepoint list",
+            "internal tool",
+            "pocketbase",
+        ],
+        path,
+        text,
+        Severity::Change,
+        "Team data kept in an internal-tools backend",
+        "Krate's `store.org` capability keeps an organisation's app data in the organisation's own store on Krate's hub -- records per app, shared with the organisation's members inside the release's audience, offline first, merged per field. There is no backend to port: map each table onto a collection and each row onto a record.",
+        Some("store.org"),
+    );
     // A program that needs more than a small heap (K-416): JVM and Node
     // heap flags, and the usual words for big in-memory work.
     detect_pattern(

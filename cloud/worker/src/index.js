@@ -57,6 +57,10 @@ import { scimRoute, orgScimRoute } from "./org-scim.js";
 import { auditExportRoute } from "./org-audit-export.js";
 // Company sign-in by SAML 2.0 (IC-955), beside OIDC.
 import { orgSamlRoute, samlStart, samlAcs, samlMetadata } from "./org-saml.js";
+// The organisation keyring (F-316) and the apps' team data sealed with it
+// (IC-951, store.org).
+import { orgKeysRoute } from "./org-keys.js";
+import { orgDataRoute } from "./org-data.js";
 // The organisation store (IC-946), one SQLite-backed Durable Object per
 // organisation; wrangler.toml binds it as ORGS.
 export { Org };
@@ -7439,10 +7443,13 @@ async function orgRouteCore(request, url, env, identity) {
   }
   const h = {
     request, url, env, slug, rest, method, principals, identity, site, base,
-    askRaw, mutateRaw, orgAsk, orgAnswer, json, readBody, isAdmin, smtpSend, fetchBundle, idempotencyOf,
+    askRaw, mutateRaw, orgAsk, orgAnswer, json, readBody, readBounded, isAdmin, smtpSend, fetchBundle, idempotencyOf,
   };
   const routed =
-    (await orgLifecycleRoute(h)) || (await orgBillingRoute(h)) || (await orgReleaseRoute(h)) || (await connectionRoute(h)) || (await orgScimRoute(h)) || (await auditExportRoute(h)) || (await orgSamlRoute(h));
+    (await orgLifecycleRoute(h)) || (await orgBillingRoute(h)) || (await orgReleaseRoute(h)) || (await connectionRoute(h)) ||
+    (await orgScimRoute(h)) || (await auditExportRoute(h)) || (await orgSamlRoute(h)) ||
+    (await orgKeysRoute(h)) ||
+    (await orgDataRoute(h));
   if (routed) return routed;
   return text("not found", 404);
 }

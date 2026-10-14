@@ -1188,13 +1188,24 @@ pub fn org_gate(
     mark: crate::access::Mark,
     door: RecordDoor,
 ) -> Result<()> {
-    let result = crate::access::gate(bytes, mark, door.access());
+    org_gate_opened(subject, bytes, mark, door).map(|_| ())
+}
+
+/// [`org_gate`], answering what is known about the private app it let
+/// through, for the app's team data (IC-951).
+pub fn org_gate_opened(
+    subject: &Subject,
+    bytes: crate::access::Bytes,
+    mark: crate::access::Mark,
+    door: RecordDoor,
+) -> Result<Option<crate::access::Opened>> {
+    let result = crate::access::gate_opened(bytes, mark, door.access());
     note_refusal(subject, door, &result);
     result
 }
 
 /// Record a refusal some other check made, if `result` is one.
-pub fn note_refusal(subject: &Subject, door: RecordDoor, result: &Result<()>) {
+pub fn note_refusal<T>(subject: &Subject, door: RecordDoor, result: &Result<T>) {
     if let Err(err) = result {
         if let Some(refused) = err.downcast_ref::<Refused>() {
             audit::refused(&record_base(subject, door), refused);

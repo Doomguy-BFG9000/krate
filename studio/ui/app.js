@@ -2765,6 +2765,7 @@ function friendlyAsk(cap) {
     "io.args": "read its start-up options",
     "store.kv": "save your data on this computer",
     "store.shared": "share its data with people who have its invite code",
+    "store.org": "keep its data in your organisation's store, shared with your team",
     "store.group": "share data with other apps from the same maker",
     "memory.budget": "use more memory than apps normally get",
     "store.sql": "keep records on this computer",
@@ -4857,6 +4858,7 @@ const CAP_WORDS = {
   "store.sql": "Keep its own database",
   "store.secret": "Keep its own sign-in keys, encrypted",
   "store.shared": "Share its data with anyone holding its invite code, via krate.tech",
+  "store.org": "Keep its data in your organisation's store on Krate's hub, shared with your team",
   "store.group": "Share data with other apps from the same maker, on this computer",
   "memory.budget": "Use more memory than apps normally get",
   "audio.playback": "Play sound",
@@ -5309,6 +5311,7 @@ const CAPS_REACH_OUT = new Set([
   // Off the machine.
   "net.connect",
   "store.shared",
+  "store.org",
   // Acts on the desktop outside its own window.
   "ui.open-url",
   "ui.notify",

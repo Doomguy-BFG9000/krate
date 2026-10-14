@@ -327,7 +327,7 @@ impl AppShared {
 
 const B64: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
-fn b64_encode(bytes: &[u8]) -> String {
+pub(crate) fn b64_encode(bytes: &[u8]) -> String {
     let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
     for chunk in bytes.chunks(3) {
         let b = [
@@ -352,7 +352,7 @@ fn b64_encode(bytes: &[u8]) -> String {
     out
 }
 
-fn b64_decode(text: &str) -> Option<Vec<u8>> {
+pub(crate) fn b64_decode(text: &str) -> Option<Vec<u8>> {
     let value = |c: u8| -> Option<u32> {
         Some(match c {
             b'A'..=b'Z' => u32::from(c - b'A'),

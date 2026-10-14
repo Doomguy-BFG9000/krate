@@ -88,6 +88,8 @@ pub enum StoreCall {
     Sql,
     Secret,
     Shared,
+    /// An organisation's team data for its private app (IC-951).
+    Org,
     /// A named group shared between one publisher's apps (IC-738).
     Group {
         group: String,
@@ -101,6 +103,7 @@ impl fmt::Display for StoreCall {
             Self::Sql => "sql",
             Self::Secret => "secret",
             Self::Shared => "shared",
+            Self::Org => "org",
             Self::Group { group } => return write!(f, "group:{group}"),
         })
     }
@@ -801,6 +804,7 @@ mod tests {
             UapiCall::Store(StoreCall::Sql),
             UapiCall::Store(StoreCall::Secret),
             UapiCall::Store(StoreCall::Shared),
+            UapiCall::Store(StoreCall::Org),
             UapiCall::Store(StoreCall::Group {
                 group: "family-budget".to_string(),
             }),

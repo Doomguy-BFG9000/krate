@@ -265,3 +265,177 @@ interface group {
   /// Every key in the group, sorted.
   keys: func(group: string) -> result<list<string>, group-error>;
 }
+
+/// Data an organisation's own app keeps for the whole team, with no backend.
+///
+/// An internal app -- an expenses list, a stock count, a rota -- needs one
+/// set of records everyone in the team sees. On the web that means a server,
+/// a database and sign-in code, and those are where AI-built apps go wrong.
+/// Here the organisation's own store on Krate's hub holds the records, per
+/// app, and the runtime handles who may see them: the app has no server,
+/// no database to secure and no sign-in code.
+///
+/// Only an organisation's private app uses it: one whose bundle carries the
+/// organisation's mark under a signature that holds, opened as a release the
+/// organisation approved and has not withdrawn, by a signed-in member inside
+/// that release's audience. Anything else is `not-an-org-app` or `refused`.
+/// The app id is the signed manifest's, so every version of the app shares
+/// its data and no other app reaches it.
+///
+/// End to end encrypted. The hub stores ciphertext only: each field is
+/// sealed on the device with a key derived from the organisation's key,
+/// which exists only on its members' devices (passed device to device, and
+/// replaced when someone is removed). The hub sees which app, how many
+/// records and fields and their sizes, when people sync, and the clock
+/// stamps it merges by; never a collection name, an id, a field name or a
+/// value. The sealed data is in the organisation's export and deleted with
+/// the organisation. A device that does not hold the key yet keeps its
+/// writes waiting, as it does offline.
+///
+/// Offline first. Every call works on this device's copy and never waits
+/// for the network; `sync` exchanges changes with the organisation's store,
+/// and the runtime also syncs every five seconds while the app is open and
+/// once when it closes. Being offline is never an error.
+///
+/// Records merge per field: two people editing different fields of one
+/// record both keep their change, and for one field the later edit wins by
+/// a hybrid logical clock (wall time, a counter and the device), so a
+/// device with a wrong clock cannot win by claiming a later time. A delete
+/// is kept for 30 days so an offline device cannot bring the record back.
+///
+/// Limits, enforced on the device and by the hub:
+/// - a collection name, record id or field name is 1 to 128 bytes with no
+///   control characters;
+/// - a record is at most 64 KiB, counting its fields' names and values
+///   (text and bytes by length, a number 8, a flag 1);
+/// - one app's data in one organisation is at most 50 MiB by default,
+///   counting every stored field and its bookkeeping;
+/// - `records` answers at most 200 records a page;
+/// - `sync` called more often than every two seconds, with nothing of this
+///   device's waiting to go up, answers from this device without reaching
+///   the hub.
+interface org {
+  /// One field's value.
+  variant value {
+    /// No value: writing `null` to a field removes that field.
+    null,
+    /// UTF-8 text.
+    text(string),
+    /// A number. It must be finite.
+    number(f64),
+    /// True or false.
+    boolean(bool),
+    /// Raw bytes.
+    bytes(list<u8>),
+  }
+
+  /// One record, as this device holds it.
+  record entry {
+    /// The record's id in its collection.
+    id: string,
+    /// Its fields, sorted by name. A field set to `null` is not listed.
+    fields: list<tuple<string, value>>,
+    /// Who changed it last, as the organisation names them: a GitHub
+    /// login or an email address.
+    changed-by: string,
+    /// When it was changed last: milliseconds since the Unix epoch.
+    changed-at: u64,
+  }
+
+  /// A place in a collection's changes. Opaque: keep it and hand it back.
+  type cursor = string;
+
+  /// One page of `records`.
+  record page {
+    /// Records, the least recently changed first.
+    entries: list<entry>,
+    /// Ids of records removed since the cursor; empty when listing from
+    /// the start.
+    removed: list<string>,
+    /// Pass this as `since` for the next page, or later to get only what
+    /// changed after this listing.
+    next: cursor,
+    /// More are waiting now: call again with `next`.
+    more: bool,
+  }
+
+  /// What one sync did.
+  record sync-state {
+    /// The organisation's store was reached. False while offline, which
+    /// is not an error.
+    online: bool,
+    /// This device's copy changed: show it again.
+    changed: bool,
+    /// Changes made here that have not reached the organisation yet.
+    pending: u32,
+    /// When the organisation last accepted this device's changes, in
+    /// milliseconds since the Unix epoch; `none` before the first time.
+    last-synced: option<u64>,
+  }
+
+  /// The signed-in person, as the organisation knows them, so an app can
+  /// say who added something.
+  record member {
+    /// Their name in the organisation: a GitHub login or an email address.
+    name: string,
+    /// Their role: owner, admin, developer, reviewer or recipient.
+    role: string,
+    /// The organisation's name.
+    org: string,
+  }
+
+  /// Why the organisation refused.
+  record refusal {
+    /// A stable reason: `removed`, `not-a-member`, `not-in-audience`,
+    /// `release-withdrawn`, `not-released`, `not-signed-in` or
+    /// `org-closed`.
+    reason: string,
+    /// Plain words to show the person, saying what to do next.
+    message: string,
+  }
+
+  /// Error returned by an organisation-data operation.
+  variant org-error {
+    /// The app did not receive the `store.org` capability.
+    denied,
+    /// This is not an organisation's private app opened as its release, so
+    /// it has no organisation data.
+    not-an-org-app,
+    /// A name, id or value broke a limit above; the words say which.
+    invalid(string),
+    /// The record would be larger than 64 KiB.
+    too-large,
+    /// The app's data in the organisation is full.
+    over-quota,
+    /// The organisation refused this person or this version of the app.
+    /// Its data is not served for the rest of the run.
+    refused(refusal),
+    /// This host cannot reach an organisation's store: a browser tab.
+    unsupported,
+    /// This device's copy could not be read or written.
+    io(string),
+  }
+
+  /// Write the named fields of one record, creating it if needed. Fields
+  /// not named keep their values; a field given `null` is removed.
+  put: func(collection: string, id: string, fields: list<tuple<string, value>>) -> result<_, org-error>;
+
+  /// Read one record. A record never written, or deleted, is `none`.
+  get: func(collection: string, id: string) -> result<option<entry>, org-error>;
+
+  /// Delete one record everywhere. Deleting one that is not there
+  /// succeeds.
+  delete: func(collection: string, id: string) -> result<_, org-error>;
+
+  /// The records in a collection: from the start with `none`, or what
+  /// changed after a cursor an earlier page gave.
+  records: func(collection: string, since: option<cursor>) -> result<page, org-error>;
+
+  /// Exchange changes with the organisation now: push this device's,
+  /// pull everyone else's.
+  sync: func() -> result<sync-state, org-error>;
+
+  /// The signed-in person and their role, once a sync has reached the
+  /// organisation; `none` before that.
+  who: func() -> result<option<member>, org-error>;
+}

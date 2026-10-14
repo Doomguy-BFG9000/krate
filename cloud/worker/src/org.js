@@ -63,6 +63,16 @@ export const MATRIX = {
   "scim.manage": { owner: "yes" },
   "audit-export.manage": { owner: "yes" },
   "audit-export.view": { owner: "yes", admin: "yes" },
+  // Team data for the organisation's apps (IC-951, org-data.js): whoever
+  // may open a release may use its data; owners and admins see the counts.
+  "data.use": { owner: "yes", admin: "yes", developer: "yes", reviewer: "yes", recipient: "yes" },
+  "data.usage": { owner: "yes", admin: "yes" },
+  // The organisation keyring (F-316, org-keys.js): every member's device
+  // may hold the key and pass it on; an owner makes it; an owner or admin
+  // restores a device from the recovery code.
+  "keys.hold": { owner: "yes", admin: "yes", developer: "yes", reviewer: "yes", recipient: "yes" },
+  "keys.init": { owner: "yes" },
+  "keys.recover": { owner: "yes", admin: "yes" },
 };
 
 /// What `role` may do for `action`: "yes", a narrower rule, or null.

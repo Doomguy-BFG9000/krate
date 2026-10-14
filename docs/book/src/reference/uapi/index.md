@@ -29,6 +29,7 @@ The current world imports these interfaces:
 - `krate:store/secret@0.1.0`
 - `krate:store/shared@0.1.0`
 - `krate:store/group@0.1.0`
+- `krate:store/org@0.1.0`
 - `krate:random/bytes@0.1.0`
 
 The app exports:
@@ -1170,6 +1171,178 @@ Accepted capability strings for this module, generated from the runtime manifest
 
 - `too-large`
 > The store could not be read or written.
+
+- `io`: `string`
+
+
+## `krate:store/org@0.1.0`
+
+### Functions
+
+> Write the named fields of one record, creating it if needed. Fields
+> not named keep their values; a field given `null` is removed.
+
+- `put(collection: string, id: string, fields: list<tuple<string, value>>) -> result<_, org-error>`
+> Read one record. A record never written, or deleted, is `none`.
+
+- `get(collection: string, id: string) -> result<option<entry>, org-error>`
+> Delete one record everywhere. Deleting one that is not there
+> succeeds.
+
+- `delete(collection: string, id: string) -> result<_, org-error>`
+> The records in a collection: from the start with `none`, or what
+> changed after a cursor an earlier page gave.
+
+- `records(collection: string, since: option<cursor>) -> result<page, org-error>`
+> Exchange changes with the organisation now: push this device's,
+> pull everyone else's.
+
+- `sync() -> result<sync-state, org-error>`
+> The signed-in person and their role, once a sync has reached the
+> organisation; `none` before that.
+
+- `who() -> result<option<member>, org-error>`
+
+### Types
+
+#### `value` variant
+
+> One field's value.
+
+> No value: writing `null` to a field removes that field.
+
+- `null`
+> UTF-8 text.
+
+- `text`: `string`
+> A number. It must be finite.
+
+- `number`: `f64`
+> True or false.
+
+- `boolean`: `bool`
+> Raw bytes.
+
+- `bytes`: `list<u8>`
+
+#### `entry` record
+
+> One record, as this device holds it.
+
+> The record's id in its collection.
+
+- `id`: `string`
+> Its fields, sorted by name. A field set to `null` is not listed.
+
+- `fields`: `list<tuple<string, value>>`
+> Who changed it last, as the organisation names them: a GitHub
+> login or an email address.
+
+- `changed-by`: `string`
+> When it was changed last: milliseconds since the Unix epoch.
+
+- `changed-at`: `u64`
+
+#### `cursor` type
+
+> A place in a collection's changes. Opaque: keep it and hand it back.
+
+`string`
+
+#### `page` record
+
+> One page of `records`.
+
+> Records, the least recently changed first.
+
+- `entries`: `list<entry>`
+> Ids of records removed since the cursor; empty when listing from
+> the start.
+
+- `removed`: `list<string>`
+> Pass this as `since` for the next page, or later to get only what
+> changed after this listing.
+
+- `next`: `cursor`
+> More are waiting now: call again with `next`.
+
+- `more`: `bool`
+
+#### `sync-state` record
+
+> What one sync did.
+
+> The organisation's store was reached. False while offline, which
+> is not an error.
+
+- `online`: `bool`
+> This device's copy changed: show it again.
+
+- `changed`: `bool`
+> Changes made here that have not reached the organisation yet.
+
+- `pending`: `u32`
+> When the organisation last accepted this device's changes, in
+> milliseconds since the Unix epoch; `none` before the first time.
+
+- `last-synced`: `option<u64>`
+
+#### `member` record
+
+> The signed-in person, as the organisation knows them, so an app can
+> say who added something.
+
+> Their name in the organisation: a GitHub login or an email address.
+
+- `name`: `string`
+> Their role: owner, admin, developer, reviewer or recipient.
+
+- `role`: `string`
+> The organisation's name.
+
+- `org`: `string`
+
+#### `refusal` record
+
+> Why the organisation refused.
+
+> A stable reason: `removed`, `not-a-member`, `not-in-audience`,
+> `release-withdrawn`, `not-released`, `not-signed-in` or
+> `org-closed`.
+
+- `reason`: `string`
+> Plain words to show the person, saying what to do next.
+
+- `message`: `string`
+
+#### `org-error` variant
+
+> Error returned by an organisation-data operation.
+
+> The app did not receive the `store.org` capability.
+
+- `denied`
+> This is not an organisation's private app opened as its release, so
+> it has no organisation data.
+
+- `not-an-org-app`
+> A name, id or value broke a limit above; the words say which.
+
+- `invalid`: `string`
+> The record would be larger than 64 KiB.
+
+- `too-large`
+> The app's data in the organisation is full.
+
+- `over-quota`
+> The organisation refused this person or this version of the app.
+> Its data is not served for the rest of the run.
+
+- `refused`: `refusal`
+> This host cannot reach an organisation's store: a browser tab.
+
+- `unsupported`
+> This device's copy could not be read or written.
 
 - `io`: `string`
 

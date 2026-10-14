@@ -55,6 +55,13 @@ test("the executable matrix is the contract's table", () => {
     "scim.manage": "y - - - -",
     "audit-export.manage": "y - - - -",
     "audit-export.view": "y y - - -",
+    // store.org (IC-951): whoever may open a release may use its data.
+    "data.use": "y y y y y",
+    "data.usage": "y y - - -",
+    // The keyring (F-316).
+    "keys.hold": "y y y y y",
+    "keys.init": "y - - - -",
+    "keys.recover": "y y - - -",
   };
   assert.deepStrictEqual(Object.keys(MATRIX).sort(), Object.keys(table).sort());
   for (const [action, row] of Object.entries(table)) {

@@ -892,6 +892,7 @@ fn capability_note(pattern: &str) -> &'static str {
         "audio.playback" => "play sound",
         "audio.capture" => "record from the microphone",
         "store.shared" => "share a key-value bucket with everyone holding its invite code",
+        "store.org" => "keep records for the whole team in its organisation's store, with no backend",
         "memory.budget" => "more memory than the default, in MiB (up to 3584); the person sees it at consent",
         "store.group" => "share a key-value store with the same publisher's other apps, in a named group its signed list admits",
         "camera.capture" => "see through the camera",
@@ -1015,7 +1016,48 @@ by `krate sign --group <file>`. An app the list does not name gets \
 not part of <name>\" rather than as a failure. Nothing leaves the \
 computer, and it does not sync between machines. Apps that used to share by \
 reusing one app id move that data in with `krate group adopt <member.krate> \
---group <name>`.\n\n";
+--group <name>`.\n\n\
+**An organisation's internal app: team data with no backend.** For \"an \
+expenses tracker for finance\", \"the stock count the warehouse shares\", \
+\"our team's rota\" -- an app a company builds for its own people -- declare \
+`store.org` and use `krate::org`. Never write a server, a database or \
+sign-in code for it: the organisation's own store on Krate's hub keeps the \
+records, and the runtime decides who may see them (members of the \
+organisation inside the release's audience). It works only in the \
+organisation's private app -- marked and signed for it with \
+`krate sign app.krate --org <slug>` and a release key the organisation \
+delegated, published with `krate publish app.krate --org <slug>`, approved, \
+and opened as that release. Run any other way, every call answers \
+`not-an-org-app`: say so in the window rather than failing.\n\n\
+1. **Records in collections, fields in records.** \
+`org::put(\"expenses\", &id, &[(\"amount\", Value::Number(42.5)), \
+(\"note\", Value::Text(note))])` writes only the fields it names; \
+`org::put_text(collection, id, field, text)` for one text field; \
+`Value::Null` removes a field. One record per item (an expense, a task), \
+never the whole list in one record: two people editing different fields or \
+different items both keep their change. Limits: names and ids up to 128 \
+bytes, a record up to 64 KiB, the app's data up to 50 MiB.\n\n\
+2. **Read locally, always.** `org::get(collection, id)` and \
+`org::all(collection)` answer from this device and never wait; \
+`org::records(collection, since)` pages through what changed after a \
+cursor. `org::text(&entry, \"note\")` and `org::field(&entry, name)` read a \
+field; `entry.changed_by` names who changed it last, so the app can say \
+\"added by dana\". `org::who()` is the signed-in person and their role, \
+once a sync has reached the organisation.\n\n\
+3. **Sync on launch, after writes, and every ten seconds.** `org::sync()` \
+returns `changed` (redraw) and `online`; offline is not an error, the \
+writes wait and go up later, and the runtime also syncs in the background \
+and when the app closes. Show a quiet \"offline -- will sync\" note, never \
+an error.\n\n\
+4. **A refusal is the organisation's answer.** `OrgError::Refused(r)` \
+means the person was removed, is outside the release's audience, or the \
+version was withdrawn: show `r.message` (plain words, with what to do) and \
+stop offering edits. `OverQuota` and `TooLarge` are the limits above; \
+`Invalid(words)` names the bad name. The data is end to end encrypted: \
+the hub holds ciphertext only, and only the organisation's members' \
+devices hold the key -- a new member's computer gets it from another \
+member's in the background, so the first sync on a new computer can show \
+`pending` until then. Never add encryption of your own on top.\n\n";
 
 /// Section 2e: capabilities the runtime has had all along that no app ever
 /// used, because nothing taught them. The coverage matrix
