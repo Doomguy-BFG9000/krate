@@ -20,6 +20,12 @@ version = 1
 # it, for example "Acme Labs does not allow this app". Optional.
 name = "Acme Labs"
 
+[org]
+# The organisation on Krate's hub that these computers belong to: its short
+# name, as in krate.tech/org/acme-labs. Krate shows that organisation's apps
+# to the people signed in to it. Optional.
+slug = "acme-labs"
+
 [trust]
 # The signing roots this computer trusts: each a name and the public half of
 # an Ed25519 root key, as 64 hex characters. An app passes when its

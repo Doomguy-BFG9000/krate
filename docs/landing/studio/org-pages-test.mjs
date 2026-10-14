@@ -105,7 +105,9 @@ import { KIT, ORGS, DASH, JOIN, OPEN, check, page, settle, storage, P, ACME, mem
   await settle();
   const second = made.sent.filter((s) => s.key === "POST /orgs")[1];
   check(second && second.headers["idempotency-key"] && second.headers["idempotency-key"] !== firstKey, "a different request gets a different Idempotency-Key");
-  check(made.location.href === "/org/?o=acme-labs&tab=people&new=1", "a new organisation opens on People, to invite the team");
+  // IC-958: straight on to the first app, in the same page, the step in
+  // the address so a reload goes on from there.
+  check(made.el("wiz").hidden === false && made.el("in").hidden === true && made.location.href.endsWith("/orgs/?o=acme-labs&step=app"), "a new organisation goes straight on to its first app");
 }
 
 /* ----------------------------------------------------------------- /org/ */
@@ -221,11 +223,12 @@ import { KIT, ORGS, DASH, JOIN, OPEN, check, page, settle, storage, P, ACME, mem
       "POST /orgs/acme/invites/abc123def/accept": () => [200, { membership: member("github:bob", "reviewer") }],
     },
   });
-  check(/Join Acme/.test(ok.el("jH").textContent) && /@alice invited @bob/.test(ok.el("jP").textContent) && /As reviewer/.test(ok.el("jBody").shown), "it says who invited whom, and the role");
-  button(ok.el("jBody"), "Accept and join Acme").click();
+  check(/Join Acme/.test(ok.el("jH").textContent) && /@alice invited @bob/.test(ok.el("jP").textContent) && /Can approve apps/.test(ok.el("jBody").shown), "it says who invited whom, and what they can do, in plain words");
+  button(ok.el("jBody"), "Join Acme").click();
   await settle();
-  check(ok.sent.some((s) => s.key === "POST /orgs/acme/invites/abc123def/accept" && s.headers["idempotency-key"]), "Accept posts to the invitation with an Idempotency-Key");
-  check(/You are in Acme/.test(ok.el("jH").textContent) && ok.el("jBody").all((n) => n.tagName === "A")[0].href === "/org/?o=acme", "and then opens the organisation");
+  check(ok.sent.some((s) => s.key === "POST /orgs/acme/invites/abc123def/accept" && s.headers["idempotency-key"]), "Join posts to the invitation with an Idempotency-Key");
+  const after = ok.el("jBody").all((n) => n.tagName === "A").map((a) => a.href);
+  check(/You are in Acme/.test(ok.el("jH").textContent) && after[0] === "/download/" && after.includes("krate://org/apps?org=acme") && after.includes("/org/?o=acme"), "and then Get Krate, Open Krate, and the organisation on the web");
 
   for (const [reason, words] of [["invite-for-someone-else", /for someone else/], ["invite-expired", /expired/], ["invite-used", /already used/], ["invite-revoked", /withdrawn/]]) {
     const p = await page("https://krate.tech/join/?o=acme&c=abc123def", JOIN, {

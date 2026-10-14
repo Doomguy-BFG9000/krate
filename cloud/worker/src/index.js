@@ -7339,6 +7339,19 @@ async function orgRouteCore(request, url, env, identity) {
 
   const slug = String(parts[1] || "").toLowerCase();
   if (!SLUG.test(slug)) return orgError(400, "slug-invalid", slug);
+  // GET /orgs/<slug>/invites/<code>/door (IC-958 C): which way in an open
+  // invitation's join page should offer first, before anyone signs in --
+  // the company's sign-in when the organisation has one, and whether the
+  // invitation is for a GitHub account or an inbox. Only for a code that
+  // is open now; it names nothing else, and writes nothing.
+  if (parts.length === 5 && parts[2] === "invites" && parts[4] === "door" && method === "GET") {
+    const over = await rateLimited(request, env, "org/anonymous");
+    if (over) return over;
+    const answer = await orgAsk(env, slug, { op: "invite-door", principals: [], args: { code: String(parts[3] || "") } });
+    const res = orgAnswer(answer);
+    res.headers.set("cache-control", "private, no-store");
+    return res;
+  }
   // No session: answered here, never by the organisation's store, so an
   // anonymous flood appends nothing to its audit and creates no object.
   // Only an authenticated principal's attempts are audited.
@@ -7362,6 +7375,10 @@ async function orgRouteCore(request, url, env, identity) {
   }
 
   if (rest.length === 0 && method === "GET") return ask("show");
+  // GET /orgs/<slug>/available (IC-958 B1): is this short name free, for
+  // the create form's live check. Asks nothing of anyone's membership, so
+  // checking a name records nothing in that organisation's activity.
+  if (rest.length === 1 && rest[0] === "available" && method === "GET") return ask("exists");
   if (rest[0] === "invites") {
     if (rest.length === 1 && method === "POST") {
       const key = (request.headers.get("idempotency-key") || "").trim().slice(0, 200);

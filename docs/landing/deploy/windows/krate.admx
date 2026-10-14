@@ -26,6 +26,14 @@
         <text id="name" valueName="name" required="true" maxLength="1023" />
       </elements>
     </policy>
+    <policy name="OrgSlug" class="Machine" displayName="$(string.OrgSlug)" explainText="$(string.OrgSlug_Help)" key="Software\Policies\Krate\org" presentation="$(presentation.OrgSlug)">
+      <parentCategory ref="Krate_Studio" />
+      <supportedOn ref="SUPPORTED_KratePolicy1" />
+      <enabledList><item key="Software\Policies\Krate" valueName="version"><value><decimal value="1" /></value></item></enabledList>
+      <elements>
+        <text id="slug" valueName="slug" required="true" maxLength="1023" />
+      </elements>
+    </policy>
     <policy name="TrustRoots" class="Machine" displayName="$(string.TrustRoots)" explainText="$(string.TrustRoots_Help)" key="Software\Policies\Krate\trust" presentation="$(presentation.TrustRoots)">
       <parentCategory ref="Krate_Trust" />
       <supportedOn ref="SUPPORTED_KratePolicy1" />

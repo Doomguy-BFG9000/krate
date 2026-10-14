@@ -1,0 +1,32 @@
+{
+  "about": "The ready apps a new organisation can release in its first minute (IC-958 addendum). The page reads this list as it is; each entry needs id, name, says (one line), can (what it can do, in plain words), why (the one line that says what only Krate does, or empty) and bundle (where its .krate is). PLACEHOLDERS until the real store.org starter bundles land: set placeholder to false and point bundle at the real file.",
+  "starters": [
+    {
+      "id": "team-notes",
+      "name": "Team Notes",
+      "says": "Notes the whole team writes and reads together.",
+      "can": ["Keeps notes shared with your team"],
+      "why": "Encrypted on your team's computers: not even Krate can read your notes.",
+      "bundle": "/orgs/starters/team-notes.krate",
+      "placeholder": true
+    },
+    {
+      "id": "expenses",
+      "name": "Expenses",
+      "says": "Log what you spent; a manager signs it off.",
+      "can": ["Keeps expenses shared with your team"],
+      "why": "Encrypted on your team's computers: not even Krate can read your expenses.",
+      "bundle": "/orgs/starters/expenses.krate",
+      "placeholder": true
+    },
+    {
+      "id": "stock-list",
+      "name": "Stock List",
+      "says": "What is on the shelf, and who took the last one.",
+      "can": ["Keeps the stock list shared with your team", "Works offline for 7 days"],
+      "why": "Works offline: the warehouse does not need Wi-Fi to count.",
+      "bundle": "/orgs/starters/stock-list.krate",
+      "placeholder": true
+    }
+  ]
+}

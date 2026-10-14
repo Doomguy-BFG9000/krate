@@ -100,7 +100,8 @@ test("an email invitation is mailed from the founder's Gmail with krate.tech in 
   assert.ok(mail.commands.includes("RCPT TO:<yashraj@krate.tech>"), "cc yashraj@krate.tech");
   assert.match(mail.data, /^From: Yashraj Pardeshi <incyashraj@gmail.com>/m);
   const text = mailText(mail);
-  for (const want of ["alice invited you to join Acme (acme) on Krate as a developer.", inv.body.join_url, "expires on", "It works only for erin@corp.example"]) {
+  // The role in the dashboard's own words, the one link, no code to copy.
+  for (const want of ["alice invited you to Acme on Krate. There you can build apps and send them.", `Join Acme: ${inv.body.join_url}`, "sign in with this address and press Join", "/download/", "only for erin@corp.example, until"]) {
     assert.ok(text.includes(want), `${want} in\n${text}`);
   }
   // The same request again is the same answer, and no second mail.

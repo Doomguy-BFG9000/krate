@@ -121,6 +121,7 @@ dialog.sheet .sheetpts { margin-top: 10px; padding-left: 18px; display: grid; ga
 dialog.sheet .sheetpts li { list-style: disc; text-wrap: pretty; }
 dialog.sheet .sheetpts li.key { color: var(--ink); font-weight: 500; }
 .toast { margin-bottom: 14px; }
+#pubNote { margin-bottom: 22px; }
 /* Addendum 3: banners, settings forms, exports, billing */
 .banners { display: grid; gap: 10px; margin-top: 22px; }
 .banners + .tabs { margin-top: 16px; }
@@ -319,6 +320,8 @@ p.connsafe::before, small.connsafe::before { content: ""; display: inline-block;
     <div id="banner" class="banners" hidden></div>
     <div class="tabs" role="tablist" id="tabs" aria-label="Organisation"></div>
     <div id="toast" class="toast" hidden></div>
+    <div id="start" class="start" hidden></div>
+    <div id="pubNote" hidden></div>
     <div class="pane" role="tabpanel" id="pane"></div>
   </div>
   <noscript><div class="panel"><h1>Organisation</h1><p>This page talks to the organisation through Krate's hub, which needs JavaScript. The command line does all of it too: <code class="k">krate org show</code>.</p></div></noscript>
@@ -349,6 +352,8 @@ p.connsafe::before, small.connsafe::before { content: ""; display: inline-block;
 </footer>
 <script src="/kit/site.js"></script>
 <script src="/kit/org.js"></script>
+<script src="/kit/policy.js"></script>
+<script src="/kit/org-setup.js"></script>
 <script src="/org/doors.js"></script>
 <script src="/org/parts.js"></script>
 <script src="/org/releases.js"></script>
@@ -356,6 +361,7 @@ p.connsafe::before, small.connsafe::before { content: ""; display: inline-block;
 <script src="/org/orgseal.js"></script>
 <script src="/org/connections.js"></script>
 <script src="/org/inventory.js"></script>
+<script src="/org/publishers.js"></script>
 <script src="/org/dashboard.js"></script>
 </body>
 </html>

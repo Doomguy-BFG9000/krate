@@ -18,6 +18,11 @@
 								<integer>1</integer>
 								<key>name</key>
 								<string>Acme Labs</string>
+								<key>org</key>
+								<dict>
+									<key>slug</key>
+									<string>acme</string>
+								</dict>
 								<key>trust</key>
 								<dict>
 									<key>roots</key>
@@ -80,11 +85,6 @@
 								<dict>
 									<key>interpreter</key>
 									<false/>
-								</dict>
-								<key>org</key>
-								<dict>
-									<key>slug</key>
-									<string>acme</string>
 								</dict>
 							</dict>
 						</dict>

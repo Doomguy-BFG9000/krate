@@ -676,6 +676,31 @@ export class Org {
     return this.ok({ org: this.orgView(), membership: this.membership(this.member(ctx.actor)) }, 201);
   }
 
+  /// GET /orgs/<slug>/available: whether the name is free. No audit: a
+  /// person typing a name is not an attempt on anyone's organisation.
+  op_exists(ctx) {
+    return this.ok({ slug: ctx.slug, available: !this.org() });
+  }
+
+  /// GET /orgs/<slug>/invites/<code>/door, signed out: for an OPEN
+  /// invitation only: the organisation's name (the code in the link is
+  /// the proof that this person was sent it), whether to offer the
+  /// company's sign-in first, and
+  /// which kind of account it names. Anything else is the same 404, so a
+  /// guessed code learns nothing.
+  op_invite_door(ctx) {
+    const none = { status: 404, body: { error: "invite-revoked", message: messageFor("invite-revoked", ctx.slug) } };
+    if (!this.org()) return none;
+    const invite = this.row("SELECT * FROM invites WHERE code = ?", String(ctx.args.code || ""));
+    if (!invite || invite.state !== "open" || ctx.now >= invite.expires_at) return none;
+    let company = false;
+    try {
+      company = Boolean(this.row("SELECT 1 AS x FROM sso WHERE id = 1") || this.row("SELECT 1 AS x FROM saml WHERE id = 1"));
+    } catch (_) {}
+    const p = parsePrincipal(invite.principal);
+    return this.ok({ name: this.org().name, company_sign_in: company, kind: p ? p.kind : null });
+  }
+
   op_show(ctx) {
     const { me, refusal } = this.standing(ctx, "org.view", `org:${ctx.slug}`);
     if (refusal) return refusal;

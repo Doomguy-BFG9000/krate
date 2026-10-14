@@ -1,0 +1,193 @@
+{
+ "keys": [
+  {
+   "table": "",
+   "key": "version",
+   "kind": "int",
+   "sample": 1,
+   "title": "Policy version",
+   "help": "Required. Always 1 for this version of the policy. An unknown version refuses to open apps."
+  },
+  {
+   "table": "",
+   "key": "name",
+   "kind": "string",
+   "sample": "Acme Labs",
+   "title": "Organisation name",
+   "help": "Your organisation's name. Every message Krate shows about the policy uses it, for example \"Acme Labs does not allow this app\". Optional."
+  },
+  {
+   "table": "org",
+   "key": "slug",
+   "kind": "string",
+   "sample": "acme-labs",
+   "title": "Organisation on Krate",
+   "help": "The organisation on Krate's hub that these computers belong to: its short name, as in krate.tech/org/acme-labs. Krate shows that organisation's apps to the people signed in to it. Optional."
+  },
+  {
+   "table": "trust",
+   "key": "roots",
+   "kind": "roots",
+   "sample": [
+    {
+     "name": "Acme Labs",
+     "key": "REPLACE-WITH-YOUR-ROOT-PUBLIC-KEY-64-HEX-CHARACTERS"
+    }
+   ],
+   "title": "Trusted signing roots",
+   "help": "The signing roots this computer trusts: each a name and the public half of an Ed25519 root key, as 64 hex characters. An app passes when its signature verifies and its root (the delegation's root, or the signing key itself) is listed. Empty or absent: no limit on roots."
+  },
+  {
+   "table": "trust",
+   "key": "allow_unsigned",
+   "kind": "bool",
+   "sample": false,
+   "title": "Allow unsigned apps",
+   "help": "Whether an app with no signature may open. Default: allowed when there is no [trust] section, refused when roots are listed. A signature that is present but damaged never passes, whatever this says."
+  },
+  {
+   "table": "trust",
+   "key": "allow_other_signed",
+   "kind": "bool",
+   "sample": false,
+   "title": "Allow apps signed by other roots",
+   "help": "Whether an app signed by a root that is not listed may open. Default: allowed when no roots are listed, refused when they are."
+  },
+  {
+   "table": "capabilities",
+   "key": "deny",
+   "kind": "list",
+   "sample": [
+    "camera.capture",
+    "audio.capture",
+    "location.read"
+   ],
+   "title": "Blocked capabilities",
+   "help": "Capabilities no app may be given on this computer, spelled as an app's manifest spells them (camera.capture, audio.capture, location.read, ui.clipboard, fs.write ...). Matched on the name before ':', so fs.write blocks every fs.write grant. A blocked capability is shown as blocked by your organisation and cannot be granted."
+  },
+  {
+   "table": "network",
+   "key": "allow",
+   "kind": "list",
+   "sample": [
+    "*.acme.com:443",
+    "api.github.com:443"
+   ],
+   "title": "Network ceiling",
+   "help": "The only hosts any app may connect to, whatever its manifest asks for. Same patterns as a manifest: host or *.host, then :port or :*. Absent: no ceiling."
+  },
+  {
+   "table": "network",
+   "key": "proxy",
+   "kind": "string",
+   "sample": null,
+   "example": "http://proxy.acme.com:3128",
+   "title": "Proxy",
+   "help": "The proxy every connection Krate makes goes through, for http and https alike, as http://host:port (user:password@ allowed), or \"direct\" to use none. When set, it replaces the proxy variables (HTTPS_PROXY, HTTP_PROXY, ALL_PROXY, NO_PROXY) and the system's own proxy settings, so a person's shell cannot route around it; absent, the variables apply when set and the system's static proxy otherwise. This computer's own services (localhost) are always reached directly. Krate does not run a PAC script or WPAD; if your computers rely on one, set the proxy here."
+  },
+  {
+   "table": "network",
+   "key": "no_proxy",
+   "kind": "string",
+   "sample": null,
+   "example": "internal.acme.com,git.acme.com",
+   "title": "Hosts reached without the proxy",
+   "help": "Used with proxy: hosts reached directly, separated by commas, as NO_PROXY is written: an entry covers the host and every name under it (acme.com covers git.acme.com), * covers every host. Address ranges such as 10.0.0.0/8 are not read; name the hosts."
+  },
+  {
+   "table": "usage",
+   "key": "counting",
+   "kind": "bool",
+   "sample": false,
+   "title": "Send usage counts",
+   "help": "Whether Krate sends its anonymous usage counts (install, make, open, publish) to Krate's hub. false: none are sent and the first-run question about them is not asked."
+  },
+  {
+   "table": "hub",
+   "key": "url",
+   "kind": "string",
+   "sample": "https://hub.krate.tech",
+   "title": "Hub",
+   "help": "The only Krate hub this computer talks to for private apps, publishing and sign-in. Any other hub, from a flag or an environment variable, is refused."
+  },
+  {
+   "table": "studio",
+   "key": "ai",
+   "kind": "bool",
+   "sample": true,
+   "title": "Allow AI builds",
+   "help": "false: Krate Studio and krate create refuse to start an AI build, before any AI provider is contacted."
+  },
+  {
+   "table": "studio",
+   "key": "providers",
+   "kind": "list",
+   "sample": [
+    "claude",
+    "codex"
+   ],
+   "title": "Allowed AI providers",
+   "help": "When present, only these AI providers may be used for a build. Provider ids: claude, codex, gemini, copilot, grok."
+  },
+  {
+   "table": "updates",
+   "key": "mode",
+   "kind": "enum",
+   "options": [
+    "auto",
+    "notify",
+    "off"
+   ],
+   "sample": "notify",
+   "title": "Updates",
+   "help": "auto (the default): updates are offered as usual. notify: Krate checks for a new version and says so, and never installs one. off: Krate never checks."
+  },
+  {
+   "table": "audit",
+   "key": "path",
+   "kind": "string",
+   "sample": null,
+   "title": "Open record location",
+   "help": "Where Krate appends its record of every app opened or refused on this computer, one JSON line each. Default: /var/log/krate/opens.jsonl on macOS and Linux, %ProgramData%\\Krate\\logs\\opens.jsonl on Windows.",
+   "example": "/var/log/krate/opens.jsonl"
+  },
+  {
+   "table": "runtime",
+   "key": "interpreter",
+   "kind": "bool",
+   "sample": false,
+   "title": "Run apps on the interpreter",
+   "help": "true: every app runs on Krate's interpreter (Pulley) instead of compiled machine code, so Krate never makes executable memory. For endpoint protection that blocks code generated at run time, and Windows Arbitrary Code Guard. Apps may run slower this way."
+  },
+  {
+   "table": "org",
+   "key": "slug",
+   "kind": "string",
+   "sample": "acme",
+   "title": "Your organisation on Krate",
+   "help": "Your organisation's short name on the hub (the one in krate.tech/org/?o=acme). Krate Studio and krate org apps list its apps first, and on a new computer Studio asks the person to sign in with your company sign-in the first time it opens. It allows nothing extra."
+  }
+ ],
+ "org_pack": [
+  [
+   "",
+   "name"
+  ],
+  [
+   "",
+   "version"
+  ],
+  [
+   "hub",
+   "url"
+  ],
+  [
+   "org",
+   "slug"
+  ],
+  [
+   "trust",
+   "roots"
+  ]
+ ]
+}

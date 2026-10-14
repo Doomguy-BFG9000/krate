@@ -39,6 +39,13 @@
 #create > p { margin-top: 4px; font-size: 14.5px; color: var(--mute); }
 #create .form { margin-top: 18px; }
 .cacts { display: flex; gap: 10px; justify-content: flex-end; flex-wrap: wrap; }
+.cfine { margin-top: 16px; font-size: 13px; color: var(--ink-3); }
+#createForm { grid-template-columns: minmax(0, 1fr); }
+#createForm > *, .cacts > * { min-width: 0; }
+#cGo { max-width: 100%; min-width: 0; overflow: hidden; text-overflow: ellipsis; display: block; line-height: 44px; text-align: center; }
+#create .addr { margin-top: -4px; }
+.wiz { padding: 28px; }
+@media (max-width: 680px) { .wiz { padding: 22px 18px; } #create { margin-top: 0; } }
 .org-why { margin-top: 4px; }
 .org-why b { display: block; font-weight: 500; color: var(--ink); }
 .org-why p { margin-top: 2px; }
@@ -87,8 +94,8 @@
   <!-- Signed out: the three ways in, each coming straight back here. -->
   <div class="panel signedout" id="out" hidden>
     <img class="mk" src="/krate-mark-3d-96.png" alt="">
-    <h1>Your organisations</h1>
-    <p>Send apps privately to the people you work with. Each release goes out only after a second person approves it.</p>
+    <h1>Your team's apps, in a minute</h1>
+    <p>Make an organisation, release its first app and invite your team, all from this page. Only your people can open its apps.</p>
     <div id="outChoices"></div>
     <p class="fine">New here? Signing in makes your account. <a href="/docs/organisations.html">How organisations work</a></p>
   </div>
@@ -104,15 +111,17 @@
     <div class="card olist" id="list"><p class="loading">Loading your organisations</p></div>
 
     <div class="card" id="create" hidden>
-      <h2>Create an organisation</h2>
-      <p>You become its first owner. You can invite people right after.</p>
+      <ol class="wsteps" aria-label="Setting up"><li class="on" aria-current="step">Name</li><li>First app</li><li>Your team</li></ol>
+      <h2>Name your organisation</h2>
+      <p>Usually your company or your team. You become its owner.</p>
       <form class="form" id="createForm" novalidate>
         <label class="fld"><span>Name</span>
           <input class="inp" id="cName" autocomplete="organization" placeholder="Acme" maxlength="80" required>
         </label>
-        <label class="fld"><span>Short name</span>
-          <input class="inp" id="cSlug" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="acme" maxlength="39" required>
-          <small>Used in its links and commands, like krate org show acme. Lower-case letters, digits and dashes; it cannot be changed later.</small>
+        <p class="addr" id="cAddr" aria-live="polite"><span id="cAddrText"></span> <button class="btn link sm" type="button" id="cAddrEdit">Change</button></p>
+        <label class="fld" id="cSlugBox" hidden><span>Address</span>
+          <span class="slugin"><span class="pre" aria-hidden="true">krate.tech/org/</span><input class="inp" id="cSlug" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="acme" maxlength="39" required aria-describedby="cSlugHint"></span>
+          <small id="cSlugHint">Lower-case letters, digits and dashes. It cannot be changed later.</small>
         </label>
         <div id="cWhy" hidden></div>
         <div class="cacts">
@@ -120,6 +129,16 @@
           <button class="btn dark" type="submit" id="cGo">Create organisation</button>
         </div>
       </form>
+      <p class="fine cfine" id="createFine" hidden>Invited by someone? Open the link in their email instead.</p>
+    </div>
+  </div>
+
+  <!-- After Create: the first app, then the team (IC-958 addendum). -->
+  <div id="wiz" hidden>
+    <div class="card wiz">
+      <ol class="wsteps" id="wSteps" aria-label="Setting up"><li class="done">Name</li><li class="on" aria-current="step">First app</li><li>Your team</li></ol>
+      <div id="wBody"></div>
+      <div class="wfoot" id="wFoot"></div>
     </div>
   </div>
   <noscript><div class="panel"><h1>Your organisations</h1><p>This page talks to your organisations through Krate's hub, which needs JavaScript. The command line does all of it too: <code class="k">krate org show</code>.</p></div></noscript>
@@ -137,6 +156,8 @@
 </footer>
 <script src="/kit/site.js"></script>
 <script src="/kit/org.js"></script>
+<script src="/kit/policy.js"></script>
+<script src="/kit/org-setup.js"></script>
 <script src="/orgs/orgs.js"></script>
 </body>
 </html>
