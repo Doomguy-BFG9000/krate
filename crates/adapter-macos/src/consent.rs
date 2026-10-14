@@ -72,6 +72,17 @@ pub fn present_denied_alert(app_name: &str, denied: &[String]) {
 #[cfg(not(target_os = "macos"))]
 pub fn present_denied_alert(_app_name: &str, _denied: &[String]) {}
 
+/// Show a native alert with a title and plain words, and an OK button. For
+/// a double-clicked app that did not open (a private app refused, IC-948 H)
+/// or that must say its offline terms first: there is no terminal to read.
+#[cfg(target_os = "macos")]
+pub fn present_message(title: &str, body: &str) {
+    platform::message_alert(title, body);
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn present_message(_title: &str, _body: &str) {}
+
 #[cfg(target_os = "macos")]
 mod platform {
     use super::{ConsentChoice, ConsentItem};
@@ -110,6 +121,22 @@ mod platform {
         alert.setAlertStyle(NSAlertStyle::Warning);
         alert.setMessageText(&NSString::from_str("Permission needed"));
         alert.setInformativeText(&NSString::from_str(&body));
+        alert.addButtonWithTitle(&NSString::from_str("OK"));
+        let app = NSApplication::sharedApplication(mtm);
+        #[allow(deprecated)]
+        app.activateIgnoringOtherApps(true);
+        alert.runModal();
+    }
+
+    /// A native alert with the caller's own title and words.
+    pub(super) fn message_alert(title: &str, body: &str) {
+        let Some(mtm) = MainThreadMarker::new() else {
+            return;
+        };
+        let alert = NSAlert::new(mtm);
+        alert.setAlertStyle(NSAlertStyle::Informational);
+        alert.setMessageText(&NSString::from_str(title));
+        alert.setInformativeText(&NSString::from_str(body));
         alert.addButtonWithTitle(&NSString::from_str("OK"));
         let app = NSApplication::sharedApplication(mtm);
         #[allow(deprecated)]

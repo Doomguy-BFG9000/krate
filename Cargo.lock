@@ -2306,6 +2306,7 @@ dependencies = [
  "krate-adapter-macos",
  "krate-author",
  "krate-bundle",
+ "krate-lease",
  "krate-manifest",
  "krate-mcp",
  "krate-policy",
@@ -2353,6 +2354,14 @@ dependencies = [
  "krate-adapter-common",
  "taffy",
  "thiserror 2.0.18",
+]
+
+[[package]]
+name = "krate-lease"
+version = "0.5.5"
+dependencies = [
+ "ring",
+ "serde_json",
 ]
 
 [[package]]

@@ -218,10 +218,7 @@ fn inspect_bundle_tool(arguments: &Value) -> Result<Value> {
 /// executes no code and grants nothing.
 pub(crate) fn inspect_json(target: &str, allow_http: bool) -> Result<Value> {
     let (bundle, archive_bytes) = if krate_bundle::is_url(target) {
-        (
-            krate_bundle::fetch(target, allow_http).with_context(|| format!("fetch {target}"))?,
-            None,
-        )
+        (fetch_with_session(target, allow_http)?.bundle, None)
     } else {
         let path = Path::new(target);
         // Plain words for the two things a person actually types wrong.
@@ -302,6 +299,19 @@ pub(crate) fn inspect_json(target: &str, allow_http: bool) -> Result<Value> {
     }))
 }
 
+/// Fetch a link the way `krate run` does (IC-948 H): with the person's
+/// session when the link is on a Krate hub, and a private app's refusal in
+/// the same words, never "403".
+fn fetch_with_session(target: &str, allow_http: bool) -> Result<krate_bundle::Fetched> {
+    let authorization = crate::org::link_authorization(target);
+    krate_bundle::fetch_resolved_authorized(target, allow_http, authorization.as_deref()).map_err(
+        |err| match crate::access::refused_words(&err, target) {
+            Some(words) => anyhow::anyhow!("{words}"),
+            None => anyhow::Error::new(err).context(format!("fetch {target}")),
+        },
+    )
+}
+
 /// Execute the component and build the krate.run.v1 report.
 fn run_component_tool(arguments: &Value) -> Result<Value> {
     // `bundle` is the shareable form: one file, or a URL to one, carrying the
@@ -316,13 +326,29 @@ fn run_component_tool(arguments: &Value) -> Result<Value> {
                 .get("insecure_http")
                 .and_then(Value::as_bool)
                 .unwrap_or(false);
-            Some(
-                krate_bundle::fetch(target, allow_http)
-                    .with_context(|| format!("fetch {target}"))?,
-            )
+            let fetched = fetch_with_session(target, allow_http)?;
+            // The same check every other door makes before an app runs
+            // (IC-948 G): an organisation's private app runs only for a
+            // current member, and offline only on a lease that holds.
+            crate::access::gate(
+                crate::access::Bytes::Fetched {
+                    sha256: &fetched.sha256,
+                    link: target,
+                },
+                fetched.bundle.signing_authority().ok().flatten().as_deref(),
+                crate::access::Door::Terminal,
+            )?;
+            Some(fetched.bundle)
         }
         Some(target) => {
-            Some(krate_bundle::open(Path::new(target)).with_context(|| format!("open {target}"))?)
+            let bundle =
+                krate_bundle::open(Path::new(target)).with_context(|| format!("open {target}"))?;
+            crate::access::gate(
+                crate::access::Bytes::File(Path::new(target)),
+                bundle.signing_authority().ok().flatten().as_deref(),
+                crate::access::Door::Terminal,
+            )?;
+            Some(bundle)
         }
         None => None,
     };

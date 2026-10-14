@@ -17,6 +17,7 @@ members = [
     "crates/bindings-rust",
     "crates/layout",
     "crates/bundle",
+    "crates/lease",
     "crates/validator-wasm",
     "crates/manifest",
     "crates/policy",

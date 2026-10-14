@@ -57,6 +57,11 @@ const DESKTOP_ONLY = {
   // and says so instead (K-902).
   stash_pasted_text: "writes a pasted file to local disk; a tab stops the paste instead",
   terminal_status: "reports on a local terminal install",
+  // Sending to an organisation signs with this machine's delegated release
+  // key, which a tab does not hold (IC-948 I); in a tab the Send menu has
+  // no organisation rows.
+  org_targets: "lists organisations for signing with a release key kept on this machine",
+  send_to_org: "signs with a release key kept on this machine",
   // agent_session_tag and sessions_pull are bridged now, as quiet no-ops:
   // every load and build printed "no browser answer" for them.
 };

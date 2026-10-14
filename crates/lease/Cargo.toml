@@ -1,0 +1,13 @@
+[package]
+name = "krate-lease"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+description = "Offline access to an organisation's private app: the hub-signed lease, its format and its check (IC-948 G)."
+
+[dependencies]
+ring = "0.17"
+serde_json.workspace = true

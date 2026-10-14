@@ -192,6 +192,12 @@ jobs:
           cargo fetch --manifest-path "$tmp/Cargo.toml" --target wasm32-wasip1
       - name: Run workspace tests
         run: cargo test --workspace --all-features
+      # A release build must ignore the lease key override (IC-948 G): the
+      # test that proves it exists only without debug assertions, so the
+      # debug run above never compiles it. krate-lease is ring and
+      # serde_json only, so this is seconds.
+      - name: Lease key override is ignored in a release build
+        run: cargo test --release -p krate-lease
       # Studio's shell is OUTSIDE the workspace, so the line above never
       # compiles it and nothing else here did either. Its tests went
       # unrun long enough that one sat red in main contradicting a fix

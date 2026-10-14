@@ -55,7 +55,22 @@ pub enum OrgCommand {
         name: Option<String>,
     },
     /// The organisations you are in, with your role in each.
-    List,
+    List {
+        /// The hub's answer as JSON, `[{slug, name, role}]`, for Studio.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Your release key for an organisation: made on this machine, kept
+    /// here, and named by its public half so an owner can delegate it.
+    /// With --delegation, install what the owner sent back; then
+    /// `krate publish app.krate --org <slug>` signs with it.
+    #[command(name = "release-key")]
+    ReleaseKey {
+        slug: String,
+        /// The delegation file an owner wrote with `krate delegate`.
+        #[arg(long, value_name = "FILE")]
+        delegation: Option<std::path::PathBuf>,
+    },
     /// Who is in an organisation, and your own role in it.
     Show { slug: String },
     /// Invite one GitHub account, with one role. The invitation works once,
@@ -616,7 +631,7 @@ fn worded<T>(result: Result<T>, org: &str, me: &str, action: Action) -> Result<T
 
 /// A time the hub gave: an RFC 3339 string is shown as it is; unix seconds
 /// (or milliseconds) become a UTC date.
-fn when(value: &serde_json::Value) -> String {
+pub(crate) fn when(value: &serde_json::Value) -> String {
     if let Some(text) = value.as_str() {
         return text.to_string();
     }
@@ -651,6 +666,10 @@ fn text<'a>(value: &'a serde_json::Value, key: &str) -> &'a str {
 
 /// `krate org ...`.
 pub fn run(command: OrgCommand, hub_override: Option<&str>) -> Result<u8> {
+    // A release key is made and kept on this machine; nothing to sign in for.
+    if let OrgCommand::ReleaseKey { slug, delegation } = &command {
+        return release_key_command(slug, delegation.as_deref());
+    }
     let hub = hub_url(hub_override);
     let identity = identity_or_sign_in("Organisations know people by their sign-in.")?;
     let client = Client::new(hub, identity);
@@ -683,7 +702,8 @@ pub fn run(command: OrgCommand, hub_override: Option<&str>) -> Result<u8> {
             );
             Ok(0)
         }
-        OrgCommand::List => {
+        OrgCommand::ReleaseKey { .. } => unreachable!("handled before signing in"),
+        OrgCommand::List { json } => {
             let answer = worded(
                 client.send("GET", "/orgs", &Body::Empty),
                 "",
@@ -695,6 +715,10 @@ pub fn run(command: OrgCommand, hub_override: Option<&str>) -> Result<u8> {
                 .cloned()
                 .or_else(|| answer["orgs"].as_array().cloned())
                 .unwrap_or_default();
+            if json {
+                println!("{}", serde_json::json!(orgs));
+                return Ok(0);
+            }
             if orgs.is_empty() {
                 println!("you're in no organisations yet: krate org create <name>");
                 return Ok(0);
@@ -1189,6 +1213,138 @@ fn revocation_list(path: &Path, root: &str) -> Result<serde_json::Value> {
     Ok(serde_json::to_value(&list)?)
 }
 
+/// Where this machine keeps its release key for `slug`, and the delegation
+/// an owner of `slug` wrote for it: `~/.krate/orgs/<slug>/`.
+fn release_dir(slug: &str) -> Result<std::path::PathBuf> {
+    let valid = slug.len() >= 2
+        && slug.len() <= 39
+        && slug.as_bytes()[0].is_ascii_lowercase()
+        && slug
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-');
+    if !valid {
+        anyhow::bail!("\"{slug}\" is not an organisation's name");
+    }
+    Ok(crate::krate_home().join("orgs").join(slug))
+}
+
+/// The release key and the delegation for `slug`, when both are installed.
+pub fn installed_release_key(slug: &str) -> Option<(std::path::PathBuf, std::path::PathBuf)> {
+    let dir = release_dir(slug).ok()?;
+    let key = dir.join("release.pkcs8");
+    let delegation = dir.join("delegation.json");
+    (key.is_file() && delegation.is_file()).then_some((key, delegation))
+}
+
+/// The namespace to sign `app` under for a delegation: its own exact
+/// namespace, or `<prefix>/<app>` for a range like `acme/*`.
+pub fn namespace_for(delegation: &Path, slug: &str, app: &str) -> String {
+    let named = std::fs::read_to_string(delegation)
+        .ok()
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+        .and_then(|v| v["delegation"]["namespace"].as_str().map(str::to_string))
+        .unwrap_or_else(|| format!("{slug}/*"));
+    match named.strip_suffix("/*") {
+        Some(prefix) => format!("{prefix}/{app}"),
+        None => named,
+    }
+}
+
+/// The public half of a PKCS#8 key file, as hex.
+fn public_hex_of(path: &Path) -> Result<String> {
+    let bytes = std::fs::read(path)
+        .with_context(|| format!("could not read the key at {}", path.display()))?;
+    let key = krate_bundle::signing::SigningKey::from_pkcs8(&bytes)
+        .map_err(|err| anyhow::anyhow!("{}: {err}", path.display()))?;
+    Ok(key
+        .public_key()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect())
+}
+
+/// `krate org release-key <slug> [--delegation <file>]`.
+fn release_key_command(slug: &str, delegation: Option<&Path>) -> Result<u8> {
+    let dir = release_dir(slug)?;
+    let key = dir.join("release.pkcs8");
+    if !key.is_file() {
+        std::fs::create_dir_all(&dir)
+            .with_context(|| format!("could not make {}", dir.display()))?;
+        let document = krate_bundle::signing::SigningKey::generate_pkcs8()
+            .map_err(|err| anyhow::anyhow!("could not make a release key: {err}"))?;
+        std::fs::write(&key, &document)
+            .with_context(|| format!("could not write {}", key.display()))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&key, std::fs::Permissions::from_mode(0o600));
+        }
+        println!("made a release key for {slug}, kept at {}", key.display());
+    }
+    let public = public_hex_of(&key)?;
+    let installed = dir.join("delegation.json");
+    if let Some(file) = delegation {
+        let text = std::fs::read_to_string(file)
+            .with_context(|| format!("could not read {}", file.display()))?;
+        let slip: krate_bundle::delegation::SignedDelegation = serde_json::from_str(&text)
+            .map_err(|_| {
+                anyhow::anyhow!(
+                    "{} is not a delegation written by `krate delegate`",
+                    file.display()
+                )
+            })?;
+        if !slip.delegation.key.eq_ignore_ascii_case(&public) {
+            anyhow::bail!(
+                "{} delegates a different key ({}...), not this machine's {slug} release key \
+                 ({}...): ask the owner to run `krate delegate` with --key {public}",
+                file.display(),
+                short(&slip.delegation.key),
+                short(&public)
+            );
+        }
+        let namespace = namespace_for(file, slug, "app");
+        let public_bytes: Vec<u8> = (0..32)
+            .filter_map(|i| u8::from_str_radix(&public[i * 2..i * 2 + 2], 16).ok())
+            .collect();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let verdict = krate_bundle::delegation::verify_chain(
+            &slip,
+            &namespace,
+            &public_bytes,
+            now,
+            &krate_bundle::delegation::RevocationState::Known(Vec::new()),
+        );
+        if !verdict.is_authorised() {
+            anyhow::bail!("{} does not hold: {verdict}", file.display());
+        }
+        std::fs::write(&installed, &text)
+            .with_context(|| format!("could not write {}", installed.display()))?;
+        println!(
+            "installed. Your {slug} release key {}... is delegated for {} until {}.",
+            short(&public),
+            slip.delegation.namespace,
+            when(&serde_json::json!(slip.delegation.expires))
+        );
+        println!("`krate publish app.krate --org {slug}` now signs with it.");
+        return Ok(0);
+    }
+    println!("your release key for {slug}: {public}");
+    if installed.is_file() {
+        println!("It is delegated; `krate publish app.krate --org {slug}` signs with it.");
+        return Ok(0);
+    }
+    println!("An owner of {slug} turns it into a delegation with:");
+    println!(
+        "  krate delegate --root <{slug}-root.pkcs8> --key {public} --namespace '{slug}/*' -o {slug}-release.json"
+    );
+    println!("Then install the file they send you:");
+    println!("  krate org release-key {slug} --delegation {slug}-release.json");
+    Ok(0)
+}
+
 /// Before anything is uploaded to an organisation: the bundle must carry a
 /// signature that verifies. Unsigned, it says exactly what to run.
 pub fn require_signed(opened: &krate_bundle::OpenBundle, file: &Path, slug: &str) -> Result<()> {
@@ -1212,6 +1368,9 @@ pub fn require_signed(opened: &krate_bundle::OpenBundle, file: &Path, slug: &str
         _ => anyhow::bail!(
             "{file} is not signed, so nothing was uploaded: {slug} takes only apps signed by \
              its root key, or by a release key that root delegated.\n\
+             \n  The shortest way: make this machine a release key, and send its public half \
+             to an owner of {slug}:\n    \
+             krate org release-key {slug}\n\
              \n  With {slug}'s root key:\n    \
              krate sign {file} --key <{slug}-root.pkcs8> --namespace {namespace}\n\
              \n  With a release key ({slug}'s owner runs the first line once):\n    \
@@ -1315,7 +1474,7 @@ pub fn link_authorization(url: &str) -> Option<String> {
     github_auth::current().map(|identity| format!("Bearer {}", identity.token))
 }
 
-fn origin(url: &str) -> Option<String> {
+pub(crate) fn origin(url: &str) -> Option<String> {
     let (scheme, rest) = url.split_once("://")?;
     let host = rest.split(['/', '?', '#']).next()?;
     // userinfo@host is not a hub; refuse rather than guess which part counts.
@@ -1329,7 +1488,7 @@ fn origin(url: &str) -> Option<String> {
     ))
 }
 
-fn is_hub_link(url: &str) -> bool {
+pub(crate) fn is_hub_link(url: &str) -> bool {
     let Some(link) = origin(url) else {
         return false;
     };

@@ -77,6 +77,9 @@ impl Client {
             // Keep every build, scratch check, and frame inside the test's own
             // directory rather than the user's real ~/.krate.
             .env("KRATE_MCP_ROOT", root)
+            // Never the live hub: a signed app is checked with the hub when
+            // it runs (IC-948 G), and a closed local port answers at once.
+            .env("KRATE_HUB_URL", "http://127.0.0.1:9")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             // The spec allows a server to log freely on stderr, and a client
