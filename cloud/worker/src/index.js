@@ -50,6 +50,8 @@ import { orgReleaseRoute } from "./org-releases.js";
 import { judgementCaps } from "./org-review.js";
 // SCIM 2.0 provisioning (IC-955); after release control, whose groups it fills.
 import { scimRoute, orgScimRoute } from "./org-scim.js";
+// Audit export over a signed webhook (IC-955).
+import { auditExportRoute } from "./org-audit-export.js";
 // The organisation store (IC-946), one SQLite-backed Durable Object per
 // organisation; wrangler.toml binds it as ORGS.
 export { Org };
@@ -7423,7 +7425,7 @@ async function orgRouteCore(request, url, env, identity) {
     askRaw, mutateRaw, orgAsk, orgAnswer, json, readBody, isAdmin, smtpSend, fetchBundle,
   };
   const routed =
-    (await orgLifecycleRoute(h)) || (await orgBillingRoute(h)) || (await orgReleaseRoute(h)) || (await orgScimRoute(h));
+    (await orgLifecycleRoute(h)) || (await orgBillingRoute(h)) || (await orgReleaseRoute(h)) || (await orgScimRoute(h)) || (await auditExportRoute(h));
   if (routed) return routed;
   return text("not found", 404);
 }

@@ -392,24 +392,24 @@ const unb64 = (text) => Uint8Array.from(atob(text), (c) => c.charCodeAt(0));
 /// Encrypt one organisation's client secret. The organisation's slug is
 /// the additional data, so a ciphertext copied into another organisation's
 /// store does not open there.
-export async function sealSecret(env, slug, plaintext) {
+export async function sealSecret(env, slug, plaintext, purpose = "sso") {
   const key = await secretKey(env);
   if (!key) return null;
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const body = await crypto.subtle.encrypt(
-    { name: "AES-GCM", iv, additionalData: new TextEncoder().encode(`krate-org-sso:${slug}`) },
+    { name: "AES-GCM", iv, additionalData: new TextEncoder().encode(`krate-org-${purpose}:${slug}`) },
     key,
     new TextEncoder().encode(plaintext),
   );
   return { v: 1, iv: b64(iv), body: b64(body) };
 }
 
-export async function openSecret(env, slug, sealed) {
+export async function openSecret(env, slug, sealed, purpose = "sso") {
   const key = await secretKey(env);
   if (!key || !sealed || !sealed.iv || !sealed.body) return null;
   try {
     const out = await crypto.subtle.decrypt(
-      { name: "AES-GCM", iv: unb64(sealed.iv), additionalData: new TextEncoder().encode(`krate-org-sso:${slug}`) },
+      { name: "AES-GCM", iv: unb64(sealed.iv), additionalData: new TextEncoder().encode(`krate-org-${purpose}:${slug}`) },
       key,
       unb64(sealed.body),
     );
@@ -423,13 +423,13 @@ export async function openSecret(env, slug, sealed) {
 
 /// The hub is this machine's loopback: a local `wrangler dev` proof. Only
 /// then may an issuer or the DNS resolver be plain http on this machine.
-function devHub(env) {
+export function devHub(env) {
   return /^http:\/\/(127\.0\.0\.1|localhost|\[::1\])(:\d+)?\/?$/.test(String(env.PUBLIC_BASE || ""));
 }
 
 /// An issuer, or an endpoint it names, that the hub will talk to: https,
 /// or http on this machine's loopback when the hub itself is a local proof.
-function reachable(raw, env) {
+export function reachable(raw, env) {
   let u;
   try {
     u = new URL(String(raw || ""));
