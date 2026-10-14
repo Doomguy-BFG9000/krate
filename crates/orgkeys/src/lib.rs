@@ -39,6 +39,7 @@ use zeroize::Zeroize;
 
 #[cfg(feature = "agent")]
 pub mod agent;
+pub mod signing;
 
 type Kem = hpke::kem::X25519HkdfSha256;
 type Kdf = hpke::kdf::HkdfSha256;
@@ -265,6 +266,26 @@ impl Keyring {
         let next = self.current().0 + 1;
         self.keys.insert(next, KeyPair::generate());
         next
+    }
+
+    /// A new organisation's keyring whose version 1 is the X25519 private
+    /// key `secret`, made elsewhere -- by WebCrypto in a browser that is the
+    /// owner's first device (IC-958).
+    pub fn from_secret(org: &str, secret: &[u8]) -> Result<Keyring, KeyError> {
+        let mut keys = BTreeMap::new();
+        keys.insert(1, KeyPair::from_secret(secret)?);
+        Ok(Keyring {
+            org: org.to_string(),
+            keys,
+        })
+    }
+
+    /// [`Keyring::rotate`] to a next version made elsewhere.
+    pub fn rotate_to(&mut self, secret: &[u8]) -> Result<u32, KeyError> {
+        let pair = KeyPair::from_secret(secret)?;
+        let next = self.current().0 + 1;
+        self.keys.insert(next, pair);
+        Ok(next)
     }
 
     pub fn org(&self) -> &str {

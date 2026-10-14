@@ -122,7 +122,17 @@ impl Agent {
     }
 
     fn call(&self, method: &str, path: &str, body: Option<&Value>) -> Result<Value, AgentError> {
-        let url = format!("{}/orgs/{}/keys{path}", self.hub, self.slug);
+        self.call_org(method, &format!("/keys{path}"), body)
+    }
+
+    /// One request to `/orgs/<slug><path>`.
+    fn call_org(
+        &self,
+        method: &str,
+        path: &str,
+        body: Option<&Value>,
+    ) -> Result<Value, AgentError> {
+        let url = format!("{}/orgs/{}{path}", self.hub, self.slug);
         let mut request = self
             .agent
             .request(method, &url)
@@ -346,3 +356,8 @@ impl Agent {
         Ok(Held { keyring, envelope })
     }
 }
+
+/// The signing ring's background duties and the publisher's side
+/// (IC-958 A), on the same device registration and the same hub client.
+mod ring;
+pub use ring::{Duties, HeldRing, Publisher, RingStatus};

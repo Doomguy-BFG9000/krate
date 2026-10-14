@@ -198,13 +198,25 @@ pub fn read_org_mark(bundle_path: &Path) -> Result<Option<String>> {
 /// earlier mark is replaced. A signature the bundle carried no longer
 /// covers it afterwards; sign it again (`krate sign --org` does both).
 pub fn add_org_mark(bundle_path: &Path, slug: &str) -> Result<()> {
+    let source = fs::read(bundle_path).map_err(|err| io_err(bundle_path, err))?;
+    let marked = mark_bytes(&source, slug)?;
+    let temporary = bundle_path.with_extension("krate.marking");
+    fs::write(&temporary, &marked).map_err(|err| io_err(&temporary, err))?;
+    fs::rename(&temporary, bundle_path).map_err(|err| io_err(bundle_path, err))?;
+    Ok(())
+}
+
+/// [`add_org_mark`] on a bundle held in memory: the same archive, with
+/// `slug`'s mark, entry for entry what the file version writes. Used where
+/// there is no disk -- signing in a browser tab through the validator
+/// compiled to WebAssembly (IC-958).
+pub fn mark_bytes(source: &[u8], slug: &str) -> Result<Vec<u8>> {
     if !valid_org_slug(slug) {
         return Err(BundleError::Manifest(format!(
             "{slug:?} is not an organisation's name"
         )));
     }
-    let source = fs::read(bundle_path).map_err(|err| io_err(bundle_path, err))?;
-    let mut archive = ZipArchive::new(io::Cursor::new(&source))?;
+    let mut archive = ZipArchive::new(io::Cursor::new(source))?;
     let mark_prefix = format!("{EXTENSION_PREFIX}{ORG_MARK_OWNER}/{ORG_MARK_NAME}/");
     let mut kept: Vec<(String, Vec<u8>)> = Vec::new();
     let mut declared: Option<ExtensionsRecord> = None;
@@ -250,25 +262,116 @@ pub fn add_org_mark(bundle_path: &Path, slug: &str) -> Result<()> {
     });
     let declaration = serde_json::to_vec_pretty(&record)
         .map_err(|err| BundleError::Manifest(format!("{EXTENSIONS_ENTRY}: {err}")))?;
-    let temporary = bundle_path.with_extension("krate.marking");
-    {
-        let file = File::create(&temporary).map_err(|err| io_err(&temporary, err))?;
-        let mut writer = DeterministicZip::new(io::BufWriter::new(file));
-        for (name, body) in &kept {
-            writer
-                .add(name, body)
-                .map_err(|err| io_err(&temporary, err))?;
-        }
-        writer
-            .add(EXTENSIONS_ENTRY, &declaration)
-            .map_err(|err| io_err(&temporary, err))?;
-        writer
-            .add(ORG_MARK_ENTRY, &mark)
-            .map_err(|err| io_err(&temporary, err))?;
-        writer.finish().map_err(|err| io_err(&temporary, err))?;
+    let mut writer = DeterministicZip::new(Vec::new());
+    for (name, body) in &kept {
+        writer.add(name, body).map_err(in_memory)?;
     }
-    fs::rename(&temporary, bundle_path).map_err(|err| io_err(bundle_path, err))?;
-    Ok(())
+    writer
+        .add(EXTENSIONS_ENTRY, &declaration)
+        .map_err(in_memory)?;
+    writer.add(ORG_MARK_ENTRY, &mark).map_err(in_memory)?;
+    writer.finish().map_err(in_memory)
+}
+
+/// An archive written to memory failed: only a bundle too large for a zip
+/// without zip64 does that.
+fn in_memory(err: io::Error) -> BundleError {
+    BundleError::Io {
+        path: PathBuf::from("<in memory>"),
+        source: err,
+    }
+}
+
+/// What [`sign_bytes`] answers: the signed archive, and the envelope it
+/// now carries.
+#[derive(Debug, Clone)]
+pub struct SignedBytes {
+    pub bytes: Vec<u8>,
+    pub envelope: signing::SignatureEnvelope,
+}
+
+/// The namespace an organisation's app signs under: the delegation's own
+/// exact namespace, or `<prefix>/<app>` for a range like `acme/*`; with no
+/// delegation (the organisation's own key), `<org>/<app>`. `<app>` is the
+/// app id's last dotted label, lower-case (`dev.acme.notes` is `notes`).
+pub fn org_namespace(
+    org: &str,
+    delegation: Option<&delegation::SignedDelegation>,
+    app_id: &str,
+) -> String {
+    let app = app_id
+        .rsplit('.')
+        .next()
+        .unwrap_or("app")
+        .to_ascii_lowercase();
+    let named = delegation
+        .map(|d| d.delegation.namespace.clone())
+        .unwrap_or_else(|| format!("{org}/*"));
+    match named.strip_suffix("/*") {
+        Some(prefix) => format!("{prefix}/{app}"),
+        None => named,
+    }
+}
+
+/// Sign a bundle held in memory (IC-958): what [`sign_bundle`] and
+/// [`sign_bundle_delegated`] do to a file, on bytes, with no disk. The
+/// bundle is judged first by the hub's own rules, so what is signed is a
+/// bundle the hub would take; the statement is built from the entries that
+/// judgement read; the result is judged again and must carry a valid
+/// signature. `namespace` defaults to [`org_namespace`] for the bundle's
+/// organisation mark.
+pub fn sign_bytes(
+    source: &[u8],
+    key: &signing::SigningKey,
+    namespace: Option<&str>,
+    signed_at: u64,
+    delegation: Option<delegation::SignedDelegation>,
+) -> Result<SignedBytes> {
+    with_limits(HUB_LIMITS, || {
+        let (judgement, entries) = judge_parts(source, HUB_MAX_EXPANDED_BYTES)?;
+        let namespace = match namespace {
+            Some(namespace) => namespace.to_string(),
+            None => {
+                let org = judgement.org_mark.clone().ok_or_else(|| {
+                    BundleError::Manifest(
+                        "this app carries no organisation's mark, so it needs a namespace to \
+                         sign under"
+                            .to_string(),
+                    )
+                })?;
+                org_namespace(&org, delegation.as_ref(), &judgement.manifest.app.id)
+            }
+        };
+        let version = judgement.manifest.app.version.clone();
+        let statement =
+            statement::SignedStatement::build(&namespace, &version, signed_at, &entries);
+        let mut envelope = signing::SignatureEnvelope::new(&statement, &key.sign(&statement));
+        envelope.delegation = delegation;
+        let json = serde_json::to_vec_pretty(&envelope)
+            .map_err(|err| BundleError::Manifest(err.to_string()))?;
+        let mut archive = ZipArchive::new(io::Cursor::new(source))?;
+        let mut writer = DeterministicZip::new(Vec::new());
+        for index in 0..archive.len() {
+            let mut entry = archive.by_index(index)?;
+            let name = entry.name().to_string();
+            if name == SIGNATURE_ENTRY {
+                continue;
+            }
+            let mut body = Vec::new();
+            entry.read_to_end(&mut body).map_err(in_memory)?;
+            writer.add(&name, &body).map_err(in_memory)?;
+        }
+        writer.add(SIGNATURE_ENTRY, &json).map_err(in_memory)?;
+        let bytes = writer.finish().map_err(in_memory)?;
+        let (again, _) = judge_parts(&bytes, HUB_MAX_EXPANDED_BYTES)?;
+        if again.signature.state != "valid" {
+            return Err(BundleError::Manifest(format!(
+                "the signature just made does not verify ({})",
+                again.signature.state
+            )));
+        }
+        Ok(SignedBytes { bytes, envelope })
+    })
 }
 
 /// One declared extension group, as the bundle records it.
@@ -3087,6 +3190,15 @@ pub fn judge_bytes_with_limits(
 }
 
 fn judge_bytes_here(bytes: &[u8], max_expanded: u64) -> Result<Judgement> {
+    judge_parts(bytes, max_expanded).map(|(judgement, _)| judgement)
+}
+
+/// [`judge_bytes_here`], and the entries a signature covers, exactly as
+/// `entries_for_digest` builds them: what [`sign_bytes`] signs.
+fn judge_parts(
+    bytes: &[u8],
+    max_expanded: u64,
+) -> Result<(Judgement, std::collections::BTreeMap<String, Vec<u8>>)> {
     use std::collections::BTreeMap;
 
     if bytes.len() as u64 > lim().bundle_bytes {
@@ -3375,7 +3487,7 @@ fn judge_bytes_here(bytes: &[u8], max_expanded: u64) -> Result<Judgement> {
             }
         })
         .collect();
-    Ok(Judgement {
+    let judgement = Judgement {
         validator: imports::VALIDATOR_VERSION,
         wit: imports::WIT_DIGEST.to_string(),
         manifest,
@@ -3393,7 +3505,8 @@ fn judge_bytes_here(bytes: &[u8], max_expanded: u64) -> Result<Judgement> {
         closure,
         org_mark,
         capabilities,
-    })
+    };
+    Ok((judgement, project_entries))
 }
 
 pub fn open_reader<R: Read + io::Seek>(reader: R) -> Result<OpenBundle> {
@@ -7020,6 +7133,81 @@ required = true
         );
         let err = open(&strict).expect_err("profile 2 wants every ext/ group declared");
         assert_eq!(variant(&err), "UndeclaredExtension", "{err}");
+    }
+
+    /// Marking and signing in memory (IC-958, the browser's path through
+    /// the validator wasm) writes byte for byte what `krate sign --org`
+    /// writes to a file, for a root and for a delegated key; a bundle with
+    /// no mark and no namespace is refused rather than signed under a
+    /// guess.
+    #[test]
+    fn signing_in_memory_writes_what_signing_a_file_writes() {
+        use delegation::{Delegation, Purpose, SignedDelegation, DELEGATION_SCHEMA};
+        const SIGNED_AT: u64 = 1_700_000_000;
+        let dir = TempDir::new().expect("tempdir");
+        let manifest = write_temp(dir.path(), "manifest.toml", MANIFEST.as_bytes());
+        let component = write_temp(dir.path(), "code.wasm", MINIMAL_COMPONENT);
+        let plain = dir.path().join("plain.krate");
+        pack(&manifest, &component, &plain).unwrap();
+        let source = fs::read(&plain).unwrap();
+        let new_key = || {
+            signing::SigningKey::from_pkcs8(&signing::SigningKey::generate_pkcs8().unwrap())
+                .unwrap()
+        };
+        let hex = |bytes: &[u8]| bytes.iter().map(|b| format!("{b:02x}")).collect::<String>();
+        let (root, release) = (new_key(), new_key());
+        let slip = SignedDelegation::create(
+            &root,
+            Delegation {
+                schema: DELEGATION_SCHEMA.to_string(),
+                root: hex(&root.public_key()),
+                namespace: "acme/*".to_string(),
+                key: hex(&release.public_key()),
+                purpose: Purpose::Release,
+                not_before: SIGNED_AT - 60,
+                expires: SIGNED_AT + 3600,
+                approvers: Vec::new(),
+            },
+        );
+
+        let marked = mark_bytes(&source, "acme").unwrap();
+        let on_disk = dir.path().join("marked.krate");
+        fs::copy(&plain, &on_disk).unwrap();
+        add_org_mark(&on_disk, "acme").unwrap();
+        assert_eq!(marked, fs::read(&on_disk).unwrap(), "the same mark");
+
+        for (name, key, delegation) in [
+            ("root.krate", &root, None),
+            ("delegated.krate", &release, Some(slip.clone())),
+        ] {
+            let signed = sign_bytes(&marked, key, None, SIGNED_AT, delegation.clone()).unwrap();
+            assert_eq!(signed.envelope.namespace, "acme/demo");
+            let path = dir.path().join(name);
+            fs::copy(&on_disk, &path).unwrap();
+            match delegation {
+                Some(slip) => {
+                    sign_bundle_delegated(&path, key, "acme/demo", "0.1.0", SIGNED_AT, slip)
+                        .unwrap();
+                }
+                None => {
+                    sign_bundle(&path, key, "acme/demo", "0.1.0", SIGNED_AT).unwrap();
+                }
+            }
+            assert_eq!(
+                signed.bytes,
+                fs::read(&path).unwrap(),
+                "{name}: the same bytes"
+            );
+            let judged = judge_bytes(&signed.bytes, HUB_MAX_EXPANDED_BYTES).unwrap();
+            assert_eq!(judged.signature.state, "valid", "{name}");
+            assert_eq!(judged.org_mark.as_deref(), Some("acme"));
+        }
+
+        let err = sign_bytes(&source, &root, None, SIGNED_AT, None).unwrap_err();
+        assert!(err.to_string().contains("no organisation's mark"), "{err}");
+        let named = sign_bytes(&source, &root, Some("acme/demo"), SIGNED_AT, None).unwrap();
+        assert_eq!(named.envelope.namespace, "acme/demo");
+        assert!(mark_bytes(&source, "Not A Slug").is_err());
     }
 
     /// The judgement names the publisher root a delegated release key

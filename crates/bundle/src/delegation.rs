@@ -515,6 +515,35 @@ pub fn verify_chain(
     ChainVerdict::Authorised
 }
 
+/// How long a permission slip an organisation's devices sign on their own
+/// lasts (IC-958): the standard 365 days.
+pub const ORG_SLIP_SECONDS: u64 = 365 * 24 * 60 * 60;
+
+/// How far back such a slip starts, so a signer whose clock runs a little
+/// ahead of the hub's does not write a slip that is "not yet valid" there.
+pub const ORG_SLIP_SKEW_SECONDS: u64 = 5 * 60;
+
+/// The slip an organisation's signing key gives a member's release key
+/// (IC-958 A): the organisation's whole namespace, `<org>/*`, from a few
+/// minutes before `at` for [`ORG_SLIP_SECONDS`]. One function, so the
+/// computers that sign in the background and the browser that signs through
+/// the validator write the same slip.
+pub fn org_delegation(root: &SigningKey, org: &str, key_hex: &str, at: u64) -> SignedDelegation {
+    SignedDelegation::create(
+        root,
+        Delegation {
+            schema: DELEGATION_SCHEMA.to_string(),
+            root: hex(&root.public_key()),
+            namespace: format!("{org}/*"),
+            key: key_hex.to_ascii_lowercase(),
+            purpose: Purpose::Release,
+            not_before: at.saturating_sub(ORG_SLIP_SKEW_SECONDS),
+            expires: at.saturating_add(ORG_SLIP_SECONDS),
+            approvers: Vec::new(),
+        },
+    )
+}
+
 fn hex(bytes: &[u8]) -> String {
     let mut out = String::with_capacity(bytes.len() * 2);
     for byte in bytes {
