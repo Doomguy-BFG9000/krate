@@ -584,7 +584,7 @@ export class Org {
     const rule = allows(me.role, "org.view");
     const members =
       rule === "yes"
-        ? this.rows("SELECT * FROM members ORDER BY added_at, principal").map((m) => this.membership(m))
+        ? this.rows("SELECT * FROM members ORDER BY added_at, rowid").map((m) => this.membership(m))
         : [this.membership(me)];
     return this.ok({ org: this.orgView(), me: this.membership(me), members });
   }
