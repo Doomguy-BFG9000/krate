@@ -177,13 +177,12 @@ fn write_org_fixtures() {
 }
 
 /// The committed fixtures say what their names say, read back through the
-/// validator the hub runs. Skipped quietly before they exist.
+/// validator the hub runs.
 #[test]
 fn the_org_fixtures_say_what_their_names_say() {
     let dir = repo().join("cloud/worker/test/fixtures/org");
-    let Ok(keys) = fs::read(dir.join("keys.json")) else {
-        return;
-    };
+    let keys = fs::read(dir.join("keys.json"))
+        .expect("the committed fixtures; write them with KRATE_WRITE_ORG_FIXTURES=1");
     let keys: serde_json::Value = serde_json::from_slice(&keys).unwrap();
     let judge = |name: &str| -> serde_json::Value {
         let bytes = fs::read(dir.join(name)).unwrap();
