@@ -1062,6 +1062,19 @@ pub enum BundleError {
     InsecureUrl { url: String },
     #[error("could not fetch {url}: {message}")]
     Fetch { url: String, message: String },
+    /// The hub refused a download with a stable reason (IC-946): a private
+    /// organisation release asked for with no session, by someone who is
+    /// not a member, or by someone who was removed. The caller words it;
+    /// `reason` is the contract's string, never shown raw.
+    #[error("the hub refused to hand over {url}: {message}")]
+    HubRefused {
+        url: String,
+        status: u16,
+        reason: String,
+        message: String,
+        /// The organisation the hub named, when it named one.
+        org: Option<String>,
+    },
     #[error(
         "bundle expands to more than {limit} bytes, which is more than this door holds in \
          memory to judge it"
@@ -4491,20 +4504,54 @@ fn fetch_resolved_here(url: &str, allow_insecure_http: bool) -> Result<Fetched> 
     // a number this small is safe: a slow 256 MB download over a poor link
     // keeps resetting it and is never cut off, while a silent server trips
     // it once.
-    let response = fetch_get(url)?;
+    let response = fetch_get(url, None)?;
     fetch_small(url, response)
 }
 
+/// `authorization` is the whole header value, sent to `url` only. ureq
+/// never carries it across a redirect (its default), so a link that bounces
+/// elsewhere does not take the person's session with it.
 #[cfg(feature = "fetch")]
-fn fetch_get(url: &str) -> Result<ureq::Response> {
+fn fetch_get(url: &str, authorization: Option<&str>) -> Result<ureq::Response> {
     let agent = ureq::AgentBuilder::new()
         .timeout_connect(FETCH_CONNECT_TIMEOUT)
         .timeout_read(FETCH_SILENCE_TIMEOUT)
         .build();
-    agent.get(url).call().map_err(|err| BundleError::Fetch {
-        url: url.to_string(),
-        message: map_fetch_error(url, err),
+    let mut request = agent.get(url);
+    if let Some(value) = authorization {
+        request = request.set("Authorization", value);
+    }
+    request.call().map_err(|err| match err {
+        ureq::Error::Status(403, response) => hub_refusal(url, response),
+        err => BundleError::Fetch {
+            url: url.to_string(),
+            message: map_fetch_error(url, err),
+        },
     })
+}
+
+/// A 403 from a hub: its stable reason when the body carries one
+/// (`{"error", "message"}`, IC-946), otherwise a plain refusal.
+#[cfg(feature = "fetch")]
+fn hub_refusal(url: &str, response: ureq::Response) -> BundleError {
+    let body = response.into_string().unwrap_or_default();
+    let answer: serde_json::Value = serde_json::from_str(&body).unwrap_or_default();
+    match answer["error"].as_str() {
+        Some(reason) => BundleError::HubRefused {
+            url: url.to_string(),
+            status: 403,
+            reason: reason.to_string(),
+            message: answer["message"]
+                .as_str()
+                .unwrap_or("this app is not yours to download")
+                .to_string(),
+            org: answer["org"].as_str().map(str::to_string),
+        },
+        None => BundleError::Fetch {
+            url: url.to_string(),
+            message: "the server refused to hand it over (403)".to_string(),
+        },
+    }
 }
 
 /// What a link to run turned out to be (IC-945).
@@ -4533,13 +4580,28 @@ pub fn fetch_for_run(
     big_dir: &Path,
     progress: &mut dyn FnMut(u64, Option<u64>),
 ) -> Result<FetchedForRun> {
+    fetch_for_run_authorized(url, allow_insecure_http, big_dir, progress, None)
+}
+
+/// [`fetch_for_run`] carrying the person's session (IC-946): a private
+/// organisation release is handed over only to a current member or
+/// recipient, and a refusal comes back as [`BundleError::HubRefused`] with
+/// the hub's reason. The caller decides which hosts see the session.
+#[cfg(feature = "fetch")]
+pub fn fetch_for_run_authorized(
+    url: &str,
+    allow_insecure_http: bool,
+    big_dir: &Path,
+    progress: &mut dyn FnMut(u64, Option<u64>),
+    authorization: Option<&str>,
+) -> Result<FetchedForRun> {
     with_limits(HUB_LIMITS, || {
         if url.starts_with("http://") && !allow_insecure_http {
             return Err(BundleError::InsecureUrl {
                 url: url.to_string(),
             });
         }
-        let response = fetch_get(url)?;
+        let response = fetch_get(url, authorization)?;
         if response.header("x-krate-tier") == Some("big") {
             return fetch_big(url, response, big_dir, progress);
         }

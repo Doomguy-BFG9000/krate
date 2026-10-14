@@ -25,6 +25,7 @@ mod github_auth;
 mod krate_mode;
 mod lineedit;
 mod mcp;
+mod org;
 mod player;
 mod port_report;
 mod progress;
@@ -964,6 +965,18 @@ enum Command {
         home: Option<PathBuf>,
     },
 
+    /// Organisations: members, invitations, a root key, two-person release
+    /// of private apps, and the audit (IC-946). Each command asks the hub
+    /// and says what happened, or why not and what to do next.
+    Org {
+        /// Hub to talk to. Overrides the KRATE_HUB_URL environment variable.
+        #[arg(long, global = true)]
+        hub: Option<String>,
+
+        #[command(subcommand)]
+        command: org::OrgCommand,
+    },
+
     /// Upload a .krate to a hub and print a URL anyone can `krate run`.
     ///
     /// The bundle is stored by the hash of its bytes, so republishing the
@@ -1009,6 +1022,13 @@ enum Command {
         /// A plain-text file of credits and licences, shown at /a/<id>/notices.
         #[arg(long)]
         notices: Option<PathBuf>,
+
+        /// Upload to this organisation as a candidate instead (IC-946). The
+        /// bundle must be signed by the organisation's root key or a release
+        /// key it delegated; it is released only when someone else with
+        /// approve authority approves its digest, and never listed publicly.
+        #[arg(long, value_name = "SLUG", conflicts_with_all = ["unlisted", "shot", "icon", "source", "notices"])]
+        org: Option<String>,
     },
 
     /// Author a small app from a request and package it as one shareable
@@ -2113,19 +2133,30 @@ fn run() -> Result<u8> {
             icon,
             source,
             notices,
-        } => publish_bundle(
-            &bundle,
-            hub.as_deref(),
-            description.as_deref(),
-            name.as_deref(),
-            shot.as_deref(),
-            icon.as_deref(),
-            unlisted,
-            Attachments {
-                source: source.as_deref(),
-                notices: notices.as_deref(),
-            },
-        ),
+            org,
+        } => match org {
+            Some(slug) => publish_to_org(
+                &bundle,
+                &slug,
+                hub.as_deref(),
+                description.as_deref(),
+                name.as_deref(),
+            ),
+            None => publish_bundle(
+                &bundle,
+                hub.as_deref(),
+                description.as_deref(),
+                name.as_deref(),
+                shot.as_deref(),
+                icon.as_deref(),
+                unlisted,
+                Attachments {
+                    source: source.as_deref(),
+                    notices: notices.as_deref(),
+                },
+            ),
+        },
+        Command::Org { hub, command } => org::run(command, hub.as_deref()),
         Command::Create {
             request,
             output,
@@ -7780,6 +7811,54 @@ pub(crate) fn publish_bundle_for_tui(bundle: &Path, description: Option<&str>) -
     }
 }
 
+/// `krate publish app.krate --org <slug>` (IC-946): the same checks as any
+/// publish before anything leaves the machine -- a real bundle that opens --
+/// and then the one an organisation adds, a signature that verifies, so an
+/// unsigned app is turned back here with the commands that sign it.
+fn publish_to_org(
+    bundle: &Path,
+    slug: &str,
+    hub_override: Option<&str>,
+    description: Option<&str>,
+    name_override: Option<&str>,
+) -> Result<u8> {
+    if !krate_bundle::is_bundle_path(bundle) {
+        anyhow::bail!(
+            "not a .krate bundle: {}\nPack one first with `krate pack` (or `krate create`).",
+            bundle.display()
+        );
+    }
+    let bytes =
+        fs::read(bundle).with_context(|| format!("could not read bundle {}", bundle.display()))?;
+    let bytes = match card_bundle_bytes(&bytes) {
+        Some(inner) => inner.to_vec(),
+        None => bytes,
+    };
+    let opened = krate_bundle::open_bytes(&bytes).map_err(|err| {
+        let detail = err.user_message().unwrap_or_else(|| err.to_string());
+        anyhow::anyhow!("this bundle cannot be opened, so it will not be published: {detail}")
+    })?;
+    org::require_signed(&opened, bundle, slug)?;
+    let name = name_override
+        .map(str::to_string)
+        .filter(|name| !name.trim().is_empty())
+        .unwrap_or_else(|| opened.manifest().app.name.clone());
+    let identity =
+        org::identity_or_sign_in("Publishing to an organisation needs your GitHub sign-in.")?;
+    let category = classify_app(&name, description.unwrap_or(""));
+    let code = org::publish_candidate(
+        &org::hub_url(hub_override),
+        slug,
+        identity,
+        &bytes,
+        &name,
+        description,
+        category,
+    )?;
+    usage::record(usage::Action::Publish);
+    Ok(code)
+}
+
 /// Files offered beside a listing through the big-file path (IC-945).
 #[derive(Default, Clone, Copy)]
 struct Attachments<'a> {
@@ -8129,9 +8208,20 @@ fn publish_big(
         .timeout_read(std::time::Duration::from_secs(600))
         .timeout_write(std::time::Duration::from_secs(600))
         .build();
+    // An organisation's candidate resumes as itself, never as a public
+    // publish of the same bytes (IC-946).
+    let org_suffix = fields["org"]
+        .as_str()
+        .map(|org| {
+            format!(
+                "-org-{}",
+                org.replace(|c: char| !c.is_ascii_alphanumeric() && c != '-', "_")
+            )
+        })
+        .unwrap_or_default();
     let state_path = krate_home()
         .join("uploads")
-        .join(format!("{sha256}-{kind}.json"));
+        .join(format!("{sha256}-{kind}{org_suffix}.json"));
     let json_of = |response: ureq::Response| -> serde_json::Value {
         response
             .into_string()
@@ -8139,12 +8229,19 @@ fn publish_big(
             .and_then(|text| serde_json::from_str(&text).ok())
             .unwrap_or_default()
     };
+    // A refusal with a stable reason stays typed, so an organisation's
+    // upload can say it in words (IC-946); the rest is the hub's message,
+    // never a raw JSON body.
     let hub_error = |what: &str, err: ureq::Error| -> anyhow::Error {
         match err {
-            ureq::Error::Status(code, response) => anyhow::anyhow!(
-                "the hub refused {what} (HTTP {code}): {}",
-                response.into_string().unwrap_or_default().trim()
-            ),
+            ureq::Error::Status(code, response) => {
+                let refused = org::refusal_of(code, response);
+                if refused.downcast_ref::<org::HubRefusal>().is_some() {
+                    refused
+                } else {
+                    refused.context(format!("the hub refused {what}"))
+                }
+            }
             ureq::Error::Transport(err) => {
                 anyhow::anyhow!("could not reach the hub at {hub} for {what}: {err}")
             }
@@ -8288,6 +8385,32 @@ fn publish_big(
                 out["id"] = serde_json::json!(sha256);
             }
             Ok(out.to_string())
+        }
+        // An organisation's candidate (IC-946): taken, bound to its digest,
+        // and served to nobody until it is approved.
+        Some("candidate") => Ok(serde_json::json!({
+            "digest": status["digest"].as_str().unwrap_or(&sha256),
+            "state": status["state"].as_str().unwrap_or("waiting-for-approval"),
+        })
+        .to_string()),
+        // An organisation's refusal after judging: the hub writes it as
+        // `<stable reason>: <its words>`, and it stays typed so the caller
+        // can say it plainly.
+        _ if status["org"].is_string() => {
+            let problem = status["problem"].as_str().unwrap_or("no reason was given");
+            match problem.split_once(": ") {
+                Some((reason, message))
+                    if !reason.is_empty()
+                        && reason.bytes().all(|b| b.is_ascii_lowercase() || b == b'-') =>
+                {
+                    Err(org::HubRefusal {
+                        reason: reason.to_string(),
+                        message: message.to_string(),
+                    }
+                    .into())
+                }
+                _ => anyhow::bail!("Krate Cloud did not take it: {problem}"),
+            }
         }
         _ => anyhow::bail!(
             "Krate Cloud did not take it: {}",
@@ -14961,9 +15084,30 @@ fn run_target_from_link(
             _ => eprintln!("downloading: {} MB", done / 1_000_000),
         }
     };
-    let bundle = match krate_bundle::fetch_for_run(url, insecure_http, &downloads, &mut progress)
-        .with_context(context)?
+    // A private organisation release needs the person's session (IC-946).
+    // It goes only to a Krate hub, never to whatever host a link names, and
+    // a refusal is said in words with what to do next -- nothing runs.
+    let authorization = org::link_authorization(url);
+    let fetched = krate_bundle::fetch_for_run_authorized(
+        url,
+        insecure_http,
+        &downloads,
+        &mut progress,
+        authorization.as_deref(),
+    );
+    if let Err(krate_bundle::BundleError::HubRefused {
+        reason,
+        message,
+        org,
+        ..
+    }) = &fetched
     {
+        anyhow::bail!(
+            "{}",
+            org::download_refusal(url, reason, message, org.as_deref())
+        );
+    }
+    let bundle = match fetched.with_context(context)? {
         krate_bundle::FetchedForRun::Small(fetched) => {
             report_resolution(url, &fetched);
             fetched.bundle

@@ -1,0 +1,1302 @@
+//! Organisations on a hub (IC-946): members, invitations, a root key,
+//! candidates that a second person approves, private releases, and the
+//! organisation's audit.
+//!
+//! The hub is the only authority. Everything here asks it and says what it
+//! answered in plain words: a success says what happened, and a refusal says
+//! the hub's stable reason in a sentence with the next step, never as JSON.
+//! The routes, the JSON shapes and the reason strings are the contract in
+//! `Plan/org-pilot/CONTRACT.md`, which the hub builds to as well.
+//!
+//! Sign-in is the one `krate publish` already uses: the GitHub identity in
+//! ~/.krate/github.json, sent as `Authorization: Bearer <token>`, which the
+//! hub checks with GitHub. Every request carries an `Idempotency-Key`, one per
+//! command, so a retry after a dropped connection is the same request rather
+//! than a second invitation or a second removal.
+
+use std::path::Path;
+
+use anyhow::{Context, Result};
+use clap::{Subcommand, ValueEnum};
+
+use crate::github_auth;
+
+/// A role in an organisation, exactly as the hub names it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum Role {
+    Owner,
+    Admin,
+    Developer,
+    Reviewer,
+    Recipient,
+}
+
+impl Role {
+    fn as_str(self) -> &'static str {
+        match self {
+            Role::Owner => "owner",
+            Role::Admin => "admin",
+            Role::Developer => "developer",
+            Role::Reviewer => "reviewer",
+            Role::Recipient => "recipient",
+        }
+    }
+}
+
+#[derive(Debug, Subcommand)]
+pub enum OrgCommand {
+    /// Create an organisation. You become its first owner.
+    Create {
+        /// Its short name: 2 to 39 lower-case letters, digits and dashes,
+        /// starting with a letter. It cannot be taken twice.
+        slug: String,
+        /// The name people see, e.g. "Acme". Defaults to the slug.
+        #[arg(long)]
+        name: Option<String>,
+    },
+    /// Who is in an organisation, and your own role in it.
+    Show { slug: String },
+    /// Invite one GitHub account, with one role. The invitation works once,
+    /// only for that account, for 7 days.
+    Invite {
+        slug: String,
+        /// The GitHub login being invited.
+        login: String,
+        #[arg(long, value_enum)]
+        role: Role,
+    },
+    /// Cancel an invitation that has not been used yet.
+    #[command(name = "cancel-invite")]
+    CancelInvite { slug: String, code: String },
+    /// Accept an invitation sent to your GitHub account.
+    Join { slug: String, code: String },
+    /// Change someone's role.
+    Role {
+        slug: String,
+        login: String,
+        #[arg(value_enum)]
+        role: Role,
+    },
+    /// Remove someone, or yourself. Their access to the organisation's apps
+    /// ends at once; their own apps and account are untouched.
+    Remove { slug: String, login: String },
+    /// Register (or rotate) the organisation's root public key: the
+    /// publisher root that `krate delegate` uses. Give the public key (64 hex
+    /// characters in a file) or the root's key file, of which only the public
+    /// half leaves this machine.
+    #[command(name = "root-key")]
+    RootKey {
+        slug: String,
+        /// The root's public key file, or its PKCS#8 key file.
+        key: std::path::PathBuf,
+        /// The signed list `krate revoke` wrote with this root: the hub
+        /// refuses anything those release keys signed, from now on.
+        #[arg(long, value_name = "FILE")]
+        revocations: Option<std::path::PathBuf>,
+    },
+    /// Approve a candidate by its exact digest, so it becomes a release.
+    /// You cannot approve your own upload.
+    Approve { slug: String, digest: String },
+    /// The organisation's releases, with who uploaded and who approved each.
+    Releases { slug: String },
+    /// Every candidate, waiting or released, with who uploaded and who
+    /// approved it.
+    Candidates { slug: String },
+    /// The organisation's audit: who did what, and every refusal, with the
+    /// hub's check that the chain of events is unbroken.
+    Audit { slug: String },
+}
+
+/// The hub's refusal: the contract's stable reason, and the hub's
+/// own sentence. Shown to a person only through [`words`].
+#[derive(Debug)]
+pub struct HubRefusal {
+    pub reason: String,
+    pub message: String,
+}
+
+impl std::fmt::Display for HubRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "the hub refused: {}", self.message)
+    }
+}
+
+impl std::error::Error for HubRefusal {}
+
+/// Turn a hub's error answer into an error a person can read: a
+/// [`HubRefusal`] when it carries a stable reason, otherwise the status and
+/// the hub's message -- never the raw body when it is JSON.
+pub fn refusal_of(status: u16, response: ureq::Response) -> anyhow::Error {
+    let body = response.into_string().unwrap_or_default();
+    match serde_json::from_str::<serde_json::Value>(&body) {
+        Ok(answer) => match answer["error"].as_str() {
+            Some(reason) => HubRefusal {
+                reason: reason.to_string(),
+                message: answer["message"]
+                    .as_str()
+                    .unwrap_or("no reason was given")
+                    .to_string(),
+            }
+            .into(),
+            None => match answer["message"].as_str().or(answer["problem"].as_str()) {
+                Some(message) => anyhow::anyhow!("the hub answered HTTP {status}: {message}"),
+                None => anyhow::anyhow!("the hub answered HTTP {status}"),
+            },
+        },
+        Err(_) => {
+            let first = body.lines().next().unwrap_or("").trim();
+            let first: String = first.chars().take(200).collect();
+            if first.is_empty() {
+                anyhow::anyhow!("the hub answered HTTP {status}")
+            } else {
+                anyhow::anyhow!("the hub answered HTTP {status}: {first}")
+            }
+        }
+    }
+}
+
+/// The hub to talk to: `--hub`, else `KRATE_HUB_URL`, else the public hub.
+pub fn hub_url(hub_override: Option<&str>) -> String {
+    hub_override
+        .map(str::to_string)
+        .or_else(|| std::env::var("KRATE_HUB_URL").ok())
+        .unwrap_or_else(|| crate::DEFAULT_HUB_URL.to_string())
+        .trim_end_matches('/')
+        .to_string()
+}
+
+/// One key per command: the same command retried is the same request.
+fn new_idempotency_key() -> String {
+    use sha2::{Digest, Sha256};
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let seed = format!(
+        "{nanos}-{}-{}",
+        std::process::id(),
+        COUNTER.fetch_add(1, Ordering::SeqCst)
+    );
+    Sha256::digest(seed.as_bytes())
+        .iter()
+        .take(16)
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+/// A path segment, percent-encoded, so a slug, login or code can never walk
+/// out of the route it was put in. One made only of dots is refused: a URL
+/// parser reads it as "up a level" however it is encoded.
+fn seg(text: &str) -> Result<String> {
+    if text.is_empty() || text.bytes().all(|b| b == b'.') {
+        anyhow::bail!("\"{text}\" is not a name the hub can look up");
+    }
+    let mut out = String::new();
+    for byte in text.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~') {
+            out.push(byte as char);
+        } else {
+            out.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    Ok(out)
+}
+
+enum Body<'a> {
+    Empty,
+    Json(serde_json::Value),
+    Bundle(&'a [u8], Vec<(&'static str, String)>),
+}
+
+/// The signed-in person and the hub they talk to.
+struct Client {
+    hub: String,
+    identity: github_auth::Identity,
+    key: String,
+    agent: ureq::Agent,
+}
+
+impl Client {
+    fn new(hub: String, identity: github_auth::Identity) -> Self {
+        Client {
+            hub,
+            identity,
+            key: new_idempotency_key(),
+            agent: ureq::AgentBuilder::new()
+                .timeout_connect(std::time::Duration::from_secs(20))
+                .timeout_read(std::time::Duration::from_secs(120))
+                .build(),
+        }
+    }
+
+    fn me(&self) -> String {
+        self.identity.login.to_ascii_lowercase()
+    }
+
+    /// Send one request; a dropped connection is retried with the SAME key,
+    /// which is what makes the retry safe.
+    fn send(&self, method: &str, path: &str, body: &Body) -> Result<serde_json::Value> {
+        let url = format!("{}{path}", self.hub);
+        let mut last = None;
+        for attempt in 0..3 {
+            if attempt > 0 {
+                std::thread::sleep(std::time::Duration::from_millis(400 * attempt));
+            }
+            let request = self
+                .agent
+                .request(method, &url)
+                .set("Authorization", &format!("Bearer {}", self.identity.token))
+                .set("Idempotency-Key", &self.key)
+                .set("Accept", "application/json");
+            let sent = match body {
+                Body::Empty => request.call(),
+                Body::Json(value) => request
+                    .set("Content-Type", "application/json")
+                    .send_string(&value.to_string()),
+                Body::Bundle(bytes, headers) => {
+                    let mut request = request.set("Content-Type", "application/octet-stream");
+                    for (name, value) in headers {
+                        request = request.set(name, value);
+                    }
+                    request.send_bytes(bytes)
+                }
+            };
+            match sent {
+                Ok(response) => {
+                    if response.status() == 204 {
+                        return Ok(serde_json::Value::Null);
+                    }
+                    let text = response
+                        .into_string()
+                        .context("could not read the hub's answer")?;
+                    if text.trim().is_empty() {
+                        return Ok(serde_json::Value::Null);
+                    }
+                    return serde_json::from_str(&text).map_err(|_| {
+                        anyhow::anyhow!(
+                            "the hub at {} answered with something that is not a Krate hub's \
+                             answer. Check --hub or KRATE_HUB_URL.",
+                            self.hub
+                        )
+                    });
+                }
+                Err(ureq::Error::Status(status, response)) => {
+                    return Err(refusal_of(status, response));
+                }
+                Err(ureq::Error::Transport(err)) => last = Some(err),
+            }
+        }
+        anyhow::bail!(
+            "could not reach the hub at {}: {}. Is it running? Point --hub or KRATE_HUB_URL \
+             at a reachable one.",
+            self.hub,
+            last.map(|err| err.to_string()).unwrap_or_default()
+        )
+    }
+}
+
+/// The signed-in identity, signing in first when a person is there to do
+/// it -- the same as `krate publish`.
+pub fn identity_or_sign_in(why: &str) -> Result<github_auth::Identity> {
+    if let Some(identity) = github_auth::current() {
+        return Ok(identity);
+    }
+    use std::io::IsTerminal;
+    if !std::io::stdout().is_terminal() {
+        anyhow::bail!("you are not signed in: run `krate account login`, then run this again");
+    }
+    println!("{why}");
+    github_auth::sign_in().map_err(|err| anyhow::anyhow!("could not sign in: {err}"))
+}
+
+/// What a command was trying to do, for the words of a refusal.
+#[derive(Clone, Copy)]
+pub enum Action<'a> {
+    Create,
+    Show,
+    Invite(Role),
+    CancelInvite,
+    Join,
+    Role(&'a str, Role),
+    Remove(&'a str),
+    RootKey,
+    Publish,
+    Approve(&'a str),
+    Releases,
+    Candidates,
+    Audit,
+}
+
+/// A refusal in plain words: what the reason means here, and the next step.
+pub fn words(refusal: &HubRefusal, org: &str, me: &str, action: Action) -> String {
+    let owner_or_admin = format!("an owner or admin of {org}");
+    let an_owner = format!("an owner of {org}");
+    match refusal.reason.as_str() {
+        "not-signed-in" => {
+            "you are not signed in: run `krate account login`, then run this again".to_string()
+        }
+        "not-a-member" => format!(
+            "{me} is not a member of {org}: ask {owner_or_admin} to invite {me} \
+             (krate org invite {org} {me} --role <role>)"
+        ),
+        "removed" => format!(
+            "you were removed from {org}, so you can no longer act in it: ask {an_owner} \
+             to invite you again if that is a mistake"
+        ),
+        "role-cannot" => {
+            let (what, who) = match action {
+                Action::Create => ("create it".to_string(), an_owner.clone()),
+                Action::Show => (format!("see {org}'s members"), owner_or_admin.clone()),
+                Action::Invite(Role::Owner | Role::Admin) => {
+                    ("invite an owner or admin".to_string(), an_owner.clone())
+                }
+                Action::Invite(_) => ("invite people".to_string(), owner_or_admin.clone()),
+                Action::CancelInvite => ("cancel invitations".to_string(), owner_or_admin.clone()),
+                Action::Join => ("join with that invitation".to_string(), an_owner.clone()),
+                Action::Role(login, Role::Owner) => {
+                    (format!("make {login} an owner"), an_owner.clone())
+                }
+                Action::Role(login, Role::Admin) => {
+                    (format!("make {login} an admin"), an_owner.clone())
+                }
+                Action::Role(login, _) => (
+                    format!("change {login}'s role"),
+                    format!(
+                        "{an_owner} (an admin moves people only between developer, reviewer \
+                         and recipient)"
+                    ),
+                ),
+                Action::Remove(login) => (format!("remove {login}"), owner_or_admin.clone()),
+                Action::RootKey => (format!("set {org}'s root key"), an_owner.clone()),
+                Action::Publish => (
+                    format!("publish to {org}"),
+                    format!("{owner_or_admin} to make you a developer"),
+                ),
+                Action::Approve(_) => (
+                    "approve uploads".to_string(),
+                    format!("a reviewer in {org}"),
+                ),
+                Action::Releases => (format!("list {org}'s releases"), owner_or_admin.clone()),
+                Action::Candidates => (format!("list {org}'s candidates"), owner_or_admin.clone()),
+                Action::Audit => (format!("read {org}'s audit"), owner_or_admin.clone()),
+            };
+            format!("your role in {org} cannot {what}: ask {who}")
+        }
+        "last-owner" => format!(
+            "that would leave {org} with no owner, so nothing changed: make someone else an \
+             owner first (krate org role {org} <login> owner)"
+        ),
+        "self-approval" => {
+            format!("you can't approve your own upload: ask a reviewer in {org}")
+        }
+        "digest-mismatch" => match action {
+            Action::Approve(digest) => format!(
+                "nothing was approved: {org} has no candidate with the digest {}. Approve the \
+                 digest `krate publish --org {org}` printed for the upload you checked; \
+                 `krate org candidates {org}` lists them",
+                short(digest)
+            ),
+            _ => "the hub received different bytes than were sent, so nothing was taken: \
+                  run the same command again"
+                .to_string(),
+        },
+        "not-signed-for-this-org" => {
+            // The hub says which rule it failed: no signature that chains to
+            // the root, a delegation already expired, a withdrawn key.
+            let why = Some(refusal.message.trim())
+                .filter(|m| !m.is_empty() && *m != "no reason was given")
+                .map(str::to_string)
+                .unwrap_or_else(|| {
+                    format!(
+                        "it is not signed by {org}'s root key, or by a release key that root \
+                         delegated"
+                    )
+                });
+            let next = format!(
+                "{org} takes only apps signed by its root key, or by a release key that root \
+                 delegated which has not expired and was not withdrawn. Ask {an_owner} for a \
+                 current delegation (krate delegate --root <{org}-root.pkcs8> --key \
+                 <your-release.pkcs8> --namespace '{org}/*' -o {org}-release.json), sign with \
+                 it (krate sign app.krate --key <your-release.pkcs8> --namespace {org}/<app> \
+                 --delegation {org}-release.json), and publish again"
+            );
+            match action {
+                Action::Approve(_) => format!(
+                    "nothing was approved: {why}. Ask the uploader to sign it again with a \
+                     current release key and publish it again; then approve the new digest"
+                ),
+                Action::RootKey => format!(
+                    "the root key was not changed: {why}. Give the list `krate revoke` wrote \
+                     with this same root key"
+                ),
+                _ => format!("{org} did not take it: {why}. {next}"),
+            }
+        }
+        "invalid-bundle" => format!(
+            "the hub could not read this as a Krate app, so nothing was taken: {}. Pack it \
+             again with `krate pack`, then publish again",
+            refusal.message
+        ),
+        "bytes-held-elsewhere" => format!(
+            "these exact bytes are already on the hub outside {org} -- published publicly, or \
+             held by another organisation -- so they cannot be {org}'s private release: change \
+             the app (a new version number is enough), sign it again and publish again"
+        ),
+        "too-large" => format!(
+            "the hub would not take it in one request: {}. Run the same publish again with this \
+             version of Krate, which sends big apps in parts",
+            refusal.message
+        ),
+        "store-failed" => format!(
+            "the hub could not store it ({}), so nothing was taken: run the same command again",
+            refusal.message
+        ),
+        "bad-request" => format!(
+            "the hub could not read the request ({}): update Krate, then run this again",
+            refusal.message
+        ),
+        "orgs-off" => "organisations are switched off on this hub: use a hub that has them \
+             (--hub or KRATE_HUB_URL), or ask whoever runs this one"
+            .to_string(),
+        "invite-expired" => format!(
+            "that invitation has run out (they last 7 days): ask {owner_or_admin} for a new one"
+        ),
+        "invite-used" => format!(
+            "that invitation was already used: ask {owner_or_admin} for a new one, and tell \
+             them if it was not you who used it"
+        ),
+        "invite-for-someone-else" => format!(
+            "that invitation is for a different GitHub account, not {me}: sign in as the \
+             invited account with `krate account login`, or ask {owner_or_admin} to invite {me}"
+        ),
+        "invite-revoked" => {
+            format!("that invitation was cancelled: ask {owner_or_admin} for a new one")
+        }
+        "slug-taken" => format!(
+            "an organisation called {org} already exists, so nothing was created: pick another name"
+        ),
+        "slug-invalid" => format!(
+            "\"{org}\" cannot name an organisation: use 2 to 39 lower-case letters, digits and \
+             dashes, starting with a letter (like acme or acme-labs)"
+        ),
+        "idempotency-key-reused" => "the hub already took a different request under this \
+             command's key, so nothing changed: run the command again"
+            .to_string(),
+        "no-such-org" => format!(
+            "there is no organisation called {org} on this hub: check the name, or create it \
+             with `krate org create {org}`"
+        ),
+        _ => format!("the hub refused: {}", refusal.message),
+    }
+}
+
+/// An audit target with any digest in it shortened: `candidate:<64 hex>`
+/// reads as `candidate:1a2b3c4d5e6f`.
+fn spoken_target(target: &str) -> String {
+    target
+        .split(':')
+        .map(|part| {
+            if part.len() == 64 && part.bytes().all(|b| b.is_ascii_hexdigit()) {
+                short(part)
+            } else {
+                part
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(":")
+}
+
+/// The first twelve characters of a digest, which is how one is spoken.
+fn short(digest: &str) -> &str {
+    &digest[..digest.len().min(12)]
+}
+
+/// `Err` carrying a [`HubRefusal`] becomes the words for it; anything else
+/// passes through unchanged.
+fn worded<T>(result: Result<T>, org: &str, me: &str, action: Action) -> Result<T> {
+    result.map_err(|err| match err.downcast_ref::<HubRefusal>() {
+        Some(refusal) => anyhow::anyhow!("{}", words(refusal, org, me, action)),
+        None => err,
+    })
+}
+
+/// A time the hub gave: an RFC 3339 string is shown as it is; unix seconds
+/// (or milliseconds) become a UTC date.
+fn when(value: &serde_json::Value) -> String {
+    if let Some(text) = value.as_str() {
+        return text.to_string();
+    }
+    let Some(mut secs) = value.as_u64() else {
+        return String::new();
+    };
+    if secs > 100_000_000_000 {
+        secs /= 1000;
+    }
+    let days = (secs / 86_400) as i64;
+    let rest = secs % 86_400;
+    // Howard Hinnant's civil-from-days.
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    format!(
+        "{year:04}-{month:02}-{day:02} {:02}:{:02} UTC",
+        rest / 3600,
+        (rest % 3600) / 60
+    )
+}
+
+fn text<'a>(value: &'a serde_json::Value, key: &str) -> &'a str {
+    value[key].as_str().unwrap_or("")
+}
+
+/// `krate org ...`.
+pub fn run(command: OrgCommand, hub_override: Option<&str>) -> Result<u8> {
+    let hub = hub_url(hub_override);
+    let identity = identity_or_sign_in("Organisations know people by their GitHub sign-in.")?;
+    let client = Client::new(hub, identity);
+    let me = client.me();
+    match command {
+        OrgCommand::Create { slug, name } => {
+            let name = name.unwrap_or_else(|| slug.clone());
+            let answer = worded(
+                client.send(
+                    "POST",
+                    "/orgs",
+                    &Body::Json(serde_json::json!({ "slug": slug, "name": name })),
+                ),
+                &slug,
+                &me,
+                Action::Create,
+            )?;
+            let org = &answer["org"];
+            let slug = Some(text(org, "slug"))
+                .filter(|s| !s.is_empty())
+                .unwrap_or(&slug);
+            let name = Some(text(org, "name"))
+                .filter(|s| !s.is_empty())
+                .unwrap_or(&name);
+            println!("created {slug} (\"{name}\"). You are its owner.");
+            println!("Next:");
+            println!("  register its root key:  krate org root-key {slug} <publisher-root.pub>");
+            println!(
+                "  invite people:          krate org invite {slug} <github-login> --role developer"
+            );
+            Ok(0)
+        }
+        OrgCommand::Show { slug } => {
+            let answer = worded(
+                client.send("GET", &format!("/orgs/{}", seg(&slug)?), &Body::Empty),
+                &slug,
+                &me,
+                Action::Show,
+            )?;
+            let org = &answer["org"];
+            let name = Some(text(org, "name"))
+                .filter(|s| !s.is_empty())
+                .unwrap_or(&slug);
+            println!("{slug} -- {name}");
+            let my_role = text(&answer["me"], "role");
+            if !my_role.is_empty() {
+                println!("  you are {me}, {my_role}");
+            }
+            let members = answer["members"].as_array().cloned().unwrap_or_default();
+            let active = members
+                .iter()
+                .filter(|m| matches!(text(m, "state"), "" | "active"))
+                .count();
+            println!(
+                "  {active} {}:",
+                if active == 1 { "person" } else { "people" }
+            );
+            for member in &members {
+                let state = text(member, "state");
+                let state = if state.is_empty() || state == "active" {
+                    String::new()
+                } else {
+                    format!("  ({state})")
+                };
+                println!(
+                    "    {:<20} {}{state}",
+                    text(member, "login"),
+                    text(member, "role")
+                );
+            }
+            Ok(0)
+        }
+        OrgCommand::Invite { slug, login, role } => {
+            let login = login.to_ascii_lowercase();
+            let answer = worded(
+                client.send(
+                    "POST",
+                    &format!("/orgs/{}/invites", seg(&slug)?),
+                    &Body::Json(serde_json::json!({ "login": login, "role": role.as_str() })),
+                ),
+                &slug,
+                &me,
+                Action::Invite(role),
+            )?;
+            let code = text(&answer, "code");
+            println!("invited {login} to {slug} as {}.", role.as_str());
+            let expires = when(&answer["expires_at"]);
+            if expires.is_empty() {
+                println!("Send {login} this. It works once, and only for {login}:");
+            } else {
+                println!("Send {login} this. It works once, only for {login}, until {expires}:");
+            }
+            println!("  krate org join {slug} {code}");
+            Ok(0)
+        }
+        OrgCommand::CancelInvite { slug, code } => {
+            worded(
+                client.send(
+                    "DELETE",
+                    &format!("/orgs/{}/invites/{}", seg(&slug)?, seg(&code)?),
+                    &Body::Empty,
+                ),
+                &slug,
+                &me,
+                Action::CancelInvite,
+            )?;
+            println!("cancelled that invitation to {slug}. It can no longer be used.");
+            Ok(0)
+        }
+        OrgCommand::Join { slug, code } => {
+            let answer = worded(
+                client.send(
+                    "POST",
+                    &format!("/orgs/{}/invites/{}/accept", seg(&slug)?, seg(&code)?),
+                    &Body::Empty,
+                ),
+                &slug,
+                &me,
+                Action::Join,
+            )?;
+            let role = text(&answer["membership"], "role");
+            if role.is_empty() {
+                println!("you joined {slug}.");
+            } else {
+                println!("you joined {slug} as {role}.");
+            }
+            if role == "recipient" {
+                println!("{slug}'s releases now open for you with `krate run <link>`.");
+            }
+            Ok(0)
+        }
+        OrgCommand::Role { slug, login, role } => {
+            let login = login.to_ascii_lowercase();
+            let answer = worded(
+                client.send(
+                    "PUT",
+                    &format!("/orgs/{}/members/{}", seg(&slug)?, seg(&login)?),
+                    &Body::Json(serde_json::json!({ "role": role.as_str() })),
+                ),
+                &slug,
+                &me,
+                Action::Role(&login, role),
+            )?;
+            let now = Some(text(&answer["membership"], "role"))
+                .filter(|r| !r.is_empty())
+                .unwrap_or(role.as_str());
+            println!("{login} is now {now} in {slug}.");
+            Ok(0)
+        }
+        OrgCommand::Remove { slug, login } => {
+            let login = login.to_ascii_lowercase();
+            worded(
+                client.send(
+                    "DELETE",
+                    &format!("/orgs/{}/members/{}", seg(&slug)?, seg(&login)?),
+                    &Body::Empty,
+                ),
+                &slug,
+                &me,
+                Action::Remove(&login),
+            )?;
+            if login == me {
+                println!("you left {slug}. Its apps no longer open for you; your own apps are untouched.");
+            } else {
+                println!("removed {login} from {slug}.");
+                println!(
+                    "Their access to {slug}'s apps ended now. Their own apps and account are \
+                     untouched, and {slug}'s releases keep their history."
+                );
+            }
+            Ok(0)
+        }
+        OrgCommand::RootKey {
+            slug,
+            key,
+            revocations,
+        } => {
+            let (public_key, from_private) = public_key_from(&key)?;
+            let mut body = serde_json::json!({ "public_key": public_key });
+            if let Some(path) = &revocations {
+                body["revocations"] = revocation_list(path, &public_key)?;
+            }
+            let answer = worded(
+                client.send(
+                    "PUT",
+                    &format!("/orgs/{}/root-key", seg(&slug)?),
+                    &Body::Json(body),
+                ),
+                &slug,
+                &me,
+                Action::RootKey,
+            )?;
+            if from_private {
+                println!(
+                    "read the public half of {}; the key itself stayed here.",
+                    key.display()
+                );
+            }
+            println!("{slug}'s root key is now {}...", short(&public_key));
+            let key = &answer["key"];
+            let replaced = key["rotated"].as_bool() == Some(true)
+                || key["previous"].as_str().is_some_and(|p| !p.is_empty());
+            if replaced {
+                println!("This replaced the previous key; the change is in {slug}'s audit.");
+            }
+            if let Some(withdrawn) = key["revoked_now"].as_u64().filter(|n| *n > 0) {
+                println!(
+                    "Withdrew {withdrawn} release key{}: {slug} refuses what {} signed, from now on.",
+                    if withdrawn == 1 { "" } else { "s" },
+                    if withdrawn == 1 { "it" } else { "they" }
+                );
+            }
+            println!(
+                "Apps published to {slug} must be signed by it, or by a release key it \
+                 delegated (krate delegate --root <root key> --key <release key> \
+                 --namespace '{slug}/*' -o {slug}-release.json)."
+            );
+            Ok(0)
+        }
+        OrgCommand::Approve { slug, digest } => {
+            let digest = digest.trim().to_ascii_lowercase();
+            let answer = worded(
+                client.send(
+                    "POST",
+                    &format!("/orgs/{}/candidates/{}/approve", seg(&slug)?, seg(&digest)?),
+                    &Body::Empty,
+                ),
+                &slug,
+                &me,
+                Action::Approve(&digest),
+            )?;
+            let release = &answer["release"];
+            let released = Some(text(release, "digest"))
+                .filter(|d| !d.is_empty())
+                .unwrap_or(&digest);
+            println!("approved. {} is now a release of {slug}.", short(released));
+            let url = text(release, "url");
+            if !url.is_empty() {
+                println!("Its members and recipients run it with:");
+                println!("  krate run {url}");
+                println!("The link alone opens nothing: each person's own sign-in is checked.");
+            }
+            Ok(0)
+        }
+        OrgCommand::Releases { slug } => {
+            let answer = worded(
+                client.send(
+                    "GET",
+                    &format!("/orgs/{}/releases", seg(&slug)?),
+                    &Body::Empty,
+                ),
+                &slug,
+                &me,
+                Action::Releases,
+            )?;
+            let releases = answer
+                .as_array()
+                .cloned()
+                .or_else(|| answer["releases"].as_array().cloned())
+                .unwrap_or_default();
+            if releases.is_empty() {
+                println!(
+                    "{slug} has no releases yet. A developer uploads one with \
+                     `krate publish app.krate --org {slug}`, and a reviewer approves it."
+                );
+                return Ok(0);
+            }
+            println!(
+                "{slug}: {} release{}",
+                releases.len(),
+                if releases.len() == 1 { "" } else { "s" }
+            );
+            for release in &releases {
+                println!(
+                    "  {} {}  {}",
+                    text(release, "name"),
+                    text(release, "version"),
+                    short(text(release, "digest"))
+                );
+                let at = when(&release["at"]);
+                println!(
+                    "    uploaded by {}, approved by {}{}",
+                    text(release, "uploaded_by"),
+                    text(release, "approved_by"),
+                    if at.is_empty() {
+                        String::new()
+                    } else {
+                        format!(", {at}")
+                    }
+                );
+                let url = text(release, "url");
+                if !url.is_empty() {
+                    println!("    krate run {url}");
+                }
+            }
+            Ok(0)
+        }
+        OrgCommand::Candidates { slug } => {
+            let answer = worded(
+                client.send(
+                    "GET",
+                    &format!("/orgs/{}/candidates", seg(&slug)?),
+                    &Body::Empty,
+                ),
+                &slug,
+                &me,
+                Action::Candidates,
+            )?;
+            let candidates = answer
+                .as_array()
+                .cloned()
+                .or_else(|| answer["candidates"].as_array().cloned())
+                .unwrap_or_default();
+            if candidates.is_empty() {
+                println!(
+                    "{slug} has no candidates yet. A developer uploads one with \
+                     `krate publish app.krate --org {slug}`."
+                );
+                return Ok(0);
+            }
+            println!(
+                "{slug}: {} candidate{}",
+                candidates.len(),
+                if candidates.len() == 1 { "" } else { "s" }
+            );
+            for candidate in &candidates {
+                let state = match text(candidate, "state") {
+                    "waiting-for-approval" => "waiting for approval",
+                    other => other,
+                };
+                println!(
+                    "  {} {}  {}  {state}",
+                    text(candidate, "name"),
+                    text(candidate, "version"),
+                    text(candidate, "digest"),
+                );
+                let uploaded = when(&candidate["uploaded_at"]);
+                let mut line = format!("    uploaded by {}", text(candidate, "uploaded_by"));
+                if !uploaded.is_empty() {
+                    line.push_str(&format!(" {uploaded}"));
+                }
+                let approver = text(candidate, "approved_by");
+                if !approver.is_empty() {
+                    line.push_str(&format!(", approved by {approver}"));
+                    let approved = when(&candidate["approved_at"]);
+                    if !approved.is_empty() {
+                        line.push_str(&format!(" {approved}"));
+                    }
+                }
+                println!("{line}");
+            }
+            Ok(0)
+        }
+        OrgCommand::Audit { slug } => {
+            let answer = worded(
+                client.send("GET", &format!("/orgs/{}/audit", seg(&slug)?), &Body::Empty),
+                &slug,
+                &me,
+                Action::Audit,
+            )?;
+            let events = answer["events"].as_array().cloned().unwrap_or_default();
+            println!(
+                "{slug} audit: {} event{}",
+                events.len(),
+                if events.len() == 1 { "" } else { "s" }
+            );
+            for event in &events {
+                let result = text(event, "result");
+                let reason = text(event, "reason");
+                let outcome = if reason.is_empty() {
+                    result.to_string()
+                } else {
+                    format!("{result}: {reason}")
+                };
+                let target = spoken_target(text(event, "target"));
+                println!(
+                    "  {:>4}  {}  {:<10} {:<16} {:<14} {outcome}",
+                    event["seq"]
+                        .as_u64()
+                        .map(|n| n.to_string())
+                        .unwrap_or_default(),
+                    when(&event["at"]),
+                    text(event, "actor"),
+                    text(event, "action"),
+                    target,
+                );
+            }
+            if answer["chain_ok"].as_bool() == Some(true) {
+                println!(
+                    "chain intact: the hub recomputed every link, and each event follows the \
+                     one before it."
+                );
+                Ok(0)
+            } else {
+                println!(
+                    "THE CHAIN IS BROKEN: an event was changed or removed after it was \
+                     written, so this history cannot be trusted. Tell {slug}'s owners."
+                );
+                Ok(1)
+            }
+        }
+    }
+}
+
+/// The public key a root-key file names: 64 hex characters, or the public
+/// half of a PKCS#8 key (the flag says it was a private key file).
+fn public_key_from(path: &Path) -> Result<(String, bool)> {
+    let bytes = std::fs::read(path)
+        .with_context(|| format!("could not read the key at {}", path.display()))?;
+    if let Ok(text) = std::str::from_utf8(&bytes) {
+        let text = text.trim();
+        if text.len() == 64 && text.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return Ok((text.to_ascii_lowercase(), false));
+        }
+    }
+    match krate_bundle::signing::SigningKey::from_pkcs8(&bytes) {
+        Ok(key) => Ok((
+            key.public_key()
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect(),
+            true,
+        )),
+        Err(_) => anyhow::bail!(
+            "{} is not a root key: give the root's public key (64 hex characters) or the \
+             key file `krate sign --generate-key` wrote",
+            path.display()
+        ),
+    }
+}
+
+/// The signed list `krate revoke` wrote, checked here before it is sent:
+/// it must be a list, and from the root being registered.
+fn revocation_list(path: &Path, root: &str) -> Result<serde_json::Value> {
+    let text = std::fs::read_to_string(path)
+        .with_context(|| format!("could not read the list at {}", path.display()))?;
+    let list: krate_bundle::delegation::SignedRevocationList = serde_json::from_str(&text)
+        .map_err(|_| {
+            anyhow::anyhow!("{} is not a list written by `krate revoke`", path.display())
+        })?;
+    if !list.list.root.eq_ignore_ascii_case(root) {
+        anyhow::bail!(
+            "{} was signed by a different root ({}...) than the key being registered \
+             ({}...): give the list `krate revoke --root` wrote with this root",
+            path.display(),
+            short(&list.list.root),
+            short(root)
+        );
+    }
+    Ok(serde_json::to_value(&list)?)
+}
+
+/// Before anything is uploaded to an organisation: the bundle must carry a
+/// signature that verifies. Unsigned, it says exactly what to run.
+pub fn require_signed(opened: &krate_bundle::OpenBundle, file: &Path, slug: &str) -> Result<()> {
+    let app = opened
+        .manifest()
+        .app
+        .id
+        .rsplit('.')
+        .next()
+        .unwrap_or("app")
+        .to_ascii_lowercase();
+    let namespace = format!("{slug}/{app}");
+    let file = file.display();
+    match opened.signature_verdict() {
+        Ok(Some(verdict)) if verdict.is_genuinely_signed() => Ok(()),
+        Ok(Some(_)) => anyhow::bail!(
+            "{file}'s signature does not match its contents, so nothing was uploaded: it was \
+             changed after it was signed. Sign it again (krate sign {file} --key <release key> \
+             --namespace {namespace} --delegation {slug}-release.json), then publish again."
+        ),
+        _ => anyhow::bail!(
+            "{file} is not signed, so nothing was uploaded: {slug} takes only apps signed by \
+             its root key, or by a release key that root delegated.\n\
+             \n  With {slug}'s root key:\n    \
+             krate sign {file} --key <{slug}-root.pkcs8> --namespace {namespace}\n\
+             \n  With a release key ({slug}'s owner runs the first line once):\n    \
+             krate delegate --root <{slug}-root.pkcs8> --key <release.pkcs8> --namespace '{slug}/*' -o {slug}-release.json\n    \
+             krate sign {file} --key <release.pkcs8> --namespace {namespace} --delegation {slug}-release.json\n\
+             \nThen run this publish again."
+        ),
+    }
+}
+
+/// `krate publish app.krate --org <slug>`: upload a signed bundle as a
+/// candidate. Over the publish door's 5 MiB it goes through the big-file
+/// path, the same as any publish. Nothing is released until someone else
+/// with approve authority approves its exact digest.
+pub fn publish_candidate(
+    hub: &str,
+    slug: &str,
+    identity: github_auth::Identity,
+    bytes: &[u8],
+    name: &str,
+    description: Option<&str>,
+    category: &str,
+) -> Result<u8> {
+    let local = krate_bundle::sha256_hex(bytes);
+    let client = Client::new(hub.trim_end_matches('/').to_string(), identity);
+    let me = client.me();
+    let answer: serde_json::Value = if bytes.len() > crate::PUBLISH_DOOR_BYTES {
+        let fields = serde_json::json!({
+            "name": name,
+            "description": description.unwrap_or(""),
+            "category": category,
+            "unlisted": true,
+            "org": slug,
+        });
+        let body = worded(
+            crate::publish_big(
+                &client.hub,
+                &client.identity.token,
+                bytes,
+                "bundle",
+                None,
+                fields,
+            ),
+            slug,
+            &me,
+            Action::Publish,
+        )?;
+        serde_json::from_str(&body).unwrap_or_default()
+    } else {
+        let mut headers = vec![("X-Krate-Encoding", "uri".to_string())];
+        if !name.is_empty() {
+            headers.push(("X-Krate-Name", crate::percent_encode_text(name)));
+        }
+        if let Some(description) = description {
+            headers.push((
+                "X-Krate-Description",
+                crate::percent_encode_text(description),
+            ));
+        }
+        headers.push(("X-Krate-Category", category.to_string()));
+        worded(
+            client.send(
+                "POST",
+                &format!("/orgs/{}/candidates", seg(slug)?),
+                &Body::Bundle(bytes, headers),
+            ),
+            slug,
+            &me,
+            Action::Publish,
+        )?
+    };
+    let digest = Some(text(&answer, "digest"))
+        .filter(|d| !d.is_empty())
+        .unwrap_or(&local)
+        .to_string();
+    println!("uploaded to {slug} as a candidate. It waits for approval and opens for nobody yet.");
+    let app = format!("{} {}", text(&answer, "name"), text(&answer, "version"));
+    if !app.trim().is_empty() {
+        println!("  app     {}", app.trim());
+    }
+    println!("  digest  {digest}");
+    if digest != local {
+        println!(
+            "  note: the hub reports a different digest than these bytes ({}); what it \
+             stored is not byte-for-byte what was sent",
+            short(&local)
+        );
+    }
+    println!("A reviewer in {slug} (not you) releases it with:");
+    println!("  krate org approve {slug} {digest}");
+    Ok(0)
+}
+
+/// The session to send with a link to run: only to a Krate hub -- the one
+/// configured here, or Krate's own -- so a link to anywhere else never
+/// receives the person's GitHub token.
+pub fn link_authorization(url: &str) -> Option<String> {
+    if !is_hub_link(url) {
+        return None;
+    }
+    github_auth::current().map(|identity| format!("Bearer {}", identity.token))
+}
+
+fn origin(url: &str) -> Option<String> {
+    let (scheme, rest) = url.split_once("://")?;
+    let host = rest.split(['/', '?', '#']).next()?;
+    // userinfo@host is not a hub; refuse rather than guess which part counts.
+    if host.contains('@') || host.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "{}://{}",
+        scheme.to_ascii_lowercase(),
+        host.to_ascii_lowercase()
+    ))
+}
+
+fn is_hub_link(url: &str) -> bool {
+    let Some(link) = origin(url) else {
+        return false;
+    };
+    let configured = origin(&hub_url(None));
+    configured.as_deref() == Some(link.as_str())
+        || link == "https://hub.krate.tech"
+        || link == "https://krate.tech"
+}
+
+/// The words for a refused download of a private release.
+pub fn download_refusal(url: &str, reason: &str, message: &str, org: Option<&str>) -> String {
+    let org_name = org.unwrap_or("the organisation that sent it");
+    let me = github_auth::current().map(|identity| identity.login.to_ascii_lowercase());
+    match reason {
+        "not-signed-in" => match (&me, is_hub_link(url)) {
+            (Some(_), false) => format!(
+                "this app is private, and the link is not on your Krate hub, so Krate did not \
+                 send your sign-in and nothing ran: if you trust that hub, run it again with \
+                 KRATE_HUB_URL={}",
+                origin(url).unwrap_or_default()
+            ),
+            (Some(login), true) => format!(
+                "the hub did not accept your sign-in as {login} (it may have run out), so \
+                 nothing ran: sign in again with `krate account login`, then run the same link \
+                 again"
+            ),
+            (None, _) => "this app is private to an organisation and you are not signed in, so \
+                  nothing was downloaded or run: sign in with `krate account login` as the \
+                  GitHub account it was shared with, then run the same link again"
+                .to_string(),
+        },
+        "not-a-member" => {
+            let me = me.unwrap_or_else(|| "this account".to_string());
+            format!(
+                "this app is private to {org_name}, and {me} is not one of its members or \
+                 recipients, so nothing ran: ask an owner or admin of {org_name} to invite {me}"
+            )
+        }
+        "removed" => format!(
+            "you were removed from {org_name}, so this app no longer opens for you: ask an \
+             owner of {org_name} if that is a mistake"
+        ),
+        "role-cannot" => format!(
+            "your role in {org_name} cannot download its releases: ask an owner or admin of \
+             {org_name}"
+        ),
+        "no-such-org" => {
+            "the organisation that released this app is gone, so it no longer opens".to_string()
+        }
+        "digest-mismatch" => format!(
+            "this link is to an app {org_name} has not approved (or no longer has), so nothing \
+             ran: ask whoever sent it for the link `krate org approve` printed"
+        ),
+        "orgs-off" => "organisations are switched off on this hub, so its private apps do \
+             not open: ask whoever runs it"
+            .to_string(),
+        _ => format!("the hub would not hand this app over: {message}"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every stable reason the contract names has its own words, so none
+    /// reaches a person as the hub's bare string.
+    #[test]
+    fn every_contract_reason_has_its_own_words() {
+        let reasons = [
+            "not-signed-in",
+            "not-a-member",
+            "removed",
+            "role-cannot",
+            "last-owner",
+            "self-approval",
+            "digest-mismatch",
+            "not-signed-for-this-org",
+            "invite-expired",
+            "invite-used",
+            "invite-for-someone-else",
+            "invite-revoked",
+            "slug-taken",
+            "slug-invalid",
+            "idempotency-key-reused",
+            "no-such-org",
+            "invalid-bundle",
+            "bytes-held-elsewhere",
+            "too-large",
+            "store-failed",
+            "bad-request",
+            "orgs-off",
+        ];
+        for reason in reasons {
+            let refusal = HubRefusal {
+                reason: reason.to_string(),
+                message: "SENTINEL".to_string(),
+            };
+            let said = words(&refusal, "acme", "bob", Action::Approve("abc"));
+            // Some reasons quote the hub's detail (which rule a signature
+            // failed, what was wrong with the file); none is ONLY that.
+            assert!(
+                !said.starts_with("the hub refused"),
+                "{reason} fell through: {said}"
+            );
+            assert!(
+                said.replace("SENTINEL", "").trim().len() > 40,
+                "{reason} says more than the hub did: {said}"
+            );
+            assert!(said.contains(':'), "{reason} names a next step: {said}");
+        }
+    }
+
+    #[test]
+    fn a_session_goes_only_to_a_hub() {
+        assert_eq!(
+            origin("https://Hub.Krate.Tech/a/abc").as_deref(),
+            Some("https://hub.krate.tech")
+        );
+        assert!(origin("https://hub.krate.tech@evil.example/a/x").is_none());
+        assert!(is_hub_link("https://hub.krate.tech/a/abc"));
+        assert!(!is_hub_link("https://hub.krate.tech.evil.example/a/abc"));
+        assert!(!is_hub_link("https://evil.example/a/abc"));
+    }
+
+    #[test]
+    fn a_path_segment_cannot_leave_its_route() {
+        assert_eq!(seg("../admin").unwrap(), "..%2Fadmin");
+        assert_eq!(seg("bob").unwrap(), "bob");
+        assert!(seg("..").is_err() && seg("").is_err());
+    }
+
+    #[test]
+    fn unix_seconds_read_as_a_date() {
+        assert_eq!(when(&serde_json::json!(0)), "1970-01-01 00:00 UTC");
+        assert_eq!(
+            when(&serde_json::json!(1_760_400_000u64)),
+            "2025-10-14 00:00 UTC"
+        );
+        assert_eq!(
+            when(&serde_json::json!(1_760_400_000_000u64)),
+            "2025-10-14 00:00 UTC"
+        );
+        assert_eq!(
+            when(&serde_json::json!("2026-10-21T00:00:00Z")),
+            "2026-10-21T00:00:00Z"
+        );
+    }
+}
