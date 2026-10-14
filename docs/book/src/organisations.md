@@ -8,6 +8,11 @@ open it. A copied link alone opens nothing.
 Organisations are a pilot, run with a few design partners while it is new.
 Everything below is driven from the `krate` command line.
 
+Installing Krate on an organisation's computers, the policy that says which
+apps may open there, the record of what opened, company networks, and
+release control are in
+[Running Krate in an organisation](running-in-an-organisation.md).
+
 ## Who can do what
 
 People are known by a GitHub account or a work email. A GitHub account is
