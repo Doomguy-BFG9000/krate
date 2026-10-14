@@ -70,5 +70,22 @@
     return true;
   }
 
-  root.KrateSignIn = { begin: begin, accept: accept };
+  /// Where a finished sign-in may continue to, from `?next=`: a path on
+  /// this site, or "" (IC-947). Never another site: "//evil.example",
+  /// "/\\evil.example", "https://evil.example", "javascript:..." and anything
+  /// the URL parser would turn into one (it drops tabs and newlines, and
+  /// reads a backslash as a slash) all come back "". The answer is the
+  /// parsed path, never the raw string, so what is checked is what is used.
+  function safeNext(next, origin) {
+    var s = String(next || "");
+    if (!s || s.length > 2048 || s.charAt(0) !== "/") return "";
+    if (/[\u0000-\u001f\u007f\\]/.test(s) || s.charAt(1) === "/") return "";
+    var u;
+    try { u = new URL(s, origin); } catch (e) { return ""; }
+    if (u.origin !== origin) return "";
+    var out = u.pathname + u.search + u.hash;
+    return out.charAt(0) === "/" && out.charAt(1) !== "/" ? out : "";
+  }
+
+  root.KrateSignIn = { begin: begin, accept: accept, safeNext: safeNext };
 })(typeof window !== "undefined" ? window : globalThis);

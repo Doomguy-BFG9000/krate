@@ -163,7 +163,9 @@ html.krate-booting .booting { display: flex; }
 <script>
 // One page view to our own hub: the page, and the site you came from by
 // name only. No cookie and nothing stored on your device (see /privacy/).
+// A copy of the site served from this machine counts nothing.
 (function () {
+  if (/^(127\.0\.0\.1|localhost|\[::1\])$/.test(location.hostname)) return;
   try {
     fetch("https://hub.krate.tech/view", {
       method: "POST",
@@ -238,6 +240,23 @@ html.krate-booting .booting { display: flex; }
     var sub = document.getElementById("loginSub");
     sub.textContent = WHY[err] + " Started from Krate on your computer? Press Sign in there again.";
     sub.classList.add("login-err");
+  }
+  // Sent here by a page on this site that needs an account (IC-947): say
+  // which, so the person knows why and that they come straight back.
+  var nextPath = window.KrateSignIn && window.KrateSignIn.safeNext ? window.KrateSignIn.safeNext(next, location.origin) : "";
+  var FOR = [
+    [/^\/join\//, "Sign in to accept your invitation", "Use the account the invitation was sent to. You come straight back to it."],
+    [/^\/orgs?\//, "Sign in to your organisations", "One account for your apps and your teams. You come straight back."],
+    [/^\/open\//, "Sign in to open this app", "It is private to the people it was sent to. You come straight back to it."],
+  ];
+  if (nextPath && !WHY[err]) {
+    for (var f = 0; f < FOR.length; f++) {
+      if (FOR[f][0].test(nextPath)) {
+        document.getElementById("loginH").textContent = FOR[f][1];
+        document.getElementById("loginSub").textContent = FOR[f][2];
+        break;
+      }
+    }
   }
   // There is no "Not now": a person is only sent here because the thing
   // they asked for needs an account. The logo is the way back to the site.
