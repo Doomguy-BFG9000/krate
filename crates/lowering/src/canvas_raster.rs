@@ -75,10 +75,27 @@ fn add_op_ms(slot: u8, started: std::time::Instant) {
     });
 }
 
-struct OpTimer(u8, std::time::Instant);
+/// A hot op's timer. A browser's wasm32 has no clock `Instant` can read
+/// (it panics), so there the timer measures nothing: the Player reports
+/// its own frame times from the page.
+struct OpTimer(u8, Option<std::time::Instant>);
+impl OpTimer {
+    fn start(slot: u8) -> Self {
+        #[cfg(target_arch = "wasm32")]
+        {
+            Self(slot, None)
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            Self(slot, Some(std::time::Instant::now()))
+        }
+    }
+}
 impl Drop for OpTimer {
     fn drop(&mut self) {
-        add_op_ms(self.0, self.1);
+        if let Some(started) = self.1 {
+            add_op_ms(self.0, started);
+        }
     }
 }
 
@@ -471,7 +488,7 @@ impl CanvasSurface {
     pub fn clear(&mut self, color: u32) {
         self.pending = None;
         self.ensure_buffer();
-        let __op_timer = OpTimer(0, std::time::Instant::now());
+        let __op_timer = OpTimer::start(0);
         let _ = &__op_timer;
         // Clear respects the clip too, so "clear this region" works -- which
         // is what a scrolling list needs before redrawing its rows.
@@ -496,7 +513,7 @@ impl CanvasSurface {
 
     pub fn fill_rect(&mut self, x: f32, y: f32, w: f32, h: f32, color: u32) {
         self.materialize();
-        let __op_timer = OpTimer(0, std::time::Instant::now());
+        let __op_timer = OpTimer::start(0);
         let _ = &__op_timer;
         let (x, y) = self.map_point(x, y);
         let (w, h) = (self.map_len(w), self.map_len(h));
@@ -1015,7 +1032,7 @@ impl CanvasSurface {
     /// honoring a font name on one system.
     pub fn text(&mut self, text: &str, x: f32, y: f32, font_size: f32, color: u32) {
         self.materialize();
-        let __op_timer = OpTimer(1, std::time::Instant::now());
+        let __op_timer = OpTimer::start(1);
         let _ = &__op_timer;
         self.text_styled(
             text,
@@ -1039,7 +1056,7 @@ impl CanvasSurface {
         style: krate_adapter_common::vector_text::CanvasTextStyle,
     ) {
         self.materialize();
-        let __op_timer = OpTimer(1, std::time::Instant::now());
+        let __op_timer = OpTimer::start(1);
         let _ = &__op_timer;
         let (x, y) = self.map_point(x, y);
         let font_size = self.map_len(font_size);
@@ -1115,7 +1132,7 @@ impl CanvasSurface {
     /// instead. A measurement that disagreed with the pixels would be worse
     /// than none, because an app cannot tell it is wrong.
     pub fn measure_text(&self, text: &str, font_size: f32) -> TextMetrics {
-        let __op_timer = OpTimer(2, std::time::Instant::now());
+        let __op_timer = OpTimer::start(2);
         let _ = &__op_timer;
         self.measure_text_styled(
             text,
@@ -1133,7 +1150,7 @@ impl CanvasSurface {
         font_size: f32,
         style: krate_adapter_common::vector_text::CanvasTextStyle,
     ) -> TextMetrics {
-        let __op_timer = OpTimer(2, std::time::Instant::now());
+        let __op_timer = OpTimer::start(2);
         let _ = &__op_timer;
         if let Some(m) =
             krate_adapter_common::vector_text::measure_canvas_text_styled(text, font_size, style)

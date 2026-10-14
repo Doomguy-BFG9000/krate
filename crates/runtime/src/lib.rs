@@ -48,7 +48,9 @@ mod camera_macos;
 mod camera_android;
 #[cfg(any(target_os = "windows", target_os = "linux"))]
 mod camera_nokhwa;
-mod canvas_raster;
+// The canvas rasterizer lives with the tree-to-widgets step, shared with the
+// browser Player (IC-956).
+pub(crate) use krate_lowering::canvas_raster;
 /// Threaded apps (IC-929).
 #[cfg(all(
     feature = "phase2-bindings",

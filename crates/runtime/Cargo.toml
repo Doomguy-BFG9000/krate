@@ -105,6 +105,8 @@ miniz_oxide = "0.8.9"
 # real thing to be worth taking.
 krate-adapter-common = { path = "../adapter-common", features = ["vector-text"] }
 krate-layout = { path = "../layout" }
+# The tree-to-widgets step, shared with the browser Player (IC-956).
+krate-lowering = { path = "../lowering" }
 krate-manifest = { path = "../manifest" }
 krate-policy = { path = "../policy" }
 libc.workspace = true

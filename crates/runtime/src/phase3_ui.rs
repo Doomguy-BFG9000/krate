@@ -9,30 +9,8 @@ use krate_adapter_common::ui::{
     UiAdapterError, UiAdapterInfo, UiEvent, UiEventLoopTick, WheelEvent, WidgetId, WidgetNode,
     WidgetTree, WindowId, WindowOptions, WindowRecord, WindowSize,
 };
-use krate_layout::{
-    compute_layout_measured, hit_test, LayoutPoint, LayoutSnapshot, LayoutViewport,
-    PreparedLayoutTree,
-};
+use krate_layout::{hit_test, LayoutPoint, LayoutSnapshot, LayoutViewport, PreparedLayoutTree};
 use thiserror::Error;
-
-/// Measure a label the way the painter will draw it.
-///
-/// The layout crate owns geometry and deliberately knows nothing about fonts,
-/// so it asks for this. Without it every Text widget is zero wide, and a
-/// centred label is placed with its left edge exactly on the centre line and
-/// drawn off to the right of it (K-412).
-///
-/// `measure_canvas_text` returns `None` when this host has no usable fonts and
-/// the painter will fall back to the 5x7 bitmap face; the fallback here is
-/// that face's own metrics, so the number layout is told always matches the
-/// pixels that get drawn.
-fn measure_label(text: &str, size: f32) -> Option<(f32, f32)> {
-    if let Some(m) = krate_adapter_common::vector_text::measure_canvas_text(text, size) {
-        return Some((m.width, m.height));
-    }
-    let scale = (size / 7.0).max(1.0);
-    Some((text.chars().count() as f32 * 6.0 * scale, 8.0 * scale))
-}
 
 use crate::uapi::{UapiCall, UapiError, UapiGuard, UiCall};
 
@@ -390,26 +368,8 @@ impl<'a> Phase3UiDispatcher<'a> {
         tree: &WidgetTree,
         viewport: LayoutViewport,
     ) -> UiDispatchResult<LayoutSnapshot> {
-        let draws_itself = tree
-            .nodes()
-            .values()
-            .any(|node| node.kind == krate_adapter_common::ui::WidgetKind::Canvas);
-        let (top, right, bottom, left) = if draws_itself {
-            (0.0, 0.0, 0.0, 0.0)
-        } else {
-            self.adapter.widget_insets(window)
-        };
-        let clear = |v: f32| if v.is_finite() { v.max(0.0) } else { 0.0 };
-        let (top, right, bottom, left) = (clear(top), clear(right), clear(bottom), clear(left));
-        let inner = LayoutViewport::new(
-            (viewport.width - left - right).max(1.0),
-            (viewport.height - top - bottom).max(1.0),
-        )
-        .map_err(|err| UiDispatchError::Layout(err.to_string()))?;
-        let mut layout = compute_layout_measured(tree, inner, &measure_label)
-            .map_err(|err| UiDispatchError::Layout(err.to_string()))?;
-        layout.offset(left, top);
-        Ok(layout)
+        krate_lowering::layout_inside(tree, viewport, self.adapter.widget_insets(window))
+            .map_err(|err| UiDispatchError::Layout(err.to_string()))
     }
 
     pub fn prepare_layout(&self, window: WindowId) -> UiDispatchResult<PreparedLayoutTree> {

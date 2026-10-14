@@ -5,6 +5,7 @@
 
 pub mod canvas_list;
 pub mod drawtext;
+pub mod kv;
 pub mod locale;
 pub mod net;
 pub mod overlay;

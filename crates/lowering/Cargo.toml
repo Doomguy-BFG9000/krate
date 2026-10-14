@@ -1,0 +1,19 @@
+[package]
+name = "krate-lowering"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+
+# The runtime's tree-to-widgets step: a window's widget tree, laid out with
+# real text measurement, turned into the placements a painter draws, plus
+# the host-side rules every drawn host keeps (scroll offsets, which presses
+# move focus, Enter/Space activating a focused control, the rules a node
+# must pass). Shared by the desktop runtime and the browser Player
+# (IC-956), so the two cannot drift. No GPU, no OS: builds for wasm32.
+
+[dependencies]
+krate-adapter-common = { path = "../adapter-common", features = ["vector-text"] }
+krate-layout = { path = "../layout" }

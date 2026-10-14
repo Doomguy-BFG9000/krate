@@ -9,11 +9,10 @@
 //! The `gfx` and `menu` surfaces return honest `unsupported` errors until
 //! their runtimes exist.
 
-use krate_adapter_common::painter::drawn_kind;
 use krate_adapter_common::ui::{
-    kind_is_selectable, ImagePixels, Modifiers, PointerButton, Theme, UiAdapterError, UiEvent,
-    WidgetId, WidgetKind, WidgetNode, WidgetPlacement, WidgetStyle, WindowBackendKind, WindowId,
-    WindowOptions, WindowSize,
+    ImagePixels, Modifiers, PointerButton, Theme, UiAdapterError, UiEvent, WidgetId, WidgetKind,
+    WidgetNode, WidgetPlacement, WidgetStyle, WindowBackendKind, WindowId, WindowOptions,
+    WindowSize,
 };
 use krate_layout::{absolute_rect, LayoutViewport};
 use std::sync::Arc;
@@ -2937,108 +2936,17 @@ impl Phase3GuiHost {
             .map_err(|err| UiDispatchError::Layout(err.to_string()))?;
         let layout = dispatcher.compute_layout(window, viewport)?;
 
+        // The tree-to-widgets step itself is shared with the browser Player
+        // (krate-lowering, IC-956), so the two cannot drift.
         let offsets = self.scroll_offsets.borrow();
-        let mut placements = Vec::new();
-        for (id, node) in tree.nodes() {
-            // One shared list decides what the drawn painters support, so
-            // placement filtering and painting can never drift apart.
-            //
-            // A CONTAINER passes too when the app gave it a box. `stack`,
-            // `grid` and `scroll` draw nothing of their own and are rightly
-            // absent from `drawn_kind` -- but a stack with a background and a
-            // corner radius is a card, and dropping it here would mean the
-            // painter never sees it.
-            let has_box = node
-                .style
-                .r#box
-                .map(|style| style.sanitized().paints_anything())
-                .unwrap_or(false);
-            if !drawn_kind(node.kind) && !has_box {
-                continue;
-            }
-            // A widget inside an unselected tab panel is not on screen. The
-            // layout collapses the panel, but a nested control still resolves
-            // to a rectangle, so without this every tab's contents would paint
-            // on top of each other.
-            if krate_layout::is_hidden_by_tabs(&tree, *id) {
-                continue;
-            }
-            let Some(rect) = absolute_rect(&tree, &layout, *id) else {
-                continue;
-            };
-            // Widgets inside a Scroll container shift by the container's
-            // host-side offset and clip to the container's rectangle.
-            let mut y = rect.y;
-            let mut clip = None;
-            if let Some(scroll_id) = nearest_scroll_ancestor(&tree, *id) {
-                if let Some(scroll_rect) = absolute_rect(&tree, &layout, scroll_id) {
-                    let offset = offsets.get(&(window, scroll_id)).copied().unwrap_or(0.0);
-                    y -= offset;
-                    clip = Some((
-                        scroll_rect.x,
-                        scroll_rect.y,
-                        scroll_rect.width,
-                        scroll_rect.height,
-                    ));
-                }
-            }
-            // Resolve a selectable container's selected index to the child's
-            // rect here, where the tree and layout are both in hand; the
-            // painters only ever see rectangles. Out-of-range indices and
-            // children that failed layout simply draw no highlight.
-            let selection = node.selected.and_then(|index| {
-                let child = *tree.children(*id).get(index as usize)?;
-                let child_rect = absolute_rect(&tree, &layout, child)?;
-                Some((
-                    child_rect.x,
-                    child_rect.y - (rect.y - y),
-                    child_rect.width,
-                    child_rect.height,
-                ))
-            });
-            // A Text row directly inside a ListView is a selectable row, not a
-            // passive label, so mark it clickable. Native hosts lower clickable
-            // rows as buttons so a click routes back with the row's widget id;
-            // drawn hosts already hit-test every placement and ignore this.
-            let list_parent = node
-                .parent
-                .filter(|_| node.kind == WidgetKind::Text)
-                .and_then(|parent| tree.node(parent).map(|p| (parent, p)))
-                .filter(|(_, parent)| parent.kind == WidgetKind::ListView);
-            let clickable = list_parent.is_some();
-            // For a native host, mark the selected row via `checked` so its
-            // button can be tinted; the drawn painters use the container's
-            // selection wash instead and leave `checked` alone here.
-            let row_selected = list_parent.and_then(|(parent_id, parent)| {
-                let index = parent.selected?;
-                let selected_child = *tree.children(parent_id).get(index as usize)?;
-                Some(selected_child == *id)
-            });
-            placements.push(WidgetPlacement {
-                widget: *id,
-                kind: node.kind,
-                label: node.label.clone(),
-                checked: row_selected.or(node.checked),
-                value: node.value,
-                selection,
-                text_cursor: node.text_cursor,
-                clip,
-                x: rect.x,
-                y,
-                width: rect.width,
-                height: rect.height,
-                clickable,
-                role: node.role.clone(),
-                // Shared, not copied: this runs once per widget per frame, and
-                // a photograph is a quarter-gigabyte of pixels.
-                pixels: self.images.borrow().get(&(window, *id)).cloned(),
-                // Sanitized here rather than at the painters, so every host
-                // gets the same bounded numbers and a guest cannot hand one
-                // of them a NaN or a thousand-pixel outline.
-                text: node.style.text.map(|style| style.sanitized()),
-                r#box: node.style.r#box.map(|style| style.sanitized()),
-            });
-        }
+        let images = self.images.borrow();
+        let placements = krate_lowering::placements(
+            &tree,
+            &layout,
+            |scroll| offsets.get(&(window, scroll)).copied().unwrap_or(0.0),
+            |widget| images.get(&(window, widget)).cloned(),
+        );
+        drop(images);
         drop(offsets);
 
         Ok(Some((record.size, placements)))
@@ -3194,26 +3102,8 @@ impl Phase3GuiHost {
         let Ok(Some(tree)) = dispatcher.widget_tree(key.window) else {
             return;
         };
-        // The same things a pointer press activates: the control kinds, and
-        // a row of a list, which is a Text node whose parent is a ListView --
-        // the definition the pointer step's `clickable` uses. hello-gui's
-        // first clickable control is such a row, and the first version of
-        // this rule, kinds only, let Enter on it do nothing.
-        let activates = tree.node(widget).is_some_and(|node| {
-            let control = matches!(
-                node.kind,
-                WidgetKind::Button | WidgetKind::Checkbox | WidgetKind::Radio | WidgetKind::Switch
-            );
-            let list_row = node.kind == WidgetKind::Text
-                && node
-                    .parent
-                    .and_then(|parent| tree.node(parent))
-                    .is_some_and(|parent| parent.kind == WidgetKind::ListView);
-            control || list_row
-        });
-        if !activates {
-            return;
-        }
+        // Which controls a key activates, and where, is the shared rule
+        // (krate-lowering): the control kinds, and a row of a list.
         let Ok(Some(record)) = dispatcher.window(key.window) else {
             return;
         };
@@ -3224,10 +3114,10 @@ impl Phase3GuiHost {
         let Ok(layout) = dispatcher.compute_layout(key.window, viewport) else {
             return;
         };
-        let Some(rect) = absolute_rect(&tree, &layout, widget) else {
+        let Some((x, y)) = krate_lowering::activation_point(&tree, &layout, widget, &key.key)
+        else {
             return;
         };
-        let (x, y) = (rect.x + rect.width / 2.0, rect.y + rect.height / 2.0);
         if std::env::var_os("KRATE_EVENT_TRACE").is_some() {
             eprintln!(
                 "krate-check: {} on focused widget {} synthesized a press at {x:.1},{y:.1}",
@@ -3429,27 +3319,19 @@ impl Phase3GuiHost {
             let Ok(layout) = dispatcher.compute_layout(sample.window, viewport) else {
                 continue;
             };
-            let Some(scroll_id) = scroll_container_at(&tree, &layout, sample.x, sample.y) else {
-                continue;
+            let moved = {
+                let offsets = self.scroll_offsets.borrow();
+                krate_lowering::scroll_by(&tree, &layout, sample.x, sample.y, sample.dy, |scroll| {
+                    offsets
+                        .get(&(sample.window, scroll))
+                        .copied()
+                        .unwrap_or(0.0)
+                })
             };
-            let Some(scroll_rect) = absolute_rect(&tree, &layout, scroll_id) else {
-                continue;
-            };
-            let content_bottom = tree
-                .nodes()
-                .iter()
-                .filter(|(child, _)| nearest_scroll_ancestor(&tree, **child) == Some(scroll_id))
-                .filter_map(|(child, _)| absolute_rect(&tree, &layout, *child))
-                .map(|r| r.y + r.height)
-                .fold(scroll_rect.y, f32::max);
-            let content_height = content_bottom - scroll_rect.y;
-            let mut offsets = self.scroll_offsets.borrow_mut();
-            let entry = offsets.entry((sample.window, scroll_id)).or_insert(0.0);
-            let updated =
-                clamped_scroll_offset(*entry, sample.dy, content_height, scroll_rect.height);
-            if (updated - *entry).abs() > f32::EPSILON {
-                *entry = updated;
-                drop(offsets);
+            if let Some((scroll_id, updated)) = moved {
+                self.scroll_offsets
+                    .borrow_mut()
+                    .insert((sample.window, scroll_id), updated);
                 let _ = self.sync_native_widgets(sample.window);
             }
         }
@@ -4839,50 +4721,11 @@ fn event_name(event: &ui::types::Event) -> &'static str {
 }
 
 /// Nearest Scroll ancestor of a widget, if any.
-fn nearest_scroll_ancestor(
-    tree: &krate_adapter_common::ui::WidgetTree,
-    id: WidgetId,
-) -> Option<WidgetId> {
-    let mut current = tree.node(id)?.parent;
-    while let Some(parent_id) = current {
-        let parent = tree.node(parent_id)?;
-        if parent.kind == WidgetKind::Scroll {
-            return Some(parent_id);
-        }
-        current = parent.parent;
-    }
-    None
-}
-
-/// Topmost Scroll container whose rectangle contains the logical point.
-fn scroll_container_at(
-    tree: &krate_adapter_common::ui::WidgetTree,
-    layout: &krate_layout::LayoutSnapshot,
-    x: f32,
-    y: f32,
-) -> Option<WidgetId> {
-    tree.nodes()
-        .iter()
-        .rev()
-        .filter(|(_, node)| node.kind == WidgetKind::Scroll)
-        .find(|(id, _)| {
-            absolute_rect(tree, layout, **id)
-                .is_some_and(|r| x >= r.x && y >= r.y && x < r.x + r.width && y < r.y + r.height)
-        })
-        .map(|(id, _)| *id)
-}
-
-/// Clamp a scroll offset after applying a wheel delta: never negative,
-/// never past the point where the last content row is visible.
-fn clamped_scroll_offset(current: f32, dy: f32, content_height: f32, viewport_height: f32) -> f32 {
-    let max_offset = (content_height - viewport_height).max(0.0);
-    (current + dy).clamp(0.0, max_offset)
-}
-
-/// Widget kinds that take keyboard focus from a pointer press.
-fn press_focuses(kind: WidgetKind) -> bool {
-    matches!(kind, WidgetKind::TextField | WidgetKind::TextArea)
-}
+// The scroll and focus rules moved to krate-lowering with the rest of the
+// tree-to-widgets step (IC-956); the tests below still hold them here.
+#[cfg(test)]
+use krate_lowering::clamped_scroll_offset;
+use krate_lowering::press_focuses;
 
 fn widget_id(raw: u64) -> Result<WidgetId, ui::types::UiError> {
     WidgetId::new(raw).map_err(|_| ui::types::UiError::InvalidWidget)
@@ -5079,7 +4922,9 @@ pub(crate) fn widget_node_from_parts(
     selected: Option<u32>,
     text_cursor: Option<(u32, u32)>,
 ) -> Result<WidgetNode, ui::types::UiError> {
-    let node = NodeParts {
+    // The rules themselves are shared with the browser Player
+    // (krate-lowering, IC-956); only the error's WIT shape is this host's.
+    krate_lowering::node_from_parts(
         raw_id,
         raw_parent,
         kind,
@@ -5090,61 +4935,11 @@ pub(crate) fn widget_node_from_parts(
         value,
         selected,
         text_cursor,
-    };
-    let id = widget_id(node.raw_id)?;
-    let parent = node.raw_parent.map(widget_id).transpose()?;
-    let style = node.style;
-    if let Some(value) = node.value {
-        if !value.is_finite() || !(0.0..=1.0).contains(&value) {
-            return Err(ui::types::UiError::Unsupported(
-                "widget value must be a finite number in 0..=1".to_string(),
-            ));
-        }
-    }
-    let kind = node.kind;
-    if node.selected.is_some() && !kind_is_selectable(kind) {
-        return Err(ui::types::UiError::Unsupported(format!(
-            "widget kind {kind:?} cannot carry a selected index"
-        )));
-    }
-    // A caret only means something on an editable text widget. Rejecting it
-    // elsewhere keeps a stray value from silently riding on, say, a button.
-    if node.text_cursor.is_some() && !matches!(kind, WidgetKind::TextArea | WidgetKind::TextField) {
-        return Err(ui::types::UiError::Unsupported(format!(
-            "widget kind {kind:?} cannot carry a text caret"
-        )));
-    }
-
-    Ok(WidgetNode {
-        id,
-        parent,
-        kind,
-        label: node.label,
-        role: node.role,
-        style,
-        checked: node.checked,
-        value: node.value,
-        selected: node.selected,
-        text_cursor: node.text_cursor,
-        // A picture arrives through `krate:ui/image`, keyed by widget id, not
-        // as a field here. The node the app sends must stay the exact record
-        // it was compiled against.
-        pixels: None,
+    )
+    .map_err(|err| match err {
+        krate_lowering::NodeError::InvalidWidget => ui::types::UiError::InvalidWidget,
+        krate_lowering::NodeError::Unsupported(words) => ui::types::UiError::Unsupported(words),
     })
-}
-
-/// The parts of a widget node, so one validation path serves both phases.
-struct NodeParts {
-    raw_id: u64,
-    raw_parent: Option<u64>,
-    kind: WidgetKind,
-    label: Option<String>,
-    role: Option<String>,
-    style: WidgetStyle,
-    checked: Option<bool>,
-    value: Option<f32>,
-    selected: Option<u32>,
-    text_cursor: Option<(u32, u32)>,
 }
 
 fn modifiers_to_wit(modifiers: Modifiers) -> ui::types::Modifiers {
