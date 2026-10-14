@@ -35,6 +35,9 @@ url = "2"
 # Reading Krate Cloud. Same version and features as the workspace's own hub
 # client, so the studio and the engine speak to the hub identically.
 ureq = { version = "2.12", default-features = false, features = ["tls", "json"] }
+# Every connection Studio makes itself goes the way the engine's do: the
+# computer's own trust store and proxy settings (IC-949 N).
+krate-http = { path = "../crates/http" }
 # Verifying the update we downloaded before running it.
 sha2 = "0.10"
 tauri-plugin-notification = "2"

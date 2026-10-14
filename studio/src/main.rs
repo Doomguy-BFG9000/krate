@@ -797,7 +797,7 @@ async fn sessions_pull() -> Result<usize, String> {
     };
     let url = format!("{}/sessions", hub_url());
     let pulled = tauri::async_runtime::spawn_blocking(move || {
-        let response = ureq::get(&url)
+        let response = krate_http::get(&url)
             .set("Authorization", &format!("Bearer {token}"))
             .timeout(std::time::Duration::from_secs(20))
             .call()
@@ -843,7 +843,7 @@ async fn sessions_pull() -> Result<usize, String> {
 /// GET a URL with the hub's bearer token, the way the build service expects
 /// it (a web-made app is readable only by the account that made it).
 fn fetch_with_token(url: &str, token: &str) -> Result<Vec<u8>, String> {
-    let response = ureq::get(url)
+    let response = krate_http::get(url)
         .set("Authorization", &format!("Bearer {token}"))
         .timeout(std::time::Duration::from_secs(60))
         .call()
@@ -976,7 +976,7 @@ fn session_push(body: String) {
     };
     let url = format!("{}/sessions", hub_url());
     std::thread::spawn(move || {
-        let _ = ureq::post(&url)
+        let _ = krate_http::post(&url)
             .set("Authorization", &format!("Bearer {token}"))
             .set("Content-Type", "application/json")
             .timeout(std::time::Duration::from_secs(15))
@@ -3355,7 +3355,7 @@ async fn login_email(email: String) -> Result<(), String> {
         }
         let nonce = begin_sign_in(&studio_dir());
         let body = serde_json::json!({ "email": email, "from": "app", "app_nonce": nonce });
-        match ureq::post(&format!("{}/login/email", hub_url()))
+        match krate_http::post(&format!("{}/login/email", hub_url()))
             .timeout(std::time::Duration::from_secs(20))
             .send_json(body)
         {
@@ -3373,6 +3373,12 @@ async fn login_email(email: String) -> Result<(), String> {
 /// The hub the studio reads and publishes to. `KRATE_HUB_URL` overrides it,
 /// the same variable the engine honours, so a local hub serves both.
 fn hub_url() -> String {
+    // An organisation that pins its hub decides it for Studio too (IC-949
+    // `[hub] url`): the engine refuses any other, and so does what Studio
+    // sends itself.
+    if let Some(pinned) = org_hub_from(&org_policy_json()) {
+        return pinned;
+    }
     std::env::var("KRATE_HUB_URL").unwrap_or_else(|_| "https://hub.krate.tech".to_string())
 }
 
@@ -3478,11 +3484,12 @@ async fn latest_release() -> Result<serde_json::Value, String> {
         if org_update_mode() == "off" {
             return Err(ORG_UPDATES_OFF.to_string());
         }
-        let response = ureq::get("https://api.github.com/repos/incyashraj/krate/releases/latest")
-            .set("User-Agent", "krate-studio")
-            .timeout(std::time::Duration::from_secs(15))
-            .call()
-            .map_err(|err| err.to_string())?;
+        let response =
+            krate_http::get("https://api.github.com/repos/incyashraj/krate/releases/latest")
+                .set("User-Agent", "krate-studio")
+                .timeout(std::time::Duration::from_secs(15))
+                .call()
+                .map_err(|err| err.to_string())?;
         let v: serde_json::Value = response.into_json().map_err(|err| err.to_string())?;
         Ok(serde_json::json!({ "tag": v["tag_name"], "body": v["body"] }))
     })
@@ -3506,8 +3513,8 @@ fn hub_post(
     token: Option<&str>,
     body: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
-    let mut req =
-        ureq::post(&format!("{}{path}", hub_url())).timeout(std::time::Duration::from_secs(20));
+    let mut req = krate_http::post(&format!("{}{path}", hub_url()))
+        .timeout(std::time::Duration::from_secs(20));
     if let Some(t) = token {
         req = req.set("authorization", &format!("Bearer {t}"));
     }
@@ -3527,7 +3534,7 @@ fn hub_post(
 async fn billing_info() -> serde_json::Value {
     tauri::async_runtime::spawn_blocking(|| {
         let base = hub_url();
-        let config: serde_json::Value = ureq::get(&format!("{base}/billing/config"))
+        let config: serde_json::Value = krate_http::get(&format!("{base}/billing/config"))
             .timeout(std::time::Duration::from_secs(10))
             .call()
             .ok()
@@ -3535,7 +3542,7 @@ async fn billing_info() -> serde_json::Value {
             .unwrap_or_else(|| serde_json::json!({ "live": false }));
         let mut out = config;
         if let Some(token) = hub_token() {
-            if let Some(status) = ureq::get(&format!("{base}/billing/status"))
+            if let Some(status) = krate_http::get(&format!("{base}/billing/status"))
                 .set("authorization", &format!("Bearer {token}"))
                 .timeout(std::time::Duration::from_secs(10))
                 .call()
@@ -3578,7 +3585,7 @@ async fn billing_checkout(plan: String) -> Result<String, String> {
 async fn me_info() -> Result<serde_json::Value, String> {
     tauri::async_runtime::spawn_blocking(|| {
         let token = hub_token().ok_or("Sign in first.")?;
-        ureq::get(&format!("{}/me", hub_url()))
+        krate_http::get(&format!("{}/me", hub_url()))
             .set("authorization", &format!("Bearer {token}"))
             .timeout(std::time::Duration::from_secs(10))
             .call()
@@ -3653,7 +3660,7 @@ async fn make_for_me(
 ) -> Result<(), String> {
     let url = format!("{}/makeit", hub_url());
     tauri::async_runtime::spawn_blocking(move || {
-        ureq::post(&url)
+        krate_http::post(&url)
             .timeout(std::time::Duration::from_secs(15))
             .send_json(serde_json::json!({
                 "email": email,
@@ -3717,7 +3724,7 @@ async fn cloud_apps(q: Option<String>, cat: Option<String>) -> Result<String, St
             url.push('?');
             url.push_str(&parts.join("&"));
         }
-        let response = ureq::get(&url)
+        let response = krate_http::get(&url)
             .timeout(std::time::Duration::from_secs(20))
             .call()
             .map_err(|err| match err {
@@ -4725,7 +4732,7 @@ fn plan_hub_sync_full(device: &str, month: &str, local_n: u64, count: bool) -> (
     }
     let path = if count { "/plan/count" } else { "/plan/get" };
     let body = serde_json::json!({ "device": device, "month": month, "n": local_n });
-    let answer = ureq::post(&format!("{}{}", hub_url(), path))
+    let answer = krate_http::post(&format!("{}{}", hub_url(), path))
         .timeout(std::time::Duration::from_secs(4))
         .send_json(body)
         .ok()
@@ -4946,29 +4953,72 @@ fn engine_lags(studio: &str, engine: &str) -> bool {
     }
 }
 
-/// Download a new Studio and stage it for install.
-///
-/// The old flow opened a browser download and left the person to find the
-/// file, mount it, and drag it over the app they were running. This does
-/// the download in the app and hands the file to the platform's own
-/// installer, which is the part a person cannot reasonably do wrong.
-///
-/// The bytes are verified against the release's SHA256SUMS before anything
-/// is run: an update channel that installs whatever it downloaded is a
-/// worse hole than the one it closes.
 /// What the organisation that manages this computer says about updates
 /// (IC-949 `[updates] mode`), as the engine reads its policy: `auto`,
 /// `notify` or `off`. An engine too old to have `krate policy` has no
 /// policy to report, which is `auto`; a policy that cannot be read turns
 /// updates off, as the engine itself does.
 fn org_update_mode() -> String {
-    let Ok(engine) = engine() else {
-        return "auto".to_string();
+    org_update_mode_from(&org_policy_json())
+}
+
+/// The engine's `krate policy --json`, read once per Studio run: the
+/// organisation's policy is the same for every request Studio makes, and a
+/// Studio left open while IT changes it picks the change up on its next run,
+/// as the engine does. Empty when there is no engine, or it is too old to
+/// have `krate policy`.
+fn org_policy_json() -> Vec<u8> {
+    fn ask() -> Vec<u8> {
+        engine()
+            .ok()
+            .and_then(|engine| silent_cmd(&engine).args(["policy", "--json"]).output().ok())
+            .map(|out| out.stdout)
+            .unwrap_or_default()
+    }
+    // Tests swap the engine between questions; a run never does.
+    if cfg!(test) {
+        return ask();
+    }
+    static ANSWER: std::sync::OnceLock<Vec<u8>> = std::sync::OnceLock::new();
+    ANSWER.get_or_init(ask).clone()
+}
+
+/// The hub the organisation pins (`[hub] url`), when its policy is in
+/// force and names one.
+fn org_hub_from(stdout: &[u8]) -> Option<String> {
+    let answer = serde_json::from_slice::<serde_json::Value>(stdout).ok()?;
+    if answer["state"].as_str() != Some("in-force") {
+        return None;
+    }
+    answer["policy"]["hub"]["url"]
+        .as_str()
+        .filter(|url| !url.is_empty())
+        .map(|url| url.trim_end_matches('/').to_string())
+}
+
+/// The proxy the organisation names (`[network] proxy`), installed for
+/// Studio's own connections the way the engine installs it for its own.
+/// Studio reads the policy through `--json`, which hides a proxy password,
+/// so a proxy with one is left to the engine's requests and Studio's own
+/// follow the system and the environment.
+fn install_org_proxy(stdout: &[u8]) {
+    let Ok(answer) = serde_json::from_slice::<serde_json::Value>(stdout) else {
+        return;
     };
-    let Ok(out) = silent_cmd(&engine).args(["policy", "--json"]).output() else {
-        return "auto".to_string();
+    if answer["state"].as_str() != Some("in-force") {
+        return;
+    }
+    let network = &answer["policy"]["network"];
+    let Some(proxy) = network["proxy"].as_str() else {
+        return;
     };
-    org_update_mode_from(&out.stdout)
+    if proxy.contains("***") {
+        return;
+    }
+    krate_http::set_policy_proxy(krate_http::PolicyProxy {
+        proxy: (proxy != "direct").then(|| proxy.to_string()),
+        no_proxy: network["no_proxy"].as_str().map(str::to_string),
+    });
 }
 
 fn org_update_mode_from(stdout: &[u8]) -> String {
@@ -4990,6 +5040,16 @@ const ORG_UPDATES_OFF: &str =
 const ORG_UPDATES_NOTIFY: &str =
     "Your organisation installs Krate updates on this computer, so Studio does not install this one.";
 
+/// Download a new Studio and stage it for install.
+///
+/// The old flow opened a browser download and left the person to find the
+/// file, mount it, and drag it over the app they were running. This does
+/// the download in the app and hands the file to the platform's own
+/// installer, which is the part a person cannot reasonably do wrong.
+///
+/// The bytes are verified against the release's SHA256SUMS before anything
+/// is run: an update channel that installs whatever it downloaded is a
+/// worse hole than the one it closes.
 #[tauri::command]
 fn install_update(version: String) -> Result<String, String> {
     // `notify` tells and never installs; `off` never even checks (IC-949).
@@ -5019,7 +5079,7 @@ fn install_update(version: String) -> Result<String, String> {
 
     // The checksums first: knowing what the bytes should be before fetching
     // them means a mismatch is a refusal, not a judgement call.
-    let sums = ureq::get(&format!("{base}/SHA256SUMS"))
+    let sums = krate_http::get(&format!("{base}/SHA256SUMS"))
         .call()
         .map_err(|e| format!("could not reach the update: {e}"))?
         .into_string()
@@ -5050,7 +5110,7 @@ fn install_update(version: String) -> Result<String, String> {
     let hex = {
         use sha2::{Digest, Sha256};
         use std::io::Write as _;
-        let mut reader = ureq::get(&format!("{base}/{file}"))
+        let mut reader = krate_http::get(&format!("{base}/{file}"))
             .call()
             .map_err(|e| format!("the download failed: {e}"))?
             .into_reader();
@@ -5432,6 +5492,12 @@ fn main() {
             let _ = std::env::set_current_dir(std::env::temp_dir());
         }
     }
+
+    // The organisation's proxy for Studio's own connections (IC-949 N),
+    // read off the main thread: it asks the engine, and a window must not
+    // wait on that. A request made before it lands follows the system and
+    // the environment, which is what it did before there was a policy.
+    std::thread::spawn(|| install_org_proxy(&org_policy_json()));
 
     // Register the file type and the krate:// scheme BEFORE the early
     // returns below, not after.

@@ -1221,6 +1221,41 @@ fn the_organisations_update_mode_stops_the_install_before_any_download() {
 }
 
 #[test]
+fn a_pinned_hub_is_the_hub_studio_talks_to() {
+    let t = TestHome::new();
+    t.engine(
+        r#"echo '{"v":1,"state":"in-force","policy":{"hub":{"url":"https://hub.acme.example/"}}}'"#,
+    );
+    assert_eq!(hub_url(), "https://hub.acme.example");
+    // No policy, or one that names no hub: Studio's own default.
+    assert_eq!(
+        org_hub_from(br#"{"v":1,"state":"none","policy":null}"#),
+        None
+    );
+    assert_eq!(
+        org_hub_from(br#"{"v":1,"state":"in-force","policy":{"hub":{"url":null}}}"#),
+        None
+    );
+    assert_eq!(org_hub_from(b""), None);
+}
+
+#[test]
+fn the_organisations_proxy_reaches_studios_own_requests() {
+    // Reading the answer is what is tested here; installing it is one call
+    // into krate-http, which has its own tests, and a process installs once.
+    let answer = br#"{"v":1,"state":"in-force","policy":{"network":{"proxy":"http://proxy.acme.example:3128","no_proxy":"internal.acme.example"}}}"#;
+    install_org_proxy(answer);
+    assert_eq!(
+        krate_http::proxy_for("https://hub.krate.tech/x").as_deref(),
+        Some("http://proxy.acme.example:3128")
+    );
+    assert_eq!(
+        krate_http::proxy_for("https://git.internal.acme.example/"),
+        None
+    );
+}
+
+#[test]
 fn the_staged_update_record_must_be_whole_to_be_trusted() {
     let t = TestHome::new();
     let staged = t.root().join("updates");
