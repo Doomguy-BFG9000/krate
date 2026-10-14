@@ -31,7 +31,7 @@ const MAX_REPORT_BYTES = 12 * 1024 * 1024;
 // Either way it is instantiated once, lazily, and the instance's memory
 // is re-read on every call because it can grow.
 import * as validatorImport from "./validator.wasm";
-import { Org, SLUG, chainOk, messageFor } from "./org.js";
+import { Org, SLUG, EMAIL, chainOk, messageFor } from "./org.js";
 // The organisation store (IC-946), one SQLite-backed Durable Object per
 // organisation; wrangler.toml binds it as ORGS.
 export { Org };
@@ -1697,7 +1697,7 @@ async function fetchBundle(request, url, hash, env) {
   // check does not. The organisation's store is asked on every fetch.
   const privateOrg = object.customMetadata && object.customMetadata.org;
   if (privateOrg) {
-    return await fetchPrivate(request, hash, object, privateOrg, big, env);
+    return await fetchPrivate(request, url, hash, object, privateOrg, big, env);
   }
 
   // Count the hit before deciding what to serve, one Analytics Engine point
@@ -2618,15 +2618,18 @@ async function ensureUser(env, provider, stableId, profile) {
   let record;
   if (!userId) {
     userId = crypto.randomUUID();
+    const shownEmail = profile.email || profile.unverified_email || "";
     record = {
       id: userId,
       created: Date.now(),
       name: profile.name || "",
-      login: profile.login || (profile.email ? profile.email.split("@")[0] : ""),
+      login: profile.login || (shownEmail ? shownEmail.split("@")[0] : ""),
       email: profile.email || "",
       avatar_url: profile.avatar_url || "",
       providers: [provider],
     };
+    if (profile.verified_email) record.verified_emails = [profile.verified_email.toLowerCase()];
+    if (profile.unverified_email && !profile.email) record.unverified_email = profile.unverified_email.toLowerCase();
     await env.APPS.put(`user:${userId}`, JSON.stringify(record));
     // A new person: the founder hears at once, with his welcome ready to
     // send from his own Gmail in one click (he writes each one himself:
@@ -2651,6 +2654,13 @@ async function ensureUser(env, provider, stableId, profile) {
     record.name = record.name || profile.name || "";
     record.avatar_url = record.avatar_url || profile.avatar_url || "";
     record.email = record.email || profile.email || "";
+    // An inbox proved by this sign-in becomes one of the account's
+    // organisation principals (IC-947). Written once, then free.
+    if (profile.verified_email) {
+      const proved = profile.verified_email.toLowerCase();
+      const held = Array.isArray(record.verified_emails) ? record.verified_emails : [];
+      if (!held.includes(proved)) record.verified_emails = [...held, proved];
+    }
     if (JSON.stringify(record) !== before) {
       await env.APPS.put(`user:${userId}`, JSON.stringify(record));
     }
@@ -3028,8 +3038,16 @@ async function googleCallback(url, env) {
   if (!info.ok) return text("Google's answer could not be verified.", 502);
   const claims = await info.json();
   if (claims.aud !== env.GOOGLE_CLIENT_ID) return text("Wrong audience.", 400);
+  // Only an address Google says it verified may find or merge an account
+  // (K-1085, IC-947). Before this, any Google account claiming an address
+  // signed in as whoever already held it. tokeninfo answers the claim as
+  // the string "true"; the ID token itself carries a boolean.
+  const verified = claims.email_verified === true || claims.email_verified === "true";
+  const email = claims.email ? String(claims.email).toLowerCase() : "";
   const user = await ensureUser(env, "google", claims.sub, {
-    email: claims.email,
+    email: verified ? email : undefined,
+    verified_email: verified ? email : undefined,
+    unverified_email: verified ? undefined : email || undefined,
     name: claims.name,
     avatar_url: claims.picture,
   });
@@ -3286,7 +3304,8 @@ async function emailVerify(url, env) {
   if (!stored) return signInFailed(url, "used");
   await env.APPS.delete(`email:${token}`);
   const record = JSON.parse(stored);
-  const user = await ensureUser(env, "email", record.email, { email: record.email });
+  // The link reached this inbox, so the inbox is proved (IC-947).
+  const user = await ensureUser(env, "email", record.email, { email: record.email, verified_email: record.email });
   return deliver(signInStart(record.from, record.nonce, record.app_nonce), user, await newSession(env, user.id));
 }
 
@@ -3460,11 +3479,38 @@ function testIdentity(token, env) {
     const at = pair.indexOf("=");
     if (at <= 0) continue;
     if (pair.slice(0, at).trim() === token) {
-      const login = pair.slice(at + 1).trim().toLowerCase();
-      return /^[a-z0-9](?:[a-z0-9-]{0,38})$/.test(login) ? login : null;
+      const who = pair.slice(at + 1).trim().toLowerCase();
+      // `email:<address>` stands for an account that proved that inbox, as
+      // an email-link sign-in does: its `login` is the part before the @,
+      // exactly like a real one, so the proof can show that part is never
+      // taken for a GitHub login (IC-947).
+      if (who.startsWith("email:")) {
+        const email = who.slice("email:".length);
+        if (!EMAIL.test(email)) return null;
+        return { login: email.split("@")[0], name: "", avatar_url: "", github: false, emails: [email] };
+      }
+      const login = who.startsWith("github:") ? who.slice("github:".length) : who;
+      return /^[a-z0-9](?:[a-z0-9-]{0,38})$/.test(login)
+        ? { login, name: "", avatar_url: "", github: true, emails: [] }
+        : null;
     }
   }
   return null;
+}
+
+/// Every principal a verified identity holds (IC-947): `github:<login>`
+/// only when GitHub vouched for the login, `email:<address>` for each inbox
+/// the account proved. A Krate session's `login` -- the part of an address
+/// before the @ -- is never one of them (K-1085).
+function principalsOf(identity) {
+  if (!identity) return [];
+  const out = [];
+  if (identity.github === true && identity.login) out.push(`github:${String(identity.login).toLowerCase()}`);
+  for (const email of identity.emails || []) {
+    const e = String(email).toLowerCase();
+    if (EMAIL.test(e)) out.push(`email:${e}`);
+  }
+  return [...new Set(out)];
 }
 
 async function verifyGitHub(request, env) {
@@ -3475,7 +3521,7 @@ async function verifyGitHub(request, env) {
   // Stubbed identities for a local `wrangler dev` proof only (IC-946). They
   // stand in for GitHub logins, so they count as vouched.
   const stubbed = testIdentity(token, env);
-  if (stubbed) return { login: stubbed, name: "", avatar_url: "", github: true };
+  if (stubbed) return stubbed;
 
   // A Krate session (Google or email sign-in) is as good as a GitHub token
   // for the account it belongs to -- but its `login` is only the part of an
@@ -3487,7 +3533,15 @@ async function verifyGitHub(request, env) {
     if (!userId) return null;
     const record = JSON.parse((await env.APPS.get(`user:${userId}`)) || "null");
     if (!record) return null;
-    return { login: record.login, name: record.name, avatar_url: record.avatar_url, github: false };
+    // The inboxes this account proved (an email link, or Google with
+    // email_verified): its organisation principals (IC-947).
+    return {
+      login: record.login,
+      name: record.name,
+      avatar_url: record.avatar_url,
+      github: false,
+      emails: Array.isArray(record.verified_emails) ? record.verified_emails : [],
+    };
   }
 
   const cacheKey = `token:${await sha256Hex(new TextEncoder().encode(token))}`;
@@ -3706,7 +3760,7 @@ async function bigStart(request, env) {
     if (kind !== "bundle") return text("an organisation takes the app itself, not a source or notices file", 400);
     const check = await orgAsk(env, org, {
       op: "check-candidate",
-      actor: identity.login,
+      principals: principalsOf(identity),
       args: { digest: sha256 },
     });
     if (check.status !== 200) return json(check.body, check.status);
@@ -3779,6 +3833,7 @@ async function bigStart(request, env) {
     kind,
     for: forHash,
     org,
+    principals: org ? principalsOf(identity) : undefined,
     login: identity.login,
     identity: { login: identity.login, name: identity.name || "", avatar_url: identity.avatar_url || "" },
     size,
@@ -4022,7 +4077,7 @@ async function bigVerdict(request, env, id) {
     }
     const added = await orgAsk(env, record.org, {
       op: "add-candidate",
-      actor: record.login,
+      principals: record.principals || [],
       args: { ...candidateArgs(verdict.judgement, record.sha256, record.size, base), big: true },
     });
     if (added.status >= 300) {
@@ -6976,11 +7031,42 @@ function candidateArgs(judgement, digest, size, base) {
   };
 }
 
+/// The site whose pages the hub links to: join links, the private-release
+/// open page. krate.tech, unless a local proof says otherwise.
+function siteBase(env) {
+  return String(env.SITE_BASE || "https://krate.tech").replace(/\/$/, "");
+}
+
+/// The KV display index of one principal's organisations (Addendum 1:
+/// `GET /orgs`). Display only: it never answers who may do what, and
+/// opening an organisation asks its store (R5). Written after the store
+/// has committed; a failed write costs a stale list, never access.
+async function noteOrgOf(env, principal, slug, name, role) {
+  if (!principal) return;
+  const key = `orgs-of:${principal}`;
+  try {
+    let list = [];
+    try {
+      list = JSON.parse((await env.APPS.get(key)) || "[]");
+    } catch (_) {}
+    const next = list.filter((o) => o && o.slug !== slug);
+    if (role) next.push({ slug, name: name || slug, role });
+    next.sort((a, b) => a.slug.localeCompare(b.slug));
+    if (JSON.stringify(next) !== JSON.stringify(list)) {
+      if (next.length) await env.APPS.put(key, JSON.stringify(next));
+      else await env.APPS.delete(key);
+    }
+  } catch (_) {
+    // The list is a convenience; the store holds the truth.
+  }
+}
+
 async function orgRoute(request, url, env) {
   if (!env.ORGS) {
     return json({ error: "orgs-off", message: "organisations are not switched on on this hub" }, 503);
   }
   const base = (env.PUBLIC_BASE || "").replace(/\/$/, "");
+  const site = siteBase(env);
   const parts = url.pathname.split("/").filter(Boolean).map((p) => {
     try {
       return decodeURIComponent(p);
@@ -6990,7 +7076,12 @@ async function orgRoute(request, url, env) {
   });
   const method = request.method;
   const identity = await verifyGitHub(request, env);
-  const actor = identity && identity.login ? String(identity.login).toLowerCase() : null;
+  // Who is asking, as principals (IC-947). A session that proved nothing
+  // an organisation can name -- an email account that has not yet signed
+  // in by link or verified Google since principals arrived -- is treated
+  // like no session at all.
+  const principals = principalsOf(identity);
+  const signedIn = principals.length > 0;
   const readBody = async () => {
     const read = await readBounded(request, 64 * 1024);
     if (read.tooLarge) return { tooLarge: true };
@@ -7005,18 +7096,33 @@ async function orgRoute(request, url, env) {
   };
   const bad = () => json({ error: "bad-request", message: "the body is JSON, under 64 KiB" }, 400);
 
-  // POST /orgs
   if (parts.length === 1) {
+    // GET /orgs: the signed-in person's organisations, for display.
+    if (method === "GET") {
+      if (!signedIn) return anonymousOrgRefusal(request, env, 401, "");
+      const bySlug = new Map();
+      for (const principal of principals) {
+        let list = [];
+        try {
+          list = JSON.parse((await env.APPS.get(`orgs-of:${principal}`)) || "[]");
+        } catch (_) {}
+        for (const o of list) if (o && o.slug && !bySlug.has(o.slug)) bySlug.set(o.slug, { slug: o.slug, name: o.name, role: o.role });
+      }
+      return json([...bySlug.values()].sort((a, b) => a.slug.localeCompare(b.slug)));
+    }
+    // POST /orgs
     if (method !== "POST") return text("not found", 404);
     const body = await readBody();
     if (body.tooLarge || body.bad) return bad();
     const slug = String(body.value.slug || "").toLowerCase();
     if (!SLUG.test(slug)) return orgError(400, "slug-invalid", slug);
-    if (!actor) return orgError(401, "not-signed-in", slug);
+    if (!signedIn) return anonymousOrgRefusal(request, env, 401, slug);
     const idempotency = await idempotencyOf(request, url.pathname, body.text);
-    return orgAnswer(
-      await orgAsk(env, slug, { op: "create", actor, args: { name: body.value.name }, idempotency }),
-    );
+    const answer = await orgAsk(env, slug, { op: "create", principals, args: { name: body.value.name }, idempotency });
+    if (answer.status === 201 && answer.body.membership) {
+      await noteOrgOf(env, answer.body.membership.principal, slug, answer.body.org.name, "owner");
+    }
+    return orgAnswer(answer);
   }
 
   const slug = String(parts[1] || "").toLowerCase();
@@ -7024,30 +7130,50 @@ async function orgRoute(request, url, env) {
   // No session: answered here, never by the organisation's store, so an
   // anonymous flood appends nothing to its audit and creates no object.
   // Only an authenticated principal's attempts are audited.
-  if (!actor) return anonymousOrgRefusal(request, env, 401, slug);
+  if (!signedIn) return anonymousOrgRefusal(request, env, 401, slug);
   const rest = parts.slice(2);
-  const ask = async (op, args = {}, idempotency = null) =>
-    orgAnswer(await orgAsk(env, slug, { op, actor, args, idempotency }));
-  const mutate = async (op, argsOf) => {
+  const askRaw = (op, args = {}, idempotency = null) => orgAsk(env, slug, { op, principals, args, idempotency });
+  const ask = async (op, args = {}, idempotency = null) => orgAnswer(await askRaw(op, args, idempotency));
+  const mutateRaw = async (op, argsOf) => {
     const body = await readBody();
-    if (body.tooLarge || body.bad) return bad();
+    if (body.tooLarge || body.bad) return { status: 400, body: { error: "bad-request", message: "the body is JSON, under 64 KiB" } };
     const idempotency = await idempotencyOf(request, url.pathname, body.text);
-    return ask(op, argsOf(body.value), idempotency);
+    return askRaw(op, argsOf(body.value), idempotency);
   };
+  const mutate = async (op, argsOf) => orgAnswer(await mutateRaw(op, argsOf));
 
   if (rest.length === 0 && method === "GET") return ask("show");
   if (rest[0] === "invites") {
     if (rest.length === 1 && method === "POST") {
-      return mutate("invite", (b) => ({ login: b.login, role: b.role }));
+      return mutate("invite", (b) => ({ github: b.github, email: b.email, role: b.role, site }));
     }
+    if (rest.length === 2 && method === "GET") return ask("invite-info", { code: rest[1], site });
     if (rest.length === 2 && method === "DELETE") return mutate("revoke-invite", () => ({ code: rest[1] }));
     if (rest.length === 3 && rest[2] === "accept" && method === "POST") {
-      return mutate("accept", () => ({ code: rest[1] }));
+      const answer = await mutateRaw("accept", () => ({ code: rest[1] }));
+      if (answer.status === 200 && answer.body.membership) {
+        const m = answer.body.membership;
+        await noteOrgOf(env, m.principal, slug, answer.body.org && answer.body.org.name, m.role);
+      }
+      return orgAnswer(answer);
     }
   }
   if (rest[0] === "members" && rest.length === 2) {
-    if (method === "PUT") return mutate("set-role", (b) => ({ login: rest[1], role: b.role }));
-    if (method === "DELETE") return mutate("remove", () => ({ login: rest[1] }));
+    // The member is named by principal, URL-encoded: github%3Aalice.
+    const target = rest[1];
+    if (method === "PUT") {
+      const answer = await mutateRaw("set-role", (b) => ({ principal: target, role: b.role }));
+      if (answer.status === 200 && answer.body.membership) {
+        const m = answer.body.membership;
+        await noteOrgOf(env, m.principal, slug, answer.body.org && answer.body.org.name, m.role);
+      }
+      return orgAnswer(answer);
+    }
+    if (method === "DELETE") {
+      const answer = await mutateRaw("remove", () => ({ principal: target }));
+      if (answer.status === 204) await noteOrgOf(env, String(target).toLowerCase(), slug, null, null);
+      return orgAnswer(answer);
+    }
   }
   if (rest[0] === "root-key" && rest.length === 1 && method === "PUT") {
     const body = await readBody();
@@ -7068,7 +7194,7 @@ async function orgRoute(request, url, env) {
     return ask("set-root", { public_key: publicKey, revocations }, idempotency);
   }
   if (rest[0] === "candidates") {
-    if (rest.length === 1 && method === "POST") return orgCandidate(request, env, slug, actor, url.pathname, base);
+    if (rest.length === 1 && method === "POST") return orgCandidate(request, env, slug, principals, url.pathname, base);
     if (rest.length === 1 && method === "GET") return ask("candidates");
     if (rest.length === 3 && rest[2] === "approve" && method === "POST") {
       const digest = String(rest[1]).toLowerCase();
@@ -7080,7 +7206,7 @@ async function orgRoute(request, url, env) {
   }
   if (rest[0] === "releases" && rest.length === 1 && method === "GET") return ask("releases", { base });
   if (rest[0] === "audit" && rest.length === 1 && method === "GET") {
-    const answer = await orgAsk(env, slug, { op: "audit", actor });
+    const answer = await askRaw("audit");
     if (answer.status !== 200) return orgAnswer(answer);
     // Recomputed here with crypto.subtle -- a second implementation from
     // the one that wrote the chain -- every time it is read.
@@ -7097,7 +7223,7 @@ async function orgRoute(request, url, env) {
 /// before a byte is stored; then the bytes are stored under their hash
 /// with the organisation's flag; then the candidate is recorded. An app
 /// over 5 MiB goes through the big-file path with `org` in its start.
-async function orgCandidate(request, env, slug, actor, path, base) {
+async function orgCandidate(request, env, slug, principals, path, base) {
   const declared = request.headers.get("content-length");
   if (declared !== null && Number(declared) > MAX_UPLOAD_BYTES) {
     return json(
@@ -7123,7 +7249,7 @@ async function orgCandidate(request, env, slug, actor, path, base) {
   const idempotency = await idempotencyOf(request, path, digest);
   const args = candidateArgs(judged.judgement, digest, body.length, base);
 
-  const check = await orgAsk(env, slug, { op: "check-candidate", actor, args, idempotency });
+  const check = await orgAsk(env, slug, { op: "check-candidate", principals, args, idempotency });
   if (check.replayed || check.status !== 200) return orgAnswer(check);
 
   const holder = await bytesHolder(env, digest);
@@ -7132,7 +7258,7 @@ async function orgCandidate(request, env, slug, actor, path, base) {
   }
   const stored = await storeBundle(env, digest, body, { org: slug });
   if (stored.problem) return json({ error: "store-failed", message: stored.problem }, 500);
-  return orgAnswer(await orgAsk(env, slug, { op: "add-candidate", actor, args, idempotency }));
+  return orgAnswer(await orgAsk(env, slug, { op: "add-candidate", principals, args, idempotency }));
 }
 
 /// GET /a/<hash> for an organisation's private release (IC-946, R1, R8).
@@ -7141,29 +7267,76 @@ async function orgCandidate(request, env, slug, actor, path, base) {
 /// No session, a stranger, a removed member and a digest that is only a
 /// candidate are each refused with 403 and a stable reason. Never cached
 /// by anything between: the answer depends on who is asking.
-async function fetchPrivate(request, hash, object, slug, big, env) {
-  const identity = await verifyGitHub(request, env);
-  const actor = identity && identity.login ? String(identity.login).toLowerCase() : null;
+///
+/// A browser (Accept: text/html) is sent to the site's open page instead
+/// (Addendum 2, item 5): the hub cannot see the site's sign-in and sets no
+/// cookies, so the page asks again with Authorization and renders the
+/// state from the stable reason. The redirect names no organisation.
+async function fetchPrivate(request, url, hash, object, slug, big, env) {
   const drop = async () => {
     try {
       if (object.body && typeof object.body.cancel === "function") await object.body.cancel();
     } catch (_) {}
   };
-  if (!actor) {
+  const accept = request.headers.get("accept") || "";
+  // A page navigation only: Accept includes text/html AND no Authorization.
+  // Never keyed on the user agent -- the dashboards' "Open in Krate" is a
+  // fetch() from a browser tab, with a browser's UA, `*/*` and the
+  // person's session, and it must get the bytes.
+  if (accept.includes("text/html") && !request.headers.get("authorization")) {
+    await drop();
+    return new Response(null, {
+      status: 303,
+      headers: {
+        location: `${siteBase(env)}/open/?a=${hash}&private=1`,
+        "cache-control": "private, no-store",
+        vary: "accept, authorization",
+      },
+    });
+  }
+  const identity = await verifyGitHub(request, env);
+  const principals = principalsOf(identity);
+  if (!principals.length) {
     // A copied URL with no session: refused without asking the store, so
     // it is neither audited nor able to flood the audit.
     await drop();
     return anonymousOrgRefusal(request, env, 403, slug);
   }
+  // Accept: application/json is the site's open page asking what this is
+  // (Addendum 2, item 6): the same checks, an answer with no bytes. The CLI
+  // and every download send no such Accept and get the bytes.
+  const look = accept.includes("application/json");
   const answer = env.ORGS
-    ? await orgAsk(env, slug, { op: "download", actor, args: { digest: hash } })
+    ? await orgAsk(env, slug, { op: look ? "view" : "download", principals, args: { digest: hash } })
     : { status: 403, body: { error: "not-a-member", message: "organisations are not switched on on this hub" } };
-  const noStore = { "cache-control": "private, no-store", vary: "authorization" };
+  const noStore = { "cache-control": "private, no-store", vary: "accept, authorization" };
+  if (look && answer.status === 200) {
+    await drop();
+    return new Response(
+      JSON.stringify({
+        name: answer.body.name,
+        version: answer.body.version,
+        size: object.size,
+        org: { slug, name: answer.body.org_name },
+      }),
+      { headers: { "content-type": "application/json", ...noStore } },
+    );
+  }
   if (answer.status !== 200) {
     await drop();
     // A removed member already knows which organisation sent the app, so
-    // the refusal names it; a stranger holding a copied link learns nothing.
-    const body = answer.body && answer.body.error === "removed" ? { ...answer.body, org: slug } : answer.body;
+    // that refusal names it; anyone else holding a copied link learns no
+    // organisation at all (R8) -- the store's own words for a stranger name
+    // the slug, so they are replaced here.
+    const reason = answer.body && answer.body.error;
+    const body =
+      reason === "removed"
+        ? { ...answer.body, org: slug }
+        : reason === "not-a-member"
+          ? { error: reason, message: "this app was not shared with you -- ask whoever sent the link to invite you" }
+          : reason === "digest-mismatch"
+            ? { error: reason, message: "this app is not released yet" }
+            : answer.body;
     return new Response(JSON.stringify(body), {
       status: 403,
       headers: { "content-type": "application/json", ...noStore },

@@ -54,14 +54,38 @@ export function allows(role, action) {
 
 export const SLUG = /^[a-z][a-z0-9-]{1,38}$/;
 export const LOGIN = /^[a-z0-9](?:[a-z0-9-]{0,38})$/;
+export const EMAIL = /^[a-z0-9._%+'-]{1,64}@[a-z0-9-]+(\.[a-z0-9-]+)+$/;
 export const INVITE_SECONDS = 7 * 24 * 60 * 60;
+
+/// A principal is who a member, inviter, uploader, approver or audit actor
+/// is (IC-947): `github:<login>` when GitHub vouched for the login, or
+/// `email:<address>` when the person proved that inbox. Never a bare login:
+/// a Krate session's `login` is the part of an address before the @, and
+/// comparing it with a GitHub login let a chosen address be someone else
+/// (K-1085). Answers `{ principal, kind, value }`, or null.
+export function parsePrincipal(raw) {
+  const text = String(raw || "").trim().toLowerCase();
+  const colon = text.indexOf(":");
+  if (colon <= 0) return null;
+  const kind = text.slice(0, colon);
+  const value = text.slice(colon + 1);
+  if (kind === "github" && LOGIN.test(value)) return { principal: text, kind, value };
+  if (kind === "email" && value.length <= 254 && EMAIL.test(value)) return { principal: text, kind, value };
+  return null;
+}
+
+/// What a person reads for a principal: the GitHub login, or the address.
+export function displayOf(principal) {
+  const p = parsePrincipal(principal);
+  return p ? p.value : String(principal || "");
+}
 export const GENESIS = "0".repeat(64);
 
 /// Plain-words messages for each stable reason. The reason is the contract;
 /// the message is for the person, and says what to do next.
 const MESSAGES = {
   "not-signed-in": "sign in first -- run `krate account login`, then try again",
-  "not-a-member": (o) => `you are not a member of ${o} -- ask one of its owners to invite you`,
+  "not-a-member": (o, d) => d || `you are not a member of ${o} -- ask one of its owners to invite you`,
   removed: (o) => `you were removed from ${o} -- ask one of its owners if that is a mistake`,
   "role-cannot": (o, d) => d || `your role in ${o} cannot do that`,
   "last-owner": (o) =>
@@ -255,11 +279,11 @@ const SCHEMA = [
      slug TEXT NOT NULL, name TEXT NOT NULL,
      created_at INTEGER NOT NULL, created_by TEXT NOT NULL)`,
   `CREATE TABLE IF NOT EXISTS members (
-     login TEXT PRIMARY KEY, role TEXT NOT NULL, state TEXT NOT NULL,
+     principal TEXT PRIMARY KEY, role TEXT NOT NULL, state TEXT NOT NULL,
      added_at INTEGER NOT NULL, added_by TEXT,
      removed_at INTEGER, removed_by TEXT)`,
   `CREATE TABLE IF NOT EXISTS invites (
-     code TEXT PRIMARY KEY, login TEXT NOT NULL, role TEXT NOT NULL,
+     code TEXT PRIMARY KEY, principal TEXT NOT NULL, role TEXT NOT NULL,
      issued_by TEXT NOT NULL, issued_at INTEGER NOT NULL, expires_at INTEGER NOT NULL,
      state TEXT NOT NULL, closed_at INTEGER, closed_by TEXT)`,
   `CREATE TABLE IF NOT EXISTS root_keys (
@@ -295,6 +319,12 @@ const MUTATIONS = new Set([
   "add-candidate",
   "approve",
 ]);
+
+function notAMember(who, ctx) {
+  return who
+    ? `${displayOf(who)} is not a member of ${ctx.slug}`
+    : "address a member by principal: github:<login> or email:<address>";
+}
 
 function inviteCode() {
   const alphabet = "abcdefghjkmnpqrstuvwxyz23456789";
@@ -339,11 +369,18 @@ export class Org {
   /// One command, inside the caller's transaction. Answers `{status, body}`.
   run(command) {
     const { op, slug } = command;
-    const actor = command.actor ? String(command.actor).toLowerCase() : null;
+    // Every principal the person proved, and the one they act as here: the
+    // one this organisation knows them by, an active membership first and a
+    // GitHub one before an email one; otherwise the first they hold.
+    const principals = (Array.isArray(command.principals) ? command.principals : [])
+      .map((p) => parsePrincipal(p))
+      .filter(Boolean)
+      .map((p) => p.principal);
     const args = command.args || {};
     const idem = command.idempotency || null;
     const now = this.now();
-    const ctx = { op, slug, actor, args, now };
+    const actor = this.actingAs(principals);
+    const ctx = { op, slug, actor, principals, args, now };
 
     // The door's pre-check before storing bytes replays too, so a retried
     // upload is answered without storing anything twice.
@@ -393,9 +430,20 @@ export class Org {
     return r ? r.public_key : null;
   }
 
-  member(login) {
-    if (!login) return null;
-    return this.row("SELECT * FROM members WHERE login = ?", login);
+  member(principal) {
+    if (!principal) return null;
+    return this.row("SELECT * FROM members WHERE principal = ?", principal);
+  }
+
+  /// Which of `principals` the person acts as in this organisation.
+  actingAs(principals) {
+    if (!principals.length) return null;
+    const rank = (m) => (m.state === "active" ? 0 : 2) + (m.principal.startsWith("github:") ? 0 : 1);
+    const held = principals
+      .map((p) => this.member(p))
+      .filter(Boolean)
+      .sort((a, b) => rank(a) - rank(b));
+    return held.length ? held[0].principal : principals[0];
   }
 
   activeOwners() {
@@ -461,18 +509,27 @@ export class Org {
     if (!ctx.actor) return { refusal: this.deny(ctx, action, target, "not-signed-in") };
     const me = this.member(ctx.actor);
     if (!me) return { refusal: this.deny(ctx, action, target, "not-a-member") };
-    if (me.state !== "active") return { refusal: this.deny(ctx, action, target, "removed") };
+    if (me.state !== "active") {
+      // A removed member already knows which organisation this is (R8).
+      const refusal = this.deny(ctx, action, target, "removed");
+      refusal.body.org = ctx.slug;
+      refusal.body.org_name = this.org().name;
+      return { refusal };
+    }
     return { me };
   }
 
   membership(m) {
     if (!m) return null;
+    const p = parsePrincipal(m.principal);
     const out = {
       org: this.org().slug,
-      login: m.login,
+      principal: m.principal,
+      display: p ? p.value : m.principal,
+      kind: p ? p.kind : null,
       role: m.role,
       state: m.state,
-      added_at: m.added_at,
+      since: m.added_at,
       added_by: m.added_by,
     };
     if (m.state === "removed") {
@@ -484,12 +541,16 @@ export class Org {
 
   orgView() {
     const o = this.org();
+    const key = this.row("SELECT public_key, set_at, set_by FROM root_keys ORDER BY seq DESC LIMIT 1");
     return {
       slug: o.slug,
       name: o.name,
       created_at: o.created_at,
       created_by: o.created_by,
-      root_key: this.rootKey(),
+      root_key: key ? key.public_key : null,
+      // When and by whom the current root was set (Addendum 2, item 3).
+      root_key_set_at: key ? key.set_at : null,
+      root_key_set_by: key ? key.set_by : null,
     };
   }
 
@@ -507,14 +568,14 @@ export class Org {
       ctx.actor,
     );
     this.sql.exec(
-      "INSERT INTO members (login, role, state, added_at, added_by) VALUES (?, 'owner', 'active', ?, ?)",
+      "INSERT INTO members (principal, role, state, added_at, added_by) VALUES (?, 'owner', 'active', ?, ?)",
       ctx.actor,
       ctx.now,
       ctx.actor,
     );
     this.audit(ctx.actor, "org.create", `org:${ctx.slug}`, "allowed");
     this.audit(ctx.actor, "member.add", `member:${ctx.actor}`, "allowed", "owner");
-    return this.ok({ org: this.orgView() }, 201);
+    return this.ok({ org: this.orgView(), membership: this.membership(this.member(ctx.actor)) }, 201);
   }
 
   op_show(ctx) {
@@ -523,22 +584,49 @@ export class Org {
     const rule = allows(me.role, "org.view");
     const members =
       rule === "yes"
-        ? this.rows("SELECT * FROM members ORDER BY added_at, login").map((m) => this.membership(m))
+        ? this.rows("SELECT * FROM members ORDER BY added_at, principal").map((m) => this.membership(m))
         : [this.membership(me)];
     return this.ok({ org: this.orgView(), me: this.membership(me), members });
   }
 
+  inviteView(invite, site) {
+    const p = parsePrincipal(invite.principal);
+    return {
+      code: invite.code,
+      expires_at: invite.expires_at,
+      principal: invite.principal,
+      display: p ? p.value : invite.principal,
+      kind: p ? p.kind : null,
+      role: invite.role,
+      join_url: `${site || "https://krate.tech"}/join/?o=${encodeURIComponent(this.org().slug)}&c=${encodeURIComponent(invite.code)}`,
+    };
+  }
+
   op_invite(ctx) {
-    const login = String(ctx.args.login || "").toLowerCase();
+    // `{github, role}` or `{email, role}`: exactly one of the two (IC-947).
+    const github = ctx.args.github;
+    const email = ctx.args.email;
     const role = String(ctx.args.role || "");
-    const target = `invite:${login}/${role}`;
+    const named = (github !== undefined && github !== null && github !== "") + (email !== undefined && email !== null && email !== "");
+    const p = named !== 1 ? null : github ? parsePrincipal(`github:${github}`) : parsePrincipal(`email:${email}`);
+    const target = `invite:${p ? p.principal : "unknown"}/${role}`;
     const { me, refusal } = this.standing(ctx, "invite.create", target);
     if (refusal) return refusal;
     if (!ROLES.includes(role)) {
       return this.deny(ctx, "invite.create", target, "role-cannot", `there is no role called ${JSON.stringify(role)}`);
     }
-    if (!LOGIN.test(login)) {
-      return this.deny(ctx, "invite.create", target, "role-cannot", "that is not a GitHub login");
+    if (!p) {
+      return this.deny(
+        ctx,
+        "invite.create",
+        target,
+        "role-cannot",
+        named !== 1
+          ? "an invitation names exactly one of a GitHub username (github) or an email address (email)"
+          : github
+            ? "that is not a GitHub username"
+            : "that is not an email address",
+      );
     }
     const action = role === "owner" || role === "admin" ? "invite.owner-admin" : "invite.other";
     if (allows(me.role, action) !== "yes") {
@@ -547,22 +635,22 @@ export class Org {
     const code = inviteCode();
     const expires = ctx.now + INVITE_SECONDS;
     this.sql.exec(
-      "INSERT INTO invites (code, login, role, issued_by, issued_at, expires_at, state) VALUES (?, ?, ?, ?, ?, ?, 'open')",
+      "INSERT INTO invites (code, principal, role, issued_by, issued_at, expires_at, state) VALUES (?, ?, ?, ?, ?, ?, 'open')",
       code,
-      login,
+      p.principal,
       role,
       ctx.actor,
       ctx.now,
       expires,
     );
     this.audit(ctx.actor, "invite.create", target, "allowed");
-    return this.ok({ code, expires_at: expires, login, role }, 201);
+    return this.ok(this.inviteView(this.row("SELECT * FROM invites WHERE code = ?", code), ctx.args.site), 201);
   }
 
   op_revoke_invite(ctx) {
     const code = String(ctx.args.code || "");
     const invite = this.row("SELECT * FROM invites WHERE code = ?", code);
-    const target = invite ? `invite:${invite.login}/${invite.role}` : "invite:unknown";
+    const target = invite ? `invite:${invite.principal}/${invite.role}` : "invite:unknown";
     const { me, refusal } = this.standing(ctx, "invite.revoke", target);
     if (refusal) return refusal;
     if (!invite) {
@@ -585,25 +673,62 @@ export class Org {
     return this.ok(null, 204);
   }
 
+  /// GET /orgs/<slug>/invites/<code> (Addendum 2, item 1): what the join
+  /// page shows before Accept -- the organisation, the role, who invited
+  /// you and who it is for. Only to the principal it names; anyone else
+  /// hears `invite-for-someone-else` and nothing beyond the slug. Reading
+  /// it changes nothing and is never audited, refusals included.
+  op_invite_info(ctx) {
+    const code = String(ctx.args.code || "");
+    const refuse = (reason, detail) => ({
+      status: STATUS[reason] || 403,
+      body: { error: reason, message: messageFor(reason, ctx.slug, detail) },
+    });
+    if (!this.org()) return refuse("no-such-org");
+    if (!ctx.actor) return refuse("not-signed-in");
+    const invite = this.row("SELECT * FROM invites WHERE code = ?", code);
+    if (!invite) return refuse("invite-revoked", "no invitation with that code -- check the link, or ask for a new one");
+    if (!ctx.principals.includes(invite.principal)) return refuse("invite-for-someone-else");
+    if (invite.state === "revoked") return refuse("invite-revoked");
+    if (invite.state === "used") return refuse("invite-used");
+    if (ctx.now >= invite.expires_at) return refuse("invite-expired");
+    const p = parsePrincipal(invite.principal);
+    return this.ok({
+      org: { slug: this.org().slug, name: this.org().name },
+      role: invite.role,
+      invited_by: { principal: invite.issued_by, display: displayOf(invite.issued_by) },
+      for: { principal: invite.principal, display: p ? p.value : invite.principal, kind: p ? p.kind : null },
+      expires_at: invite.expires_at,
+      state: "open",
+      join_url: this.inviteView(invite, ctx.args.site).join_url,
+    });
+  }
+
   op_accept(ctx) {
     const code = String(ctx.args.code || "");
     if (!this.org()) {
       return { status: 404, body: { error: "no-such-org", message: messageFor("no-such-org", ctx.slug) } };
     }
     const invite = this.row("SELECT * FROM invites WHERE code = ?", code);
-    const target = invite ? `invite:${invite.login}/${invite.role}` : "invite:unknown";
+    const target = invite ? `invite:${invite.principal}/${invite.role}` : "invite:unknown";
     if (!ctx.actor) return this.deny(ctx, "invite.accept", target, "not-signed-in");
     if (!invite) {
       return this.deny(ctx, "invite.accept", target, "invite-revoked", `no invitation with that code in ${ctx.slug} -- check the code, or ask for a new one`);
     }
     // Who it is for is asked first, so a person it does not name learns
-    // nothing about its state.
-    if (invite.login !== ctx.actor) return this.deny(ctx, "invite.accept", target, "invite-for-someone-else");
+    // nothing about its state. The person accepts as the principal the
+    // invitation names: an email invitation with any sign-in that proved
+    // that inbox, a GitHub one only with GitHub.
+    if (!ctx.principals.includes(invite.principal)) {
+      return this.deny(ctx, "invite.accept", target, "invite-for-someone-else");
+    }
+    const as = invite.principal;
+    ctx = { ...ctx, actor: as };
     if (invite.state === "revoked") return this.deny(ctx, "invite.accept", target, "invite-revoked");
     if (invite.state === "used") return this.deny(ctx, "invite.accept", target, "invite-used");
     if (ctx.now >= invite.expires_at) return this.deny(ctx, "invite.accept", target, "invite-expired");
 
-    const current = this.member(ctx.actor);
+    const current = this.member(as);
     if (
       current &&
       current.state === "active" &&
@@ -616,42 +741,49 @@ export class Org {
     this.sql.exec(
       "UPDATE invites SET state = 'used', closed_at = ?, closed_by = ? WHERE code = ?",
       ctx.now,
-      ctx.actor,
+      as,
       code,
     );
     if (current) {
       this.sql.exec(
-        "UPDATE members SET role = ?, state = 'active', added_at = ?, added_by = ?, removed_at = NULL, removed_by = NULL WHERE login = ?",
+        "UPDATE members SET role = ?, state = 'active', added_at = ?, added_by = ?, removed_at = NULL, removed_by = NULL WHERE principal = ?",
         invite.role,
         ctx.now,
         invite.issued_by,
-        ctx.actor,
+        as,
       );
     } else {
       this.sql.exec(
-        "INSERT INTO members (login, role, state, added_at, added_by) VALUES (?, ?, 'active', ?, ?)",
-        ctx.actor,
+        "INSERT INTO members (principal, role, state, added_at, added_by) VALUES (?, ?, 'active', ?, ?)",
+        as,
         invite.role,
         ctx.now,
         invite.issued_by,
       );
     }
-    this.audit(ctx.actor, "invite.accept", target, "allowed");
-    return this.ok({ membership: this.membership(this.member(ctx.actor)) });
+    this.audit(as, "invite.accept", target, "allowed");
+    return this.ok({ membership: this.membership(this.member(as)), org: { slug: this.org().slug, name: this.org().name } });
+  }
+
+  /// The member a URL names, as a principal: `github%3Aalice`. A bare
+  /// login is not a principal and names nobody.
+  targetOf(ctx) {
+    const p = parsePrincipal(ctx.args.principal);
+    return p ? p.principal : null;
   }
 
   op_set_role(ctx) {
-    const login = String(ctx.args.login || "").toLowerCase();
+    const who = this.targetOf(ctx);
     const role = String(ctx.args.role || "");
-    const target = `member:${login}`;
+    const target = `member:${who || String(ctx.args.principal || "").slice(0, 80)}`;
     const { me, refusal } = this.standing(ctx, "member.role", target);
     if (refusal) return refusal;
     if (!ROLES.includes(role)) {
       return this.deny(ctx, "member.role", target, "role-cannot", `there is no role called ${JSON.stringify(role)}`);
     }
-    const them = this.member(login);
+    const them = this.member(who);
     if (!them || them.state !== "active") {
-      return this.deny(ctx, "member.role", target, "not-a-member", `${login} is not a member of ${ctx.slug}`);
+      return this.deny(ctx, "member.role", target, "not-a-member", notAMember(who, ctx));
     }
     // Making or unmaking an owner is an owner's; so is anything touching an
     // admin, because only an owner can invite one. Everything else between
@@ -665,24 +797,24 @@ export class Org {
       return this.deny(ctx, "member.role", target, "last-owner");
     }
     if (them.role !== role) {
-      this.sql.exec("UPDATE members SET role = ? WHERE login = ?", role, login);
+      this.sql.exec("UPDATE members SET role = ? WHERE principal = ?", role, who);
       this.audit(ctx.actor, "member.role", target, "allowed", `${them.role}->${role}`);
     }
-    return this.ok({ membership: this.membership(this.member(login)) });
+    return this.ok({ membership: this.membership(this.member(who)), org: { slug: this.org().slug, name: this.org().name } });
   }
 
   op_remove(ctx) {
-    const login = String(ctx.args.login || "").toLowerCase();
-    const target = `member:${login}`;
+    const who = this.targetOf(ctx);
+    const target = `member:${who || String(ctx.args.principal || "").slice(0, 80)}`;
     const { me, refusal } = this.standing(ctx, "member.remove", target);
     if (refusal) return refusal;
-    const them = this.member(login);
+    const them = this.member(who);
     if (!them || them.state !== "active") {
-      return this.deny(ctx, "member.remove", target, "not-a-member", `${login} is not a member of ${ctx.slug}`);
+      return this.deny(ctx, "member.remove", target, "not-a-member", notAMember(who, ctx));
     }
     const rule = allows(me.role, "member.remove");
-    const permitted =
-      rule === "yes" || (rule === "self" && login === me.login) || (rule === "not-owners" && (them.role !== "owner" || login === me.login));
+    const self = who === me.principal;
+    const permitted = rule === "yes" || (rule === "self" && self) || (rule === "not-owners" && (them.role !== "owner" || self));
     if (!permitted) {
       return this.deny(ctx, "member.remove", target, "role-cannot", `a ${me.role} cannot remove a ${them.role}`);
     }
@@ -692,22 +824,22 @@ export class Org {
     // The member's row stays, marked removed: their uploads and approvals
     // keep naming them (R12), and their next fetch is refused as `removed`.
     this.sql.exec(
-      "UPDATE members SET state = 'removed', removed_at = ?, removed_by = ? WHERE login = ?",
+      "UPDATE members SET state = 'removed', removed_at = ?, removed_by = ? WHERE principal = ?",
       ctx.now,
       ctx.actor,
-      login,
+      who,
     );
     this.audit(ctx.actor, "member.remove", target, "allowed", them.role);
     // Invitations they issued that nobody has accepted go with their
     // authority (ch 14 7.3: removal ends pending authority).
-    for (const invite of this.rows("SELECT code, login, role FROM invites WHERE issued_by = ? AND state = 'open'", login)) {
+    for (const invite of this.rows("SELECT code, principal, role FROM invites WHERE issued_by = ? AND state = 'open'", who)) {
       this.sql.exec(
         "UPDATE invites SET state = 'revoked', closed_at = ?, closed_by = ? WHERE code = ?",
         ctx.now,
         ctx.actor,
         invite.code,
       );
-      this.audit(ctx.actor, "invite.revoke", `invite:${invite.login}/${invite.role}`, "allowed", "issuer removed");
+      this.audit(ctx.actor, "invite.revoke", `invite:${invite.principal}/${invite.role}`, "allowed", "issuer removed");
     }
     return this.ok(null, 204);
   }
@@ -832,7 +964,9 @@ export class Org {
     const candidate = this.row("SELECT * FROM candidates WHERE digest = ?", digest);
     // Separation first: whoever uploaded it hears that someone else must
     // approve it, whatever their role, because that is the next step.
-    if (candidate && candidate.uploaded_by === ctx.actor) {
+    // Any principal the approver holds counts: one person signed in with
+    // both GitHub and a proved inbox is still one person.
+    if (candidate && ctx.principals.includes(candidate.uploaded_by)) {
       return this.deny(ctx, "candidate.approve", target, "self-approval");
     }
     if (allows(me.role, "candidate.approve") !== "yes") {
@@ -922,7 +1056,26 @@ export class Org {
       );
     }
     this.audit(ctx.actor, "release.download", target, "allowed");
-    return this.ok({ name: candidate.name, version: candidate.version, big: Boolean(candidate.big) });
+    return this.ok({ name: candidate.name, version: candidate.version, big: Boolean(candidate.big), org_name: this.org().name });
+  }
+
+  /// What the site's open page may show about a private release before
+  /// anything is downloaded (Addendum 2, item 6): the checks a download
+  /// makes, refused the same way and audited the same way; allowed, it is
+  /// a look, not a download, and records nothing.
+  op_view(ctx) {
+    const digest = String(ctx.args.digest || "");
+    const target = `release:${digest}`;
+    const { me, refusal } = this.standing(ctx, "release.download", target);
+    if (refusal) return refusal;
+    if (allows(me.role, "release.download") !== "yes") {
+      return this.deny(ctx, "release.download", target, "role-cannot");
+    }
+    const candidate = this.row("SELECT * FROM candidates WHERE digest = ?", digest);
+    if (!candidate || candidate.state !== "released") {
+      return this.deny(ctx, "release.download", target, "digest-mismatch", "that digest is not a release");
+    }
+    return this.ok({ name: candidate.name, version: candidate.version, org_name: this.org().name });
   }
 
   op_audit(ctx) {

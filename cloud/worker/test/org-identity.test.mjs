@@ -63,10 +63,10 @@ test("with KRATE_TEST_IDENTITIES on a loopback hub, each test token is its login
       new Request("http://127.0.0.1:8787/orgs/acme", { headers: { authorization: "Bearer tok-alice" } }),
       env,
     );
-    assert.strictEqual((await show.json()).me.login, "alice");
+    assert.strictEqual((await show.json()).me.principal, "github:alice");
     // Logins compare without case and are stored lower-case.
     const bob = await create(env, "tok-bob", "bobs");
-    assert.strictEqual((await bob.json()).org.created_by, "bob");
+    assert.strictEqual((await bob.json()).org.created_by, "github:bob");
     // A token not in the map still goes to GitHub.
     assert.strictEqual((await create(env, "tok-mallory", "mal")).status, 401);
     assert.ok(gh.asked.length >= 1);

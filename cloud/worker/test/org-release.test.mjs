@@ -145,7 +145,7 @@ test("approving X releases X; changed bytes are a new candidate that approving X
   const [release] = releases;
   assert.deepStrictEqual(
     { name: release.name, version: release.version, uploaded_by: release.uploaded_by, approved_by: release.approved_by },
-    { name: "Bounce", version: "1.0.0", uploaded_by: "carol", approved_by: "bob" },
+    { name: "Bounce", version: "1.0.0", uploaded_by: "github:carol", approved_by: "github:bob" },
   );
   assert.strictEqual(release.url, `https://hub.example/a/${x}`);
 });
@@ -172,18 +172,18 @@ test("a private release downloads only for a current member or recipient, asked 
       if (method === "GET") assert.strictEqual(r.body.error, reason);
       assert.strictEqual(r.bytes.length === 0 || r.body.error === reason, true, "no bytes in a refusal");
     }
-    // A browser is not walked to the receive page; it is refused too.
+    // A page navigation (no session) goes to the site's open page (Addendum 2, item 5); a signed-in request is answered.
     const browser = await call(env, who, "GET", `/a/${digest}`, { headers: { accept: "text/html" } });
-    assert.strictEqual(browser.status, 403);
+    assert.deepStrictEqual(who ? [browser.status, browser.body.error] : [browser.status, browser.headers.get("location")], who ? [403, reason] : [303, `https://krate.tech/open/?a=${digest}&private=1`]);
   }
   assert.strictEqual(
     env.ORGS.requests - asked,
     3,
-    "the organisation was asked on every signed-in fetch; a fetch with no session is refused at the door",
+    "the organisation was asked on every signed-in fetch; no session is answered at the door",
   );
 
   // Removed: refused at the very next fetch, no session or cache in between.
-  assert.strictEqual((await call(env, "alice", "DELETE", "/orgs/acme/members/dan")).status, 204);
+  assert.strictEqual((await call(env, "alice", "DELETE", "/orgs/acme/members/github%3Adan")).status, 204);
   const gone = await call(env, "dan", "GET", `/a/${digest}`);
   assert.deepStrictEqual([gone.status, gone.body.error], [403, "removed"]);
   // The removed member is told which organisation; a stranger is not.
@@ -212,15 +212,15 @@ test("removing a member keeps the organisation's releases, their history, and ev
   const x = await released(env);
   const y = await call(env, "carol", "POST", "/orgs/acme/candidates", { bytes: fixture("candidate-v2.krate") });
 
-  assert.strictEqual((await call(env, "alice", "DELETE", "/orgs/acme/members/carol")).status, 204);
+  assert.strictEqual((await call(env, "alice", "DELETE", "/orgs/acme/members/github%3Acarol")).status, 204);
   const releases = (await call(env, "bob", "GET", "/orgs/acme/releases")).body;
-  assert.deepStrictEqual(releases.map((r) => [r.digest, r.uploaded_by, r.approved_by]), [[x, "carol", "bob"]], "history as it was (R12)");
+  assert.deepStrictEqual(releases.map((r) => [r.digest, r.uploaded_by, r.approved_by]), [[x, "github:carol", "github:bob"]], "history as it was (R12)");
   const history = (await call(env, "alice", "GET", "/orgs/acme/candidates")).body;
   assert.deepStrictEqual(
     history.map((c) => [c.digest, c.state, c.uploaded_by]),
     [
-      [x, "released", "carol"],
-      [y.body.digest, "waiting-for-approval", "carol"],
+      [x, "released", "github:carol"],
+      [y.body.digest, "waiting-for-approval", "github:carol"],
     ],
   );
   assert.strictEqual((await call(env, "dan", "GET", `/a/${x}`)).status, 200, "the release still serves its recipients");
@@ -308,7 +308,7 @@ test("the public door refuses an organisation's bytes, and an organisation refus
   );
   // Bytes already public cannot become a private release: they are out.
   await call(env, "alice", "PUT", "/orgs/acme/root-key", { json: { public_key: KEYS.root } });
-  const inv = await call(env, "alice", "POST", "/orgs/acme/invites", { json: { login: "frank", role: "developer" } });
+  const inv = await call(env, "alice", "POST", "/orgs/acme/invites", { json: { github: "frank", role: "developer" } });
   await call(env, "frank", "POST", `/orgs/acme/invites/${inv.body.code}/accept`);
   // A public listing of a signed bundle, then the same bytes to the org.
   const signedPublic = await worker.fetch(
@@ -338,7 +338,7 @@ test("an organisation candidate through the big-file path lands as a candidate, 
     worker.fetch(
       bigReq("/publish/big/start", {
         method: "POST",
-        headers: { authorization: `Bearer krs_${who}`, "content-type": "application/json" },
+        headers: { authorization: `Bearer gho_${who}`, "content-type": "application/json" },
         body: JSON.stringify({ kind: "bundle", size: bytes.byteLength, sha256: sha, org: "acme" }),
       }),
       env,
@@ -401,7 +401,7 @@ test("a big upload signed for another root is refused at the verdict and leaves 
   const started = await worker.fetch(
     bigReq("/publish/big/start", {
       method: "POST",
-      headers: { authorization: "Bearer krs_carol", "content-type": "application/json" },
+      headers: { authorization: "Bearer gho_carol", "content-type": "application/json" },
       body: JSON.stringify({ kind: "bundle", size: bytes.byteLength, sha256: sha, org: "acme" }),
     }),
     env,

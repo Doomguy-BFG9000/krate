@@ -58,7 +58,7 @@ test("the executable matrix is the contract's table", () => {
 async function acmeWithAdmin() {
   const env = orgEnv();
   await acme(env);
-  const inv = await call(env, "alice", "POST", "/orgs/acme/invites", { json: { login: "erin", role: "admin" } });
+  const inv = await call(env, "alice", "POST", "/orgs/acme/invites", { json: { github: "erin", role: "admin" } });
   assert.strictEqual(inv.status, 201);
   assert.strictEqual((await call(env, "erin", "POST", `/orgs/acme/invites/${inv.body.code}/accept`)).status, 200);
   return env;
@@ -73,7 +73,7 @@ test("view: every role sees the organisation; a recipient sees only their own en
     assert.strictEqual(r.body.me.role, role);
     assert.strictEqual(r.body.org.slug, "acme");
     if (role === "recipient") {
-      assert.deepStrictEqual(r.body.members.map((m) => m.login), ["dan"], "own entry only");
+      assert.deepStrictEqual(r.body.members.map((m) => m.display), ["dan"], "own entry only");
     } else {
       assert.strictEqual(r.body.members.length, 5);
     }
@@ -90,7 +90,7 @@ test("invite owner or admin: owners only", async () => {
   const env = await acmeWithAdmin();
   for (const role of ["owner", "admin"]) {
     for (const [as, login] of Object.entries(BY_ROLE)) {
-      const r = await call(env, login, "POST", "/orgs/acme/invites", { json: { login: "frank", role } });
+      const r = await call(env, login, "POST", "/orgs/acme/invites", { json: { github: "frank", role } });
       if (as === "owner") assert.strictEqual(r.status, 201, `${as} invites ${role}`);
       else assert.deepStrictEqual([r.status, r.body.error], [403, "role-cannot"], `${as} invites ${role}`);
     }
@@ -101,7 +101,7 @@ test("invite developer, reviewer or recipient: owners and admins", async () => {
   const env = await acmeWithAdmin();
   for (const role of ["developer", "reviewer", "recipient"]) {
     for (const [as, login] of Object.entries(BY_ROLE)) {
-      const r = await call(env, login, "POST", "/orgs/acme/invites", { json: { login: "frank", role } });
+      const r = await call(env, login, "POST", "/orgs/acme/invites", { json: { github: "frank", role } });
       if (as === "owner" || as === "admin") {
         assert.strictEqual(r.status, 201, `${as} invites ${role}`);
         assert.match(r.body.code, /^[a-z0-9]{20}$/);
@@ -117,22 +117,22 @@ test("change role among non-owner roles: owners and admins; owner-making: owners
   const env = await acmeWithAdmin();
   for (const [as, login] of Object.entries(BY_ROLE)) {
     if (as === "developer") continue; // carol is the target
-    const r = await call(env, login, "PUT", "/orgs/acme/members/carol", { json: { role: "reviewer" } });
+    const r = await call(env, login, "PUT", "/orgs/acme/members/github%3Acarol", { json: { role: "reviewer" } });
     if (as === "owner" || as === "admin") {
       assert.strictEqual(r.status, 200, `${as}: ${JSON.stringify(r.body)}`);
       assert.strictEqual(r.body.membership.role, "reviewer");
-      await call(env, "alice", "PUT", "/orgs/acme/members/carol", { json: { role: "developer" } });
+      await call(env, "alice", "PUT", "/orgs/acme/members/github%3Acarol", { json: { role: "developer" } });
     } else {
       assert.deepStrictEqual([r.status, r.body.error], [403, "role-cannot"], as);
     }
   }
-  const adminMakesOwner = await call(env, "erin", "PUT", "/orgs/acme/members/carol", { json: { role: "owner" } });
+  const adminMakesOwner = await call(env, "erin", "PUT", "/orgs/acme/members/github%3Acarol", { json: { role: "owner" } });
   assert.deepStrictEqual([adminMakesOwner.status, adminMakesOwner.body.error], [403, "role-cannot"]);
-  const adminUnmakesOwner = await call(env, "erin", "PUT", "/orgs/acme/members/alice", { json: { role: "developer" } });
+  const adminUnmakesOwner = await call(env, "erin", "PUT", "/orgs/acme/members/github%3Aalice", { json: { role: "developer" } });
   assert.deepStrictEqual([adminUnmakesOwner.status, adminUnmakesOwner.body.error], [403, "role-cannot"]);
-  const ownerMakesOwner = await call(env, "alice", "PUT", "/orgs/acme/members/carol", { json: { role: "owner" } });
+  const ownerMakesOwner = await call(env, "alice", "PUT", "/orgs/acme/members/github%3Acarol", { json: { role: "owner" } });
   assert.strictEqual(ownerMakesOwner.body.membership.role, "owner");
-  const ownerUnmakesOwner = await call(env, "alice", "PUT", "/orgs/acme/members/carol", { json: { role: "developer" } });
+  const ownerUnmakesOwner = await call(env, "alice", "PUT", "/orgs/acme/members/github%3Acarol", { json: { role: "developer" } });
   assert.strictEqual(ownerUnmakesOwner.body.membership.role, "developer");
 });
 
@@ -141,16 +141,16 @@ test("remove: owners anyone, admins anyone but owners, everyone else only themse
   // Not themselves: the others are refused.
   for (const [as, login] of Object.entries(BY_ROLE)) {
     if (as === "owner" || as === "admin") continue;
-    const r = await call(env, login, "DELETE", "/orgs/acme/members/erin");
+    const r = await call(env, login, "DELETE", "/orgs/acme/members/github%3Aerin");
     assert.deepStrictEqual([r.status, r.body.error], [403, "role-cannot"], as);
   }
-  const adminRemovesOwner = await call(env, "erin", "DELETE", "/orgs/acme/members/alice");
+  const adminRemovesOwner = await call(env, "erin", "DELETE", "/orgs/acme/members/github%3Aalice");
   assert.deepStrictEqual([adminRemovesOwner.status, adminRemovesOwner.body.error], [403, "role-cannot"]);
-  assert.strictEqual((await call(env, "erin", "DELETE", "/orgs/acme/members/dan")).status, 204, "admin removes a recipient");
+  assert.strictEqual((await call(env, "erin", "DELETE", "/orgs/acme/members/github%3Adan")).status, 204, "admin removes a recipient");
   // Themselves: each may leave.
-  assert.strictEqual((await call(env, "bob", "DELETE", "/orgs/acme/members/bob")).status, 204, "reviewer leaves");
-  assert.strictEqual((await call(env, "carol", "DELETE", "/orgs/acme/members/carol")).status, 204, "developer leaves");
-  assert.strictEqual((await call(env, "alice", "DELETE", "/orgs/acme/members/erin")).status, 204, "owner removes an admin");
+  assert.strictEqual((await call(env, "bob", "DELETE", "/orgs/acme/members/github%3Abob")).status, 204, "reviewer leaves");
+  assert.strictEqual((await call(env, "carol", "DELETE", "/orgs/acme/members/github%3Acarol")).status, 204, "developer leaves");
+  assert.strictEqual((await call(env, "alice", "DELETE", "/orgs/acme/members/github%3Aerin")).status, 204, "owner removes an admin");
   // Removed is removed: their next request says so.
   const gone = await call(env, "bob", "GET", "/orgs/acme");
   assert.deepStrictEqual([gone.status, gone.body.error], [403, "removed"]);
@@ -214,11 +214,11 @@ test("download a release: every role; read the audit: owners and admins", async 
 test("no single command leaves zero owners: remove, demote, or accept a lesser invitation", async () => {
   const env = orgEnv();
   await acme(env);
-  const leave = await call(env, "alice", "DELETE", "/orgs/acme/members/alice");
+  const leave = await call(env, "alice", "DELETE", "/orgs/acme/members/github%3Aalice");
   assert.deepStrictEqual([leave.status, leave.body.error], [409, "last-owner"]);
-  const demote = await call(env, "alice", "PUT", "/orgs/acme/members/alice", { json: { role: "developer" } });
+  const demote = await call(env, "alice", "PUT", "/orgs/acme/members/github%3Aalice", { json: { role: "developer" } });
   assert.deepStrictEqual([demote.status, demote.body.error], [409, "last-owner"]);
-  const inv = await call(env, "alice", "POST", "/orgs/acme/invites", { json: { login: "alice", role: "developer" } });
+  const inv = await call(env, "alice", "POST", "/orgs/acme/invites", { json: { github: "alice", role: "developer" } });
   const accept = await call(env, "alice", "POST", `/orgs/acme/invites/${inv.body.code}/accept`);
   assert.deepStrictEqual([accept.status, accept.body.error], [409, "last-owner"]);
   const show = await call(env, "alice", "GET", "/orgs/acme");
@@ -228,12 +228,12 @@ test("no single command leaves zero owners: remove, demote, or accept a lesser i
 async function twoOwners() {
   const env = orgEnv();
   await acme(env, { root: null });
-  const inv = await call(env, "alice", "POST", "/orgs/acme/invites", { json: { login: "erin", role: "owner" } });
+  const inv = await call(env, "alice", "POST", "/orgs/acme/invites", { json: { github: "erin", role: "owner" } });
   await call(env, "erin", "POST", `/orgs/acme/invites/${inv.body.code}/accept`);
   return env;
 }
 const owners = async (env) =>
-  (await call(env, "bob", "GET", "/orgs/acme")).body.members.filter((m) => m.role === "owner" && m.state === "active").map((m) => m.login);
+  (await call(env, "bob", "GET", "/orgs/acme")).body.members.filter((m) => m.role === "owner" && m.state === "active").map((m) => m.display);
 
 test("two owners leaving at the same moment leave exactly one, and the second hears last-owner", async () => {
   for (let round = 0; round < 20; round++) {
@@ -243,8 +243,8 @@ test("two owners leaving at the same moment leave exactly one, and the second he
     // Both requests are in flight before either commits: both reach the
     // store, and each one's transaction runs whole.
     const [a, e] = await Promise.all([
-      call(env, "alice", "DELETE", "/orgs/acme/members/alice"),
-      call(env, "erin", "DELETE", "/orgs/acme/members/erin"),
+      call(env, "alice", "DELETE", "/orgs/acme/members/github%3Aalice"),
+      call(env, "erin", "DELETE", "/orgs/acme/members/github%3Aerin"),
     ]);
     assert.strictEqual(env.ORGS.requests - before, 2);
     const results = [a, e].map((r) => r.status).sort();
@@ -258,8 +258,8 @@ test("two owners leaving at the same moment leave exactly one, and the second he
 test("two owners removing each other at the same moment leave exactly one", async () => {
   const env = await twoOwners();
   const [a, e] = await Promise.all([
-    call(env, "alice", "DELETE", "/orgs/acme/members/erin"),
-    call(env, "erin", "DELETE", "/orgs/acme/members/alice"),
+    call(env, "alice", "DELETE", "/orgs/acme/members/github%3Aerin"),
+    call(env, "erin", "DELETE", "/orgs/acme/members/github%3Aalice"),
   ]);
   assert.deepStrictEqual([a, e].map((r) => r.status).sort(), [204, 403]);
   assert.strictEqual([a, e].find((r) => r.status === 403).body.error, "removed", "the one removed first has no authority left");
@@ -272,19 +272,19 @@ test("an invitation is single-use, for one login, and expires seven days after i
   const env = orgEnv();
   await acme(env);
   // A login is compared without case; stored lower-case.
-  const inv = await call(env, "alice", "POST", "/orgs/acme/invites", { json: { login: "Frank", role: "developer" } });
-  assert.strictEqual(inv.body.login, "frank");
+  const inv = await call(env, "alice", "POST", "/orgs/acme/invites", { json: { github: "Frank", role: "developer" } });
+  assert.strictEqual(inv.body.display, "frank");
   const other = await call(env, "stranger", "POST", `/orgs/acme/invites/${inv.body.code}/accept`);
   assert.deepStrictEqual([other.status, other.body.error], [403, "invite-for-someone-else"]);
   const first = await call(env, "frank", "POST", `/orgs/acme/invites/${inv.body.code}/accept`);
   assert.strictEqual(first.status, 200);
-  assert.deepStrictEqual([first.body.membership.login, first.body.membership.role], ["frank", "developer"]);
+  assert.deepStrictEqual([first.body.membership.display, first.body.membership.role], ["frank", "developer"]);
   const again = await call(env, "frank", "POST", `/orgs/acme/invites/${inv.body.code}/accept`);
   assert.deepStrictEqual([again.status, again.body.error], [410, "invite-used"]);
 
   const store = env.ORGS.object("acme");
   const issued = Math.floor(Date.now() / 1000);
-  const late = await call(env, "alice", "POST", "/orgs/acme/invites", { json: { login: "erin", role: "reviewer" } });
+  const late = await call(env, "alice", "POST", "/orgs/acme/invites", { json: { github: "erin", role: "reviewer" } });
   store.now = () => issued + 7 * DAY + 5;
   const expired = await call(env, "erin", "POST", `/orgs/acme/invites/${late.body.code}/accept`);
   assert.deepStrictEqual([expired.status, expired.body.error], [410, "invite-expired"]);
@@ -294,15 +294,15 @@ test("an invitation is single-use, for one login, and expires seven days after i
 
 test("a withdrawn invitation cannot be accepted, and only its issuer's peers can withdraw it", async () => {
   const env = await acmeWithAdmin();
-  const inv = await call(env, "alice", "POST", "/orgs/acme/invites", { json: { login: "frank", role: "admin" } });
+  const inv = await call(env, "alice", "POST", "/orgs/acme/invites", { json: { github: "frank", role: "admin" } });
   const byAdmin = await call(env, "erin", "DELETE", `/orgs/acme/invites/${inv.body.code}`);
   assert.deepStrictEqual([byAdmin.status, byAdmin.body.error], [403, "role-cannot"], "an admin cannot withdraw an admin invitation");
   assert.strictEqual((await call(env, "alice", "DELETE", `/orgs/acme/invites/${inv.body.code}`)).status, 204);
   const accept = await call(env, "frank", "POST", `/orgs/acme/invites/${inv.body.code}/accept`);
   assert.deepStrictEqual([accept.status, accept.body.error], [410, "invite-revoked"]);
   // Removing an issuer withdraws what they issued and nobody accepted.
-  const pending = await call(env, "erin", "POST", "/orgs/acme/invites", { json: { login: "frank", role: "developer" } });
-  assert.strictEqual((await call(env, "alice", "DELETE", "/orgs/acme/members/erin")).status, 204);
+  const pending = await call(env, "erin", "POST", "/orgs/acme/invites", { json: { github: "frank", role: "developer" } });
+  assert.strictEqual((await call(env, "alice", "DELETE", "/orgs/acme/members/github%3Aerin")).status, 204);
   const orphan = await call(env, "frank", "POST", `/orgs/acme/invites/${pending.body.code}/accept`);
   assert.deepStrictEqual([orphan.status, orphan.body.error], [410, "invite-revoked"]);
 });
@@ -333,15 +333,15 @@ test("the same Idempotency-Key gets the same result, once; a reused key with ano
   const replay = await call(env, "alice", "POST", "/orgs", { json: { slug: "acme" }, key: "k-create" });
   assert.deepStrictEqual([replay.status, replay.body], [201, created.body], "a retried create is its first answer, not slug-taken");
 
-  const one = await call(env, "alice", "POST", "/orgs/acme/invites", { json: { login: "bob", role: "reviewer" }, key: "k1" });
-  const two = await call(env, "alice", "POST", "/orgs/acme/invites", { json: { login: "bob", role: "reviewer" }, key: "k1" });
+  const one = await call(env, "alice", "POST", "/orgs/acme/invites", { json: { github: "bob", role: "reviewer" }, key: "k1" });
+  const two = await call(env, "alice", "POST", "/orgs/acme/invites", { json: { github: "bob", role: "reviewer" }, key: "k1" });
   assert.strictEqual(one.status, 201);
   assert.deepStrictEqual(two.body, one.body, "the same code back");
   const db = env.ORGS.object("acme").ctx.storage.db;
   assert.strictEqual(db.prepare("SELECT COUNT(*) AS n FROM invites").get().n, 1, "the effect happened once");
   assert.strictEqual(db.prepare("SELECT COUNT(*) AS n FROM audit WHERE action = 'invite.create'").get().n, 1);
 
-  const reused = await call(env, "alice", "POST", "/orgs/acme/invites", { json: { login: "carol", role: "developer" }, key: "k1" });
+  const reused = await call(env, "alice", "POST", "/orgs/acme/invites", { json: { github: "carol", role: "developer" }, key: "k1" });
   assert.deepStrictEqual([reused.status, reused.body.error], [409, "idempotency-key-reused"]);
   assert.strictEqual(db.prepare("SELECT COUNT(*) AS n FROM invites").get().n, 1);
 
@@ -350,11 +350,11 @@ test("the same Idempotency-Key gets the same result, once; a reused key with ano
   assert.strictEqual(accepted.status, 200);
 
   // A refusal is not remembered: retried after its cause is fixed, it works.
-  const early = await call(env, "alice", "PUT", "/orgs/acme/members/carol", { json: { role: "reviewer" }, key: "k-role" });
+  const early = await call(env, "alice", "PUT", "/orgs/acme/members/github%3Acarol", { json: { role: "reviewer" }, key: "k-role" });
   assert.strictEqual(early.body.error, "not-a-member");
-  const inv = await call(env, "alice", "POST", "/orgs/acme/invites", { json: { login: "carol", role: "developer" } });
+  const inv = await call(env, "alice", "POST", "/orgs/acme/invites", { json: { github: "carol", role: "developer" } });
   await call(env, "carol", "POST", `/orgs/acme/invites/${inv.body.code}/accept`);
-  const later = await call(env, "alice", "PUT", "/orgs/acme/members/carol", { json: { role: "reviewer" }, key: "k-role" });
+  const later = await call(env, "alice", "PUT", "/orgs/acme/members/github%3Acarol", { json: { role: "reviewer" }, key: "k-role" });
   assert.strictEqual(later.status, 200);
 });
 
@@ -391,14 +391,14 @@ test("the audit has every step and every denial, chained, with nothing secret in
   const events = audit.body.events;
   const lines = events.map((e) => `${e.actor} ${e.action} ${e.result} ${e.reason || ""}`.trim());
   for (const want of [
-    "alice org.create allowed",
-    "alice root-key.register allowed",
-    "alice release-key.revoke allowed",
-    "bob invite.accept allowed",
-    "carol candidate.publish allowed",
-    "carol candidate.approve denied self-approval",
-    "bob candidate.approve allowed",
-    "stranger org.view denied not-a-member",
+    "github:alice org.create allowed",
+    "github:alice root-key.register allowed",
+    "github:alice release-key.revoke allowed",
+    "github:bob invite.accept allowed",
+    "github:carol candidate.publish allowed",
+    "github:carol candidate.approve denied self-approval",
+    "github:bob candidate.approve allowed",
+    "github:stranger org.view denied not-a-member",
   ]) {
     assert.ok(lines.includes(want), `${want} in\n${lines.join("\n")}`);
   }
@@ -445,9 +445,9 @@ test("a command that fails part-way leaves nothing behind", async () => {
     if (a[1] === "member.remove") throw new Error("disk on fire");
     return audit(...a);
   };
-  const failed = await call(env, "alice", "DELETE", "/orgs/acme/members/bob");
+  const failed = await call(env, "alice", "DELETE", "/orgs/acme/members/github%3Abob");
   assert.strictEqual(failed.status, 500, "our fault, said as ours");
   store.audit = audit;
-  const bob = (await call(env, "alice", "GET", "/orgs/acme")).body.members.find((m) => m.login === "bob");
+  const bob = (await call(env, "alice", "GET", "/orgs/acme")).body.members.find((m) => m.display === "bob");
   assert.strictEqual(bob.state, "active", "the removal rolled back with its audit event");
 });
