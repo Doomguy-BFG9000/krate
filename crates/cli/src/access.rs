@@ -319,6 +319,7 @@ pub fn gate(bytes: Bytes, mark: Mark, door: Door) -> Result<()> {
         Mark::Broken(slug) => {
             return refuse(
                 door,
+                "broken-mark",
                 &format!(
                     "this app is marked as {slug}'s private app, but its signature does not \
                      hold, so it does not open: it was changed after it was signed, or the \
@@ -347,7 +348,13 @@ pub fn gate(bytes: Bytes, mark: Mark, door: Door) -> Result<()> {
                 .as_ref()
                 .and_then(|r| r["hub"].as_str().map(str::to_string))
         })
-        .unwrap_or_else(|| org::hub_url(None));
+        .map(Ok)
+        .unwrap_or_else(|| org::hub_url(None))?;
+    // A pinned hub (IC-949 [hub]) is the only one asked, whatever served
+    // the link or answered before.
+    let hub = crate::fleet::pinned_hub()
+        .map(str::to_string)
+        .unwrap_or(hub);
     // The session goes only to a Krate hub, as on every other path.
     let authorization = identity
         .as_ref()
@@ -370,6 +377,7 @@ pub fn gate(bytes: Bytes, mark: Mark, door: Door) -> Result<()> {
             forget(&digest);
             refuse(
                 door,
+                "not-released",
                 &format!(
                     "this is {slug}'s private app, and {hub} has no release of it, so it does \
                      not open: ask {slug} for the link its reviewer's approval gave"
@@ -397,9 +405,9 @@ pub fn gate(bytes: Bytes, mark: Mark, door: Door) -> Result<()> {
                 &message,
                 org.as_deref(),
             );
-            refuse(door, &words)
+            refuse(door, &reason, &words)
         }
-        CheckIn::Refused(other) => refuse(door, &other.to_string()),
+        CheckIn::Refused(other) => refuse(door, "hub-refused", &other.to_string()),
         CheckIn::Allowed(meta) => online(
             &digest,
             &hub,
@@ -412,9 +420,20 @@ pub fn gate(bytes: Bytes, mark: Mark, door: Door) -> Result<()> {
     }
 }
 
-fn refuse(door: Door, words: &str) -> Result<()> {
+/// Refuse at the door with a stable reason for the open record. The error
+/// reads as the words alone.
+fn refuse(door: Door, reason: &str, words: &str) -> Result<()> {
+    alert_refusal(door, words);
+    Err(anyhow::Error::new(crate::audit::Refused::new(
+        reason,
+        words.to_string(),
+    )))
+}
+
+/// The refusal alert alone, for the machine policy's gate (IC-949), which
+/// refuses through the same door machinery as this one.
+pub fn alert_refusal(door: Door, words: &str) {
     alert_where(door, "This app did not open", words, false);
-    anyhow::bail!("{words}")
 }
 
 /// Checked in: the person may open it. Keep the lease fresh and show the
@@ -455,7 +474,7 @@ fn online(
                         "",
                         Some(&slug),
                     );
-                    return refuse(door, &words);
+                    return refuse(door, &reason, &words);
                 }
                 Ok(Some(answer)) => {
                     if answer["class"].as_str() == Some("online") && answer["lease"].is_null() {
@@ -511,6 +530,7 @@ fn offline(digest: &str, record: &Value, me: Option<&str>, door: Door) -> Result
     let Some(me) = me else {
         return refuse(
             door,
+            "offline-not-signed-in",
             &format!(
                 "this is {org_name}'s private app and you are not signed in, so it does not \
                  open offline: sign in with `krate account login` while connected"
@@ -520,6 +540,7 @@ fn offline(digest: &str, record: &Value, me: Option<&str>, door: Door) -> Result
     let Some(answer) = record.get("answer").filter(|a| !a.is_null()) else {
         return refuse(
             door,
+            "offline-online-only",
             &format!(
                 "this is {org_name}'s private app, and it opens only with a connection: \
                  connect to the internet and open it again"
@@ -545,6 +566,7 @@ fn offline(digest: &str, record: &Value, me: Option<&str>, door: Door) -> Result
         }
         Err(krate_lease::Refusal::Expired { expires_at }) => refuse(
             door,
+            "offline-expired",
             &format!(
                 "this is {org_name}'s private app, and its offline access ran out on {}: \
                  connect to the internet and open it again",
@@ -553,6 +575,7 @@ fn offline(digest: &str, record: &Value, me: Option<&str>, door: Door) -> Result
         ),
         Err(krate_lease::Refusal::OtherPerson) => refuse(
             door,
+            "offline-other-person",
             &format!(
                 "this is {org_name}'s private app, and its offline access belongs to another \
                  sign-in: connect to the internet and open it again as yourself"
@@ -560,6 +583,7 @@ fn offline(digest: &str, record: &Value, me: Option<&str>, door: Door) -> Result
         ),
         Err(why) => refuse(
             door,
+            "offline-unchecked",
             &format!(
                 "this is {org_name}'s private app, and its offline access could not be checked \
                  ({}), so it needs a connection: connect to the internet and open it again",

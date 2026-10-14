@@ -181,14 +181,11 @@ pub fn refusal_of(status: u16, response: ureq::Response) -> anyhow::Error {
     }
 }
 
-/// The hub to talk to: `--hub`, else `KRATE_HUB_URL`, else the public hub.
-pub fn hub_url(hub_override: Option<&str>) -> String {
-    hub_override
-        .map(str::to_string)
-        .or_else(|| std::env::var("KRATE_HUB_URL").ok())
-        .unwrap_or_else(|| crate::DEFAULT_HUB_URL.to_string())
-        .trim_end_matches('/')
-        .to_string()
+/// The hub to talk to: `--hub`, else `KRATE_HUB_URL`, else the public hub,
+/// and only the organisation's hub when its policy pins one. One function
+/// for every caller, so a pin cannot be missed (IC-949 [hub]).
+pub fn hub_url(hub_override: Option<&str>) -> Result<String> {
+    crate::fleet::hub(hub_override)
 }
 
 /// One key per command: the same command retried is the same request.
@@ -682,7 +679,7 @@ pub fn run(command: OrgCommand, hub_override: Option<&str>) -> Result<u8> {
     if let OrgCommand::ReleaseKey { slug, delegation } = &command {
         return release_key_command(slug, delegation.as_deref());
     }
-    let hub = hub_url(hub_override);
+    let hub = hub_url(hub_override)?;
     let identity = identity_or_sign_in("Organisations know people by their sign-in.")?;
     let client = Client::new(hub, identity);
     let me = client.me();
@@ -1522,7 +1519,11 @@ pub(crate) fn is_hub_link(url: &str) -> bool {
     let Some(link) = origin(url) else {
         return false;
     };
-    let configured = origin(&hub_url(None));
+    // Under a pinned hub, that hub is the only one there is.
+    if let Some(pinned) = crate::fleet::pinned_hub() {
+        return link == pinned;
+    }
+    let configured = hub_url(None).ok().and_then(|hub| origin(&hub));
     configured.as_deref() == Some(link.as_str())
         || link == "https://hub.krate.tech"
         || link == "https://krate.tech"

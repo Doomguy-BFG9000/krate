@@ -24,6 +24,9 @@ pub struct ConsentItem {
     pub rationale: String,
     /// Whether the app cannot run without it. Required rows start checked.
     pub required: bool,
+    /// Set when the organisation that manages this computer blocks it
+    /// ("blocked by Acme Labs"): the row is shown off and cannot be ticked.
+    pub blocked: Option<String>,
 }
 
 /// What the person decided in the consent window.
@@ -263,10 +266,10 @@ mod platform {
                 NSPoint::new(20.0, row_top - 22.0),
                 NSSize::new(WINDOW_WIDTH - 40.0, 20.0),
             );
-            let label = if item.required {
-                format!("{}  (required)", item.display)
-            } else {
-                item.display.clone()
+            let label = match (&item.blocked, item.required) {
+                (Some(blocked), _) => format!("{}  ({blocked})", item.display),
+                (None, true) => format!("{}  (required)", item.display),
+                (None, false) => item.display.clone(),
             };
             // SAFETY: checkbox construction needs the main thread; held above.
             let checkbox = unsafe {
@@ -280,11 +283,14 @@ mod platform {
             checkbox.setFrame(checkbox_rect);
             // Required capabilities start checked; optional ones start off so
             // the person opts in rather than out.
-            checkbox.setState(if item.required {
+            checkbox.setState(if item.required && item.blocked.is_none() {
                 NSControlStateValueOn
             } else {
                 NSControlStateValueOff
             });
+            if item.blocked.is_some() {
+                checkbox.setEnabled(false);
+            }
             content.addSubview(&checkbox);
             checkboxes.push(checkbox);
 
