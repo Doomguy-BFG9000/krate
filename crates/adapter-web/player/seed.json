@@ -1,0 +1,17 @@
+{
+  "publish": [
+    { "label": "curl", "file": "build/apps/curl.krate", "name": "krate-curl" },
+    { "label": "hello", "file": "build/apps/hello-gui.krate", "name": "Hello GUI" },
+    { "label": "bigscroll", "file": "build/apps/bigscroll.krate", "name": "Big Scroll" },
+    { "label": "convert", "file": "build/apps/convert.krate", "name": "Temperature" },
+    { "label": "checklist", "file": "build/apps/checklist.krate", "name": "Checklist" },
+    { "label": "orgprobe", "file": "build/apps/orgprobe.krate", "name": "orgstore-probe" },
+    { "label": "camera", "file": "build/apps/camera.krate", "name": "Camera Hello" },
+    { "label": "signed", "file": "../../../cloud/worker/test/fixtures/org/unmarked.krate", "name": "Bounce, signed" }
+  ],
+  "inject": [
+    { "label": "tampered", "file": "build/apps/tampered.krate" },
+    { "label": "swapped", "file": "build/apps/convert.krate", "underFile": "build/apps/twin.krate" }
+  ],
+  "org": { "file": "../../../cloud/worker/test/fixtures/org/candidate-v1.krate" }
+}

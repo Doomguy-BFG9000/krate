@@ -21,6 +21,17 @@ globs = ["**/*.wasm"]
 fallthrough = true
 account_id = "1ded170dc582113e578faac5034be4ce"
 
+# The browser Player (IC-956): the page /run/<hash> serves and the files it
+# loads, built by scripts/build-web-player.sh (run it before deploying; it
+# also writes src/transpiler.wasm, which the publish door imports). The
+# Worker runs first for every request and serves these itself, so each one
+# carries the cross-origin-isolation headers the app's worker needs
+# (src/web-player.js) and nothing outside /run/ and /player/ changes.
+[assets]
+directory = "./player-dist"
+binding = "ASSETS"
+run_worker_first = true
+
 [[r2_buckets]]
 binding = "BUNDLES"
 bucket_name = "krate-bundles"

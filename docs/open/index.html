@@ -136,7 +136,7 @@
       <p class="ta-kicker" id="taKick">Waiting for you</p>
       <h2 id="taName">Your app</h2>
       <p class="ta-sub" id="taSize"></p>
-      <p class="dlrow" id="taRow" hidden><a class="btn dark" id="taGet" href="#">Download the app</a></p>
+      <p class="dlrow" id="taRow" hidden><a class="btn dark" id="taGet" href="#">Download the app</a><a class="btn ghost" id="taTab" href="#" hidden>Open in this tab</a></p>
       <div id="taMore" hidden></div>
     </div>
   </div>
@@ -417,6 +417,20 @@ document.querySelectorAll("[data-copy]").forEach(function (b) {
 (function () {
   var hash;
   try { hash = new URLSearchParams(location.search).get("a"); } catch (e) { return; }
+  // The app in this browser tab, nothing installed (IC-956): the Player on
+  // the hub, which can send the headers a tab needs to run it. Offered for
+  // a full link only, beside the download; on a phone it is the way in.
+  function inThisTab(primary) {
+    if (!/^[0-9a-f]{64}$/.test(hash)) return;
+    var tab = document.getElementById("taTab");
+    tab.href = "https://hub.krate.tech/run/" + hash;
+    tab.hidden = false;
+    if (primary) {
+      tab.className = "btn dark";
+      document.getElementById("taGet").hidden = true;
+    }
+    document.getElementById("taRow").hidden = false;
+  }
   if (!hash || !/^[0-9a-f]{8,64}$/.test(hash)) return;
   // An organisation's private release (IC-947, CONTRACT.md Addendum 2):
   // the hub sends a browser here with private=1 and tells nobody what the
@@ -465,6 +479,7 @@ document.querySelectorAll("[data-copy]").forEach(function (b) {
           + "double-click it, the same as a document or a photo. Nothing to unzip, nothing to "
           + "install per app.";
       }
+      inThisTab(/Android|iPhone|iPad|iPod/.test(navigator.userAgent));
       document.getElementById("theirApp").hidden = false;
       document.getElementById("pageHead").textContent = "Someone sent you " + name + ".";
       // They have a specific app in hand; an invitation to browse the
@@ -549,6 +564,7 @@ document.querySelectorAll("[data-copy]").forEach(function (b) {
           document.getElementById("openBody").textContent = "Find it in your downloads and double-click it, "
             + "the same as a document or a photo. Nothing to unzip, nothing to install per app.";
         }
+        inThisTab(phone);
         return;
       }
       if (b.error === "not-signed-in") { K.forget(); signedOut(); return; }

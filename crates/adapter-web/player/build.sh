@@ -1,40 +1,29 @@
 #!/bin/sh
-# Rebuild everything the web Player spike serves into ./build (IC-956 Phase 0).
-# Nothing it writes is committed. Run from anywhere:
+# Rebuild everything the web Player proofs need (IC-956 Phase 1). Nothing it
+# writes is committed. Run from anywhere:
 #   sh crates/adapter-web/player/build.sh
+#   cd crates/adapter-web/player && node phase1.mjs ../../../evidence/web-player/phase1.json 10
 set -eu
 here=$(cd "$(dirname "$0")" && pwd)
 repo=$(cd "$here/../../.." && pwd)
 export PATH="$HOME/.cargo/bin:$PATH"
 
-# 1. The two apps, as components (the same bytes a .krate carries).
-(cd "$repo/apps/krate-diceroll" && cargo component build --release)
-(cd "$repo/apps/krate-hello-gui" && cargo component build --release)
-dice="$repo/apps/krate-diceroll/target/wasm32-wasip1/release/krate_diceroll.wasm"
-hello="$repo/apps/krate-hello-gui/target/wasm32-wasip1/release/krate_hello_gui.wasm"
+# 1. The proof apps, as components (the same bytes a .krate carries).
+for app in krate-curl krate-hello-gui krate-bigscroll krate-convert krate-checklist krate-orgstore-probe; do
+  (cd "$repo/apps/$app" && cargo component build --release)
+done
 
-# 2. jco: each component to core wasm + JS glue. The CLI app and the
-#    Worker path use the sync glue; the main-thread GUI path uses JSPI.
+# 2. What the hub runs and serves: the validator, the transpiler, the Player.
+sh "$repo/scripts/build-hub-validator.sh"
+sh "$repo/scripts/build-web-player.sh"
+
+# 3. The bundles the proofs open, and the pinned browsers (Playwright's own
+#    builds; the Mac's Safari is not touched).
 cd "$here"
 npm ci --no-audit --no-fund
-npx jco transpile "$dice" -o build/diceroll-sync --name app --instantiation async --no-nodejs-compat --no-typescript -b 0 -q
-npx jco transpile "$hello" -o build/hello-sync --name app --instantiation async --no-nodejs-compat --no-typescript -b 0 -q
-npx jco transpile "$hello" -o build/hello-jspi --name app --instantiation async --no-nodejs-compat --no-typescript -b 0 -q \
-  --async-mode jspi --async-imports 'krate:ui/events@0.1.0#wait' --async-exports run
-
-# 3. The painter (krate-layout + krate-adapter-common) for wasm32.
-(cd "$repo" && cargo build -p krate-adapter-web --target wasm32-unknown-unknown --release)
-wasm-bindgen --target web --no-typescript --out-dir build/painter \
-  "$repo/target/wasm32-unknown-unknown/release/krate_adapter_web.wasm"
-
-# 4. The comparison: wasmtime/pulley compiled to wasm32, and diceroll
-#    precompiled for it (pulley32 -- a wasm32 host is 32-bit).
-(cd "$here/../pulley-probe" && cargo build --release --bin precompile \
-  && cargo build --release --lib --target wasm32-unknown-unknown)
-mkdir -p build/pulley
-"$here/../pulley-probe/target/release/precompile" "$dice" build/pulley/diceroll.cwasm
-wasm-bindgen --target web --no-typescript --out-dir build/pulley \
-  "$here/../pulley-probe/target/wasm32-unknown-unknown/release/krate_pulley_probe.wasm"
-
-# 5. Browsers for Playwright (its own builds; the Mac's Safari is not touched).
+(cd "$repo/cloud/worker" && npm ci --no-audit --no-fund)
+node prepare.mjs
 npx playwright install --only-shell chromium webkit firefox
+
+# Phase 0's pulley comparison (evidence/web-player/README.md) still builds
+# on its own: crates/adapter-web/pulley-probe.

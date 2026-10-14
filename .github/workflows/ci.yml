@@ -177,6 +177,11 @@ jobs:
           python3 scripts/sdk-phase3-layer.py --check
           cargo check -p krate --target wasm32-wasip1
           cargo check -p krate --features gui --target wasm32-wasip1
+      # The browser Player's module and the step it shares with the desktop
+      # (IC-956) must keep compiling for a tab: adapter-web silently stopped
+      # building for wasm32 once already, because nothing built it.
+      - name: Check the Player and its shared crates build for the browser
+        run: cargo check -p krate-adapter-web -p krate-lowering -p krate-layout -p krate-policy --target wasm32-unknown-unknown
       - name: Warm the cargo cache for the offline port tests
         run: |
           # The port tests build a guest with CARGO_NET_OFFLINE so they
@@ -1874,6 +1879,14 @@ jobs:
       # clang targets wasm32, which ring's C parts need.
       - name: Build the hub validator
         run: TARGET_CC=clang scripts/build-hub-validator.sh
+      # The publish door makes each release's web pack with the transpiler
+      # compiled to wasm, and the hub serves the Player (IC-956); the worker
+      # imports both. The transpiler brings its own Rust (its toolchain file).
+      - name: Build the hub transpiler and the Player
+        run: |
+          cargo install wasm-bindgen-cli --locked --version 0.2.120
+          rustup toolchain install 1.96.0 --profile minimal --target wasm32-unknown-unknown
+          scripts/build-web-player.sh
       # The hub signs people in with SAML through @node-saml/node-saml
       # (IC-955), so the worker has npm dependencies now; exactly the
       # locked ones.

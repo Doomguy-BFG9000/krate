@@ -206,7 +206,14 @@ for (const [what, bytes, why] of refused) {
   const bundles = r2Mock(blobs);
   let puts = 0;
   const honest = bundles.put;
-  bundles.put = (k, v, opts) => { puts += 1; assert.strictEqual(opts.sha256, hash, "the upgrade names the digest"); return honest(k, v, opts); };
+  // The bundle's own key; the Player's web pack (web/<tag>/<hash>, IC-956)
+  // is a different object, made once beside it.
+  bundles.put = (k, v, opts) => {
+    if (k.startsWith("web/")) return honest(k, v, opts);
+    puts += 1;
+    assert.strictEqual(opts.sha256, hash, "the upgrade names the digest");
+    return honest(k, v, opts);
+  };
   const res = await worker.fetch(publish(bytes), env(bundles));
   assert.strictEqual(res.status, 200, await res.clone().text());
   assert.strictEqual(puts, 1, "a legacy object without a recorded digest is written again under the guard");
@@ -241,7 +248,9 @@ for (const [what, bytes, why] of refused) {
   const second = JSON.parse(await (await worker.fetch(publish(bytes), e)).text());
   assert.strictEqual(first.id, second.id);
   assert.deepStrictEqual(first.stored, second.stored, "a byte-identical retry reads back the same receipt");
-  assert.strictEqual(e.BUNDLES._blobs.size, 1);
+  // One bundle object; the Player's web pack (web/<tag>/<hash>, IC-956) is
+  // its own object beside it, held by web-player.test.mjs to being made once.
+  assert.strictEqual([...e.BUNDLES._blobs.keys()].filter((k) => !k.startsWith("web/")).length, 1);
 }
 
 console.log(
