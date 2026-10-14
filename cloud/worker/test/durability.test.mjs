@@ -41,7 +41,7 @@ function env() {
 const req = (path, init = {}) => new Request(`https://hub.example${path}`, init);
 const admin = (path, init = {}) => req(path, { ...init, headers: { authorization: "Bearer gho_alice", ...(init.headers || {}) } });
 async function publish(e, bytes, name) {
-  const res = await worker.fetch(req("/publish", { method: "POST", headers: { authorization: "Bearer krs_alice", "x-krate-name": name }, body: bytes }), e);
+  const res = await worker.fetch(req("/publish", { method: "POST", headers: { authorization: "Bearer gho_alice", "x-krate-name": name }, body: bytes }), e);
   assert.strictEqual(res.status, 200, await res.clone().text());
   return JSON.parse(await res.text());
 }

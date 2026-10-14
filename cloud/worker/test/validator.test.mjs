@@ -13,6 +13,7 @@ import assert from "node:assert";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import "./github-stub.mjs";
 import worker, { judgeBundle } from "../src/index.js";
 import { r2Mock, sha256Hex } from "./r2-mock.mjs";
 import { patchStored } from "./zip-tools.mjs";
@@ -44,7 +45,7 @@ function env() {
 const publish = (bytes, extra = {}) =>
   new Request("https://hub.example/publish", {
     method: "POST",
-    headers: { authorization: "Bearer krs_alice", "x-krate-name": "Bounce", ...extra },
+    headers: { authorization: "Bearer gho_alice", "x-krate-name": "Bounce", ...extra },
     body: bytes,
   });
 

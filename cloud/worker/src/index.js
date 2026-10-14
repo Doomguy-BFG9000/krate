@@ -670,22 +670,58 @@ export default {
 
 // ---------------------------------------------------------------- publishing
 
-/// Whether `hash` is already published by an author other than `login`:
+// ------------------------------------------------------------- ownership
+//
+// Who owns a listing, a channel, an attachment: a principal nobody can
+// choose (K-1085). `github:<login>` when GitHub vouched for the login;
+// `account:<user-id>` for a Krate session (email or Google sign-in), whose
+// `login` is only the part of an address before the @ and so is never a
+// name to own things by. Every ownership check compares these exactly.
+//
+// A record written before this has no `owner`; it reads as
+// `github:<author_login>` -- the legacy default -- so only a GitHub-vouched
+// identity can act on it. scripts/attribute-owners.mjs gives the rows that
+// email accounts really published back to their accounts.
+
+/// The owner principal a verified identity publishes as, or null.
+function ownerOf(identity) {
+  if (!identity) return null;
+  if (identity.github === true && identity.login) return `github:${String(identity.login).toLowerCase()}`;
+  if (identity.id) return `account:${identity.id}`;
+  return null;
+}
+
+/// Who owns a stored listing, ownership record or channel.
+function ownerOfRecord(record) {
+  if (!record || typeof record !== "object") return null;
+  if (typeof record.owner === "string" && record.owner) return record.owner;
+  const login = record.author_login || record.login;
+  return login ? `github:${String(login).toLowerCase()}` : null;
+}
+
+/// Whether a developer namespace (`<login>.krate.tech`, `/c/<login>/...`)
+/// may show this record: only a GitHub-vouched owner of that login.
+function ownedByGitHubLogin(record, login) {
+  return ownerOfRecord(record) === `github:${String(login || "").toLowerCase()}`;
+}
+
+/// Whether `hash` is already published by an owner other than `owner`:
 /// by its listing, or -- when the listing write failed -- by the ownership
 /// record written before the bytes were stored (IC-387, IC-833 test 1838).
 /// A read hiccup answers "no", which is the pre-fix behaviour for that one
 /// request rather than a failed publish.
-async function publishedBySomeoneElse(env, hash, login) {
+async function publishedBySomeoneElse(env, hash, owner) {
   try {
     const listing = await env.APPS.get(`app:${hash}`);
     if (listing) {
       const prior = JSON.parse(listing);
-      if (prior.author_login) return prior.author_login !== login;
+      const theirs = ownerOfRecord(prior);
+      if (theirs) return theirs !== owner;
     }
-    const owner = await env.APPS.get(`owner:${hash}`);
-    if (owner) {
-      const record = JSON.parse(owner);
-      return Boolean(record.login) && record.login !== login;
+    const record = await env.APPS.get(`owner:${hash}`);
+    if (record) {
+      const theirs = ownerOfRecord(JSON.parse(record));
+      return Boolean(theirs) && theirs !== owner;
     }
   } catch (_) {}
   return false;
@@ -806,7 +842,10 @@ async function admitJudged(env, { identity, judgement, hash, size, fields, store
     rationale: c.rationale || "",
     required: Boolean(c.required),
   }));
-
+  // Who owns what this publish writes (K-1085): never a bare login.
+  const owner = ownerOf(identity);
+  if (!owner) return text("publishing needs a sign-in -- run `krate publish` and it will ask", 401);
+  const vouched = owner.startsWith("github:");
 
   // Identical bytes are idempotent, and authorship does not transfer
   // (IC-387). Content addressing means anyone can re-POST bytes they
@@ -816,7 +855,7 @@ async function admitJudged(env, { identity, judgement, hash, size, fields, store
   // existing listing stands and they get the same URLs back. Asked BEFORE
   // the store is touched: those bytes are already there, and nothing about
   // this request should write anything.
-  if (await publishedBySomeoneElse(env, hash, identity.login)) {
+  if (await publishedBySomeoneElse(env, hash, owner)) {
     const base2 = (env.PUBLIC_BASE || "").replace(/\/$/, "");
     return json({
       url: `${base2}/a/${hash}`,
@@ -841,7 +880,7 @@ async function admitJudged(env, { identity, judgement, hash, size, fields, store
   try {
     await env.APPS.put(
       ownerKey,
-      JSON.stringify({ login: identity.login, at: Math.floor(Date.now() / 1000) }),
+      JSON.stringify({ login: identity.login, owner, at: Math.floor(Date.now() / 1000) }),
     );
   } catch (_) {
     return text(
@@ -871,7 +910,10 @@ async function admitJudged(env, { identity, judgement, hash, size, fields, store
     category: fields.category || "apps",
     author: identity.name || identity.login,
     author_login: identity.login,
-    author_url: `https://github.com/${identity.login}`,
+    // The owner the checks compare; author_login stays for display and
+    // older clients. Only a GitHub-vouched owner links to a GitHub profile.
+    owner,
+    author_url: vouched ? `https://github.com/${identity.login}` : "",
     avatar_url: identity.avatar_url || "",
     published: Math.floor(Date.now() / 1000),
     size,
@@ -930,7 +972,7 @@ async function admitJudged(env, { identity, judgement, hash, size, fields, store
       const raw = await env.APPS.get(key.name);
       if (!raw) continue;
       const other = JSON.parse(raw);
-      if (other.author_login === meta.author_login && other.name === meta.name) {
+      if (ownerOfRecord(other) === owner && other.name === meta.name) {
         await env.APPS.delete(key.name);
         // A retired release's bytes are anyone's to re-publish (see
         // `namable`), so its ownership record retires with its listing. The
@@ -976,7 +1018,9 @@ async function admitJudged(env, { identity, judgement, hash, size, fields, store
   // (IC-389, test 470). Only a listed publish moves it -- an unlisted one
   // is deliberately not the app's public face -- and only this author's,
   // because the key is their login and the login came from their session.
-  if (listed && !meta.unlisted) {
+  // A moving name lives under a developer namespace, which only a
+  // GitHub-vouched owner has (K-1085): `/c/bob/notes` is github:bob's.
+  if (listed && !meta.unlisted && vouched) {
     const channel = await moveChannel(env, identity.login, meta.name, hash, meta.release ? meta.release.id : null);
     if (channel) {
       result.channel = `${base}/c/${channel.login}/${channel.slug}`;
@@ -1007,7 +1051,7 @@ async function ownedApp(hash, identity, env) {
     return { error: text("publish the app first -- images belong to a listing", 404) };
   }
   const meta = JSON.parse(raw);
-  if (meta.author_login !== identity.login) {
+  if (!ownerOf(identity) || ownerOfRecord(meta) !== ownerOf(identity)) {
     return { error: text("only the app's author can change its listing", 403) };
   }
   return { meta };
@@ -1171,8 +1215,8 @@ async function unpublish(request, hash, env) {
   const ownerRaw = raw ? null : await env.APPS.get(`owner:${hash}`);
   if (!raw && !ownerRaw) return text("not listed", 404);
   const meta = raw ? JSON.parse(raw) : null;
-  const author = meta ? meta.author_login : JSON.parse(ownerRaw).login;
-  if (author !== identity.login) {
+  const author = meta ? ownerOfRecord(meta) : ownerOfRecord(JSON.parse(ownerRaw));
+  if (!ownerOf(identity) || author !== ownerOf(identity)) {
     return text("only the app's author can remove it", 403);
   }
   // Delisting is not deleting. The listing is one of four places an app
@@ -1196,7 +1240,7 @@ async function unpublish(request, hash, env) {
   // when there is none: a name must never resolve to bytes that are gone.
   // Only a listed publish ever moved a channel, so an app that never got
   // its listing has none to retreat.
-  if (meta) await retreatChannel(env, identity.login, meta.name, hash);
+  if (meta && ownerOf(identity).startsWith("github:")) await retreatChannel(env, identity.login, meta.name, hash);
   return json({ ok: true });
 }
 
@@ -1278,7 +1322,7 @@ async function namable(env, login, hash) {
   const raw = await env.APPS.get(`app:${hash}`);
   if (!raw) return true;
   try {
-    return JSON.parse(raw).author_login === login;
+    return ownedByGitHubLogin(JSON.parse(raw), login);
   } catch (_) {
     return false;
   }
@@ -1496,8 +1540,8 @@ async function takedownAppeal(request, hash, env) {
   if (!raw) return text("not found", 404);
   const record = JSON.parse(raw);
   const listed = await env.APPS.get(`app:${hash}`);
-  const author = listed ? JSON.parse(listed).author_login : null;
-  if (!author || author !== identity.login) return text("only the app's author can appeal its removal", 403);
+  const author = listed ? ownerOfRecord(JSON.parse(listed)) : null;
+  if (!author || author !== ownerOf(identity)) return text("only the app's author can appeal its removal", 403);
   const body = await readJson(request);
   const appealText = String((body && body.text) || "").trim().slice(0, 2000);
   if (!appealText) return text("an appeal needs a sentence: what is wrong with the reason given", 400);
@@ -2020,7 +2064,9 @@ async function list(env, url) {
       url: `${base}/a/${id}`,
       ...images.get(id),
       opens: opens.get(id) || 0,
-      meta: a.meta,
+      // The owner principal is for the hub's checks, not the gallery: an
+      // account owner is a random account id that is nobody's business.
+      meta: (({ owner, ...rest }) => rest)(a.meta),
     };
   };
 
@@ -3414,7 +3460,8 @@ async function verifyGitHub(request, env) {
     if (!userId) return null;
     const record = JSON.parse((await env.APPS.get(`user:${userId}`)) || "null");
     if (!record) return null;
-    return { login: record.login, name: record.name, avatar_url: record.avatar_url, github: false };
+    // `id` is the account's random id: what it owns things by (K-1085).
+    return { login: record.login, name: record.name, avatar_url: record.avatar_url, github: false, id: userId };
   }
 
   const cacheKey = `token:${await sha256Hex(new TextEncoder().encode(token))}`;
@@ -3490,9 +3537,13 @@ function bigOn(env) {
   return Boolean(env.KRATE_BUILDER_SECRET);
 }
 
-/// Who may use the big tier while it is new: logins named in
-/// BIG_PUBLISHERS (comma-separated). Empty means nobody.
-function bigAllowed(env, login) {
+/// Who may use the big tier while it is new: GitHub logins named in
+/// BIG_PUBLISHERS (comma-separated). Empty means nobody. The name is a
+/// GitHub login, so only a login GitHub vouched for matches it: an email
+/// account called incyashraj@anything is not incyashraj (K-1085).
+function bigAllowed(env, identity) {
+  if (!identity || identity.github !== true) return false;
+  const login = identity.login;
   return String(env.BIG_PUBLISHERS || "")
     .split(",")
     .map((s) => s.trim().toLowerCase())
@@ -3597,7 +3648,7 @@ async function bigStart(request, env) {
   if (!identity) {
     return text("publishing needs a GitHub sign-in -- run `krate publish` and it will ask", 401);
   }
-  if (!bigAllowed(env, identity.login)) {
+  if (!bigAllowed(env, identity)) {
     return text(
       "apps over 5 MiB go through the big-file path, which is open to a few publishers " +
         "while it is new -- write to the Krate team to be added",
@@ -3653,7 +3704,7 @@ async function bigStart(request, env) {
     try {
       prior = owner ? JSON.parse(owner) : null;
     } catch (_) {}
-    if (!prior || prior.author_login !== identity.login) {
+    if (!prior || ownerOfRecord(prior) !== ownerOf(identity)) {
       return text("that app is not one you published", 403);
     }
   }
@@ -3680,7 +3731,14 @@ async function bigStart(request, env) {
     kind,
     for: forHash,
     login: identity.login,
-    identity: { login: identity.login, name: identity.name || "", avatar_url: identity.avatar_url || "" },
+    owner: ownerOf(identity),
+    identity: {
+      login: identity.login,
+      name: identity.name || "",
+      avatar_url: identity.avatar_url || "",
+      github: identity.github === true,
+      id: identity.id || undefined,
+    },
     size,
     sha256,
     key,
@@ -3899,7 +3957,8 @@ async function bigVerdict(request, env, id) {
   if (record.kind === "bundle") {
     if (!verdict.judgement) return refuse("the judgement was missing");
     const response = await admitJudged(env, {
-      identity: record.identity,
+      // An upload from before owners were recorded was a BIG_PUBLISHERS GitHub login.
+      identity: { github: true, ...record.identity },
       judgement: verdict.judgement,
       hash: record.sha256,
       size: record.size,
@@ -3942,7 +4001,10 @@ async function bigVerdict(request, env, id) {
   try {
     meta = raw ? JSON.parse(raw) : null;
   } catch (_) {}
-  if (!meta || meta.author_login !== record.login) return refuse("that app is no longer listed");
+  // An upload started before owners were recorded carries none; it was a
+  // BIG_PUBLISHERS login, which is a GitHub login (the legacy default).
+  const uploader = record.owner || `github:${String(record.login || "").toLowerCase()}`;
+  if (!meta || ownerOfRecord(meta) !== uploader) return refuse("that app is no longer listed");
   const previous = meta[record.kind];
   meta[record.kind] = { key: record.key, size: record.size, sha256: record.sha256 };
   try {
@@ -4499,7 +4561,8 @@ async function developerDirectApps(env, login, seen) {
       } catch (_) {
         return null;
       }
-      if (!meta || meta.author_login !== login) return null;
+      // <login>.krate.tech shows only what github:<login> owns (K-1085).
+      if (!meta || !ownedByGitHubLogin(meta, login)) return null;
       if (meta.unlisted) return null;
       if (await env.APPS.get(`takedown:${hash}`)) return null;
       return {
@@ -4533,12 +4596,15 @@ async function developerChannelApps(env, login) {
       }
       if (!channel.current) return null;
       if (await env.APPS.get(`takedown:${channel.current}`)) return null;
+      const meta = await appMeta(env, channel.current);
+      // A channel shows only its own GitHub owner's listing (K-1085).
+      if ((meta.owner || meta.author_login) && !ownedByGitHubLogin(meta, login)) return null;
       return {
         slug: channel.slug,
         name: channel.name || channel.slug,
         current: channel.current,
         moved_at: channel.moved_at || 0,
-        meta: await appMeta(env, channel.current),
+        meta,
       };
     }),
   );
@@ -6024,11 +6090,14 @@ async function sessionsDelete(request, id, env) {
 async function myApps(request, env) {
   const user = await authedUser(request, env);
   if (!user) return text("Sign in first.", 401);
+  // What this person owns (K-1085): the account's own publishes, and, with
+  // a GitHub sign-in, what that GitHub login owns. Never by login text.
+  const mine = new Set([`account:${user.id}`, ownerOf(await verifyGitHub(request, env))].filter(Boolean));
   const listing = await env.APPS.list({ prefix: "app:", limit: 1000 });
   const out = [];
   for (const k of listing.keys) {
     const a = JSON.parse((await env.APPS.get(k.name)) || "null");
-    if (a && a.author_login && a.author_login === user.login) {
+    if (a && mine.has(ownerOfRecord(a))) {
       out.push({
         hash: k.name.slice("app:".length),
         name: a.name, description: a.description,
