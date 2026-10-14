@@ -13873,6 +13873,22 @@ impl FakeOrgHub {
         }
         let json: serde_json::Value = serde_json::from_slice(body).unwrap_or_default();
 
+        // GET /orgs: the signed-in person's organisations (Addendum 1).
+        if method == "GET" && parts.len() == 1 {
+            let Some(who) = who else {
+                return fake_refuse(401, "not-signed-in");
+            };
+            let mine: Vec<serde_json::Value> = self
+                .orgs
+                .iter()
+                .filter_map(|(slug, org)| {
+                    org.role_of(&who).map(
+                        |role| serde_json::json!({ "slug": slug, "name": org.name, "role": role }),
+                    )
+                })
+                .collect();
+            return fake_json(200, serde_json::json!(mine));
+        }
         if method == "POST" && parts.len() == 1 {
             let slug = json["slug"].as_str().unwrap_or("").to_string();
             let valid = slug.len() >= 2
@@ -14757,6 +14773,53 @@ impl OrgWorld {
             &["run", url, "--insecure-http", "--auto-grant", "--headless"],
         )
     }
+}
+
+/// `krate org list`: your organisations with your role in each, the email
+/// member's included; nobody's but your own; and a plain line when there
+/// are none.
+#[test]
+fn org_list_shows_your_organisations_and_your_role() {
+    let Some(world) = OrgWorld::new(&["alice", "bob", "dan", "erin"]) else {
+        eprintln!("skipping org_list_shows_your_organisations_and_your_role: no local port");
+        return;
+    };
+    let said = world.says("alice", &["org", "list"], true);
+    assert!(
+        said.contains("you're in no organisations yet: krate org create <name>"),
+        "{said}"
+    );
+    world.acme();
+    world.says(
+        "bob",
+        &["org", "create", "globex", "--name", "Globex"],
+        true,
+    );
+    let said = world.says("bob", &["org", "list"], true);
+    assert!(said.contains("you are in 2 organisations:"), "{said}");
+    assert!(
+        said.lines()
+            .any(|l| l.contains("acme") && l.contains("Acme") && l.contains("reviewer")),
+        "{said}"
+    );
+    assert!(
+        said.lines()
+            .any(|l| l.contains("globex") && l.contains("Globex") && l.contains("owner")),
+        "{said}"
+    );
+    let said = world.says("dan", &["org", "list"], true);
+    assert!(
+        said.contains("you are in 1 organisation:")
+            && said
+                .lines()
+                .any(|l| l.contains("acme") && l.contains("recipient"))
+            && !said.contains("globex"),
+        "{said}"
+    );
+    let said = world.says("erin", &["org", "list"], true);
+    assert!(said.contains("you're in no organisations yet"), "{said}");
+    let said = world.says("nobody", &["org", "list"], false);
+    assert!(said.contains("you are not signed in"), "{said}");
 }
 
 /// `krate org create`: the creator is its owner and is told what to do

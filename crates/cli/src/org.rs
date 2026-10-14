@@ -54,6 +54,8 @@ pub enum OrgCommand {
         #[arg(long)]
         name: Option<String>,
     },
+    /// The organisations you are in, with your role in each.
+    List,
     /// Who is in an organisation, and your own role in it.
     Show { slug: String },
     /// Invite one GitHub account, with one role. The invitation works once,
@@ -329,6 +331,7 @@ pub fn identity_or_sign_in(why: &str) -> Result<github_auth::Identity> {
 #[derive(Clone, Copy)]
 pub enum Action<'a> {
     Create,
+    List,
     Show,
     Invite(Role),
     CancelInvite,
@@ -369,6 +372,7 @@ pub fn words(refusal: &HubRefusal, org: &str, me: &str, action: Action) -> Strin
         "role-cannot" => {
             let (what, who) = match action {
                 Action::Create => ("create it".to_string(), an_owner.clone()),
+                Action::List => ("list organisations".to_string(), an_owner.clone()),
                 Action::Show => (format!("see {org}'s members"), owner_or_admin.clone()),
                 Action::Invite(Role::Owner | Role::Admin) => {
                     ("invite an owner or admin".to_string(), an_owner.clone())
@@ -677,6 +681,37 @@ pub fn run(command: OrgCommand, hub_override: Option<&str>) -> Result<u8> {
             println!(
                 "  invite people:          krate org invite {slug} <github-login> --role developer"
             );
+            Ok(0)
+        }
+        OrgCommand::List => {
+            let answer = worded(
+                client.send("GET", "/orgs", &Body::Empty),
+                "",
+                &me,
+                Action::List,
+            )?;
+            let orgs = answer
+                .as_array()
+                .cloned()
+                .or_else(|| answer["orgs"].as_array().cloned())
+                .unwrap_or_default();
+            if orgs.is_empty() {
+                println!("you're in no organisations yet: krate org create <name>");
+                return Ok(0);
+            }
+            println!(
+                "you are in {} organisation{}:",
+                orgs.len(),
+                if orgs.len() == 1 { "" } else { "s" }
+            );
+            for org in &orgs {
+                let slug = text(org, "slug");
+                let name = Some(text(org, "name"))
+                    .filter(|n| !n.is_empty())
+                    .unwrap_or(slug);
+                println!("  {slug:<20} {name:<28} {}", text(org, "role"));
+            }
+            println!("See one with `krate org show <slug>`.");
             Ok(0)
         }
         OrgCommand::Show { slug } => {

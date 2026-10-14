@@ -67,6 +67,7 @@ krate org join acme <code>
 
 or open `https://krate.tech/join/?o=acme&c=<code>`.
 
+`krate org list` shows the organisations you are in and your role in each.
 `krate org show acme` lists who is in it, each as `bob (GitHub)` or
 `dan@acme.example (email)`. `krate org role acme bob developer` changes a role
 (name an email member by their address), and `krate org cancel-invite acme <code>` takes back an
