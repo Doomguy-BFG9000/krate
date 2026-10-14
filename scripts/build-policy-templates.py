@@ -115,9 +115,6 @@ KEYS = [
     dict(table="runtime", key="interpreter", kind="bool", sample=False,
          title="Run apps on the interpreter",
          help="true: every app runs on Krate's interpreter (Pulley) instead of compiled machine code, so Krate never makes executable memory. For endpoint protection that blocks code generated at run time, and Windows Arbitrary Code Guard. Apps may run slower this way."),
-    dict(table="org", key="slug", kind="string", sample="acme",
-         title="Your organisation on Krate",
-         help="Your organisation's short name on the hub (the one in krate.tech/org/?o=acme). Krate Studio and krate org apps list its apps first, and on a new computer Studio asks the person to sign in with your company sign-in the first time it opens. It allows nothing extra."),
 ]
 
 TABLES = ["org", "trust", "capabilities", "network", "usage", "hub", "studio", "updates", "audit", "runtime"]
