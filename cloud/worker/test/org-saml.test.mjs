@@ -109,6 +109,10 @@ test("an owner sets SAML: the identity provider, its certificate fingerprinted, 
   const bare = IDP.cert.replace(/-----[A-Z ]+-----/g, "").replace(/\s+/g, "");
   const again = await call(env, "alice", "PUT", "/orgs/acme/saml", { json: { idp_entity_id: IDP_ENTITY, idp_sso_url: IDP_SSO, idp_cert: bare } });
   assert.strictEqual(again.body.idp.certificates[0].sha256, s.body.idp.certificates[0].sha256);
+  // A change with no certificate keeps the stored one.
+  const kept = await call(env, "alice", "PUT", "/orgs/acme/saml", { json: { idp_entity_id: IDP_ENTITY, idp_sso_url: `${IDP_SSO}?v=2` } });
+  assert.deepStrictEqual([kept.status, kept.body.idp.sso_url, kept.body.idp.certificates[0].sha256], [200, `${IDP_SSO}?v=2`, s.body.idp.certificates[0].sha256]);
+  await call(env, "alice", "PUT", "/orgs/acme/saml", { json: { idp_entity_id: IDP_ENTITY, idp_sso_url: IDP_SSO } });
   // Nothing works before the domain is proved.
   assert.strictEqual((await signIn(env)).error, "domain-not-verified");
 });

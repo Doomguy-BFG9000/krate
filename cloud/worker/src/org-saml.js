@@ -108,7 +108,9 @@ const ops = {
     const entity = String(a.idp_entity_id || "").trim();
     if (!entity || entity.length > 500) return bad("the identity provider's entity id (Issuer) is required -- copy it from its SAML set-up page");
     if (!a.idp_sso_url) return bad("the identity provider's sign-in URL (SSO URL) is required");
-    if (!Array.isArray(a.certs) || !a.certs.length) return bad("paste the identity provider's signing certificate");
+    const kept = this.samlRow();
+    const certs = Array.isArray(a.certs) && a.certs.length ? a.certs.slice(0, CERTS_MAX) : kept ? JSON.parse(kept.idp_certs) : null;
+    if (!certs) return bad("paste the identity provider's signing certificate");
     let sso = this.row("SELECT * FROM sso WHERE id = 1");
     const domain = a.domain === undefined || a.domain === null || a.domain === "" ? null : String(a.domain).trim().toLowerCase();
     if (sso && domain && domain !== sso.domain) {
@@ -135,11 +137,11 @@ const ops = {
          idp_certs = excluded.idp_certs, set_at = excluded.set_at, set_by = excluded.set_by`,
       entity,
       String(a.idp_sso_url),
-      JSON.stringify(a.certs.slice(0, CERTS_MAX)),
+      JSON.stringify(certs),
       ctx.now,
       me.principal,
     );
-    this.audit(me.principal, before ? "saml.update" : "saml.set", `saml:${sso.domain}`, "allowed", a.certs.map((c) => String(c.sha256).slice(0, 16)).join(","));
+    this.audit(me.principal, before ? "saml.update" : "saml.set", `saml:${sso.domain}`, "allowed", certs.map((c) => String(c.sha256).slice(0, 16)).join(","));
     return this.ok(this.samlView(ctx));
   },
 
@@ -341,13 +343,16 @@ export async function orgSamlRoute(h) {
     if (body.bad || body.tooLarge) return h.json({ error: "bad-request", message: "the body is JSON, under 64 KiB" }, 400);
     const v = body.value;
     if (!reachable(v.idp_sso_url, env)) return h.json({ error: "bad-request", message: "the identity provider's sign-in URL is an https URL" }, 400);
-    const raw = Array.isArray(v.idp_certs) ? v.idp_certs : [v.idp_cert];
-    const certs = [];
+    // No certificate on a change keeps the one stored.
+    const given = Array.isArray(v.idp_certs) ? v.idp_certs : v.idp_cert === undefined || v.idp_cert === null || v.idp_cert === "" ? [] : [v.idp_cert];
+    const raw = given;
+    let certs = [];
     for (const r of raw.slice(0, CERTS_MAX)) {
       const c = readCert(r);
       if (c.problem) return h.json({ error: "bad-request", message: c.problem }, 400);
       certs.push(c);
     }
+    if (!certs.length) certs = undefined;
     return h.orgAnswer(await h.askRaw("saml-set", { ...sp, idp_entity_id: v.idp_entity_id, idp_sso_url: v.idp_sso_url, certs, domain: v.domain }));
   }
   return null;

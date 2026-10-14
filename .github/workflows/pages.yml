@@ -275,6 +275,12 @@ jobs:
           # shown only the controls the matrix gives it (IC-949 R).
           node docs/landing/studio/org-releases-test.mjs
           node docs/landing/studio/org-review-test.mjs
+          # And the doors security asks for (IC-955): SAML, SCIM and the
+          # audit export are each shown only to the roles the matrix gives
+          # them, a token or secret is shown once and kept nowhere, nothing
+          # is revoked or stopped without asking, and the directory never
+          # offers owner or admin.
+          node docs/landing/studio/org-doors-test.mjs
           # And that the homepage's prompt bar starts a build only from its
           # own fresh handoff, once, and never from a link (K-885).
           node docs/landing/studio/frontpage-test.mjs

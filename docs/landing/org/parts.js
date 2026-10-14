@@ -229,16 +229,22 @@
         el("p", { text: "Let people sign in with your company's accounts (OpenID Connect). Paste what your identity provider gives you when you add Krate as an app there." }),
         el("p", { class: "loading", text: "Loading" }),
       ]);
-      K.api("GET", path("/sso")).then(function (res) {
+      // Whether SAML signs people in (doors.js): then this card holds only
+      // the domain, joining and enforcement, and needs no OIDC issuer.
+      Promise.all([K.api("GET", path("/sso")), K.api("GET", path("/saml"))]).then(function (both) {
+        var res = both[0];
         card.lastChild.remove();
         if (!res.ok) { card.appendChild(K.refusalBlock(D.words(res, { what: "set up company sign-in", whoCan: "an owner" }))); return; }
+        samlOn = Boolean(both[1].ok && both[1].body && both[1].body.idp);
         ssoForm(card, res.body || null);
       });
       return card;
     }
 
+    var samlOn = false;
     function ssoForm(card, cur) {
       cur = cur || {};
+      var oidcOff = samlOn && !cur.issuer;
       var fld = function (label, input, hint) { return el("label", { class: "fld" }, [el("span", { text: label }), input, hint ? el("small", { text: hint }) : null]); };
       var issuer = el("input", { class: "inp", id: "ssoIssuer", value: cur.issuer || "", autocomplete: "off", spellcheck: "false", placeholder: "https://accounts.google.com" });
       var client = el("input", { class: "inp", id: "ssoClient", value: cur.client_id || "", autocomplete: "off", spellcheck: "false", placeholder: "The client ID your provider shows" });
@@ -263,7 +269,7 @@
       }));
       var shape = el("small", { text: K.PROVIDERS.map(function (p) { return p[0] + ": " + p[1] + (p[2] ? ", " + p[2] : ""); }).join(" · ") });
       var out = el("div");
-      var save = el("button", { class: "btn dark", type: "button", text: cur.issuer ? "Save changes" : "Turn on company sign-in" });
+      var save = el("button", { class: "btn dark", type: "button", text: cur.issuer || oidcOff ? "Save changes" : "Turn on company sign-in" });
       save.addEventListener("click", function () {
         var body = {
           issuer: issuer.value.trim(),
@@ -277,9 +283,10 @@
         // https, or a loopback issuer on a copy of the site served from
         // this machine (the hub allows that only on a development hub too).
         var local = /^(127\.0\.0\.1|localhost)$/.test(location.hostname) && /^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?\//.test(body.issuer + "/");
-        if (!/^https:\/\/[^\s<>]+$/.test(body.issuer) && !local) return hintOut("The issuer is a web address", "It starts with https://, like " + K.PROVIDERS[0][1] + ". Pick your provider above to see its shape.");
-        if (!body.client_id) return hintOut("The client ID is missing", "Your provider shows it when you add Krate as an app.");
-        if (!cur.has_secret && !body.client_secret) return hintOut("The client secret is missing", "Your provider shows it once, when you create the app. It is stored encrypted and never shown again.");
+        if (oidcOff && !body.issuer) { delete body.client_id; delete body.issuer; }
+        else if (!/^https:\/\/[^\s<>]+$/.test(body.issuer) && !local) return hintOut("The issuer is a web address", "It starts with https://, like " + K.PROVIDERS[0][1] + ". Pick your provider above to see its shape.");
+        if (!oidcOff && !body.client_id) return hintOut("The client ID is missing", "Your provider shows it when you add Krate as an app.");
+        if (!oidcOff && !cur.has_secret && !body.client_secret) return hintOut("The client secret is missing", "Your provider shows it once, when you create the app. It is stored encrypted and never shown again.");
         if (!/^[a-z0-9.-]+\.[a-z]{2,}$/.test(body.domain)) return hintOut("The domain is a name like acme.com", "The part of your people's work addresses after the @.");
         save.disabled = true;
         save.textContent = "Saving";
@@ -541,6 +548,11 @@
       if (owner() && o.root_key) replaceKey(keyCard);
       pane.appendChild(offlineCard());
       if (K.can(D.roleOf(), "sso.set")) pane.appendChild(ssoCard());
+      // IC-955: SAML, provisioning, and the activity sent to the company's logs.
+      var doors = root.KrateOrgDoors ? root.KrateOrgDoors(D) : null;
+      if (doors && K.can(D.roleOf(), "saml.set")) pane.appendChild(doors.samlCard());
+      if (doors && K.can(D.roleOf(), "scim.manage")) pane.appendChild(doors.scimCard());
+      if (doors && K.can(D.roleOf(), "audit-export.view")) pane.appendChild(doors.exportCard());
       if (K.can(D.roleOf(), "org.export")) pane.appendChild(exportCard());
       if (K.can(D.roleOf(), "org.close")) pane.appendChild(closeCard());
     }

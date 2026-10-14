@@ -98,6 +98,8 @@
     // Who acts for Krate itself in the audit (Addendum 3 D, E).
     if (s === "system:krate") return { principal: s, kind: "krate", display: "Krate", label: "Krate" };
     if (s === "stripe") return { principal: s, kind: "stripe", display: "Stripe", label: "Stripe" };
+    // The company's directory, acting through SCIM (IC-955).
+    if (s === "scim") return { principal: s, kind: "scim", display: "Your directory", label: "Your directory (SCIM)" };
     var sup = s.match(/^krate-support:(.*)$/);
     if (sup) return { principal: s, kind: "krate-support", display: sup[1], label: "Krate support" + (sup[1] ? " (" + sup[1].replace(/^github:/, "@") + ")" : "") };
     var m = s.match(/^(github|email):(.+)$/);
@@ -146,6 +148,12 @@
     "release.set-current": { owner: "yes", admin: "yes" },
     "group.manage": { owner: "yes", admin: "yes" },
     "release.audience": { owner: "yes", admin: "yes" },
+    // IC-955: provisioning, audit export and SAML are an owner's to set up;
+    // admins watch the export's delivery, as they read the activity.
+    "scim.manage": { owner: "yes" },
+    "audit-export.manage": { owner: "yes" },
+    "audit-export.view": { owner: "yes", admin: "yes" },
+    "saml.set": { owner: "yes" },
   };
 
   function can(role, action) {
@@ -316,6 +324,10 @@
         return { title: "That group does not exist", body: "Nothing changed. Make the group in People first.", action: null };
       case "group-taken":
         return { title: "There is already a group by that name", body: "Pick another name, or add people to the one there is.", action: null };
+      case "audit-export-off":
+        return { title: "The audit export is not switched on on this hub yet", body: "Nothing changed. The activity is still recorded here, and its chain is checked every time you read it.", action: null };
+      case "bad-request":
+        return { title: "That is not quite right", body: (ctx.message ? String(ctx.message).replace(/ -- /g, ". ").replace(/\.?$/, ".") + " " : "") + "Nothing changed.", action: null };
       case "group-invalid":
         return { title: "That group name will not work", body: "Use lower-case letters, digits and dashes, starting with a letter. For example finance or field-ops.", action: null };
       default:
@@ -438,7 +450,14 @@
     }
     switch (ev.action) {
       case "org.create": return a + " created the organisation.";
-      case "member.add": return a + " joined as " + roleWord(ev.reason || "owner") + ".";
+      case "member.add": {
+        if (ev.actor === "scim") {
+          var r0 = String(ev.reason || "").split(";")[0];
+          if (/inactive/.test(ev.reason || "")) return a + " listed " + who(t.value).label + ", with no access yet.";
+          return a + (/reactivated/.test(ev.reason || "") ? " brought back " : " added ") + who(t.value).label + " as " + roleWord(r0) + ".";
+        }
+        return a + " joined as " + roleWord(ev.reason || "owner") + ".";
+      }
       case "invite.create": { var i = invitee(); return a + " invited " + i.p + " as " + roleWord(i.role) + "."; }
       case "invite.revoke": {
         var j = invitee();
@@ -451,8 +470,23 @@
       }
       case "member.remove": {
         var them = who(t.value).label;
+        if (ev.actor === "scim") return a + " removed " + them + (/deleted/.test(ev.reason || "") ? ", deleted in the directory." : ", deactivated in the directory.");
         return them === a ? a + " left the organisation." : a + " removed " + them + ".";
       }
+      // IC-955: provisioning, audit export, SAML.
+      case "scim.token.create": return a + " made a SCIM token for the company directory.";
+      case "scim.token.revoke": return a + " revoked a SCIM token. It stops at its next request.";
+      case "scim.default-role": return a + " set people the directory adds to join as " + roleWord(ev.reason || "") + ".";
+      case "group.link": return a + " took over the group " + t.value + ": its members now follow the directory.";
+      case "group.delete": return a + " deleted the group " + t.value + ".";
+      case "audit-export.set": return a + " started sending the activity to " + t.value + ".";
+      case "audit-export.change": return a + " changed where the activity is sent: " + t.value + ".";
+      case "audit-export.secret": return a + " made a new signing secret for the activity export.";
+      case "audit-export.clear": return a + " stopped sending the activity to " + t.value + (/^0 /.test(ev.reason || "") || !ev.reason ? "." : " (" + String(ev.reason).replace(/ not sent$/, "") + " events were not sent).");
+      case "audit-export.test": return a + " sent a test event to " + t.value + ".";
+      case "saml.set": return a + " set up company sign-in by SAML.";
+      case "saml.update": return a + " changed the SAML sign-in.";
+      case "saml.clear": return a + " turned off SAML sign-in.";
       case "root-key.register": return a + " registered the root key " + fingerprint(t.value) + ".";
       case "root-key.rotate": return a + " replaced the root key with " + fingerprint(t.value) + ".";
       case "release-key.revoke": return a + " withdrew the release key " + fingerprint(t.value) + ".";
