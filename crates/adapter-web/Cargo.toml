@@ -19,7 +19,13 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 krate-adapter-common = { path = "../adapter-common" }
 krate-layout = { path = "../layout" }
-krate-runtime = { path = "../runtime" }
+# Only the pulley-in-a-tab probe needs the engine. IC-956 Phase 0 measured
+# it against the browser's own engine (evidence/web-player), so it is
+# opt-in: the painter module the web Player loads builds without wasmtime.
+krate-runtime = { path = "../runtime", optional = true }
+
+[features]
+engine-probe = ["dep:krate-runtime"]
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "0.2"

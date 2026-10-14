@@ -1,0 +1,22 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>OffscreenCanvas control</title>
+<style>body{margin:0;background:#fff}canvas{display:block}</style>
+<canvas id="c" width="200" height="200"></canvas>
+<script type="module">
+// The control for the worker-offscreen path: a worker fills its
+// OffscreenCanvas red and then either returns to its event loop (?block=0)
+// or blocks in Atomics.wait the way a Krate app's run() does (?block=1).
+// A screenshot then shows whether a blocked worker's frame ever reaches
+// the page.
+const block = new URLSearchParams(location.search).get('block') === '1';
+const off = document.getElementById('c').transferControlToOffscreen();
+const src = `self.onmessage = ({ data }) => {
+  const ctx = data.off.getContext('2d');
+  ctx.fillStyle = 'rgb(255,0,0)'; ctx.fillRect(0, 0, 200, 200);
+  if (data.block) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5000);
+};`;
+const w = new Worker(URL.createObjectURL(new Blob([src], { type: 'text/javascript' })));
+w.postMessage({ off, block }, [off]);
+window.__krate = { started: true, block };
+</script>

@@ -1,0 +1,36 @@
+[package]
+name = "krate-pulley-probe"
+version = "0.0.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+publish = false
+
+# IC-956 Phase 0, the rejected alternative, measured once: wasmtime's pulley
+# interpreter compiled to wasm32, running a Krate CLI app inside a tab.
+#
+# Its own workspace, deliberately: it builds wasmtime twice (natively with the
+# compiler, to precompile the app for pulley; for wasm32 without one, to run
+# it), and none of that belongs in the main workspace's build or lock file.
+# How to rebuild and run: evidence/web-player/README.md.
+
+[workspace]
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+path = "src/lib.rs"
+
+[[bin]]
+name = "precompile"
+path = "src/precompile.rs"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+wasmtime = { version = "=46.0.3", default-features = false, features = ["component-model", "cranelift", "pulley", "runtime", "std"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasmtime = { version = "=46.0.3", default-features = false, features = ["component-model", "runtime", "pulley", "std", "custom-virtual-memory"] }
+wasm-bindgen = "=0.2.120"
+js-sys = "0.3"
+
+[profile.release]
+debug = false
+opt-level = 3

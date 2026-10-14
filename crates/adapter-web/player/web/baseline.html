@@ -1,0 +1,9 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Baseline</title>
+<pre id="out">hello</pre>
+<script type="module">
+// The floor: the same server, headers and fresh context, one module script
+// and no Krate at all. Subtract it to see what Krate itself costs.
+window.__krate = { path: 'baseline', firstOutput: performance.now() };
+</script>

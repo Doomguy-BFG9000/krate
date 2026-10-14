@@ -1,0 +1,9 @@
+{
+  "name": "krate-web-player-spike",
+  "private": true,
+  "type": "module",
+  "devDependencies": {
+    "@bytecodealliance/jco": "1.35.0",
+    "playwright": "1.63.0"
+  }
+}

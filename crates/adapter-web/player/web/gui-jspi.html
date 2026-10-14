@@ -1,0 +1,68 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Krate GUI app in a tab (JSPI)</title>
+<style>body{margin:0;background:#fff}canvas{display:block}</style>
+<canvas id="c" width="640" height="480"></canvas>
+<script type="module">
+// apps/krate-hello-gui on the page's main thread. Its run() blocks in
+// events.wait; with jco's JSPI mode that import returns a Promise and the
+// wasm stack is suspended until it settles, so the page stays responsive.
+import init, { WebWindow } from '../build/painter/krate_adapter_web.js';
+import { ioHost, uiHost, GRANTS, instantiateApp } from './host.js';
+
+const report = (window.__krate = { path: 'jco-jspi', marks: {}, latencies: [], frames: 0 });
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+const memories = [];
+
+if (typeof WebAssembly.Suspending !== 'function') {
+  report.error = 'no JSPI: WebAssembly.Suspending is missing in this browser';
+} else {
+  try {
+    const t = performance.now();
+    const painter = await init();
+    report.marks.painter = performance.now() - t;
+    const queue = [];
+    let waiter = null;
+    const deliver = (raw) => {
+      if (waiter) { const w = waiter; waiter = null; w(raw); } else queue.push(raw);
+    };
+    const at = (e) => performance.timeOrigin + e.timeStamp;
+    canvas.addEventListener('pointerdown', (e) => deliver({ type: 'down', x: e.offsetX, y: e.offsetY, at: at(e) }));
+    canvas.addEventListener('pointerup', (e) => deliver({ type: 'up', x: e.offsetX, y: e.offsetY, at: at(e) }));
+    window.addEventListener('keydown', (e) => {
+      if (e.key.length === 1) deliver({ type: 'text', text: e.key, at: at(e) });
+      else deliver({ type: 'key', key: e.key, at: at(e) });
+    });
+
+    const imports = {
+      ...ioHost({ args: '', grants: GRANTS.hello, onOutput: (fd, s) => { report.stdout = (report.stdout || '') + s; } }),
+      ...uiHost({
+        WebWindow,
+        onWindow(id, title, w, h) { canvas.width = w; canvas.height = h; document.title = title; },
+        present(id, w, inputAt) {
+          const view = new Uint8ClampedArray(painter.memory.buffer, w.surface.rgba_ptr(), w.surface.rgba_len());
+          ctx.putImageData(new ImageData(view, w.width, w.height), 0, 0);
+          const done = performance.now();
+          report.frames++;
+          if (report.firstFrame === undefined) report.firstFrame = done;
+          if (inputAt !== undefined) report.latencies.push(performance.timeOrigin + done - inputAt);
+        },
+        waitRaw(timeout) {
+          if (queue.length) return queue.shift();
+          return new Promise((resolve) => {
+            const timer = timeout === undefined ? null : setTimeout(() => { waiter = null; resolve(undefined); }, timeout);
+            waiter = (raw) => { if (timer) clearTimeout(timer); resolve(raw); };
+          });
+        },
+      }),
+    };
+    const app = await instantiateApp('../build/hello-jspi', imports, memories, report.marks);
+    report.memories = () => memories.map((m) => m.buffer.byteLength).concat([painter.memory.buffer.byteLength]);
+    report.running = true;
+    app.run().then((code) => { report.exit = code; }, (e) => { report.error = String(e && e.stack || e); });
+  } catch (e) {
+    report.error = String(e && e.stack || e);
+  }
+}
+</script>

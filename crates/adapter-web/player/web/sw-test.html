@@ -1,0 +1,15 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Cross-origin isolation probe</title>
+<p id="s"></p>
+<script>
+// ?sw=1 registers coi-sw.js, which re-serves every same-origin response with
+// COOP/COEP added -- what a page on GitHub Pages would have to do.
+document.getElementById('s').textContent = `crossOriginIsolated=${self.crossOriginIsolated}`;
+if (new URLSearchParams(location.search).get('sw') === '1') {
+  if (!('serviceWorker' in navigator)) window.__sw = 'error: no serviceWorker';
+  else navigator.serviceWorker.register('./coi-sw.js').then(
+    () => navigator.serviceWorker.ready.then(() => { window.__sw = 'ready'; }),
+    (e) => { window.__sw = `error: ${e}`; });
+}
+</script>

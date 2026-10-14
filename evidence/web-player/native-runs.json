@@ -1,0 +1,22 @@
+{
+  "krate": "krate 0.5.5",
+  "cli": {
+    "firstStdoutMedianMs": 21.86624999999998,
+    "totalMedianMs": 25.317000000000007,
+    "codes": [
+      0
+    ],
+    "peakRssMB": 21.96875
+  },
+  "gui": {
+    "pngWrittenMedianMs": 201.30987499999992,
+    "totalMedianMs": 5220.733208000005,
+    "shots": 10,
+    "codes": [
+      0
+    ],
+    "err": "",
+    "peakRssMB": 46.453125
+  },
+  "shot": "/var/folders/82/5hzk6h852x72618k0yml9_880000gn/T/krate-native-1AjKex/hello.png"
+}
