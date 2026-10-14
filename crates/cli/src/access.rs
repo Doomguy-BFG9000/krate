@@ -114,8 +114,8 @@ enum CheckIn {
     Offline,
 }
 
-fn agent() -> ureq::Agent {
-    ureq::AgentBuilder::new()
+fn agent(url: &str) -> ureq::Agent {
+    krate_http::builder(url)
         .timeout_connect(std::time::Duration::from_secs(5))
         .timeout_read(std::time::Duration::from_secs(15))
         .build()
@@ -125,7 +125,7 @@ fn agent() -> ureq::Agent {
 /// 2, item 6), which names the organisation or the reason. No bytes.
 fn check_in(hub: &str, digest: &str, authorization: Option<&str>) -> CheckIn {
     let url = format!("{hub}/a/{digest}");
-    let mut request = agent().get(&url).set("Accept", "application/json");
+    let mut request = agent(&url).get(&url).set("Accept", "application/json");
     if let Some(value) = authorization {
         request = request.set("Authorization", value);
     }
@@ -201,7 +201,7 @@ fn fetch_lease(
     authorization: &str,
 ) -> std::result::Result<Option<Value>, String> {
     let url = format!("{hub}/orgs/{slug}/leases/{digest}");
-    match agent()
+    match agent(&url)
         .get(&url)
         .set("Authorization", authorization)
         .set("Accept", "application/json")

@@ -4713,7 +4713,7 @@ fn fetch_resolved_here(
 /// elsewhere does not take the person's session with it.
 #[cfg(feature = "fetch")]
 fn fetch_get(url: &str, authorization: Option<&str>) -> Result<ureq::Response> {
-    let agent = ureq::AgentBuilder::new()
+    let agent = krate_http::builder(url)
         .timeout_connect(FETCH_CONNECT_TIMEOUT)
         .timeout_read(FETCH_SILENCE_TIMEOUT)
         .build();

@@ -246,14 +246,15 @@ struct Client {
 
 impl Client {
     fn new(hub: String, identity: github_auth::Identity) -> Self {
+        let agent = krate_http::builder(&hub)
+            .timeout_connect(std::time::Duration::from_secs(20))
+            .timeout_read(std::time::Duration::from_secs(120))
+            .build();
         Client {
             hub,
             identity,
             key: new_idempotency_key(),
-            agent: ureq::AgentBuilder::new()
-                .timeout_connect(std::time::Duration::from_secs(20))
-                .timeout_read(std::time::Duration::from_secs(120))
-                .build(),
+            agent,
         }
     }
 

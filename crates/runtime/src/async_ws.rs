@@ -186,10 +186,50 @@ impl AsyncWs {
     }
 }
 
+/// Open the socket the way every other connection Krate makes is opened
+/// (IC-949 N): through the proxy that applies to this URL, and over TLS that
+/// trusts the computer's own store, so an app's websocket works on a company
+/// network that inspects or proxies traffic.
+#[cfg(not(target_arch = "wasm32"))]
+fn connect(
+    url: &str,
+) -> std::result::Result<
+    (
+        tungstenite::WebSocket<tungstenite::stream::MaybeTlsStream<std::net::TcpStream>>,
+        tungstenite::handshake::client::Response,
+    ),
+    String,
+> {
+    use tungstenite::client::IntoClientRequest;
+    let request = url.into_client_request().map_err(|err| err.to_string())?;
+    let uri = request.uri();
+    let host = uri
+        .host()
+        .ok_or("the address has no host")?
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .to_string();
+    let port = uri.port_u16().unwrap_or(match uri.scheme_str() {
+        Some("wss") => 443,
+        _ => 80,
+    });
+    let stream = krate_http::tcp_for(url, &host, port, std::time::Duration::from_secs(20))
+        .map_err(|err| err.to_string())?;
+    tungstenite::client_tls_with_config(
+        request,
+        stream,
+        None,
+        Some(tungstenite::Connector::Rustls(krate_http::tls_config())),
+    )
+    .map_err(|err| {
+        let words = err.to_string();
+        krate_http::explain(&words).unwrap_or(words)
+    })
+}
+
 /// The worker: owns the socket for the connection's whole life.
 #[cfg(not(target_arch = "wasm32"))]
 fn run_connection(url: String, reports: Sender<Report>, commands: Receiver<Command>) {
-    use tungstenite::client::connect;
     use tungstenite::protocol::Message;
     use tungstenite::stream::MaybeTlsStream;
 

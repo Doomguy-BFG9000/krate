@@ -161,7 +161,7 @@ impl AppShared {
 
     #[cfg(not(target_arch = "wasm32"))]
     pub fn create(&mut self) -> Result<String, SharedError> {
-        let text = ureq::post(&format!("{}/share/new", self.hub))
+        let text = krate_http::post(&format!("{}/share/new", self.hub))
             .timeout(std::time::Duration::from_secs(8))
             .call()
             .map_err(|error| SharedError::Io(error.to_string()))?
@@ -189,7 +189,7 @@ impl AppShared {
         }
         // Prove it exists before remembering it, so a typo answers now
         // rather than as eternal silent sync failure.
-        let response = ureq::get(&format!("{}/share/{}", self.hub, code))
+        let response = krate_http::get(&format!("{}/share/{}", self.hub, code))
             .timeout(std::time::Duration::from_secs(8))
             .call();
         match response {
@@ -270,12 +270,12 @@ impl AppShared {
             .collect();
         let url = format!("{}/share/{}", self.hub, code);
         let response = if dirty.is_empty() {
-            ureq::get(&url)
+            krate_http::get(&url)
                 .timeout(std::time::Duration::from_secs(8))
                 .call()
         } else {
             let payload = serde_json::json!({ "writes": dirty }).to_string();
-            ureq::request("PUT", &url)
+            krate_http::request("PUT", &url)
                 .timeout(std::time::Duration::from_secs(8))
                 .set("content-type", "application/json")
                 .send_string(&payload)

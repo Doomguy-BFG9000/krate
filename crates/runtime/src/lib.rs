@@ -3320,7 +3320,8 @@ fn fetch_over_tls(
 ) -> std::result::Result<HttpResponse, AdapterError> {
     use std::io::Read;
 
-    let mut builder = ureq::AgentBuilder::new()
+    let target = format!("https://{}:{}{}", url.host, url.port, url.path_and_query);
+    let mut builder = krate_http::builder(&target)
         // A redirect to a host the app was not granted would walk straight
         // through the capability check that happened before this call.
         .redirects(0);
@@ -3345,7 +3346,6 @@ fn fetch_over_tls(
         HttpMethod::Head => "HEAD",
         HttpMethod::Options => "OPTIONS",
     };
-    let target = format!("https://{}:{}{}", url.host, url.port, url.path_and_query);
     let mut request = agent.request(method, &target);
     for header in &req.headers {
         request = request.set(&header.name, &header.value);

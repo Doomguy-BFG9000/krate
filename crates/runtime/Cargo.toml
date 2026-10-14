@@ -41,6 +41,9 @@ speech = ["dep:whisper-rs"]
 # so there is one certificate story in the workspace rather than two.
 ureq.workspace = true
 tungstenite.workspace = true
+# The computer's trust store and proxy settings for an app's connections
+# and websockets (IC-949 N).
+krate-http = { path = "../http" }
 rusqlite.workspace = true
 cpal = "0.18.1"
 # Gamepads. Pulls libudev-sys on Linux, which is why every Linux build got the
