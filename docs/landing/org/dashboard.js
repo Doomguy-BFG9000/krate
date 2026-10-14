@@ -598,7 +598,7 @@
 
       var steps = [
         ["Once, an owner gives each developer a release key", "krate delegate --root " + slug + "-root.pkcs8 --key release.pkcs8 \\\n  --namespace '" + slug + "/*' -o release-" + slug + ".json"],
-        ["The developer signs the app with it", "krate sign app.krate --key release.pkcs8 --namespace " + slug + "/app \\\n  --delegation release-" + slug + ".json"],
+        ["The developer marks the app as yours and signs it", "krate sign app.krate --org " + slug + " --key release.pkcs8 \\\n  --delegation release-" + slug + ".json"],
         ["And sends it here", "krate publish app.krate --org " + slug],
       ];
       pane.appendChild(el("div", { class: "card" }, [

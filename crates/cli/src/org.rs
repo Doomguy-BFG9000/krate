@@ -459,7 +459,7 @@ pub fn words(refusal: &HubRefusal, org: &str, me: &str, action: Action) -> Strin
                  delegated which has not expired and was not withdrawn. Ask {an_owner} for a \
                  current delegation (krate delegate --root <{org}-root.pkcs8> --key \
                  <your-release.pkcs8> --namespace '{org}/*' -o {org}-release.json), sign with \
-                 it (krate sign app.krate --key <your-release.pkcs8> --namespace {org}/<app> \
+                 it (krate sign app.krate --org {org} --key <your-release.pkcs8> \
                  --delegation {org}-release.json), and publish again"
             );
             match action {
