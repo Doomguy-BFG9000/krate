@@ -2764,6 +2764,96 @@ pub struct JudgedSignature {
     pub state: String,
     pub public_key: Option<String>,
     pub detail: Option<String>,
+    /// The delegation the signing key carries, checked (IC-946). `None`
+    /// when the bundle is unsigned, its signature cannot be read, or the
+    /// publisher signed directly with their root.
+    ///
+    /// `state` says only what can be decided from the file. "valid" alone
+    /// is "the key in the envelope signed this"; a door that trusts a
+    /// publisher root must also know that the root signed the permission
+    /// slip for that key, for this namespace, at the signing time. The
+    /// release's `authority` is read from the slip whether or not the slip
+    /// verifies, so it is not that answer; `chain.root` is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chain: Option<JudgedChain>,
+}
+
+/// What the delegation chain says, for a door that holds its own
+/// revocation list (IC-946).
+///
+/// The validator knows nothing about revocations -- a bundle cannot know
+/// what its publisher withdrew later -- so a chain that passes every other
+/// check is `revocation-unchecked`, never `authorised`. The door applies
+/// its own list on top; the hub's organisation store does exactly that.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct JudgedChain {
+    /// `revocation-unchecked` (the root signed the slip, it names this key,
+    /// is for releases, covers the namespace and was in force at the
+    /// signing time), `forged`, `wrong-namespace`, `expired`,
+    /// `not-yet-valid`, `unknown-purpose` or `unknown-schema`.
+    pub state: String,
+    /// The publisher root the slip chains to. Present only when the root's
+    /// own signature over the slip verifies: an unverified slip names a
+    /// root anybody can type.
+    pub root: Option<String>,
+    /// The release key the slip delegates, lowercase hex.
+    pub key: String,
+    /// What the slip permits, from the slip itself.
+    pub namespace: String,
+    pub not_before: u64,
+    pub expires: u64,
+    /// When the bundle says it was signed (the envelope's `signed_at`).
+    pub signed_at: u64,
+    /// The plain sentence, when the chain did not pass.
+    pub detail: Option<String>,
+}
+
+/// Check a delegation as far as a file can be checked (IC-946). See
+/// [`JudgedChain`].
+fn judge_chain(
+    envelope: &signing::SignatureEnvelope,
+    entries: &std::collections::BTreeMap<String, Vec<u8>>,
+) -> Option<JudgedChain> {
+    use delegation::ChainVerdict;
+    let signed = envelope.delegation.as_ref()?;
+    let verdict = signing::verify_full(
+        envelope,
+        entries,
+        &delegation::RevocationState::Unknown {
+            last_known: Vec::new(),
+        },
+    )
+    .chain?;
+    let state = match &verdict {
+        // Every check a file can answer passed; revocation is the door's.
+        ChainVerdict::UnknownRevocationState | ChainVerdict::Authorised => "revocation-unchecked",
+        ChainVerdict::ForgedDelegation => "forged",
+        ChainVerdict::WrongNamespace { .. } => "wrong-namespace",
+        ChainVerdict::Expired { .. } => "expired",
+        ChainVerdict::NotYetValid { .. } => "not-yet-valid",
+        ChainVerdict::UnknownPurpose { .. } => "unknown-purpose",
+        ChainVerdict::UnknownSchema { .. } => "unknown-schema",
+        // Unreachable with an unknown revocation state, which names no key.
+        ChainVerdict::RevokedAtSigning { .. } | ChainVerdict::ValidBeforeRevocation { .. } => {
+            "revocation-unchecked"
+        }
+    };
+    // The root is reported only once its signature over the slip has been
+    // checked. Forged and unknown-schema stop before that check passes.
+    let root_verified = !matches!(
+        verdict,
+        ChainVerdict::ForgedDelegation | ChainVerdict::UnknownSchema { .. }
+    );
+    Some(JudgedChain {
+        state: state.to_string(),
+        root: root_verified.then(|| signed.delegation.root.clone()),
+        key: signed.delegation.key.clone(),
+        namespace: signed.delegation.namespace.clone(),
+        not_before: signed.delegation.not_before,
+        expires: signed.delegation.expires,
+        signed_at: envelope.signed_at,
+        detail: (state != "revocation-unchecked").then(|| verdict.to_string()),
+    })
 }
 
 /// Judge a bundle held in memory. See [`Judgement`].
@@ -2987,6 +3077,7 @@ fn judge_bytes_here(bytes: &[u8], max_expanded: u64) -> Result<Judgement> {
                 state: "absent".to_string(),
                 public_key: None,
                 detail: None,
+                chain: None,
             },
             None,
         ),
@@ -2996,6 +3087,7 @@ fn judge_bytes_here(bytes: &[u8], max_expanded: u64) -> Result<Judgement> {
                     state: "damaged".to_string(),
                     public_key: None,
                     detail: Some(err.to_string()),
+                    chain: None,
                 },
                 None,
             ),
@@ -3037,6 +3129,7 @@ fn judge_bytes_here(bytes: &[u8], max_expanded: u64) -> Result<Judgement> {
                             signing::Verdict::Valid { .. } => None,
                             other => Some(other.to_string()),
                         },
+                        chain: judge_chain(&envelope, &project_entries),
                     },
                     release,
                 )
@@ -6612,6 +6705,130 @@ required = true
         );
         let err = open(&strict).expect_err("profile 2 wants every ext/ group declared");
         assert_eq!(variant(&err), "UndeclaredExtension", "{err}");
+    }
+
+    /// The judgement names the publisher root a delegated release key
+    /// chains to, and only once the root's own signature over the slip
+    /// verifies (IC-946). A slip naming a root it was not signed by, one
+    /// signed for another key, and one whose window closed before the
+    /// signing time each say so; signing with the root itself carries no
+    /// chain at all, because there is no slip to check.
+    #[test]
+    fn the_judgement_names_the_root_a_delegated_key_chains_to() {
+        use delegation::{Delegation, Purpose, SignedDelegation, DELEGATION_SCHEMA};
+        const SIGNED_AT: u64 = 1_700_000_000;
+        let dir = TempDir::new().expect("tempdir");
+        let manifest = write_temp(dir.path(), "manifest.toml", MANIFEST.as_bytes());
+        let component = write_temp(dir.path(), "code.wasm", MINIMAL_COMPONENT);
+        let plain = dir.path().join("plain.krate");
+        pack(&manifest, &component, &plain).unwrap();
+        let new_key = || {
+            signing::SigningKey::from_pkcs8(&signing::SigningKey::generate_pkcs8().unwrap())
+                .unwrap()
+        };
+        let hex = |bytes: &[u8]| bytes.iter().map(|b| format!("{b:02x}")).collect::<String>();
+        let (root, release, impostor) = (new_key(), new_key(), new_key());
+        let slip = |signer: &signing::SigningKey, key: &signing::SigningKey, expires: u64| {
+            SignedDelegation::create(
+                signer,
+                Delegation {
+                    schema: DELEGATION_SCHEMA.to_string(),
+                    root: hex(&root.public_key()),
+                    namespace: "acme/*".to_string(),
+                    key: hex(&key.public_key()),
+                    purpose: Purpose::Release,
+                    not_before: SIGNED_AT - 60,
+                    expires,
+                    approvers: Vec::new(),
+                },
+            )
+        };
+        let judged = |name: &str, signer: &signing::SigningKey, slip: Option<SignedDelegation>| {
+            let path = dir.path().join(name);
+            fs::copy(&plain, &path).unwrap();
+            match slip {
+                Some(slip) => {
+                    sign_bundle_delegated(&path, signer, "acme/notes", "1.0.0", SIGNED_AT, slip)
+                        .unwrap();
+                }
+                None => {
+                    sign_bundle(&path, signer, "acme/notes", "1.0.0", SIGNED_AT).unwrap();
+                }
+            }
+            judge_bytes(&fs::read(&path).unwrap(), 64 * 1024 * 1024)
+                .unwrap()
+                .signature
+        };
+
+        let direct = judged("direct.krate", &root, None);
+        assert_eq!(direct.state, "valid");
+        assert_eq!(direct.public_key, Some(hex(&root.public_key())));
+        assert_eq!(direct.chain, None, "signed by the root: no slip to check");
+
+        let good = judged(
+            "delegated.krate",
+            &release,
+            Some(slip(&root, &release, SIGNED_AT + 3600)),
+        );
+        assert_eq!(good.state, "valid");
+        let chain = good.chain.expect("a delegated signature carries its chain");
+        assert_eq!(chain.state, "revocation-unchecked", "{chain:?}");
+        assert_eq!(chain.root, Some(hex(&root.public_key())));
+        assert_eq!(chain.key, hex(&release.public_key()));
+        assert_eq!(chain.namespace, "acme/*");
+        assert_eq!(chain.expires, SIGNED_AT + 3600);
+        assert_eq!(chain.signed_at, SIGNED_AT);
+        assert_eq!(chain.detail, None);
+
+        // The impostor writes a slip that NAMES the root. The envelope's
+        // signature is genuine, so `state` alone says valid -- the chain is
+        // what refuses, and it reports no root.
+        let forged = judged(
+            "forged.krate",
+            &release,
+            Some(slip(&impostor, &release, SIGNED_AT + 3600)),
+        );
+        assert_eq!(forged.state, "valid");
+        let chain = forged.chain.unwrap();
+        assert_eq!(chain.state, "forged");
+        assert_eq!(
+            chain.root, None,
+            "an unverified slip names a root anybody can type"
+        );
+        assert!(chain.detail.is_some());
+
+        // A genuine slip for a different key does not cover this one.
+        let other = judged(
+            "other-key.krate",
+            &release,
+            Some(slip(&root, &impostor, SIGNED_AT + 3600)),
+        );
+        assert_eq!(other.chain.unwrap().state, "forged");
+
+        let expired = judged(
+            "expired.krate",
+            &release,
+            Some(slip(&root, &release, SIGNED_AT - 1)),
+        );
+        let chain = expired.chain.unwrap();
+        assert_eq!(chain.state, "expired");
+        assert_eq!(
+            chain.root,
+            Some(hex(&root.public_key())),
+            "a real slip, out of date"
+        );
+
+        // What the hub reads is this, as JSON.
+        let path = dir.path().join("delegated.krate");
+        let answer: serde_json::Value = serde_json::from_str(&judgement_json(judge_bytes(
+            &fs::read(&path).unwrap(),
+            64 * 1024 * 1024,
+        )))
+        .unwrap();
+        assert_eq!(
+            answer["judgement"]["signature"]["chain"]["root"],
+            serde_json::Value::String(hex(&root.public_key()))
+        );
     }
 
     /// The in-memory judge and the on-disk open are one validator with

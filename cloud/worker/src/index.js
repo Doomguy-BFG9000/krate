@@ -31,6 +31,10 @@ const MAX_REPORT_BYTES = 12 * 1024 * 1024;
 // Either way it is instantiated once, lazily, and the instance's memory
 // is re-read on every call because it can grow.
 import * as validatorImport from "./validator.wasm";
+import { Org, SLUG, chainOk, messageFor } from "./org.js";
+// The organisation store (IC-946), one SQLite-backed Durable Object per
+// organisation; wrangler.toml binds it as ORGS.
+export { Org };
 let validatorExports = null;
 function validator() {
   if (!validatorExports) {
@@ -45,10 +49,22 @@ function validator() {
 /// Judge an upload with the Rust validator. Returns the parsed answer:
 /// `{ ok: true, judgement }` or `{ ok: false, problem }`.
 function judgeBundle(bytes) {
+  return callValidator("krate_judge", bytes);
+}
+
+/// Read a revocation list written by `krate revoke`, with the Rust
+/// validator: `{ ok: true, root, issued_at, revocations }` once the root
+/// it names is checked to have signed it, or `{ ok: false, problem }`
+/// (IC-946).
+function readRevocations(bytes) {
+  return callValidator("krate_revocations", bytes);
+}
+
+function callValidator(name, bytes) {
   const v = validator();
   const input = v.krate_alloc(bytes.length);
   new Uint8Array(v.memory.buffer, input, bytes.length).set(bytes);
-  const out = v.krate_judge(input, bytes.length);
+  const out = v[name](input, bytes.length);
   const view = new DataView(v.memory.buffer);
   const length = view.getUint32(out, true);
   const json = new TextDecoder().decode(new Uint8Array(v.memory.buffer, out + 4, length));
@@ -121,6 +137,11 @@ const RATE_LIMITS = {
   founding: 5,
   makeit: 5,
   "support/new": 5,
+  // Requests with no session to an organisation's routes or private
+  // links (IC-946). They never reach the organisation's store -- so they
+  // cannot grow its audit -- and this bounds what they cost. A person
+  // opening a private link before signing in sends one.
+  "org/anonymous": 20,
 };
 
 /// Who is asking, as far as the edge can tell.
@@ -617,6 +638,10 @@ export default {
       if (request.method === "GET" && pathname.startsWith("/c/")) {
         return cors(await resolveChannel(request, url, pathname.slice(3), env));
       }
+      // Organisations (IC-946).
+      if (pathname === "/orgs" || pathname.startsWith("/orgs/")) {
+        return cors(await orgRoute(request, url, env));
+      }
       return cors(text("not found", 404));
     } catch (err) {
       // Never leak a stack trace to a caller; log it for us instead.
@@ -816,6 +841,16 @@ async function admitJudged(env, { identity, judgement, hash, size, fields, store
   // existing listing stands and they get the same URLs back. Asked BEFORE
   // the store is touched: those bytes are already there, and nothing about
   // this request should write anything.
+  // An organisation's private release is never given a public listing
+  // (IC-946): the gallery, search and every developer page read listings,
+  // so this one refusal keeps the bytes out of all of them.
+  if ((await bytesHolder(env, hash)).org) {
+    return text(
+      "these exact bytes are an organisation's private release, so they cannot be published publicly",
+      409,
+    );
+  }
+
   if (await publishedBySomeoneElse(env, hash, identity.login)) {
     const base2 = (env.PUBLIC_BASE || "").replace(/\/$/, "");
     return json({
@@ -1650,6 +1685,15 @@ async function fetchBundle(request, url, hash, env) {
   }
   if (!object) {
     return text("not found", 404);
+  }
+
+  // An organisation's private release (IC-946). The flag is on the R2
+  // object itself, written with the bytes, so it is as consistent as the
+  // bytes are: there is no moment at which the object exists and the
+  // check does not. The organisation's store is asked on every fetch.
+  const privateOrg = object.customMetadata && object.customMetadata.org;
+  if (privateOrg) {
+    return await fetchPrivate(request, hash, object, privateOrg, big, env);
   }
 
   // Count the hit before deciding what to serve, one Analytics Engine point
@@ -3395,10 +3439,38 @@ async function authPoll(request, env) {
 /// send a header. The answer is cached in KV so publishing several apps does
 /// not mean several round trips, and expires so a revoked token stops working
 /// without us tracking revocations ourselves.
+/// The login a test token stands for, or null (IC-946).
+///
+/// The organisation proof needs two or three people signed in at once
+/// without spending real GitHub accounts, so `wrangler dev` can be given
+/// KRATE_TEST_IDENTITIES as `token=login,token=login`. It is honoured only
+/// when that variable is set AND the hub's own address is this machine's
+/// loopback -- the production hub is https://hub.krate.tech, so even a
+/// variable set there by mistake grants nothing. Absent, every token goes
+/// to GitHub as before, which refuses one it did not issue.
+function testIdentity(token, env) {
+  const map = env.KRATE_TEST_IDENTITIES;
+  if (!map) return null;
+  if (!/^http:\/\/(127\.0\.0\.1|localhost|\[::1\])(:\d+)?\/?$/.test(String(env.PUBLIC_BASE || ""))) return null;
+  for (const pair of String(map).split(",")) {
+    const at = pair.indexOf("=");
+    if (at <= 0) continue;
+    if (pair.slice(0, at).trim() === token) {
+      const login = pair.slice(at + 1).trim().toLowerCase();
+      return /^[a-z0-9](?:[a-z0-9-]{0,38})$/.test(login) ? login : null;
+    }
+  }
+  return null;
+}
+
 async function verifyGitHub(request, env) {
   const auth = request.headers.get("authorization") || "";
   const token = auth.replace(/^Bearer\s+/i, "").trim();
   if (!token) return null;
+
+  // Stubbed identities for a local `wrangler dev` proof only (IC-946).
+  const stubbed = testIdentity(token, env);
+  if (stubbed) return { login: stubbed, name: "", avatar_url: "" };
 
   // A Krate session (Google or email sign-in) is as good as a GitHub token.
   if (token.startsWith("krs_")) {
@@ -3613,14 +3685,39 @@ async function bigStart(request, env) {
   const sha256 = String(ask.sha256 || "").toLowerCase();
   if (!/^[0-9a-f]{64}$/.test(sha256)) return text("sha256 is 64 hex characters", 400);
 
+  // An organisation candidate over 5 MiB (IC-946): the same parts and the
+  // same judging, landing as a candidate rather than a listing. Who may
+  // publish there is asked before a part is accepted; the signature is
+  // asked again with the judgement.
+  let org = null;
+  if (ask.org !== undefined && ask.org !== null && ask.org !== "") {
+    org = String(ask.org).toLowerCase();
+    if (!SLUG.test(org)) return orgError(400, "slug-invalid", org);
+    if (kind !== "bundle") return text("an organisation takes the app itself, not a source or notices file", 400);
+    const check = await orgAsk(env, org, {
+      op: "check-candidate",
+      actor: identity.login,
+      args: { digest: sha256 },
+    });
+    if (check.status !== 200) return json(check.body, check.status);
+  }
+
   let forHash = null;
   if (kind === "bundle") {
-    // These exact bytes are already listed: nothing to upload.
-    const listed = await env.APPS.get(`app:${sha256}`);
-    if (listed) {
-      const base = (env.PUBLIC_BASE || "").replace(/\/$/, "");
-      return json({ already: true, url: `${base}/a/${sha256}`, id: sha256 });
+    if (org) {
+      const holder = await bytesHolder(env, sha256);
+      if (holder.exists && holder.org !== org) {
+        return orgError(409, "bytes-held-elsewhere", org, "these exact bytes are already held outside this organisation");
+      }
+    } else {
+      // These exact bytes are already listed: nothing to upload.
+      const listed = await env.APPS.get(`app:${sha256}`);
+      if (listed) {
+        const base = (env.PUBLIC_BASE || "").replace(/\/$/, "");
+        return json({ already: true, url: `${base}/a/${sha256}`, id: sha256 });
+      }
     }
+    // The tier's daily ceilings hold for an organisation's uploads too.
     const mine = await readCount(env, `bigday:${identity.login}:${today()}`);
     if (mine >= BIG_PER_LOGIN_PER_DAY) {
       return text(`${BIG_PER_LOGIN_PER_DAY} big apps a day per publisher -- try again tomorrow`, 429);
@@ -3655,6 +3752,7 @@ async function bigStart(request, env) {
   try {
     upload = await env.BUNDLES.createMultipartUpload(key, {
       httpMetadata: { contentType: "application/octet-stream" },
+      ...(org ? { customMetadata: { org } } : {}),
     });
   } catch (err) {
     return text("the store could not open an upload -- try again in a few minutes", 503);
@@ -3670,6 +3768,7 @@ async function bigStart(request, env) {
     id,
     kind,
     for: forHash,
+    org,
     login: identity.login,
     identity: { login: identity.login, name: identity.name || "", avatar_url: identity.avatar_url || "" },
     size,
@@ -3831,6 +3930,11 @@ async function askBuilderToJudge(env, record) {
 
 function bigStatus(record, env) {
   const out = { id: record.id, kind: record.kind, status: record.status };
+  if (record.org) {
+    out.org = record.org;
+    if (record.digest) out.digest = record.digest;
+    if (record.state) out.state = record.state;
+  }
   if (record.problem) out.problem = record.problem;
   if (record.url) out.url = record.url;
   if (record.status === "uploading") out.parts = record.parts;
@@ -3887,6 +3991,51 @@ async function bigVerdict(request, env, id) {
   }
 
   const base = (env.PUBLIC_BASE || "").replace(/\/$/, "");
+  if (record.kind === "bundle" && record.org) {
+    // An organisation candidate (IC-946): never a listing. The address
+    // record goes first, so a candidate never names bytes /a/ cannot find;
+    // if the organisation refuses it, both go.
+    if (!verdict.judgement) return refuse("the judgement was missing");
+    const holder = await bytesHolder(env, record.sha256);
+    if (holder.exists && holder.org !== record.org) {
+      return refuse("these exact bytes are already held outside this organisation");
+    }
+    const head = await env.BUNDLES.head(record.key);
+    if (!head || head.size !== record.size) return refuse("the upload could not be found in the store");
+    const ours = !holder.exists;
+    if (ours) {
+      try {
+        await env.APPS.put(`bigkey:${record.sha256}`, record.key);
+      } catch (_) {
+        return text("could not record where the app lives -- the build service will be asked again", 503);
+      }
+    }
+    const added = await orgAsk(env, record.org, {
+      op: "add-candidate",
+      actor: record.login,
+      args: { ...candidateArgs(verdict.judgement, record.sha256, record.size, base), big: true },
+    });
+    if (added.status >= 300) {
+      if (ours) {
+        try {
+          await env.APPS.delete(`bigkey:${record.sha256}`);
+        } catch (_) {}
+      }
+      return refuse(`${added.body.error}: ${added.body.message}`);
+    }
+    if (!ours) {
+      // The same bytes were already this organisation's; the copy that
+      // just arrived is not needed.
+      try {
+        await env.BUNDLES.delete(record.key);
+      } catch (_) {}
+    }
+    record.status = "candidate";
+    record.digest = record.sha256;
+    record.state = added.body.state;
+    await writeBigRecord(env, record);
+    return json(bigStatus(record, env));
+  }
   if (record.kind === "bundle") {
     if (!verdict.judgement) return refuse("the judgement was missing");
     const response = await admitJudged(env, {
@@ -4181,10 +4330,13 @@ function shortName(name) {
 /// written again under the same guard, which upgrades it. What the store
 /// reports on read-back is the receipt; a receipt that disagrees with what
 /// was sent removes the object and fails the publish.
-async function storeBundle(env, hash, body) {
+async function storeBundle(env, hash, body, customMetadata) {
   const options = {
     httpMetadata: { contentType: "application/octet-stream" },
     sha256: hash,
+    // An organisation's candidate carries `org` here, and /a/<hash> asks
+    // that organisation before serving a byte (IC-946).
+    ...(customMetadata ? { customMetadata } : {}),
   };
   const existing = await env.BUNDLES.head(hash);
   const existingSha = existing ? checksumHex(existing) : null;
@@ -4749,10 +4901,10 @@ function json(value, status = 200) {
 function cors(response) {
   const headers = new Headers(response.headers);
   headers.set("access-control-allow-origin", "*");
-  headers.set("access-control-allow-methods", "GET, POST, DELETE, OPTIONS");
+  headers.set("access-control-allow-methods", "GET, POST, PUT, DELETE, OPTIONS");
   headers.set(
     "access-control-allow-headers",
-    "authorization, content-type, x-krate-name, x-krate-description, x-krate-category, x-krate-session, x-krate-version, x-krate-os, x-krate-note, x-krate-unlisted, x-krate-encoding",
+    "authorization, content-type, x-krate-name, x-krate-description, x-krate-category, x-krate-session, x-krate-version, x-krate-os, x-krate-note, x-krate-unlisted, x-krate-encoding, idempotency-key",
   );
   // A page script cannot read a response header it was not shown. The 429
   // from the anonymous wall (K-767) carries `retry-after`, and without this
@@ -6714,6 +6866,308 @@ boot();
   return new Response(html, { headers: { "content-type": "text/html; charset=utf-8" } });
 }
 
+// ============================================================ organisations
+//
+// The hub half of the organisation pilot (IC-946), to the contract in
+// Plan/org-pilot/CONTRACT.md. Every route here is a thin door: it proves
+// who is asking (the same GitHub sign-in `krate publish` uses), reads and
+// judges what was sent, and hands one command to the organisation's
+// Durable Object, which decides. The answer is JSON; a refusal is
+// `{ error: <stable reason>, message: <plain words> }`.
+//
+//   POST   /orgs                                  {slug, name}
+//   GET    /orgs/<slug>
+//   POST   /orgs/<slug>/invites                   {login, role}
+//   DELETE /orgs/<slug>/invites/<code>
+//   POST   /orgs/<slug>/invites/<code>/accept
+//   PUT    /orgs/<slug>/members/<login>           {role}
+//   DELETE /orgs/<slug>/members/<login>
+//   PUT    /orgs/<slug>/root-key                  {public_key, revocations?}
+//   POST   /orgs/<slug>/candidates                (bundle bytes)
+//   GET    /orgs/<slug>/candidates                (history, for members who publish or approve)
+//   POST   /orgs/<slug>/candidates/<digest>/approve
+//   GET    /orgs/<slug>/releases
+//   GET    /orgs/<slug>/audit
+//   GET    /a/<hash>                              (a private release: see fetchPrivate)
+
+/// A refusal in the contract's shape.
+function orgError(status, reason, slug, detail) {
+  return json({ error: reason, message: messageFor(reason, slug, detail) }, status);
+}
+
+/// The answer to a request with no session (IC-946): `not-signed-in`, or
+/// the anonymous wall's 429 once this caller has sent too many. Never
+/// reaches an organisation's store.
+async function anonymousOrgRefusal(request, env, status, slug) {
+  const over = await rateLimited(request, env, "org/anonymous");
+  if (over) return over;
+  const res = orgError(status, "not-signed-in", slug);
+  res.headers.set("cache-control", "private, no-store");
+  return res;
+}
+
+/// Ask organisation `slug`'s store one command. Answers `{ status, body }`.
+async function orgAsk(env, slug, command) {
+  const stub = env.ORGS.get(env.ORGS.idFromName(`org:${slug}`));
+  const res = await stub.fetch("https://org/command", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ ...command, slug }),
+  });
+  return res.json();
+}
+
+function orgAnswer(answer) {
+  if (answer.status === 204 || answer.body === null) return new Response(null, { status: answer.status });
+  return json(answer.body, answer.status);
+}
+
+/// The Idempotency-Key and what it is bound to: the method, the path and
+/// the body, hashed, so the same key on a different request is caught.
+async function idempotencyOf(request, path, bodyText) {
+  const key = (request.headers.get("idempotency-key") || "").trim();
+  if (!key) return null;
+  return {
+    key: key.slice(0, 200),
+    hash: await sha256Hex(new TextEncoder().encode(`${request.method} ${path}\n${bodyText}`)),
+  };
+}
+
+/// Where these bytes already live, and for whom: `{ exists, org }`. `org`
+/// is the organisation whose private release or candidate they are, or
+/// null for public bytes. Read from the R2 object's own metadata, for the
+/// one-request bytes at their hash and the big tier's at big/<id>.
+async function bytesHolder(env, hash) {
+  let object = await env.BUNDLES.head(hash);
+  if (!object) {
+    let blob = null;
+    try {
+      blob = await env.APPS.get(`bigkey:${hash}`);
+    } catch (_) {}
+    if (blob) object = await env.BUNDLES.head(blob);
+  }
+  if (!object) return { exists: false, org: null };
+  return { exists: true, org: (object.customMetadata && object.customMetadata.org) || null };
+}
+
+/// What the organisation's store is told about a judged candidate. The
+/// signature is the validator's whole answer, chain included; the store
+/// decides whether it is signed for the organisation.
+function candidateArgs(judgement, digest, size, base) {
+  const app = (judgement.manifest && judgement.manifest.app) || {};
+  return {
+    digest,
+    size,
+    name: app.name || "",
+    version: (judgement.release && judgement.release.version) || app.version || "",
+    namespace: (judgement.release && judgement.release.namespace) || "",
+    signature: judgement.signature || { state: "absent" },
+    base,
+  };
+}
+
+async function orgRoute(request, url, env) {
+  if (!env.ORGS) {
+    return json({ error: "orgs-off", message: "organisations are not switched on on this hub" }, 503);
+  }
+  const base = (env.PUBLIC_BASE || "").replace(/\/$/, "");
+  const parts = url.pathname.split("/").filter(Boolean).map((p) => {
+    try {
+      return decodeURIComponent(p);
+    } catch (_) {
+      return p;
+    }
+  });
+  const method = request.method;
+  const identity = await verifyGitHub(request, env);
+  const actor = identity && identity.login ? String(identity.login).toLowerCase() : null;
+  const readBody = async () => {
+    const read = await readBounded(request, 64 * 1024);
+    if (read.tooLarge) return { tooLarge: true };
+    const text_ = new TextDecoder().decode(read.body);
+    let value = {};
+    try {
+      value = text_ ? JSON.parse(text_) : {};
+    } catch (_) {
+      return { bad: true };
+    }
+    return { text: text_, value: value && typeof value === "object" ? value : {} };
+  };
+  const bad = () => json({ error: "bad-request", message: "the body is JSON, under 64 KiB" }, 400);
+
+  // POST /orgs
+  if (parts.length === 1) {
+    if (method !== "POST") return text("not found", 404);
+    const body = await readBody();
+    if (body.tooLarge || body.bad) return bad();
+    const slug = String(body.value.slug || "").toLowerCase();
+    if (!SLUG.test(slug)) return orgError(400, "slug-invalid", slug);
+    if (!actor) return orgError(401, "not-signed-in", slug);
+    const idempotency = await idempotencyOf(request, url.pathname, body.text);
+    return orgAnswer(
+      await orgAsk(env, slug, { op: "create", actor, args: { name: body.value.name }, idempotency }),
+    );
+  }
+
+  const slug = String(parts[1] || "").toLowerCase();
+  if (!SLUG.test(slug)) return orgError(400, "slug-invalid", slug);
+  // No session: answered here, never by the organisation's store, so an
+  // anonymous flood appends nothing to its audit and creates no object.
+  // Only an authenticated principal's attempts are audited.
+  if (!actor) return anonymousOrgRefusal(request, env, 401, slug);
+  const rest = parts.slice(2);
+  const ask = async (op, args = {}, idempotency = null) =>
+    orgAnswer(await orgAsk(env, slug, { op, actor, args, idempotency }));
+  const mutate = async (op, argsOf) => {
+    const body = await readBody();
+    if (body.tooLarge || body.bad) return bad();
+    const idempotency = await idempotencyOf(request, url.pathname, body.text);
+    return ask(op, argsOf(body.value), idempotency);
+  };
+
+  if (rest.length === 0 && method === "GET") return ask("show");
+  if (rest[0] === "invites") {
+    if (rest.length === 1 && method === "POST") {
+      return mutate("invite", (b) => ({ login: b.login, role: b.role }));
+    }
+    if (rest.length === 2 && method === "DELETE") return mutate("revoke-invite", () => ({ code: rest[1] }));
+    if (rest.length === 3 && rest[2] === "accept" && method === "POST") {
+      return mutate("accept", () => ({ code: rest[1] }));
+    }
+  }
+  if (rest[0] === "members" && rest.length === 2) {
+    if (method === "PUT") return mutate("set-role", (b) => ({ login: rest[1], role: b.role }));
+    if (method === "DELETE") return mutate("remove", () => ({ login: rest[1] }));
+  }
+  if (rest[0] === "root-key" && rest.length === 1 && method === "PUT") {
+    const body = await readBody();
+    if (body.tooLarge || body.bad) return bad();
+    const publicKey = String(body.value.public_key || "").trim().toLowerCase();
+    let revocations;
+    if (body.value.revocations !== undefined && body.value.revocations !== null) {
+      // A list `krate revoke` wrote, checked by the Rust validator: signed
+      // by the root it names, and that root is the one being registered.
+      const list = readRevocations(new TextEncoder().encode(JSON.stringify(body.value.revocations)));
+      if (!list.ok) return orgError(422, "not-signed-for-this-org", slug, `the revocation list does not hold: ${list.problem}`);
+      if (list.root !== publicKey) {
+        return orgError(422, "not-signed-for-this-org", slug, "the revocation list is signed by a different root than the key being registered");
+      }
+      revocations = list.revocations;
+    }
+    const idempotency = await idempotencyOf(request, url.pathname, body.text);
+    return ask("set-root", { public_key: publicKey, revocations }, idempotency);
+  }
+  if (rest[0] === "candidates") {
+    if (rest.length === 1 && method === "POST") return orgCandidate(request, env, slug, actor, url.pathname, base);
+    if (rest.length === 1 && method === "GET") return ask("candidates");
+    if (rest.length === 3 && rest[2] === "approve" && method === "POST") {
+      const digest = String(rest[1]).toLowerCase();
+      if (!/^[0-9a-f]{64}$/.test(digest)) {
+        return orgError(404, "digest-mismatch", slug, "a digest is the candidate's 64-hex sha256");
+      }
+      return mutate("approve", () => ({ digest, base }));
+    }
+  }
+  if (rest[0] === "releases" && rest.length === 1 && method === "GET") return ask("releases", { base });
+  if (rest[0] === "audit" && rest.length === 1 && method === "GET") {
+    const answer = await orgAsk(env, slug, { op: "audit", actor });
+    if (answer.status !== 200) return orgAnswer(answer);
+    // Recomputed here with crypto.subtle -- a second implementation from
+    // the one that wrote the chain -- every time it is read.
+    const events = answer.body.events;
+    return json({ events, chain_ok: await chainOk(events) });
+  }
+  return text("not found", 404);
+}
+
+/// POST /orgs/<slug>/candidates: the bundle bytes, as `krate publish`
+/// sends them to /publish (IC-946). The same archive check and the same
+/// validator as the publish door; then the organisation decides whether
+/// this person may publish there and whether the app is signed for it,
+/// before a byte is stored; then the bytes are stored under their hash
+/// with the organisation's flag; then the candidate is recorded. An app
+/// over 5 MiB goes through the big-file path with `org` in its start.
+async function orgCandidate(request, env, slug, actor, path, base) {
+  const declared = request.headers.get("content-length");
+  if (declared !== null && Number(declared) > MAX_UPLOAD_BYTES) {
+    return json(
+      { error: "too-large", message: "apps over 5 MiB go through the big-file path: POST /publish/big/start with \"org\"" },
+      413,
+    );
+  }
+  const read = await readBounded(request, MAX_UPLOAD_BYTES);
+  if (read.tooLarge) {
+    return json(
+      { error: "too-large", message: "apps over 5 MiB go through the big-file path: POST /publish/big/start with \"org\"" },
+      413,
+    );
+  }
+  const body = read.body;
+  const invalid = (problem) => json({ error: "invalid-bundle", message: `not a valid .krate bundle: ${problem}` }, 422);
+  if (body.length === 0) return invalid("the body is empty");
+  const problem = archiveProblem(body);
+  if (problem) return invalid(problem);
+  const judged = judgeBundle(body);
+  if (!judged.ok) return invalid(judged.problem);
+  const digest = await sha256Hex(body);
+  const idempotency = await idempotencyOf(request, path, digest);
+  const args = candidateArgs(judged.judgement, digest, body.length, base);
+
+  const check = await orgAsk(env, slug, { op: "check-candidate", actor, args, idempotency });
+  if (check.replayed || check.status !== 200) return orgAnswer(check);
+
+  const holder = await bytesHolder(env, digest);
+  if (holder.exists && holder.org !== slug) {
+    return orgError(409, "bytes-held-elsewhere", slug, "these exact bytes are already held outside this organisation, so they cannot be its private release");
+  }
+  const stored = await storeBundle(env, digest, body, { org: slug });
+  if (stored.problem) return json({ error: "store-failed", message: stored.problem }, 500);
+  return orgAnswer(await orgAsk(env, slug, { op: "add-candidate", actor, args, idempotency }));
+}
+
+/// GET /a/<hash> for an organisation's private release (IC-946, R1, R8).
+/// The organisation's store is asked on every fetch, with the person's
+/// own session; a copied URL alone carries none, so it downloads nothing.
+/// No session, a stranger, a removed member and a digest that is only a
+/// candidate are each refused with 403 and a stable reason. Never cached
+/// by anything between: the answer depends on who is asking.
+async function fetchPrivate(request, hash, object, slug, big, env) {
+  const identity = await verifyGitHub(request, env);
+  const actor = identity && identity.login ? String(identity.login).toLowerCase() : null;
+  const drop = async () => {
+    try {
+      if (object.body && typeof object.body.cancel === "function") await object.body.cancel();
+    } catch (_) {}
+  };
+  if (!actor) {
+    // A copied URL with no session: refused without asking the store, so
+    // it is neither audited nor able to flood the audit.
+    await drop();
+    return anonymousOrgRefusal(request, env, 403, slug);
+  }
+  const answer = env.ORGS
+    ? await orgAsk(env, slug, { op: "download", actor, args: { digest: hash } })
+    : { status: 403, body: { error: "not-a-member", message: "organisations are not switched on on this hub" } };
+  const noStore = { "cache-control": "private, no-store", vary: "authorization" };
+  if (answer.status !== 200) {
+    await drop();
+    return new Response(JSON.stringify(answer.body), {
+      status: 403,
+      headers: { "content-type": "application/json", ...noStore },
+    });
+  }
+  const name = slugOf(answer.body.name || "") || hash.slice(0, 12);
+  return new Response(request.method === "HEAD" ? null : object.body, {
+    headers: {
+      "content-type": "application/octet-stream",
+      "content-disposition": `attachment; filename="${name}.krate"`,
+      "content-length": String(object.size),
+      ...(big ? { "x-krate-tier": "big" } : {}),
+      ...noStore,
+    },
+  });
+}
+
 // The door's pieces, exported so a test can watch them work rather than
 // infer it from a status code: a bounded inflate and a whole inflate both
 // answer 422 to a bomb, and only a byte count tells them apart (IC-833).
@@ -6759,9 +7213,13 @@ async function listAllObjects(bucket) {
   const out = [];
   let cursor;
   for (let page = 0; page < 200; page += 1) {
-    const listing = await bucket.list({ limit: 1000, cursor });
+    // customMetadata, so an organisation's private bytes (IC-946) are
+    // recognised as owned: they have no listing, alias or channel by
+    // design, and would otherwise read as orphans.
+    const listing = await bucket.list({ limit: 1000, cursor, include: ["customMetadata"] });
     for (const object of listing.objects) {
-      out.push({ key: object.key, size: object.size, sha256: checksumHex(object) });
+      const org = (object.customMetadata && object.customMetadata.org) || null;
+      out.push({ key: object.key, size: object.size, sha256: checksumHex(object), org });
     }
     if (!listing.truncated || !listing.cursor) break;
     cursor = listing.cursor;
@@ -6855,8 +7313,15 @@ async function runScrub(env, { repair }) {
 
   // Orphans: bytes nothing points at. Reported, never removed here -- a
   // retired listing keeps its bytes on purpose, and so may a link that
-  // was only ever sent by hand.
-  for (const hash of bundles.keys()) {
+  // was only ever sent by hand. An organisation's private bytes (IC-946)
+  // are owned by that organisation's store, which no KV record mirrors on
+  // purpose: never an orphan, and counted on their own.
+  let orgObjects = 0;
+  for (const [hash, object] of bundles) {
+    if (object.org) {
+      orgObjects += 1;
+      continue;
+    }
     if (!referenced.has(hash)) {
       problems.push({ kind: "orphan-object", key: hash, detail: "no listing, alias, channel or takedown names it", repaired: false });
     }
@@ -6872,6 +7337,7 @@ async function runScrub(env, { repair }) {
     aliases: aliases.length,
     channels: channels.length,
     takedowns: takedowns.length,
+    org_objects: orgObjects,
     problems,
   };
   try {

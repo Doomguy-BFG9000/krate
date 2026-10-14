@@ -36,6 +36,40 @@ pub fn judge_to_json(bytes: &[u8]) -> String {
     krate_bundle::judgement_json(krate_bundle::judge_bytes(bytes, MAX_EXPANDED_BYTES))
 }
 
+/// Read a revocation list written by `krate revoke` and answer as JSON:
+/// `{"ok":true,"root":"<hex>","issued_at":n,"revocations":[...]}` once the
+/// root it names has been checked to have signed it, or
+/// `{"ok":false,"problem":"..."}` (IC-946). The hub's organisation store
+/// keeps the keys an owner withdrew from this; a list nobody signed is
+/// not a list.
+pub fn revocations_to_json(bytes: &[u8]) -> String {
+    use krate_bundle::delegation::SignedRevocationList;
+    let refused =
+        |problem: String| serde_json::json!({ "ok": false, "problem": problem }).to_string();
+    let signed: SignedRevocationList = match serde_json::from_slice(bytes) {
+        Ok(signed) => signed,
+        Err(err) => {
+            return refused(format!(
+                "not a revocation list written by `krate revoke`: {err}"
+            ))
+        }
+    };
+    match signed.verify() {
+        Ok(list) => serde_json::json!({
+            "ok": true,
+            "root": list.root,
+            "issued_at": list.issued_at,
+            "revocations": list.revocations.iter().map(|r| serde_json::json!({
+                "key": r.key,
+                "compromised_from": r.compromised_from,
+                "reason": r.reason,
+            })).collect::<Vec<_>>(),
+        })
+        .to_string(),
+        Err(err) => refused(err.to_string()),
+    }
+}
+
 /// Reserve `len` bytes in the module's memory for the host to write into.
 ///
 /// # Safety
@@ -73,7 +107,23 @@ pub unsafe extern "C" fn krate_free(ptr: *mut u8, len: u32) {
 #[no_mangle]
 pub unsafe extern "C" fn krate_judge(ptr: *const u8, len: u32) -> *mut u8 {
     let bytes = std::slice::from_raw_parts(ptr, len as usize);
-    let json = judge_to_json(bytes).into_bytes();
+    answer(judge_to_json(bytes))
+}
+
+/// [`revocations_to_json`] over the `len` bytes at `ptr`, answered the way
+/// [`krate_judge`] answers.
+///
+/// # Safety
+/// As [`krate_judge`].
+#[no_mangle]
+pub unsafe extern "C" fn krate_revocations(ptr: *const u8, len: u32) -> *mut u8 {
+    let bytes = std::slice::from_raw_parts(ptr, len as usize);
+    answer(revocations_to_json(bytes))
+}
+
+/// A length-prefixed copy of `json` in the module's memory.
+unsafe fn answer(json: String) -> *mut u8 {
+    let json = json.into_bytes();
     let total = 4 + json.len();
     let layout = Layout::from_size_align(total, 1).expect("layout");
     let out = raw_alloc(layout);
