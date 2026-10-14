@@ -273,9 +273,13 @@ Every connection Krate makes, for itself and for apps, trusts the
 your MDM installed is trusted with no Krate setting, and a network that
 inspects TLS works as it does for a browser.
 
-Krate does not read the system proxy settings or a PAC file. Name the
-proxy in the policy instead, so it reaches every computer with the rest of
-your settings:
+Krate finds the proxy in this order: the policy's `[network] proxy`; the
+proxy variables, if any is set; then the proxy the operating system is set
+to use (System Settings on a Mac, Internet Options on Windows, which a
+configuration profile or Group Policy usually sets). It does not run an
+automatic configuration script (PAC) or auto-discovery (WPAD). If your
+computers rely on one, name the proxy in the policy, so it reaches every
+computer with the rest of your settings:
 
 ```toml
 [network]
@@ -283,9 +287,9 @@ proxy = "http://proxy.acme.com:3128"     # or "direct"
 no_proxy = "internal.acme.com,git.acme.com"
 ```
 
-With `proxy` set, the environment's proxy variables are ignored, so a
-person's shell cannot route around it. Without it, every connection honours
-the usual variables: `HTTPS_PROXY` for https, `HTTP_PROXY` for http,
+With `proxy` set, the variables and the system settings are ignored, so a
+person's shell cannot route around it. Without it, the usual variables
+apply when set: `HTTPS_PROXY` for https, `HTTP_PROXY` for http,
 `ALL_PROXY` for either, and `NO_PROXY`, in capitals or lower case. A
 `NO_PROXY` entry covers the host and every name under it; address ranges
 such as `10.0.0.0/8` are not read. This computer's own services

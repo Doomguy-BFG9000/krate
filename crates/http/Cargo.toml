@@ -24,3 +24,10 @@ rustls-platform-verifier = "0.7"
 # CA bundle installed still reaches the public internet.
 [target.'cfg(all(unix, not(target_vendor = "apple"), not(target_os = "android")))'.dependencies]
 webpki-root-certs = "1"
+
+# The proxy the system is set to use, when no proxy variable is set.
+[target.'cfg(target_os = "macos")'.dependencies]
+system-configuration = "0.7"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Networking_WinHttp"] }

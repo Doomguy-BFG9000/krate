@@ -21,6 +21,9 @@
 //! ureq reads proxy variables itself, but uses one proxy for every scheme
 //! and ignores `NO_PROXY`, so the choice is made here, per URL.
 
+mod system_proxy;
+pub use system_proxy::{from_mac_settings, from_windows_settings, system_proxy, SystemProxy};
+
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpStream;
 use std::sync::{Arc, OnceLock};
@@ -143,16 +146,38 @@ pub fn set_policy_proxy(proxy: PolicyProxy) -> bool {
     POLICY_PROXY.set(proxy).is_ok()
 }
 
-/// The proxy for `url`: the machine policy's when one was installed, the
-/// environment's otherwise, or `None` to connect directly.
+/// The proxy for `url`, or `None` to connect directly. In order: the
+/// machine policy's when one was installed; the environment's proxy
+/// variables when any is set; the operating system's own proxy settings.
 pub fn proxy_for(url: &str) -> Option<String> {
     if let Some(policy) = POLICY_PROXY.get() {
         return proxy_for_policy(url, policy);
     }
-    proxy_for_with(url, |name| {
+    let env = |name: &str| {
         std::env::var(name)
             .ok()
             .filter(|value| !value.trim().is_empty())
+    };
+    let any_set = ["HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY"]
+        .iter()
+        .any(|name| {
+            env(name)
+                .or_else(|| env(&name.to_ascii_lowercase()))
+                .is_some()
+        });
+    match system_proxy() {
+        Some(system) if !any_set => proxy_for_system(url, system),
+        _ => proxy_for_with(url, env),
+    }
+}
+
+/// [`proxy_for`] under the operating system's settings.
+fn proxy_for_system(url: &str, system: &SystemProxy) -> Option<String> {
+    proxy_for_with(url, |name| match name {
+        "HTTPS_PROXY" => system.https.clone(),
+        "HTTP_PROXY" => system.http.clone(),
+        "NO_PROXY" => system.bypass.clone(),
+        _ => None,
     })
 }
 
@@ -222,6 +247,11 @@ fn bypasses(list: &str, host: &str) -> bool {
         .any(|entry| {
             if entry == "*" {
                 return true;
+            }
+            // Windows' and macOS's word for "a name with no dots": a host on
+            // the local network reached by its short name.
+            if entry.eq_ignore_ascii_case("<local>") {
+                return !host.contains('.') && !host.contains(':');
             }
             let entry = entry.to_ascii_lowercase();
             let entry = entry.strip_prefix("*.").unwrap_or(&entry);
@@ -494,6 +524,26 @@ mod tests {
             proxy_for_policy("https://hub.krate.tech/", &PolicyProxy::default()),
             None
         );
+    }
+
+    #[test]
+    fn the_systems_settings_route_each_scheme_and_honour_local() {
+        let system =
+            from_windows_settings(Some("http=a:80;https=b:443"), Some("<local>;*.acme.com"));
+        assert_eq!(
+            proxy_for_system("https://hub.krate.tech/", &system).as_deref(),
+            Some("http://b:443")
+        );
+        assert_eq!(
+            proxy_for_system("http://example.com/", &system).as_deref(),
+            Some("http://a:80")
+        );
+        assert_eq!(
+            proxy_for_system("https://intranet/", &system),
+            None,
+            "<local> is a dotless name"
+        );
+        assert_eq!(proxy_for_system("https://git.acme.com/", &system), None);
     }
 
     #[test]
