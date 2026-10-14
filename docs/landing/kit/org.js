@@ -146,6 +146,10 @@
     "release.set-current": { owner: "yes", admin: "yes" },
     "group.manage": { owner: "yes", admin: "yes" },
     "release.audience": { owner: "yes", admin: "yes" },
+    // Company connections (IC-952).
+    "connection.manage": { owner: "yes", admin: "yes" },
+    "connection.view": { owner: "yes", admin: "yes", developer: "yes", reviewer: "yes" },
+    "connection.use": { owner: "yes", admin: "yes", developer: "yes", reviewer: "yes", recipient: "yes" },
   };
 
   function can(role, action) {
@@ -318,6 +322,21 @@
         return { title: "There is already a group by that name", body: "Pick another name, or add people to the one there is.", action: null };
       case "group-invalid":
         return { title: "That group name will not work", body: "Use lower-case letters, digits and dashes, starting with a letter. For example finance or field-ops.", action: null };
+      // Company connections (IC-952).
+      case "no-such-connection":
+        return { title: "That connection is not there any more", body: "Someone may have removed it. The list is fresh now.", action: null };
+      case "connection-taken":
+        return { title: "There is already a connection by that name", body: "Nothing changed. Pick another name, or replace the credential of the one there is.", action: null };
+      case "connection-invalid":
+        return { title: "That connection is not complete", body: (ctx.message ? String(ctx.message).replace(/\.?$/, ". ") : "") + "Nothing changed.", action: null };
+      case "credential-required":
+        return { title: "A new address needs its credential again", body: "The stored credential is never sent anywhere new. Remove this connection and add it again with the new address.", action: null };
+      case "connections-off":
+        return { title: "Connections are not switched on on this hub yet", body: "Nothing changed.", action: null };
+      case "connection-not-in-audience":
+      case "app-not-allowed":
+      case "connection-not-requested":
+        return { title: "This app cannot use that connection", body: (ctx.message ? String(ctx.message).split(" -- ")[0] + ". " : "") + "Ask an admin of " + org + ".", action: null };
       default:
         return { title: "That did not work", body: (ctx.message ? String(ctx.message) + ". " : "") + "Nothing changed. Try again in a moment.", action: null };
     }
@@ -375,6 +394,14 @@
     "no-such-group": "no such group",
     "group-taken": "the group exists already",
     "group-invalid": "not a group name",
+    // Company connections (IC-952).
+    "no-such-connection": "no such connection",
+    "connection-taken": "the connection exists already",
+    "connection-invalid": "the connection was not complete",
+    "credential-required": "a new address needs the credential again",
+    "connection-not-in-audience": "the connection is not for their groups",
+    "app-not-allowed": "the connection does not allow that app",
+    "connection-not-requested": "that version did not ask for it",
   };
 
   /// One audit event as a sentence. `names` maps a digest to "Ledger 1.2".
@@ -432,6 +459,10 @@
         "group.remove": "take someone out of a group",
         "group.list": "see the groups",
         "lease.issue": "get offline access to " + app(),
+        // Company connections (IC-952).
+        "connection.manage": "change the " + (t.kind === "connection" ? t.value : "") + " connection",
+        "connection.view": "see the connections",
+        "connection.use": "use the " + (t.kind === "connection" ? t.value : "") + " connection",
       }[ev.action] || "do " + ev.action;
       // Shown beside a Refused badge, so the sentence says why, not "refused" again.
       return a + " tried to " + tried + ": " + (SHORT_WHY[ev.reason] || ev.reason || "not allowed") + ".";
@@ -512,6 +543,17 @@
         var gs = t.value.indexOf("/"), g = gs > 0 ? t.value.slice(0, gs) : t.value, whom = who(gs > 0 ? t.value.slice(gs + 1) : "").label;
         if (ev.action === "group.add") return a + " added " + whom + " to " + g + ".";
         return ev.reason === "member removed" ? whom + " left " + g + ", on being removed from the organisation." : a + " took " + whom + " out of " + g + ".";
+      }
+      // Company connections (IC-952). The credential is never in an event.
+      case "connection.create": return a + " added the " + t.value + " connection, to " + (ev.reason || "its address") + ".";
+      case "connection.change": return a + " changed the " + t.value + " connection: " + (ev.reason || "its settings") + ".";
+      case "connection.credential": return a + " replaced the credential of the " + t.value + " connection.";
+      case "connection.remove": return a + " removed the " + t.value + " connection and its credential.";
+      case "connection.use": {
+        var cu = String(ev.reason || "").match(/^(\d+) uses? on (\d{4}-\d{2}-\d{2})$/);
+        return cu
+          ? "Apps used the " + t.value + " connection " + cu[1] + (cu[1] === "1" ? " time" : " times") + " on " + day(Date.parse(cu[2] + "T12:00:00Z") / 1000) + "."
+          : "Apps used the " + t.value + " connection.";
       }
       default: return a + " " + ev.action + (ev.target ? " " + ev.target : "") + ".";
     }

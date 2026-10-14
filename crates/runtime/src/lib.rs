@@ -28,6 +28,7 @@ use wasmtime::{
     Engine, ResourceLimiter, Store, Trap,
 };
 
+pub mod connections;
 pub mod phase3_ui;
 pub mod uapi;
 pub mod uapi_dispatch;
@@ -201,6 +202,10 @@ pub struct Config {
     /// The shared groups this run may reach, as the caller decided them
     /// (IC-738). A group missing here is refused as `denied`.
     pub app_groups: std::collections::BTreeMap<String, store_host::GroupGrant>,
+    /// The company connections this run may use, as the CLI resolved them
+    /// with the organisation's hub (IC-952). Empty for every app that is not
+    /// an organisation's private app asking for one.
+    pub connections: connections::Connections,
     /// The name the person consented to -- the manifest's `app.name` -- for
     /// anything the OS shows outside the app's own window (IC-271). A
     /// notification carries it as the sender. It is optional because the
@@ -246,6 +251,7 @@ impl Default for Config {
             bundle_assets_root: None,
             app_store_path: None,
             app_groups: std::collections::BTreeMap::new(),
+            connections: connections::Connections::default(),
             app_database_path: None,
             app_secrets: None,
             app_shared: None,
@@ -1811,7 +1817,8 @@ impl HostState {
             _uapi: UapiGuard::new(config.session_policy.clone()),
             #[cfg(feature = "phase2-bindings")]
             phase2: phase2_host::Phase2Host::new_with_http_timeout(
-                UapiGuard::new(config.session_policy.clone()),
+                UapiGuard::new(config.session_policy.clone())
+                    .with_connections(config.connections.clone()),
                 Box::new(
                     LocalPhase2Adapter::new(
                         output,

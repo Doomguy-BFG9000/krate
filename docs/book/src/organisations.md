@@ -183,6 +183,49 @@ The limit to know: this is enforced by Krate on the device. Someone who
 strips the mark and the signature has an unsigned copy of the code, not the
 organisation's app, and Krate cannot stop a file from being copied.
 
+## Company connections
+
+A connection lets the organisation's apps call one of its APIs without any
+app holding the API's credential. An owner or admin sets it up once, in
+Settings on the dashboard or with the CLI:
+
+```sh
+krate org connection create acme finance-api \
+  --base https://api.acme.com/finance \
+  --header Authorization --value-file finance-token.txt \
+  --allow GET --paths /invoices,/rates \
+  --groups finance --apps com.acme.ledger
+```
+
+The credential is read from the file, or typed at a prompt that does not
+show it, and is never shown again: the dashboard and `krate org connection
+list acme` say only which header it is, who set it and when, and how often
+it was used. `krate org connection replace` gives it a new credential, which
+every app gets the next time it opens; `krate org connection remove` deletes
+it. Moving a connection to another address needs its credential again.
+
+An app asks for it by name in its manifest:
+
+```toml
+[[capabilities]]
+cap = "net.connection:finance-api"
+rationale = "Read invoices"
+```
+
+and makes ordinary requests to `https://api.acme.com/finance/...`, with no
+credential of its own. When the organisation's signed app opens, Krate asks
+the hub for the credential for this person and this release, and adds it to
+the app's requests to that address, after they leave the app. It is given
+only to a member in the connection's groups, for an app it allows, in a
+version that asked for it, and not for a withdrawn release. A request with a
+method or path the connection does not allow, or offline, is refused in
+words and never sent. A redirect is never followed with it, and no request
+anywhere else carries it. Each use is counted per day in the audit.
+
+The request goes from the person's computer, so an API on the company
+network works. The limit to know: a server that echoes request headers back
+would show the credential to the app.
+
 ## Withdrawing a release key
 
 If a release key is lost or someone leaves, the owner withdraws it with

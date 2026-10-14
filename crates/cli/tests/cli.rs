@@ -13543,6 +13543,35 @@ struct FakeOrg {
     groups: std::collections::BTreeMap<String, std::collections::BTreeSet<String>>,
     /// The release each app id opens, once one was chosen or approved.
     current: std::collections::BTreeMap<String, String>,
+    /// Company connections by name (IC-952).
+    connections: std::collections::BTreeMap<String, FakeConnection>,
+}
+
+/// One company connection in the fake hub (cloud/worker/src/org-connections.js).
+struct FakeConnection {
+    base: String,
+    methods: Vec<String>,
+    paths: Vec<String>,
+    /// The groups who may use it; `None` is everyone.
+    audience: Option<Vec<String>>,
+    /// The app ids that may use it; `None` is any.
+    apps: Option<Vec<String>>,
+    header_name: String,
+    value: String,
+    set_by: String,
+    set_at: u64,
+}
+
+/// The company connections a bundle's manifest asks for.
+fn fake_connections_asked(bytes: &[u8]) -> Vec<String> {
+    krate_bundle::open_bytes(bytes)
+        .ok()
+        .and_then(|opened| opened.manifest().declared_capabilities().ok())
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|cap| cap.module() == "net" && cap.action() == "connection")
+        .filter_map(|cap| cap.resource().map(str::to_string))
+        .collect()
 }
 
 struct FakeInvite {
@@ -13606,6 +13635,10 @@ struct FakeOrgHub {
     lease_class: String,
     lease_shift: i64,
     leases_issued: usize,
+    /// How many times a connection's credential was handed out, and whether
+    /// the credential route answers as if the hub were down (IC-952).
+    connection_fetches: usize,
+    connections_down: bool,
 }
 
 type FakeAnswer = (u16, Vec<(String, String)>, Vec<u8>);
@@ -13619,8 +13652,9 @@ fn fake_status(reason: &str) -> u16 {
         "not-signed-for-this-org" | "not-marked-for-this-org" | "invalid-bundle" => 422,
         "invite-expired" | "invite-used" | "invite-revoked" | "release-withdrawn" => 410,
         "slug-invalid" | "bad-request" | "reason-required" | "group-invalid" => 400,
-        "no-such-group" => 404,
-        "group-taken" => 409,
+        "no-such-group" | "no-such-connection" => 404,
+        "group-taken" | "connection-taken" => 409,
+        "connection-invalid" => 400,
         _ => 403,
     }
 }
@@ -14120,6 +14154,11 @@ impl FakeOrgHub {
             ("POST", Some("groups"), 3) => "group.manage",
             ("PUT", Some("groups"), 6) => "group.add",
             ("DELETE", Some("groups"), 6) => "group.remove",
+            ("GET", Some("connections"), 3) => "connection.view",
+            ("POST", Some("connections"), 3) => "connection.manage",
+            ("PUT", Some("connections"), 5) if parts[4] == "credential" => "connection.manage",
+            ("DELETE", Some("connections"), 4) => "connection.manage",
+            ("GET", Some("connections"), 6) if parts[4] == "credential" => "connection.use",
             _ => return (404, vec![], b"not found".to_vec()),
         };
         let target = match action {
@@ -14129,6 +14168,14 @@ impl FakeOrgHub {
             "release.set-current" | "release.current-of" => format!("app:{}", parts[3]),
             "group.manage" => format!("group:{}", json["name"].as_str().unwrap_or("")),
             "group.add" | "group.remove" => format!("group:{}/{}", parts[3], parts[5]),
+            "connection.manage" | "connection.use" => format!(
+                "connection:{}",
+                parts
+                    .get(3)
+                    .copied()
+                    .or(json["name"].as_str())
+                    .unwrap_or("")
+            ),
             "invite.create" => format!(
                 "invite:{}/{}",
                 json["github"]
@@ -14785,6 +14832,197 @@ impl FakeOrgHub {
                     org.record(now, &who, "group.remove", &target, "allowed", None);
                 }
                 (204, vec![], vec![])
+            }
+            "connection.view" => {
+                if !is(&["owner", "admin", "developer", "reviewer"]) {
+                    return deny(org, "role-cannot");
+                }
+                let all: Vec<serde_json::Value> = org
+                    .connections
+                    .iter()
+                    .map(|(name, c)| {
+                        serde_json::json!({
+                            "name": name, "base": c.base,
+                            "allow": { "methods": c.methods, "paths": c.paths },
+                            "audience": c.audience, "apps": c.apps,
+                            "credential": { "kind": "header", "header": c.header_name, "set_by": c.set_by, "set_at": c.set_at },
+                            "uses": { "today": 0, "last_30_days": 0 },
+                        })
+                    })
+                    .collect();
+                fake_json(200, serde_json::json!({ "connections": all }))
+            }
+            "connection.manage" => {
+                if !is(&["owner", "admin"]) {
+                    return deny(org, "role-cannot");
+                }
+                let credential = || -> Option<(String, String)> {
+                    let h = &json["header"];
+                    Some((
+                        h["name"].as_str()?.to_string(),
+                        h["value"].as_str()?.to_string(),
+                    ))
+                };
+                match method {
+                    "POST" => {
+                        let name = json["name"].as_str().unwrap_or("").to_string();
+                        if org.connections.contains_key(&name) {
+                            return deny(org, "connection-taken");
+                        }
+                        let Some((header_name, value)) = credential() else {
+                            return deny(org, "connection-invalid");
+                        };
+                        let strings = |v: &serde_json::Value| -> Vec<String> {
+                            v.as_array()
+                                .map(|a| {
+                                    a.iter()
+                                        .filter_map(|x| x.as_str().map(str::to_string))
+                                        .collect()
+                                })
+                                .unwrap_or_default()
+                        };
+                        let audience = json["audience"]["groups"]
+                            .as_array()
+                            .map(|_| strings(&json["audience"]["groups"]));
+                        let apps = json["apps"]["ids"]
+                            .as_array()
+                            .map(|_| strings(&json["apps"]["ids"]));
+                        let connection = FakeConnection {
+                            base: json["base"]
+                                .as_str()
+                                .unwrap_or("")
+                                .trim_end_matches('/')
+                                .to_string(),
+                            methods: strings(&json["allow"]["methods"])
+                                .iter()
+                                .map(|m| m.to_ascii_uppercase())
+                                .collect(),
+                            paths: strings(&json["allow"]["paths"]),
+                            audience,
+                            apps,
+                            header_name,
+                            value,
+                            set_by: who.clone(),
+                            set_at: now,
+                        };
+                        let view = serde_json::json!({
+                            "name": name, "base": connection.base,
+                            "allow": { "methods": connection.methods, "paths": connection.paths },
+                            "audience": connection.audience, "apps": connection.apps,
+                            "credential": { "kind": "header", "header": connection.header_name, "set_by": who, "set_at": now },
+                            "uses": { "today": 0, "last_30_days": 0 },
+                        });
+                        let base = connection.base.clone();
+                        org.connections.insert(name.clone(), connection);
+                        org.record(
+                            now,
+                            &who,
+                            "connection.create",
+                            &target,
+                            "allowed",
+                            Some(&base),
+                        );
+                        fake_json(201, serde_json::json!({ "connection": view }))
+                    }
+                    "PUT" => {
+                        let name = parts[3].to_string();
+                        let Some((header_name, value)) = credential() else {
+                            return deny(org, "connection-invalid");
+                        };
+                        let Some(c) = org.connections.get_mut(&name) else {
+                            return deny(org, "no-such-connection");
+                        };
+                        c.header_name = header_name;
+                        c.value = value;
+                        c.set_by = who.clone();
+                        c.set_at = now;
+                        org.record(now, &who, "connection.credential", &target, "allowed", None);
+                        fake_json(200, serde_json::json!({ "connection": { "name": name } }))
+                    }
+                    _ => {
+                        if org.connections.remove(parts[3]).is_none() {
+                            return deny(org, "no-such-connection");
+                        }
+                        org.record(now, &who, "connection.remove", &target, "allowed", None);
+                        (204, vec![], vec![])
+                    }
+                }
+            }
+            "connection.use" => {
+                if self.connections_down {
+                    return fake_refuse(503, "busy");
+                }
+                let (name, digest) = (parts[3].to_string(), parts[5].to_string());
+                let Some(c) = org.candidates.get(&digest) else {
+                    return deny(org, "digest-mismatch");
+                };
+                if c.state == "withdrawn" {
+                    return deny(org, "release-withdrawn");
+                }
+                if c.state != "released" {
+                    return deny(org, "digest-mismatch");
+                }
+                if !org.in_audience(&who, &role, &c.audience) {
+                    return deny(org, "not-in-audience");
+                }
+                let (app_id, asked, app_name) = (
+                    c.app_id.clone(),
+                    fake_connections_asked(&c.bytes),
+                    c.name.clone(),
+                );
+                let Some(conn) = org.connections.get(&name) else {
+                    return deny_with(
+                        org,
+                        "no-such-connection",
+                        &format!(
+                            "{} has no connection called {name} any more -- ask an admin of {}",
+                            org.name, org.name
+                        ),
+                    );
+                };
+                let base = conn.base.clone();
+                let refusal = if let Some(groups) = conn.audience.clone().filter(|g| {
+                    !g.iter()
+                        .any(|g| org.groups.get(g).is_some_and(|m| m.contains(&who)))
+                }) {
+                    Some((
+                        "connection-not-in-audience",
+                        format!("the {name} connection is only for the {} group in {} -- ask an admin of {} to add you", groups.join(", "), org.name, org.name),
+                    ))
+                } else if conn
+                    .apps
+                    .as_ref()
+                    .is_some_and(|apps| !apps.contains(&app_id))
+                {
+                    Some((
+                        "app-not-allowed",
+                        format!("{} has not let {app_name} use the {name} connection -- an owner or admin of {} can add {app_id} to it", org.name, org.name),
+                    ))
+                } else if !asked.contains(&name) {
+                    Some((
+                        "connection-not-requested",
+                        format!("this version of {app_name} did not ask for the {name} connection (net.connection:{name} in its manifest), so it does not get it"),
+                    ))
+                } else {
+                    None
+                };
+                if let Some((reason, message)) = refusal {
+                    org.record(now, &who, action, &target, "denied", Some(reason));
+                    return fake_json(
+                        403,
+                        serde_json::json!({ "error": reason, "message": message, "base": base }),
+                    );
+                }
+                let conn = &org.connections[&name];
+                self.connection_fetches += 1;
+                fake_json(
+                    200,
+                    serde_json::json!({
+                        "name": name, "base": conn.base,
+                        "allow": { "methods": conn.methods, "paths": conn.paths },
+                        "header": { "name": conn.header_name, "value": conn.value },
+                    }),
+                )
             }
             "audit.read" => {
                 if !is(&["owner", "admin"]) {
@@ -18705,4 +18943,465 @@ fn an_update_that_adds_a_capability_is_approved_only_once_it_is_named() {
         true,
     );
     assert!(approved.contains("approved."), "{approved}");
+}
+
+// ---------------------------------------------------------------------------
+// Company connections (IC-952).
+// ---------------------------------------------------------------------------
+
+/// One request a local API received: method, path, and every header.
+type ApiRequest = (String, String, Vec<(String, String)>);
+
+/// A local stand-in for a company's API that records every request it
+/// receives, headers included, and never echoes them back. `/moved` under
+/// any path answers a redirect to `redirect_to`.
+struct RecordingApi {
+    addr: SocketAddr,
+    seen: std::sync::Arc<std::sync::Mutex<Vec<ApiRequest>>>,
+    _stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl Drop for RecordingApi {
+    fn drop(&mut self) {
+        self._stop.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+impl RecordingApi {
+    fn start(redirect_to: Option<String>) -> Option<RecordingApi> {
+        let seen: std::sync::Arc<std::sync::Mutex<Vec<ApiRequest>>> = Default::default();
+        let log = seen.clone();
+        let (addr, stop) = spawn_fake_hub(std::sync::Arc::new(move |method, path, headers, _| {
+            log.lock()
+                .unwrap()
+                .push((method.to_string(), path.to_string(), headers.to_vec()));
+            match &redirect_to {
+                Some(to) if path.ends_with("/moved") => (
+                    302,
+                    vec![("Location".into(), to.clone())],
+                    b"moved".to_vec(),
+                ),
+                _ => (200, vec![], br#"{"invoices":3}"#.to_vec()),
+            }
+        }))?;
+        Some(RecordingApi {
+            addr,
+            seen,
+            _stop: stop,
+        })
+    }
+
+    fn count(&self) -> usize {
+        self.seen.lock().unwrap().len()
+    }
+
+    /// The `authorization` header of every request so far.
+    fn authorizations(&self) -> Vec<Option<String>> {
+        self.seen
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(_, _, headers)| {
+                headers
+                    .iter()
+                    .find(|(k, _)| k == "authorization")
+                    .map(|(_, v)| v.clone())
+            })
+            .collect()
+    }
+}
+
+fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {
+    haystack.windows(needle.len()).any(|w| w == needle)
+}
+
+/// Every file under `dir`, read whole.
+fn files_under(dir: &std::path::Path) -> Vec<(PathBuf, Vec<u8>)> {
+    let mut out = Vec::new();
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&d) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if let Ok(bytes) = std::fs::read(&path) {
+                out.push((path, bytes));
+            }
+        }
+    }
+    out
+}
+
+impl OrgWorld {
+    /// The connection probe (apps/krate-connection-probe) packed under
+    /// `id` at `version`, asking for `net.connection:finance-api` or not.
+    fn probe_bundle(&self, file: &str, id: &str, version: &str, asks: bool) -> PathBuf {
+        let dir = self.dir.path().join(format!("src-{file}"));
+        std::fs::create_dir_all(&dir).expect("dir");
+        let wasm = dir.join("code.wasm");
+        std::fs::write(&wasm, include_bytes!("fixtures/connection-probe.wasm")).expect("probe");
+        let mut manifest = format!(
+            "[app]\nid = \"{id}\"\nname = \"Ledger\"\nversion = \"{version}\"\n\
+             entry = \"code.wasm\"\nworld = \"krate:app/cli@0.1.0\"\n\n\
+             [[capabilities]]\ncap = \"io.stdout\"\nrationale = \"print\"\nrequired = true\n\n\
+             [[capabilities]]\ncap = \"io.args\"\nrationale = \"args\"\nrequired = true\n"
+        );
+        if asks {
+            manifest.push_str(
+                "\n[[capabilities]]\ncap = \"net.connection:finance-api\"\n\
+                 rationale = \"read invoices\"\nrequired = false\n",
+            );
+        }
+        let manifest_path = dir.join("manifest.toml");
+        std::fs::write(&manifest_path, manifest).expect("manifest");
+        let bundle = self.dir.path().join(file);
+        let packed = krate()
+            .arg("pack")
+            .arg(&wasm)
+            .arg("--manifest")
+            .arg(&manifest_path)
+            .arg("-o")
+            .arg(&bundle)
+            .output()
+            .expect("pack");
+        assert!(
+            packed.status.success(),
+            "{}",
+            String::from_utf8_lossy(&packed.stderr)
+        );
+        bundle
+    }
+
+    /// Carol signs and publishes `bundle`, Bob approves it: its digest and link.
+    fn release(&self, root: &std::path::Path, bundle: &std::path::Path) -> (String, String) {
+        self.sign_delegated(root, "carol", bundle);
+        let digest = OrgWorld::digest_in(&self.says(
+            "carol",
+            &["publish", bundle.to_str().unwrap(), "--org", "acme"],
+            true,
+        ));
+        self.says("bob", &["org", "approve", "acme", &digest], true);
+        (digest.clone(), format!("{}/a/{digest}", self.url()))
+    }
+
+    /// `who` runs the probe from `link`, asking it for `method url`.
+    fn probe(&self, who: &str, link: &str, args: &[&str]) -> std::process::Output {
+        let mut all = vec![
+            "run",
+            link,
+            "--insecure-http",
+            "--auto-grant",
+            "--headless",
+            "--",
+        ];
+        all.extend_from_slice(args);
+        self.krate_as(who, &all)
+    }
+}
+
+/// The first line the probe printed: its outcome.
+fn probe_said(output: &std::process::Output) -> String {
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .next()
+        .unwrap_or("")
+        .to_string()
+}
+
+/// IC-952, the contract's proof: an organisation's app reaches the
+/// company's API with a credential it never holds. The credential arrives
+/// at the API and is never in the app's memory, its output, or anything
+/// written on the person's machine; a wrong method, a wrong path, an app
+/// that did not ask, a person outside the connection's audience, an app the
+/// connection does not allow, a removed connection and a removed member are
+/// each refused, and nothing reaches the API; a redirect off the base never
+/// carries it; a replaced credential is the one sent at the next run.
+///
+/// Against the fake hub by default; set KRATE_ORG_E2E_HUB to a local
+/// `wrangler dev` hub (with ORG_SECRET_KEY) to run it against the real one.
+#[test]
+fn a_company_connection_reaches_the_api_and_the_app_never_holds_the_credential() {
+    let Some(world) = OrgWorld::new(&["alice", "bob", "carol", "dan"]) else {
+        eprintln!("skipping the company connection proof: no local port");
+        return;
+    };
+    let Some(elsewhere) = RecordingApi::start(None) else {
+        return;
+    };
+    let steal = format!("http://{}/steal", elsewhere.addr);
+    let Some(api) = RecordingApi::start(Some(steal.clone())) else {
+        return;
+    };
+    let base = format!("http://{}/finance", api.addr);
+    let secret = "Bearer sk-live-acme-0f1e2d3c4b5a69788796a5b4c3d2e1f0";
+    let rotated = "Bearer sk-live-acme-rotated-11223344556677889900aabb";
+    let secret_file = world.dir.path().join("secret.txt");
+    std::fs::write(&secret_file, format!("{secret}\n")).expect("secret");
+
+    let root = world.acme();
+    world.says(
+        "alice",
+        &["org", "group", "create", "acme", "finance"],
+        true,
+    );
+    world.says(
+        "alice",
+        &["org", "group", "add", "acme", "finance", "dan@acme.example"],
+        true,
+    );
+    // Only an owner or admin sets one up, and the credential never comes
+    // back in what is printed.
+    let create = [
+        "org",
+        "connection",
+        "create",
+        "acme",
+        "finance-api",
+        "--base",
+        &base,
+        "--header",
+        "Authorization",
+        "--value-file",
+        secret_file.to_str().unwrap(),
+        "--allow",
+        "GET",
+        "--paths",
+        "/invoices",
+        "--groups",
+        "finance",
+        "--apps",
+        "com.acme.ledger",
+    ];
+    let refused = world.says("carol", &create, false);
+    assert!(refused.contains("your role in acme cannot"), "{refused}");
+    let made = world.says("alice", &create, true);
+    assert!(made.contains("set up the finance-api connection"), "{made}");
+    assert!(made.contains("net.connection:finance-api"), "{made}");
+    assert!(
+        !made.contains("sk-live"),
+        "the credential is never printed: {made}"
+    );
+    let listed = world.says("carol", &["org", "connection", "list", "acme"], true);
+    assert!(
+        listed.contains(&base) && listed.contains("Authorization"),
+        "{listed}"
+    );
+    assert!(!listed.contains("sk-live"), "{listed}");
+
+    let ledger = world.probe_bundle("ledger.krate", "com.acme.ledger", "1.0.0", true);
+    let (digest, link) = world.release(&root, &ledger);
+    let invoices = format!("{base}/invoices");
+
+    // 1. Dan, in finance, opens the app: the request arrives with the
+    // credential, and the app's own Authorization header does not survive.
+    let ran = world.probe(
+        "dan",
+        &link,
+        &[
+            "GET",
+            &invoices,
+            "Authorization",
+            "Bearer app-guess",
+            "dump",
+        ],
+    );
+    assert!(ran.status.success(), "{}", stderr_of(&ran));
+    assert_eq!(probe_said(&ran), r#"status=200 body={"invoices":3}"#);
+    assert_eq!(api.authorizations(), vec![Some(secret.to_string())]);
+    // Never in the app's memory (the probe dumped all of it to stdout), its
+    // output, or anything on Dan's machine.
+    assert!(
+        String::from_utf8_lossy(&ran.stdout).contains("--- memory ---"),
+        "the probe dumped its memory"
+    );
+    assert!(ran.stdout.len() > 65_536, "a whole memory, not a stub");
+    assert!(
+        !contains_bytes(&ran.stdout, b"sk-live"),
+        "not in the app's memory or stdout"
+    );
+    assert!(!contains_bytes(&ran.stderr, b"sk-live"), "not in stderr");
+    for (path, bytes) in files_under(world.homes["dan"].path()) {
+        assert!(
+            !contains_bytes(&bytes, b"sk-live"),
+            "the credential was written to {}",
+            path.display()
+        );
+    }
+    let audit = world.says("alice", &["org", "audit", "acme"], true);
+    assert!(!audit.contains("sk-live"), "{audit}");
+
+    // 2. A method or a path the connection does not allow: refused in words,
+    // and nothing reaches the API.
+    let post = world.probe("dan", &link, &["POST", &invoices]);
+    assert!(
+        probe_said(&post)
+            .starts_with("error=other the finance-api connection lets this app use GET only"),
+        "{}",
+        probe_said(&post)
+    );
+    let payroll = world.probe("dan", &link, &["GET", &format!("{base}/payroll")]);
+    assert!(
+        probe_said(&payroll).contains("does not reach /payroll"),
+        "{}",
+        probe_said(&payroll)
+    );
+    assert_eq!(api.count(), 1, "neither reached the API");
+
+    // 3. A redirect off the base is not followed, and the place it points
+    // never sees the credential, even when the app goes there itself.
+    let moved = world.probe("dan", &link, &["GET", &format!("{base}/invoices/moved")]);
+    assert!(
+        probe_said(&moved).starts_with("status=302"),
+        "{}",
+        probe_said(&moved)
+    );
+    let follow = world.probe("dan", &link, &["GET", &steal]);
+    assert_eq!(probe_said(&follow), "error=permission-denied");
+    assert_eq!(elsewhere.count(), 0, "the redirect's target saw nothing");
+
+    // 4. A version of the app that did not ask for the connection gets no
+    // credential; its request to the base is an ordinary one it may not make.
+    let plain = world.probe_bundle("ledger-plain.krate", "com.acme.ledger", "1.0.1", false);
+    let (_, plain_link) = world.release(&root, &plain);
+    let asked = api.count();
+    let without = world.probe("dan", &plain_link, &["GET", &invoices]);
+    assert_eq!(probe_said(&without), "error=permission-denied");
+    assert_eq!(api.count(), asked, "nothing reached the API");
+
+    // 5. Bob is a member, outside the connection's audience: the app opens,
+    // its request is refused with the reason.
+    let bobs = world.probe("bob", &link, &["GET", &invoices]);
+    assert!(bobs.status.success(), "{}", stderr_of(&bobs));
+    assert!(
+        probe_said(&bobs).contains("only for the finance group"),
+        "{}",
+        probe_said(&bobs)
+    );
+    assert!(
+        stderr_of(&bobs).contains("finance-api connection is not available"),
+        "{}",
+        stderr_of(&bobs)
+    );
+
+    // 6. An app the connection does not allow.
+    let other = world.probe_bundle("other.krate", "com.acme.other", "1.0.0", true);
+    let (_, other_link) = world.release(&root, &other);
+    let others = world.probe("dan", &other_link, &["GET", &invoices]);
+    assert!(
+        probe_said(&others).contains("has not let"),
+        "{}",
+        probe_said(&others)
+    );
+    assert_eq!(api.count(), asked, "no refused request reached the API");
+
+    // 7. The credential is replaced: the next run sends the new one.
+    let rotated_file = world.dir.path().join("rotated.txt");
+    std::fs::write(&rotated_file, rotated).expect("rotated");
+    let replaced = world.says(
+        "alice",
+        &[
+            "org",
+            "connection",
+            "replace",
+            "acme",
+            "finance-api",
+            "--header",
+            "Authorization",
+            "--value-file",
+            rotated_file.to_str().unwrap(),
+        ],
+        true,
+    );
+    assert!(replaced.contains("next time it opens"), "{replaced}");
+    let again = world.probe("dan", &link, &["GET", &invoices]);
+    assert_eq!(probe_said(&again), r#"status=200 body={"invoices":3}"#);
+    assert_eq!(
+        api.authorizations().last().cloned().flatten().as_deref(),
+        Some(rotated)
+    );
+
+    // 8. No answer from the hub for the credential: nothing is sent, and the
+    // words say why (the fake hub only; a real one cannot be made to fail).
+    if world.real_hub().is_none() {
+        world.hub.lock().unwrap().connections_down = true;
+        let before = api.count();
+        let down = world.probe("dan", &link, &["GET", &invoices]);
+        assert!(
+            probe_said(&down).contains("could not be reached"),
+            "{}",
+            probe_said(&down)
+        );
+        assert_eq!(api.count(), before);
+        world.hub.lock().unwrap().connections_down = false;
+    }
+
+    // 9. The connection is removed: its address is refused from the next run.
+    world.says(
+        "alice",
+        &["org", "connection", "remove", "acme", "finance-api"],
+        true,
+    );
+    let before = api.count();
+    let gone = world.probe("dan", &link, &["GET", &invoices]);
+    assert!(
+        probe_said(&gone).contains("any more"),
+        "{}",
+        probe_said(&gone)
+    );
+    assert_eq!(api.count(), before);
+
+    // 10. A removed member: the app does not open at all, and the hub would
+    // not hand the credential over either.
+    world.says(
+        "alice",
+        &[
+            "org",
+            "connection",
+            "create",
+            "acme",
+            "finance-api",
+            "--base",
+            &base,
+            "--header",
+            "Authorization",
+            "--value-file",
+            secret_file.to_str().unwrap(),
+        ],
+        true,
+    );
+    world.says(
+        "alice",
+        &["org", "remove", "acme", "dan@acme.example"],
+        true,
+    );
+    let removed = world.probe("dan", &link, &["GET", &invoices]);
+    assert!(!removed.status.success());
+    assert!(
+        stderr_of(&removed).contains("removed"),
+        "{}",
+        stderr_of(&removed)
+    );
+    let asked_directly = ureq::get(&format!(
+        "{}/orgs/acme/connections/finance-api/credential/{digest}",
+        world.url()
+    ))
+    .set("Authorization", "Bearer tok-dan@acme.example")
+    .call();
+    match asked_directly {
+        Err(ureq::Error::Status(403, response)) => {
+            let body = response.into_string().unwrap_or_default();
+            assert!(body.contains("\"removed\""), "{body}");
+            assert!(!body.contains("sk-live"), "{body}");
+        }
+        other => panic!("a removed member got {other:?}"),
+    }
+    assert_eq!(api.count(), before, "nothing reached the API");
+    // The credential was handed out for the two runs that used it, and to
+    // nobody else (the fake counts; a real hub keeps its own daily count).
+    if world.real_hub().is_none() {
+        assert!(world.hub.lock().unwrap().connection_fetches >= 2);
+    }
 }

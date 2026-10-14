@@ -531,6 +531,7 @@ to exactly what the app needs, e.g. `fs.read:notes/**`.
 | `fs.remove:<path-glob>` | no | delete under a folder |
 | `fs.mkdir:<path-glob>` | no | make folders |
 | `net.connect:<host>:<port>` | no | reach a host and port |
+| `net.connection:<connection-name>` | no | an organisation's company connection by name: its API, with a credential Krate adds and the app never sees (section 2c, rule 8) |
 | `time.clock` | yes | wall-clock time |
 | `time.monotonic` | yes | a monotonic timer |
 | `time.sleep` | yes | sleep |

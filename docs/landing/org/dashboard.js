@@ -714,6 +714,9 @@
         })),
       ]));
 
+      // Company connections (connections.js, IC-952).
+      if (C) C.settings(pane);
+
       pane.appendChild(el("div", { class: "card" }, [
         el("h3", { text: "Organisation" }),
         el("dl", { class: "kv" }, [
@@ -756,6 +759,10 @@
       toast: toast, show: function (id) { show(id); }, roleOf: roleOf, P: P, flat: flatReleases,
     });
   }
+  // Company connections (connections.js); absent, Settings has no card.
+  var C = window.KrateOrgConnections
+    ? window.KrateOrgConnections({ S: S, slug: slug, words: words, confirmSheet: confirmSheet, toast: toast, roleOf: roleOf })
+    : null;
 
   if (!slug) { location.replace("/orgs/"); return; }
   if (!/^[a-z][a-z0-9-]{1,38}$/.test(slug)) { stop("no-such-org"); return; }

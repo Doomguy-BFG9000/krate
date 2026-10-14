@@ -1496,6 +1496,26 @@ fn inspect_content(path: &str, text: &str, analysis: &mut Analysis) {
         "Krate's `store.group:<name>` capability is a key-value store shared between apps its publisher names in a signed list -- the same idea as an app group, decided by the publisher and shown to the person. Sign the apps and the list with `krate group sign`.",
         Some("store.group"),
     );
+    // An API key the app carries for a service it calls (IC-952). When that
+    // service is the organisation's, the key belongs with the organisation:
+    // a company connection holds it and Krate adds it to the app's requests.
+    detect_pattern(
+        analysis,
+        "api-key",
+        &[
+            "x-api-key",
+            "api_key",
+            "apikey",
+            "\"authorization\"",
+            "'authorization'",
+        ],
+        path,
+        text,
+        Severity::Change,
+        "Carries a key for an API it calls",
+        "If the API is your organisation's, do not ship the key in the app: an owner or admin sets the API up once as a company connection (`krate org connection create`), the app declares `net.connection:<name>` and calls the address with no key of its own, and Krate adds the credential to its requests. Only the organisation's signed app, for the people and apps the organisation chose, gets it.",
+        Some("net.connection"),
+    );
     detect_pattern(
         analysis,
         "notifications",

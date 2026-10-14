@@ -299,6 +299,54 @@ fn stderr_is_watched() -> bool {
     }
 }
 
+/// Who is opening a private app that the gate let open, and through which
+/// hub: what a company connection (IC-952) asks that hub with.
+pub struct OrgSession {
+    pub hub: String,
+    pub slug: String,
+    /// `Bearer <token>`, only ever for a Krate hub.
+    pub authorization: Option<String>,
+}
+
+/// The session for `digest`, from what the gate kept when it last checked
+/// these bytes in. `None` when the gate never saw them as a private app.
+pub fn org_session(digest: &str) -> Option<OrgSession> {
+    let record = load_record(digest)?;
+    let hub = record["hub"].as_str()?.to_string();
+    let slug = record["org"]["slug"].as_str()?.to_string();
+    let authorization = github_auth::current()
+        .filter(|_| org::is_hub_link(&format!("{hub}/")))
+        .map(|identity| format!("Bearer {}", identity.token));
+    Some(OrgSession {
+        hub,
+        slug,
+        authorization,
+    })
+}
+
+/// A company connection's address and allow, as the hub last gave them for
+/// these bytes: no credential, ever. Kept so that offline, or after the hub
+/// refused, a request to the address is refused in words rather than sent.
+pub fn known_connection(digest: &str, name: &str) -> Option<Value> {
+    load_record(digest)?
+        .get("connections")?
+        .get(name)
+        .filter(|c| c["base"].is_string())
+        .cloned()
+}
+
+/// Keep a connection's address and allow (never its credential) beside
+/// these bytes' lease record.
+pub fn remember_connection(digest: &str, name: &str, base: &str, allow: &Value) {
+    if let Some(mut record) = load_record(digest) {
+        if !record["connections"].is_object() {
+            record["connections"] = serde_json::json!({});
+        }
+        record["connections"][name] = serde_json::json!({ "base": base, "allow": allow });
+        save_record(digest, &record);
+    }
+}
+
 /// The offline terms, shown before the first private open (Addendum 3 G).
 fn notice(org_name: &str, class: &str, expires_at: Option<u64>) -> String {
     match expires_at {

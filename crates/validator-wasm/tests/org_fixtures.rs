@@ -296,3 +296,103 @@ fn a_revocation_list_nobody_signed_is_refused() {
         serde_json::from_str(&krate_validator_wasm::revocations_to_json(b"not json")).unwrap();
     assert_eq!(junk["ok"], false);
 }
+
+/// The bundles the hub's company-connection tests run against (IC-952):
+/// one app that asks for `net.connection:finance-api`, a later version of
+/// it that does not, and another app that asks too, each marked for acme
+/// and signed by a release key acme's own (fresh) root delegated.
+///
+///   KRATE_WRITE_ORG_FIXTURES=1 cargo test -p krate-validator-wasm \
+///     --test org_fixtures -- --ignored
+#[test]
+#[ignore = "writes cloud/worker/test/fixtures/org-connections; run by hand with KRATE_WRITE_ORG_FIXTURES=1"]
+fn write_connection_fixtures() {
+    if std::env::var("KRATE_WRITE_ORG_FIXTURES").as_deref() != Ok("1") {
+        eprintln!("set KRATE_WRITE_ORG_FIXTURES=1 to write the fixtures");
+        return;
+    }
+    let out = repo().join("cloud/worker/test/fixtures/org-connections");
+    fs::create_dir_all(&out).unwrap();
+    let component = repo().join("crates/bundle/tests/fixtures/minimal-run.wasm");
+    let root = key();
+    let release = key();
+    let work = std::env::temp_dir().join(format!("krate-conn-fixtures-{}", std::process::id()));
+    fs::create_dir_all(&work).unwrap();
+    let make = |name: &str, id: &str, version: &str, asks: bool| {
+        let mut manifest = format!(
+            "[app]\nid = \"{id}\"\nname = \"Ledger\"\nversion = \"{version}\"\n\
+             entry = \"code.wasm\"\nworld = \"krate:app/cli@0.1.0\"\n"
+        );
+        if asks {
+            manifest.push_str(
+                "\n[[capabilities]]\ncap = \"net.connection:finance-api\"\n\
+                 rationale = \"read invoices\"\nrequired = false\n",
+            );
+        }
+        let manifest_path = work.join(format!("{name}.toml"));
+        fs::write(&manifest_path, manifest).unwrap();
+        let path = out.join(name);
+        krate_bundle::pack(&manifest_path, &component, &path).unwrap();
+        krate_bundle::add_org_mark(&path, "acme").unwrap();
+        krate_bundle::sign_bundle_delegated(
+            &path,
+            &release,
+            "acme/ledger",
+            version,
+            SIGNED_AT,
+            slip(&root, &root, &release, SLIP_FROM, SLIP_UNTIL),
+        )
+        .unwrap();
+    };
+    make("ledger.krate", "com.acme.ledger", "1.0.0", true);
+    make("ledger-plain.krate", "com.acme.ledger", "1.0.1", false);
+    make("other.krate", "com.acme.other", "1.0.0", true);
+    let _ = fs::remove_dir_all(&work);
+    fs::write(
+        out.join("keys.json"),
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "root": hex(&root.public_key()),
+            "release": hex(&release.public_key()),
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+}
+
+/// The committed connection fixtures say what their names say.
+#[test]
+fn the_connection_fixtures_say_what_their_names_say() {
+    let dir = repo().join("cloud/worker/test/fixtures/org-connections");
+    let keys: serde_json::Value = serde_json::from_slice(
+        &fs::read(dir.join("keys.json"))
+            .expect("the committed fixtures; write them with KRATE_WRITE_ORG_FIXTURES=1"),
+    )
+    .unwrap();
+    for (name, id, asks) in [
+        ("ledger.krate", "com.acme.ledger", true),
+        ("ledger-plain.krate", "com.acme.ledger", false),
+        ("other.krate", "com.acme.other", true),
+    ] {
+        let answer: serde_json::Value = serde_json::from_str(&krate_validator_wasm::judge_to_json(
+            &fs::read(dir.join(name)).unwrap(),
+        ))
+        .unwrap();
+        assert_eq!(answer["ok"], true, "{name}: {answer}");
+        let j = &answer["judgement"];
+        assert_eq!(j["org_mark"], "acme", "{name}");
+        assert_eq!(j["manifest"]["app"]["id"], id, "{name}");
+        assert_eq!(j["signature"]["state"], "valid", "{name}");
+        assert_eq!(j["signature"]["chain"]["root"], keys["root"], "{name}");
+        let caps: Vec<String> = j["manifest"]["capabilities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c["cap"].as_str().unwrap_or("").to_string())
+            .collect();
+        assert_eq!(
+            caps.contains(&"net.connection:finance-api".to_string()),
+            asks,
+            "{name}: {caps:?}"
+        );
+    }
+}
