@@ -18,6 +18,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import worker from "../src/index.js";
 import { r2Mock } from "./r2-mock.mjs";
+import "./github-stub.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const BOUNCE = new Uint8Array(readFileSync(join(here, "..", "..", "..", "evidence", "ported", "bounce.krate")));
@@ -43,7 +44,7 @@ function env() {
   };
 }
 
-const as = (who) => ({ authorization: `Bearer krs_${who}`, "content-type": "application/json" });
+const as = (who) => ({ authorization: who === "root" ? "Bearer gho_root" : `Bearer krs_${who}`, "content-type": "application/json" });
 const req = (path, init = {}) => new Request(`https://hub.example${path}`, init);
 const post = (path, who, body) => req(path, { method: "POST", headers: as(who), body: JSON.stringify(body) });
 

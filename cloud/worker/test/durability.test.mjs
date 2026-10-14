@@ -14,6 +14,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import worker, { canonicalRecords } from "../src/index.js";
 import { r2Mock, sha256Hex } from "./r2-mock.mjs";
+import "./github-stub.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const V1 = new Uint8Array(readFileSync(join(here, "..", "..", "..", "evidence", "ported", "bounce.krate")));
@@ -38,7 +39,7 @@ function env() {
   };
 }
 const req = (path, init = {}) => new Request(`https://hub.example${path}`, init);
-const admin = (path, init = {}) => req(path, { ...init, headers: { authorization: "Bearer krs_alice", ...(init.headers || {}) } });
+const admin = (path, init = {}) => req(path, { ...init, headers: { authorization: "Bearer gho_alice", ...(init.headers || {}) } });
 async function publish(e, bytes, name) {
   const res = await worker.fetch(req("/publish", { method: "POST", headers: { authorization: "Bearer krs_alice", "x-krate-name": name }, body: bytes }), e);
   assert.strictEqual(res.status, 200, await res.clone().text());

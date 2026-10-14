@@ -14,6 +14,7 @@
 import assert from "node:assert";
 import worker from "../src/index.js";
 import { r2Mock } from "./r2-mock.mjs";
+import "./github-stub.mjs";
 
 function env() {
   const kv = new Map([
@@ -58,10 +59,10 @@ const e = env();
 
 /* ---- the desk lists the person's sessions, by account id or login ------- */
 {
-  const byId = await (await worker.fetch(as("krs_admin", "/admin/api/person/sessions?id=u7"), e)).json();
+  const byId = await (await worker.fetch(as("gho_boss", "/admin/api/person/sessions?id=u7"), e)).json();
   assert.deepStrictEqual(byId.sessions.map((s) => s.id), ["s-weather", "s-older"], "newest first");
   assert.match(byId.sessions[0].messages[1].body, /net\.connect/, "the whole conversation comes back");
-  const byLogin = await (await worker.fetch(as("krs_admin", "/admin/api/person/sessions?login=SAM"), e)).json();
+  const byLogin = await (await worker.fetch(as("gho_boss", "/admin/api/person/sessions?login=SAM"), e)).json();
   assert.strictEqual(byLogin.sessions.length, 2, "a report's login finds the same account");
   const notAdmin = await worker.fetch(as("krs_sam", "/admin/api/person/sessions?id=u7"), e);
   assert.strictEqual(notAdmin.status, 404, "only admins can read anyone's sessions");
@@ -73,16 +74,16 @@ const e = env();
   const sent = await worker.fetch(req("/report", { method: "POST", body: zip, headers: { authorization: "Bearer krs_sam", "content-length": String(zip.length), "x-krate-session": "s-weather", "x-krate-version": "0.5.4", "x-krate-os": "web", "x-krate-note": "it stopped at the build" } }), e);
   assert.strictEqual(sent.status, 200, await sent.clone().text());
   const { id } = await sent.json();
-  const list = await (await worker.fetch(as("krs_admin", "/admin/api/reports"), e)).json();
+  const list = await (await worker.fetch(as("gho_boss", "/admin/api/reports"), e)).json();
   assert.strictEqual(list.reports.length, 1);
   assert.strictEqual(list.reports[0].session, "s-weather");
   assert.strictEqual(list.reports[0].from, "sam");
-  const mark = await worker.fetch(as("krs_admin", "/admin/api/report/state", { method: "POST", body: JSON.stringify({ id, state: "done" }) }), e);
+  const mark = await worker.fetch(as("gho_boss", "/admin/api/report/state", { method: "POST", body: JSON.stringify({ id, state: "done" }) }), e);
   assert.strictEqual(mark.status, 200);
   assert.strictEqual(JSON.parse(e._kv.get(`report:${id}`)).state, "done");
-  const zipBack = await worker.fetch(as("krs_admin", `/admin/report/${id}`), e);
+  const zipBack = await worker.fetch(as("gho_boss", `/admin/report/${id}`), e);
   assert.strictEqual(zipBack.status, 200, "the evidence downloads for an admin");
-  const overview = await (await worker.fetch(as("krs_admin", "/admin/api/overview"), e)).json();
+  const overview = await (await worker.fetch(as("gho_boss", "/admin/api/overview"), e)).json();
   assert.strictEqual(overview.reports, 1);
 }
 
@@ -97,7 +98,7 @@ const e = env();
   assert.doesNotMatch(page, /data-t="payments"/, "no Payments tab: billing is not live");
   assert.match(page, /How sign-ins went, 7 days/, "sign-ins are broken down by way in");
   assert.match(page, /attempts, not people/, "a sign-in is labelled as an attempt");
-  const people = await (await worker.fetch(as("krs_admin", "/admin/api/people?days=7"), e)).json();
+  const people = await (await worker.fetch(as("gho_boss", "/admin/api/people?days=7"), e)).json();
   assert.ok(Array.isArray(people.signin_ways_7d), "the people view carries the sign-in breakdown");
   assert.strictEqual(people.accounts_total, 2, "accounts are people: one record each");
 }

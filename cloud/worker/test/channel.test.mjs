@@ -13,6 +13,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import worker from "../src/index.js";
 import { r2Mock } from "./r2-mock.mjs";
+import "./github-stub.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const V1 = new Uint8Array(readFileSync(join(here, "..", "..", "..", "evidence", "ported", "bounce.krate")));
@@ -122,7 +123,7 @@ assert.strictEqual(dl.headers.get("cache-control"), "no-store", "a channel resol
   const e2 = env();
   e2.KRATE_ADMINS = "alice";
   const p = await publish(e2, "alice", V1, "Blocked");
-  await worker.fetch(req(`/admin/takedown/${p.id}`, { method: "POST", headers: { authorization: "Bearer krs_alice", "content-type": "application/json" }, body: JSON.stringify({ reason: "x" }) }), e2);
+  await worker.fetch(req(`/admin/takedown/${p.id}`, { method: "POST", headers: { authorization: "Bearer gho_alice", "content-type": "application/json" }, body: JSON.stringify({ reason: "x" }) }), e2);
   const r = await channel(e2, "/c/alice/blocked");
   assert.strictEqual(r.body.blocked, true, "the resolution says the current release is blocked");
 }
@@ -137,7 +138,7 @@ assert.strictEqual(c.body.history.at(-1).reason, "unpublished", "and the retreat
 
 /* ---- bytes gone by another door: the name resolves to nothing ---------- */
 e.KRATE_ADMINS = "alice";
-const purge = await worker.fetch(req(`/blob/${first.id}`, { method: "DELETE", headers: { authorization: "Bearer krs_alice" } }), e);
+const purge = await worker.fetch(req(`/blob/${first.id}`, { method: "DELETE", headers: { authorization: "Bearer gho_alice" } }), e);
 assert.strictEqual(purge.status, 200, await purge.text());
 assert.strictEqual((await channel(e, "/c/alice/my-notes")).status, 404, "with the bytes purged the name resolves to nothing, never to gone bytes");
 assert.strictEqual((await worker.fetch(req("/c/alice/my-notes?dl=1"), e)).status, 404, "and a download is not redirected to an address that is gone");
