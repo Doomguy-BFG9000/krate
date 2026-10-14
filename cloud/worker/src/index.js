@@ -2738,6 +2738,13 @@ async function ensureUser(env, provider, stableId, profile) {
   }
   if (identHeld !== userId) await env.APPS.put(identKey, userId);
   if (emailKey && emailHeld !== userId) await env.APPS.put(emailKey, userId);
+  // Which account a GitHub login signs in to, so an organisation notice
+  // for github:<login> can reach that account's address (IC-948 D). Only a
+  // GitHub sign-in writes it, and only when it changed.
+  if (provider === "github" && profile.login) {
+    const loginKey = `ghlogin:${String(profile.login).toLowerCase()}`;
+    if ((await env.APPS.get(loginKey)) !== userId) await env.APPS.put(loginKey, userId);
+  }
   return record;
 }
 

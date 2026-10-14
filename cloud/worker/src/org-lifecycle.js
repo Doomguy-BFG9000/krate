@@ -96,13 +96,14 @@ async function startRecovery(h) {
 
 // --------------------------------------------------------------- export
 
-/// The most release bytes one export carries (ORG_EXPORT_MAX_BYTES, 64
-/// MiB): a Worker holds the zip in memory. A release past it is listed in
-/// the manifest's exclusions with its digest and size, never dropped
-/// silently.
+/// The most release bytes one package carries (ORG_EXPORT_MAX_BYTES, 2
+/// GiB). Memory is not what bounds it -- the zip is streamed into R2 a part
+/// at a time -- but a package somebody has to download is. A release past
+/// it is listed in the manifest's exclusions with its digest and size,
+/// never dropped silently.
 const maxExportBytes = (env) => {
   const n = Number(env.ORG_EXPORT_MAX_BYTES);
-  return Number.isFinite(n) && n > 0 ? n : 64 * 1024 * 1024;
+  return Number.isFinite(n) && n > 0 ? n : 2 * 1024 * 1024 * 1024;
 };
 
 export const EXPORT_FORMAT = "krate.org-export.v1";
@@ -124,13 +125,8 @@ async function buildExport(h) {
   const data = begun.body.data;
   let done;
   try {
-    const zip = await exportZip(h.env, h.slug, id, data);
-    const sha = await sha256Hex(zip);
-    await h.env.BUNDLES.put(exportKey(h.slug, id), zip, {
-      httpMetadata: { contentType: "application/zip" },
-      customMetadata: { org: h.slug, export: id },
-    });
-    done = await h.orgAsk(h.env, h.slug, { op: "export-done", args: { id, state: "ready", size: zip.length, sha256: sha } });
+    const { size } = await streamExport(h.env, h.slug, id, data);
+    done = await h.orgAsk(h.env, h.slug, { op: "export-done", args: { id, state: "ready", size } });
   } catch (err) {
     done = await h.orgAsk(h.env, h.slug, {
       op: "export-done",
@@ -140,44 +136,115 @@ async function buildExport(h) {
   return h.json({ export: done.body.export }, 202);
 }
 
-/// The zip: export-manifest.json first, then each data class as JSON and
-/// the releases' own .krate files.
-export async function exportZip(env, slug, id, data) {
+/// The largest part the zip is written to R2 in, and so the most of it held
+/// in memory at once (plus one chunk read from a release). R2 wants every
+/// part but the last the same size and at least 5 MiB.
+export const EXPORT_PART_BYTES = 8 * 1024 * 1024;
+
+/// What the last export held in memory at its peak, for the tests that
+/// prove the writer is bounded however large the releases are.
+export const exportStats = { peakBuffered: 0, parts: 0 };
+
+/// Bytes written into R2 one fixed-size part at a time (multipart, as the
+/// big-file path does), so a package of any size never sits whole in a
+/// Worker's 128 MB.
+class PartWriter {
+  constructor(upload, partSize) {
+    this.upload = upload;
+    this.partSize = partSize;
+    this.buffer = new Uint8Array(partSize);
+    this.fill = 0;
+    this.parts = [];
+    this.total = 0;
+    this.peak = 0;
+  }
+
+  async write(bytes) {
+    this.peak = Math.max(this.peak, this.fill + bytes.length);
+    let at = 0;
+    while (at < bytes.length) {
+      const take = Math.min(this.partSize - this.fill, bytes.length - at);
+      this.buffer.set(bytes.subarray(at, at + take), this.fill);
+      this.fill += take;
+      at += take;
+      this.total += take;
+      if (this.fill === this.partSize) await this.flush();
+    }
+  }
+
+  async flush() {
+    if (!this.fill) return;
+    const n = this.parts.length + 1;
+    const part = await this.upload.uploadPart(n, this.buffer.slice(0, this.fill));
+    this.parts.push({ partNumber: n, etag: part.etag });
+    this.fill = 0;
+  }
+
+  async finish() {
+    await this.flush();
+    return this.upload.complete(this.parts);
+  }
+}
+
+/// Every chunk of an R2 object's body, without holding more than one.
+async function* chunksOf(object) {
+  const body = object.body;
+  if (body && typeof body.getReader === "function") {
+    const reader = body.getReader();
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) return;
+      yield value instanceof Uint8Array ? value : new Uint8Array(value);
+    }
+  } else if (body) {
+    yield body instanceof Uint8Array ? body : new Uint8Array(await new Response(body).arrayBuffer());
+  }
+}
+
+/// The standard export, written straight into R2 at org-exports/<slug>/<id>.zip:
+/// export-manifest.json first, then each data class as JSON, then the
+/// releases' own .krate files streamed from the store. A release's CRC is
+/// taken in a first streaming pass so its header can be written before its
+/// bytes; nothing is ever held whole. Answers `{ size }`.
+export async function streamExport(env, slug, id, data) {
   const enc = new TextEncoder();
-  const files = [];
+  const asJson = (v) => enc.encode(JSON.stringify(v, null, 2) + "\n");
+  const small = [];
   const classes = [];
-  const add = async (cls, path, bytes) => {
-    files.push({ path, bytes });
+  const describe = (cls, path, size, sha256) => {
     let entry = classes.find((c) => c.class === cls);
     if (!entry) classes.push((entry = { class: cls, files: [] }));
-    entry.files.push({ path, size: bytes.length, sha256: await sha256Hex(bytes) });
+    entry.files.push({ path, size, sha256 });
   };
-  const asJson = (v) => enc.encode(JSON.stringify(v, null, 2) + "\n");
-  await add("organisation", "org.json", asJson(data.org));
-  await add("members and roles", "members.json", asJson(data.members));
-  await add("candidates", "candidates.json", asJson(data.candidates));
+  const addSmall = async (cls, path, bytes) => {
+    small.push({ path, bytes });
+    describe(cls, path, bytes.length, await sha256Hex(bytes));
+  };
+  await addSmall("organisation", "org.json", asJson(data.org));
+  await addSmall("members and roles", "members.json", asJson(data.members));
+  await addSmall("candidates", "candidates.json", asJson(data.candidates));
   const chain = await chainOk(data.audit);
-  await add("audit", "audit.json", asJson({ chain_ok: chain, events: data.audit }));
+  await addSmall("audit", "audit.json", asJson({ chain_ok: chain, events: data.audit }));
 
+  // The releases: their digests are their sha256 (content-addressed), and
+  // their sizes are the store's, so the manifest can be written first.
   const excluded = [...EXCLUSIONS];
+  const releases = [];
   let budget = maxExportBytes(env);
   for (const c of data.candidates.filter((x) => x.state === "released")) {
-    const object = await releaseObject(env, c.digest);
+    const head = await releaseHead(env, c.digest);
     const name = `releases/${String(c.name || "app").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "app"}-${String(c.version || "").replace(/[^0-9A-Za-z.]+/g, "-")}-${c.digest.slice(0, 12)}.krate`;
-    if (!object) {
+    if (!head) {
       excluded.push({ class: "release file", digest: c.digest, why: "the bytes were not found in the store" });
       continue;
     }
-    if (object.size > budget) {
-      excluded.push({ class: "release file", digest: c.digest, size: object.size, why: "larger than one export carries; download it as a release while the organisation is open" });
-      try {
-        await object.body?.cancel?.();
-      } catch (_) {}
+    if (head.size > budget) {
+      excluded.push({ class: "release file", digest: c.digest, size: head.size, why: "past the package's size limit; download it as a release while the organisation is open" });
       continue;
     }
-    const bytes = new Uint8Array(await new Response(object.body).arrayBuffer());
-    budget -= bytes.length;
-    await add("releases", name, bytes);
+    budget -= head.size;
+    releases.push({ path: name, digest: c.digest, size: head.size });
+    describe("releases", name, head.size, c.digest);
   }
   const manifest = {
     format: EXPORT_FORMAT,
@@ -188,7 +255,59 @@ export async function exportZip(env, slug, id, data) {
     audit_chain_ok: chain,
     excluded,
   };
-  return zipStore([{ path: "export-manifest.json", bytes: asJson(manifest) }, ...files]);
+
+  const upload = await env.BUNDLES.createMultipartUpload(exportKey(slug, id), {
+    httpMetadata: { contentType: "application/zip" },
+    customMetadata: { org: slug, export: id },
+  });
+  const out = new PartWriter(upload, EXPORT_PART_BYTES);
+  const central = [];
+  const entry = async (path, size, crc, write) => {
+    const name = enc.encode(path);
+    central.push({ name, size, crc, offset: out.total });
+    await out.write(localHeader(name, size, crc));
+    await write();
+  };
+  try {
+    for (const f of [{ path: "export-manifest.json", bytes: asJson(manifest) }, ...small]) {
+      await entry(f.path, f.bytes.length, crc32(f.bytes), () => out.write(f.bytes));
+    }
+    for (const r of releases) {
+      // Pass one: the CRC. Pass two: the bytes. Neither holds more than a chunk.
+      let crc = 0xffffffff;
+      for await (const chunk of chunksOf(await releaseObject(env, r.digest))) crc = crcUpdate(crc, chunk);
+      await entry(r.path, r.size, (crc ^ 0xffffffff) >>> 0, async () => {
+        let written = 0;
+        for await (const chunk of chunksOf(await releaseObject(env, r.digest))) {
+          await out.write(chunk);
+          written += chunk.length;
+        }
+        if (written !== r.size) throw new Error(`release ${r.digest.slice(0, 12)} changed size while it was exported`);
+      });
+    }
+    const directoryAt = out.total;
+    for (const c of central) await out.write(centralRecord(c));
+    await out.write(endRecord(central.length, out.total - directoryAt, directoryAt));
+    await out.finish();
+  } catch (err) {
+    try {
+      await upload.abort();
+    } catch (_) {}
+    throw err;
+  } finally {
+    exportStats.peakBuffered = out.peak;
+    exportStats.parts = out.parts.length;
+  }
+  return { size: out.total };
+}
+
+async function releaseHead(env, digest) {
+  let object = await env.BUNDLES.head(digest);
+  if (!object) {
+    const blob = await env.APPS.get(`bigkey:${digest}`).catch(() => null);
+    if (blob) object = await env.BUNDLES.head(blob);
+  }
+  return object;
 }
 
 async function releaseObject(env, digest) {
@@ -264,58 +383,59 @@ const CRC = (() => {
   return t;
 })();
 
-function crc32(bytes) {
-  let c = 0xffffffff;
+function crcUpdate(c, bytes) {
   for (let i = 0; i < bytes.length; i++) c = CRC[(c ^ bytes[i]) & 0xff] ^ (c >>> 8);
-  return (c ^ 0xffffffff) >>> 0;
+  return c;
 }
 
-/// A zip of stored (uncompressed) entries: the .krate files inside are
-/// already compressed, and this is small enough to be plainly right.
-export function zipStore(entries) {
-  const enc = new TextEncoder();
-  const chunks = [];
-  const central = [];
-  let offset = 0;
-  for (const { path, bytes } of entries) {
-    const name = enc.encode(path);
-    const crc = crc32(bytes);
-    const local = new DataView(new ArrayBuffer(30));
-    local.setUint32(0, 0x04034b50, true);
-    local.setUint16(4, 20, true);
-    local.setUint16(6, 0x0800, true); // names are UTF-8
-    local.setUint16(8, 0, true); // stored
-    local.setUint32(14, crc, true);
-    local.setUint32(18, bytes.length, true);
-    local.setUint32(22, bytes.length, true);
-    local.setUint16(26, name.length, true);
-    chunks.push(new Uint8Array(local.buffer), name, bytes);
-    const cd = new DataView(new ArrayBuffer(46));
-    cd.setUint32(0, 0x02014b50, true);
-    cd.setUint16(4, 20, true);
-    cd.setUint16(6, 20, true);
-    cd.setUint16(8, 0x0800, true);
-    cd.setUint32(16, crc, true);
-    cd.setUint32(20, bytes.length, true);
-    cd.setUint32(24, bytes.length, true);
-    cd.setUint16(28, name.length, true);
-    cd.setUint32(42, offset, true);
-    central.push(new Uint8Array(cd.buffer), name);
-    offset += 30 + name.length + bytes.length;
-  }
-  const cdSize = central.reduce((n, c) => n + c.length, 0);
-  const end = new DataView(new ArrayBuffer(22));
-  end.setUint32(0, 0x06054b50, true);
-  end.setUint16(8, entries.length, true);
-  end.setUint16(10, entries.length, true);
-  end.setUint32(12, cdSize, true);
-  end.setUint32(16, offset, true);
-  const all = [...chunks, ...central, new Uint8Array(end.buffer)];
-  const out = new Uint8Array(all.reduce((n, c) => n + c.length, 0));
-  let at = 0;
-  for (const c of all) {
-    out.set(c, at);
-    at += c.length;
-  }
+function crc32(bytes) {
+  return (crcUpdate(0xffffffff, bytes) ^ 0xffffffff) >>> 0;
+}
+
+// A zip of stored (uncompressed) entries: the .krate files inside are
+// already compressed. Sizes and CRC are known before each entry is
+// written, so there are no data descriptors.
+
+function localHeader(name, size, crc) {
+  const v = new DataView(new ArrayBuffer(30));
+  v.setUint32(0, 0x04034b50, true);
+  v.setUint16(4, 20, true);
+  v.setUint16(6, 0x0800, true); // names are UTF-8
+  v.setUint16(8, 0, true); // stored
+  v.setUint32(14, crc, true);
+  v.setUint32(18, size, true);
+  v.setUint32(22, size, true);
+  v.setUint16(26, name.length, true);
+  return concat(new Uint8Array(v.buffer), name);
+}
+
+function centralRecord({ name, size, crc, offset }) {
+  const v = new DataView(new ArrayBuffer(46));
+  v.setUint32(0, 0x02014b50, true);
+  v.setUint16(4, 20, true);
+  v.setUint16(6, 20, true);
+  v.setUint16(8, 0x0800, true);
+  v.setUint32(16, crc, true);
+  v.setUint32(20, size, true);
+  v.setUint32(24, size, true);
+  v.setUint16(28, name.length, true);
+  v.setUint32(42, offset, true);
+  return concat(new Uint8Array(v.buffer), name);
+}
+
+function endRecord(count, size, offset) {
+  const v = new DataView(new ArrayBuffer(22));
+  v.setUint32(0, 0x06054b50, true);
+  v.setUint16(8, count, true);
+  v.setUint16(10, count, true);
+  v.setUint32(12, size, true);
+  v.setUint32(16, offset, true);
+  return new Uint8Array(v.buffer);
+}
+
+function concat(a, b) {
+  const out = new Uint8Array(a.length + b.length);
+  out.set(a, 0);
+  out.set(b, a.length);
   return out;
 }

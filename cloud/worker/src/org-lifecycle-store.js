@@ -28,6 +28,8 @@ const setting = (env, name, fallback) => {
 export const closeWindowDays = (env) => setting(env, "ORG_CLOSE_WINDOW_DAYS", 30);
 export const exportWindowDays = (env) => setting(env, "ORG_EXPORT_WINDOW_DAYS", 30);
 export const exportPackageDays = (env) => setting(env, "ORG_EXPORT_PACKAGE_DAYS", 7);
+// The free seats a suspended organisation keeps. 3 is a placeholder: the
+// number is the founder's call, not decided yet (2026-10-14).
 export const freeSeats = (env) => setting(env, "ORG_FREE_SEATS", 3);
 export const billingEnforced = (env) => String((env && env.ORG_BILLING_ENFORCED) || "") === "1";
 

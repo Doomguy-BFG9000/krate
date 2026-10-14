@@ -92,19 +92,41 @@ export async function mailInvite(env, smtpSend, invite, { orgName, slug, inviter
   return problem ? { emailed: false, email_problem: problem } : { emailed: true };
 }
 
-/// Tell every current owner and admin with an address that Krate support
-/// has been asked to make someone an owner, and how to object. GitHub
-/// principals have no address the hub has proved; they are listed back.
+/// Where a principal can be mailed, or null. An email principal is its own
+/// proved inbox. A GitHub principal is mailed at the address of the account
+/// its GitHub sign-in belongs to (the `ghlogin:` record a GitHub sign-in
+/// writes): an inbox that account proved by email link or verified Google,
+/// or else the email GitHub itself showed on the profile, which GitHub only
+/// lets a person choose from their verified addresses.
+export async function addressFor(env, principal) {
+  if (principal.startsWith("email:")) return principal.slice("email:".length);
+  if (!principal.startsWith("github:")) return null;
+  try {
+    const userId = await env.APPS.get(`ghlogin:${principal.slice("github:".length)}`);
+    if (!userId) return null;
+    const user = JSON.parse((await env.APPS.get(`user:${userId}`)) || "null");
+    if (!user) return null;
+    if (Array.isArray(user.verified_emails) && user.verified_emails.length) return user.verified_emails[0];
+    if ((user.providers || [])[0] === "github" && user.email) return user.email;
+  } catch (_) {}
+  return null;
+}
+
+/// Tell every current owner and admin Krate can reach that Krate support
+/// has been asked to make someone an owner, and how to object. Only those
+/// with no address at all are listed back as not mailed; the dashboard's
+/// banner and the audit say it to everyone either way.
 export async function mailRecovery(env, smtpSend, { slug, orgName, recovery, notify, site }) {
   const mailed = [];
   const notMailed = [];
   for (const principal of notify) {
-    if (!principal.startsWith("email:") || !env.GMAIL_APP_PASSWORD) {
+    const to = env.GMAIL_APP_PASSWORD ? await addressFor(env, principal) : null;
+    if (!to) {
       notMailed.push(principal);
       continue;
     }
     const problem = await gmail(env, smtpSend, {
-      to: principal.slice("email:".length),
+      to,
       subject: `Krate support was asked to add an owner to ${orgName}`,
       text: [
         `Krate support has been asked to make ${recovery.for} an owner of ${orgName} (${slug}).`,
