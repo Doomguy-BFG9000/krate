@@ -158,6 +158,13 @@
     "audit-export.manage": { owner: "yes" },
     "audit-export.view": { owner: "yes", admin: "yes" },
     "saml.set": { owner: "yes" },
+    // IC-954: the inventory is read by the people who run and review the
+    // organisation's apps; who opened each, an app's owner and the usage
+    // counts are owners' and admins'.
+    "inventory.view": { owner: "yes", admin: "yes", reviewer: "yes" },
+    "inventory.people": { owner: "yes", admin: "yes" },
+    "app.owner": { owner: "yes", admin: "yes" },
+    "usage.view": { owner: "yes", admin: "yes" },
   };
 
   function can(role, action) {
@@ -168,6 +175,8 @@
   /// The tabs a role sees on /org/, in order.
   function tabsFor(role) {
     var out = ["releases"];
+    // Every app the organisation has, with its record (IC-954).
+    if (can(role, "inventory.view")) out.push("apps");
     // The candidates list is for the people who send, approve or run the
     // organisation; a recipient only ever opens what was released.
     if (can(role, "candidate.publish") || can(role, "candidate.approve") || can(role, "audit.read")) out.push("waiting");
@@ -475,6 +484,10 @@
         "connection.manage": "change the " + (t.kind === "connection" ? t.value : "") + " connection",
         "connection.view": "see the connections",
         "connection.use": "use the " + (t.kind === "connection" ? t.value : "") + " connection",
+        // Inventory and ownership (IC-954).
+        "inventory.view": "see the organisation's apps",
+        "app.owner": "choose who owns " + (t.value || "an app"),
+        "usage.view": "see how the apps are used",
       }[ev.action] || "do " + ev.action;
       // Shown beside a Refused badge, so the sentence says why, not "refused" again.
       return a + " tried to " + tried + ": " + (SHORT_WHY[ev.reason] || ev.reason || "not allowed") + ".";
@@ -588,6 +601,12 @@
         return cu
           ? "Apps used the " + t.value + " connection " + cu[1] + (cu[1] === "1" ? " time" : " times") + " on " + day(Date.parse(cu[2] + "T12:00:00Z") / 1000) + "."
           : "Apps used the " + t.value + " connection.";
+      }
+      // Ownership (IC-954): who IT asks about an app.
+      case "app.owner": {
+        var gone = String(ev.reason || "").match(/^needs an owner: (.+) was removed$/);
+        if (gone) return (t.value || "An app") + " needs an owner: " + who(gone[1]).label + ", who owned it, was removed.";
+        return a + " made " + who(ev.reason || "").label + " the owner of " + (t.value || "an app") + ".";
       }
       default: return a + " " + ev.action + (ev.target ? " " + ev.target : "") + ".";
     }

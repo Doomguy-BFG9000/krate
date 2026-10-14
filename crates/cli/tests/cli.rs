@@ -19852,3 +19852,139 @@ fn the_policy_organisation_is_listed_first_and_offers_its_company_sign_in() {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// IC-954: provenance in the bundle.
+
+/// `krate create` writes a build record into the app it makes: the tool
+/// (Studio says so through KRATE_BUILT_BY), the provider (a person's own
+/// command here, so no AI is contacted), when, the request's digest, and the
+/// request itself only with --keep-prompt. `krate inspect` shows it, the
+/// signature covers it, and what runs is unchanged by it.
+#[test]
+fn create_writes_a_build_record_that_inspect_shows_and_signing_covers() {
+    if !has_cargo_component() {
+        eprintln!("skipping: cargo-component not installed");
+        return;
+    }
+    let _build_lock = cargo_build_guard();
+    let work = tempfile::tempdir().expect("temp dir");
+    let make = |out: &std::path::Path, keep: bool| {
+        let mut command = krate();
+        command
+            .args([
+                "create",
+                "a small dashboard",
+                "--author-cmd",
+                "true",
+                "--output",
+            ])
+            .arg(out)
+            .env("KRATE_BUILT_BY", "studio");
+        if keep {
+            command.arg("--keep-prompt");
+        }
+        let output = command.output().expect("run create");
+        // A no-op author leaves the starter: exit 6, and the file is written.
+        assert_eq!(
+            output.status.code(),
+            Some(6),
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(out.is_file());
+    };
+    let inspect = |path: &std::path::Path| -> serde_json::Value {
+        let out = krate()
+            .args(["inspect", path.to_str().unwrap(), "--format", "json"])
+            .output()
+            .expect("inspect");
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        serde_json::from_slice(&out.stdout).expect("json")
+    };
+    let kept = work.path().join("kept.krate");
+    make(&kept, true);
+    let report = inspect(&kept);
+    let built = &report["provenance"];
+    assert_eq!(built["v"], 1, "{report}");
+    assert_eq!(built["tool"], "krate studio");
+    assert_eq!(built["provider"], "author-cmd");
+    assert_eq!(built["prompt"], "a small dashboard");
+    assert_eq!(
+        built["prompt_sha256"],
+        format!("{:x}", Sha256::digest(b"a small dashboard"))
+    );
+    assert_eq!(built["revisions"], 0);
+    assert!(built["finished_at"].as_u64() >= built["started_at"].as_u64());
+    assert!(built["krate_version"]
+        .as_str()
+        .is_some_and(|v| !v.is_empty()));
+    assert!(
+        report["extensions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e["owner"] == "krate" && e["name"] == "provenance"),
+        "declared, as every extension is: {report}"
+    );
+    let text = krate()
+        .args(["inspect", kept.to_str().unwrap()])
+        .output()
+        .expect("inspect");
+    let said = String::from_utf8_lossy(&text.stdout);
+    assert!(
+        said.contains("built           by krate studio with author-cmd")
+            && said.contains("  asked for     a small dashboard"),
+        "{said}"
+    );
+
+    // Without --keep-prompt only the digest is kept, and what runs is the
+    // same app either way.
+    let plain = work.path().join("plain.krate");
+    make(&plain, false);
+    let report = inspect(&plain);
+    assert!(report["provenance"]["prompt"].is_null(), "{report}");
+    assert!(report["provenance"]["prompt_sha256"].is_string());
+    assert_eq!(
+        inspect(&kept)["identity"]["execution"],
+        report["identity"]["execution"]
+    );
+
+    // Signed, the signature covers the record: it holds, and once the
+    // record is changed it no longer does.
+    let key = work.path().join("key.pkcs8");
+    let signed = krate()
+        .args([
+            "sign",
+            kept.to_str().unwrap(),
+            "--key",
+            key.to_str().unwrap(),
+            "--generate-key",
+            "--namespace",
+            "acme/dashboard",
+        ])
+        .output()
+        .expect("sign");
+    assert!(
+        signed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&signed.stderr)
+    );
+    let holds = |path: &std::path::Path| {
+        krate_bundle::open(path)
+            .unwrap()
+            .signature_verdict()
+            .unwrap()
+            .is_some_and(|v| v.is_genuinely_signed())
+    };
+    assert!(holds(&kept), "signed over its build record");
+    let mut record = krate_bundle::read_build_provenance(&kept).unwrap().unwrap();
+    record.provider = Some("someone-else".into());
+    krate_bundle::add_build_provenance(&kept, &record).unwrap();
+    assert!(!holds(&kept), "a changed build record breaks the signature");
+}

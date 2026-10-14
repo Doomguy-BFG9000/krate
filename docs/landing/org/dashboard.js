@@ -18,6 +18,7 @@
 
   var TAB = {
     releases: { long: "Releases" },
+    apps: { long: "Apps" },
     waiting: { long: "Waiting for approval", short: "Waiting" },
     people: { long: "People" },
     activity: { long: "Activity" },
@@ -111,7 +112,7 @@
     pane.textContent = "";
     pane.setAttribute("aria-labelledby", "tab-" + id);
     pane.appendChild(el("p", { class: "loading", text: "Loading" }));
-    ({ releases: releases, waiting: waiting, people: people, activity: activity, settings: settings, billing: P && P.panes.billing })[id](pane);
+    ({ releases: releases, apps: apps, waiting: waiting, people: people, activity: activity, settings: settings, billing: P && P.panes.billing })[id](pane);
   }
 
   function head(pane, title, sub) {
@@ -758,6 +759,15 @@
       S: S, slug: slug, words: words, confirmSheet: confirmSheet, head: head, failed: failed,
       toast: toast, show: function (id) { show(id); }, roleOf: roleOf, P: P, flat: flatReleases,
     });
+  }
+  // The Apps tab (inventory.js, IC-954).
+  var I = window.KrateOrgInventory
+    ? window.KrateOrgInventory({ S: S, slug: slug, words: words, head: head, failed: failed, toast: toast, show: function (id) { show(id); }, roleOf: roleOf })
+    : null;
+  function apps(pane) {
+    if (I) { I.pane(pane); return; }
+    head(pane, "Apps", "");
+    pane.appendChild(el("div", { class: "card" }, [el("p", { text: "This page did not load completely. Reload it." })]));
   }
   // Company connections (connections.js); absent, Settings has no card.
   var C = window.KrateOrgConnections

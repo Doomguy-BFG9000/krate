@@ -629,6 +629,19 @@ struct Settings {
     out_dir: String,
     /// Which AI authors, by provider name.
     agent: String,
+    /// "Keep the request with the app" (IC-954): the request goes into the
+    /// app's build record, not only its fingerprint. Off unless chosen.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    keep_prompt: Option<bool>,
+}
+
+/// Studio's mark on what it builds (IC-954): the engine's build record says
+/// "krate studio", and keeps the request when the person chose to.
+fn studio_build(cmd: &mut Command) {
+    cmd.env("KRATE_BUILT_BY", "studio");
+    if settings_get().keep_prompt == Some(true) {
+        cmd.arg("--keep-prompt");
+    }
 }
 
 impl Default for Settings {
@@ -647,6 +660,7 @@ impl Default for Settings {
             // and macOS asks them once, in response to their own choice.
             out_dir: dirs_home().join("Krate Apps").display().to_string(),
             agent: "claude".to_string(),
+            keep_prompt: None,
         }
     }
 }
@@ -683,6 +697,15 @@ fn settings_get() -> Settings {
 
 #[tauri::command]
 fn settings_set(settings: Settings) -> Result<(), String> {
+    let mut settings = settings;
+    // A screen that saves only the folder and the AI leaves the person's
+    // "Keep the request with the app" choice as it was.
+    if settings.keep_prompt.is_none() {
+        settings.keep_prompt = std::fs::read_to_string(studio_dir().join("settings.json"))
+            .ok()
+            .and_then(|text| serde_json::from_str::<Settings>(&text).ok())
+            .and_then(|stored| stored.keep_prompt);
+    }
     let body = serde_json::to_string_pretty(&settings).map_err(|e| e.to_string())?;
     write_private_atomic(&studio_dir().join("settings.json"), body.as_bytes())
 }
@@ -1664,6 +1687,7 @@ async fn create_app(
         cmd.arg("create")
             .args(["--agent", &agent, "--yes", "--output"])
             .arg(&out_path);
+        studio_build(&mut cmd);
         // One stable workspace per session, so a retry RESUMES from the code
         // the last attempt wrote instead of starting from an empty directory.
         // The stall message has always promised this ("it resumes from the
@@ -1731,6 +1755,7 @@ async fn revise_app(
         let out_path = existing(&path)?;
         let mut cmd = silent_cmd(&engine);
         cmd.arg("revise").args(["--agent", &agent]);
+        studio_build(&mut cmd);
         for file in &attachments {
             cmd.args(["--attach", file]);
         }

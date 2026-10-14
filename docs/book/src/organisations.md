@@ -211,6 +211,32 @@ shows the list it last saw. Krate Studio shows the same apps on its Home
 under Company apps, refreshed when it opens and every 15 minutes while it is
 open. `krate org apps --json` is the same list for other tools.
 
+## Every app's record
+
+Every app `krate create` or Krate Studio makes carries a record of how it
+was made: the tool, the AI and model when Krate knows it, when, and a
+fingerprint of the request. The request itself goes with it only when the
+builder chooses to keep it (`krate create --keep-prompt`, or Studio's
+"Keep the request with the app"). The record is inside the app and covered
+by its signature, so it cannot be changed afterwards without the signature
+failing. `krate inspect app.krate` shows it; an app made by hand has none.
+
+The organisation dashboard's **Apps** tab lists every app the organisation
+has, for owners, admins and reviewers: its owner, who last sent it, how it
+was made, what it can do, the company connections it uses, who it is for,
+how many people opened it in the last 30 days (owners and admins also see
+who), and whether it is in use, waiting or withdrawn. The list downloads as
+a spreadsheet.
+
+Each app has an owner, by default whoever first sent it: the person IT asks
+about the app. Owning an app gives no extra permission. When the owner is
+removed from the organisation, the app shows "Needs an owner" at the top of
+the list until an owner or admin chooses one; both are in the activity.
+
+What the hub counts is only that a person opened a release on a given day,
+seen when Krate checks the app in; nothing from inside the app. It keeps
+those daily counts for 90 days.
+
 ## Company connections
 
 A connection lets the organisation's apps call one of its APIs without any

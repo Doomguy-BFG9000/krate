@@ -396,3 +396,149 @@ fn the_connection_fixtures_say_what_their_names_say() {
         );
     }
 }
+
+/// What each inventory fixture carries: file, app id, version, its build
+/// record (provider, model, kept request, revisions), whether it asks for
+/// the finance-api connection.
+type Built = Option<(&'static str, &'static str, Option<&'static str>, u32)>;
+type InventoryFixture = (&'static str, &'static str, &'static str, Built, bool);
+const INVENTORY: [InventoryFixture; 3] = [
+    (
+        "expenses-1.krate",
+        "com.acme.expenses",
+        "1.0.0",
+        Some((
+            "claude",
+            "claude-opus-5",
+            Some("an expenses tracker for finance"),
+            0,
+        )),
+        true,
+    ),
+    (
+        "expenses-2.krate",
+        "com.acme.expenses",
+        "1.0.1",
+        Some(("claude", "claude-opus-5", None, 1)),
+        true,
+    ),
+    ("rota.krate", "com.acme.rota", "1.0.0", None, false),
+];
+
+/// The bundles the hub's inventory tests run against (IC-954): two
+/// versions of an app made with an AI, the first keeping its request, and
+/// one made by hand; each marked for acme and signed by a release key a
+/// fresh acme root delegated.
+///
+///   KRATE_WRITE_ORG_FIXTURES=1 cargo test -p krate-validator-wasm \
+///     --test org_fixtures -- --ignored
+#[test]
+#[ignore = "writes cloud/worker/test/fixtures/org-inventory; run by hand with KRATE_WRITE_ORG_FIXTURES=1"]
+fn write_inventory_fixtures() {
+    if std::env::var("KRATE_WRITE_ORG_FIXTURES").as_deref() != Ok("1") {
+        eprintln!("set KRATE_WRITE_ORG_FIXTURES=1 to write the fixtures");
+        return;
+    }
+    let out = repo().join("cloud/worker/test/fixtures/org-inventory");
+    fs::create_dir_all(&out).unwrap();
+    let component = repo().join("crates/bundle/tests/fixtures/minimal-run.wasm");
+    let root = key();
+    let release = key();
+    let work = std::env::temp_dir().join(format!("krate-inv-fixtures-{}", std::process::id()));
+    fs::create_dir_all(&work).unwrap();
+    for (name, id, version, built, asks) in INVENTORY {
+        let label = if id.ends_with("rota") {
+            "Rota"
+        } else {
+            "Expenses"
+        };
+        let mut manifest = format!(
+            "[app]\nid = \"{id}\"\nname = \"{label}\"\nversion = \"{version}\"\n\
+             entry = \"code.wasm\"\nworld = \"krate:app/cli@0.1.0\"\n"
+        );
+        if asks {
+            manifest.push_str(
+                "\n[[capabilities]]\ncap = \"net.connection:finance-api\"\n\
+                 rationale = \"read invoices\"\nrequired = false\n",
+            );
+        }
+        let manifest_path = work.join(format!("{name}.toml"));
+        fs::write(&manifest_path, manifest).unwrap();
+        let path = out.join(name);
+        krate_bundle::pack(&manifest_path, &component, &path).unwrap();
+        if let Some((provider, model, prompt, revisions)) = built {
+            krate_bundle::add_build_provenance(
+                &path,
+                &krate_bundle::BuildProvenance {
+                    v: 1,
+                    tool: "krate studio".into(),
+                    krate_version: "0.5.5".into(),
+                    provider: Some(provider.into()),
+                    model: Some(model.into()),
+                    started_at: SIGNED_AT - 600,
+                    finished_at: SIGNED_AT - 300,
+                    prompt_sha256: krate_bundle::sha256_hex(b"an expenses tracker for finance"),
+                    prompt: prompt.map(str::to_string),
+                    revisions,
+                },
+            )
+            .unwrap();
+        }
+        krate_bundle::add_org_mark(&path, "acme").unwrap();
+        krate_bundle::sign_bundle_delegated(
+            &path,
+            &release,
+            &format!("acme/{}", id.rsplit('.').next().unwrap()),
+            version,
+            SIGNED_AT,
+            slip(&root, &root, &release, SLIP_FROM, SLIP_UNTIL),
+        )
+        .unwrap();
+    }
+    let _ = fs::remove_dir_all(&work);
+    fs::write(
+        out.join("keys.json"),
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "root": hex(&root.public_key()),
+            "release": hex(&release.public_key()),
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+}
+
+/// The committed inventory fixtures say what their names say, and the
+/// validator puts each build record in its judgement.
+#[test]
+fn the_inventory_fixtures_say_what_their_names_say() {
+    let dir = repo().join("cloud/worker/test/fixtures/org-inventory");
+    let keys: serde_json::Value = serde_json::from_slice(
+        &fs::read(dir.join("keys.json"))
+            .expect("the committed fixtures; write them with KRATE_WRITE_ORG_FIXTURES=1"),
+    )
+    .unwrap();
+    for (name, id, version, built, _) in INVENTORY {
+        let answer: serde_json::Value = serde_json::from_str(&krate_validator_wasm::judge_to_json(
+            &fs::read(dir.join(name)).unwrap(),
+        ))
+        .unwrap();
+        assert_eq!(answer["ok"], true, "{name}: {answer}");
+        let j = &answer["judgement"];
+        assert_eq!(j["org_mark"], "acme", "{name}");
+        assert_eq!(j["manifest"]["app"]["id"], id, "{name}");
+        assert_eq!(j["manifest"]["app"]["version"], version, "{name}");
+        assert_eq!(j["signature"]["state"], "valid", "{name}");
+        assert_eq!(j["signature"]["chain"]["root"], keys["root"], "{name}");
+        match built {
+            None => assert!(j["provenance"].is_null(), "{name}: made by hand"),
+            Some((provider, model, prompt, revisions)) => {
+                let p = &j["provenance"];
+                assert_eq!(p["tool"], "krate studio", "{name}");
+                assert_eq!(p["provider"], provider, "{name}");
+                assert_eq!(p["model"], model, "{name}");
+                assert_eq!(p["prompt"].as_str(), prompt, "{name}");
+                assert_eq!(p["revisions"], revisions, "{name}");
+            }
+        }
+    }
+}

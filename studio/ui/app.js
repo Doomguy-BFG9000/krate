@@ -9479,10 +9479,34 @@ async function loadSettingsPage() {
     if (dir) dir.textContent = (settings.out_dir || "").replace(/^\/Users\/[^/]+/, "~");
     const agent = $("setAgent");
     if (agent) agent.textContent = agentLabel();
+    paintKeepPrompt(settings.keep_prompt === true);
   } catch (e) { /* the page still renders without them */ }
   paintTerminalSetting();
   checkForUpdate();
 }
+
+/* "Keep the request with the app" (IC-954): the request goes into the
+ * app's build record, beside the AI and model that made it. Saved the
+ * moment it is pressed; the switch shows what is stored, not what was
+ * pressed, so a save that failed never looks like it worked. */
+function paintKeepPrompt(on) {
+  const sw = $("setKeepPrompt");
+  if (!sw) return;
+  sw.classList.toggle("on", on);
+  sw.setAttribute("aria-checked", String(on));
+}
+$("setKeepPrompt")?.addEventListener("click", async () => {
+  const sw = $("setKeepPrompt");
+  const want = sw.getAttribute("aria-checked") !== "true";
+  try {
+    await invoke("settings_set", { settings: { out_dir: state.outDir, agent: state.agent, keep_prompt: want } });
+    paintKeepPrompt(want);
+  } catch (e) {
+    paintKeepPrompt(!want);
+    const hint = $("setKeepHint");
+    if (hint) hint.textContent = `Could not save that: ${String(e && e.message ? e.message : e).replace(/^error:\s*/i, "")}. Press it again.`;
+  }
+});
 
 $("setOutBtn")?.addEventListener("click", async () => {
   try {

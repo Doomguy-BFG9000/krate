@@ -756,6 +756,7 @@ fn new_project(
         unix_now()
     ));
     let mut cmd = engine_cmd(engine, false);
+    crate::studio_build(&mut cmd);
     cmd.arg("create")
         .args(["--kind", kind, "--name", &kebab, "--work-dir"])
         .arg(&staging)
@@ -1085,6 +1086,7 @@ fn ask(
     let result = (|| {
         let after = work.join("after.krate");
         let mut cmd = engine_cmd(engine, true);
+        crate::studio_build(&mut cmd);
         cmd.arg("revise")
             .args(["--agent", agent, "--output"])
             .arg(&after)

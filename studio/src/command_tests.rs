@@ -385,6 +385,7 @@ fn settings_round_trip_a_folder_with_spaces_and_unicode() {
     settings_set(Settings {
         out_dir: out.display().to_string(),
         agent: "codex".to_string(),
+        keep_prompt: None,
     })
     .expect("save settings");
     let back = settings_get();
@@ -427,6 +428,7 @@ fn the_old_documents_default_is_moved_out_and_saved() {
             .display()
             .to_string(),
         agent: "gemini".to_string(),
+        keep_prompt: None,
     })
     .unwrap();
     let s = settings_get();
@@ -448,6 +450,7 @@ fn a_folder_the_person_chose_inside_documents_is_kept() {
     settings_set(Settings {
         out_dir: mine.display().to_string(),
         agent: "claude".to_string(),
+        keep_prompt: None,
     })
     .unwrap();
     assert_eq!(PathBuf::from(settings_get().out_dir), mine);
@@ -1657,6 +1660,7 @@ fn ide_projects_lists_only_real_projects_in_the_apps_folder_and_the_recent_list(
     settings_set(Settings {
         out_dir: out.display().to_string(),
         agent: "claude".into(),
+        keep_prompt: None,
     })
     .unwrap();
     let root = out.join("Projects");
@@ -2949,6 +2953,44 @@ echo '   '"#,
             );
             assert_eq!(t.args(), before, "the engine was not run for {slug} {app}");
         }
+    }
+
+    /* ---- the build record (IC-954) ------------------------------------- */
+
+    #[test]
+    fn studio_builds_say_so_and_keep_the_request_only_when_chosen() {
+        let _t = TestHome::new();
+        let args = || {
+            let mut cmd = std::process::Command::new("krate");
+            studio_build(&mut cmd);
+            let env: Vec<(String, String)> = cmd
+                .get_envs()
+                .filter_map(|(k, v)| {
+                    Some((k.to_string_lossy().into(), v?.to_string_lossy().into()))
+                })
+                .collect();
+            let args: Vec<String> = cmd.get_args().map(|a| a.to_string_lossy().into()).collect();
+            (env, args)
+        };
+        let (env, plain) = args();
+        assert!(env.contains(&("KRATE_BUILT_BY".to_string(), "studio".to_string())));
+        assert!(plain.is_empty(), "off unless chosen: {plain:?}");
+        let mut settings = settings_get();
+        settings.keep_prompt = Some(true);
+        settings_set(settings).unwrap();
+        assert_eq!(args().1, vec!["--keep-prompt"]);
+        // A screen that saves only the folder and the AI keeps the choice.
+        let mut other = settings_get();
+        other.keep_prompt = None;
+        other.agent = "codex".into();
+        settings_set(other).unwrap();
+        assert_eq!(settings_get().keep_prompt, Some(true));
+        assert_eq!(settings_get().agent, "codex");
+        assert_eq!(args().1, vec!["--keep-prompt"]);
+        let mut off = settings_get();
+        off.keep_prompt = Some(false);
+        settings_set(off).unwrap();
+        assert!(args().1.is_empty());
     }
 
     #[test]
