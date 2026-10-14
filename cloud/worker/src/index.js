@@ -40,6 +40,9 @@ import { orgLifecycleRoute, sweepOrgs } from "./org-lifecycle.js";
 import { orgBillingRoute, orgBillingEvent, orgBillingAlerts } from "./org-billing.js";
 import { mailInvite } from "./org-mail.js";
 import { refusalsExhausted, noteRefusal, isRefusal, rateLimitedAnswer } from "./org-limits.js";
+// Company sign-in and offline access for organisations (IC-948, F and G).
+import { ssoRoute, oidcStart, oidcCallback, ssoSlugsFor, ssoMarks } from "./org-sso.js";
+import { leaseRoute, leaseKeyRoute } from "./org-lease.js";
 // The organisation store (IC-946), one SQLite-backed Durable Object per
 // organisation; wrangler.toml binds it as ORGS.
 export { Org };
@@ -375,6 +378,17 @@ export default {
       }
       if (request.method === "GET" && pathname === "/login/google/callback") {
         return noteStep(env, "signin", "google-done", googleCallback(url, env));
+      }
+      // Company sign-in for an organisation (IC-948, F).
+      if (request.method === "GET" && pathname === "/login/oidc/start") {
+        return noteStep(env, "signin", "oidc-start", oidcStart(url, env, signInDeps()));
+      }
+      if (request.method === "GET" && pathname === "/login/oidc/callback") {
+        return noteStep(env, "signin", "oidc-done", oidcCallback(url, env, signInDeps()));
+      }
+      // The public half of the hub's offline-lease key (IC-948, G).
+      if (request.method === "GET" && pathname === "/lease-key") {
+        return cors(await leaseKeyRoute(env));
       }
       if (request.method === "POST" && pathname === "/login/email") {
         // Fetched from page scripts on krate.tech, unlike the login
@@ -3043,6 +3057,12 @@ function signInStart(from, nonce, appNonce) {
   return { from: from === "app" ? "app" : "web", nonce: ok(nonce), app_nonce: ok(appNonce) };
 }
 
+/// What the company sign-in routes (org-sso.js) borrow from here: the same
+/// accounts, sessions and K-909 delivery every other sign-in uses.
+function signInDeps() {
+  return { SLUG, signInStart, deliver, ensureUser, newSession, orgAsk, noteOrgOf };
+}
+
 /// Read a stored start. Before K-909 the record was the bare word "app" or
 /// "web"; a sign-in in flight across the deploy still has one of those.
 function readSignInStart(raw) {
@@ -3588,6 +3608,10 @@ function principalsOf(identity) {
     const e = String(email).toLowerCase();
     if (EMAIL.test(e)) out.push(`email:${e}`);
   }
+  // `sso:<slug>` when this session came through that organisation's
+  // company sign-in. Not a principal: a store reads it only to answer
+  // `sso-required` (org-sso.js).
+  if (out.length) out.push(...ssoMarks(identity));
   return [...new Set(out)];
 }
 
@@ -3621,6 +3645,8 @@ async function verifyGitHub(request, env) {
       github: false,
       id: userId,
       emails: Array.isArray(record.verified_emails) ? record.verified_emails : [],
+      // The organisations whose company sign-in made this session (IC-948).
+      sso: await ssoSlugsFor(record, token),
     };
   }
 
@@ -7266,6 +7292,13 @@ async function orgRouteCore(request, url, env, identity) {
   };
   const mutate = async (op, argsOf) => orgAnswer(await mutateRaw(op, argsOf));
 
+  // Company sign-in and offline access (IC-948, F and G).
+  {
+    const routed = { request, env, slug, rest, method, askRaw, readBody, idempotencyOf, path: url.pathname, answer: orgAnswer };
+    const mine = (await ssoRoute(routed)) || (await leaseRoute(routed));
+    if (mine) return mine;
+  }
+
   if (rest.length === 0 && method === "GET") return ask("show");
   if (rest[0] === "invites") {
     if (rest.length === 1 && method === "POST") {
@@ -7464,6 +7497,7 @@ async function fetchPrivate(request, url, hash, object, slug, big, env) {
         version: answer.body.version,
         size: object.size,
         org: { slug, name: answer.body.org_name },
+        offline: answer.body.offline,
       }),
       { headers: { "content-type": "application/json", ...noStore } },
     );
