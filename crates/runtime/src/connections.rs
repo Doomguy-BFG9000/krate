@@ -185,17 +185,22 @@ pub struct Connections {
 }
 
 /// Does this path try to step outside what a prefix check sees? A dot
-/// segment, a backslash or a percent-escaped dot, slash or backslash could
-/// be read by the server as a different path from the one checked here.
+/// segment (also behind a `;` path parameter), a backslash, or a
+/// percent-escaped dot, slash, backslash or semicolon could be read by the
+/// server as a different path from the one checked here.
 fn ambiguous(path: &str) -> bool {
     let lower = path.to_ascii_lowercase();
     path.contains('\\')
         || lower.contains("%2e")
         || lower.contains("%2f")
         || lower.contains("%5c")
-        || path
-            .split('/')
-            .any(|segment| segment == "." || segment == "..")
+        || lower.contains("%3b")
+        || path.split('/').any(|segment| {
+            // `..;x` is `..` to a server that drops path parameters (Tomcat,
+            // Spring, some proxies): the classic way past a prefix check.
+            let bare = segment.split(';').next().unwrap_or(segment);
+            bare == "." || bare == ".."
+        })
 }
 
 fn loopback(host: &str) -> bool {
@@ -315,6 +320,21 @@ impl Connections {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn a_dot_segment_hidden_behind_a_path_parameter_is_refused() {
+        for path in [
+            "/invoices/..;/admin",
+            "/invoices/.;/x",
+            "/..;a/admin",
+            "/invoices/..%3B/admin",
+        ] {
+            assert!(ambiguous(path), "{path} must not pass as a plain path");
+        }
+        // An ordinary parameter on an ordinary segment is fine.
+        assert!(!ambiguous("/invoices;page=2"));
+        assert!(!ambiguous("/rates/eur"));
+    }
     use super::*;
 
     const SECRET: &str = "Bearer sk-test-only-0123456789";
