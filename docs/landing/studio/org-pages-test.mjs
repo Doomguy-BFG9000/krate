@@ -223,7 +223,7 @@ const DIGEST = "7373e64ed97975e617f8c9c0c78cac114370fb54156be5bfd9400656e40c8f37
 
   // The audit in words.
   const w1 = K.eventWords({ actor: "github:carol", action: "candidate.approve", target: `candidate:${DIGEST}`, result: "denied", reason: "self-approval" }, { [DIGEST]: "Bounce 1.0.0" });
-  check(w1 === "@carol tried to approve Bounce 1.0.0. Refused: they sent it themselves.", "a refused self-approval reads plainly");
+  check(w1 === "@carol tried to approve Bounce 1.0.0: they sent it themselves.", "a refused self-approval reads plainly");
   const w2 = K.eventWords({ actor: "github:alice", action: "invite.create", target: "invite:email:erin@acme.test/recipient", result: "allowed" });
   check(w2 === "@alice invited erin@acme.test as recipient.", "an email invitation names the inbox");
   const w3 = K.eventWords({ actor: "github:alice", action: "member.role", target: "member:github:bob", result: "allowed", reason: "reviewer->developer" });

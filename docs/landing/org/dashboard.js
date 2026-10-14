@@ -304,7 +304,7 @@
         team.forEach(function (m) { card.appendChild(memberRow(m, owners)); });
       }
       if (recips.length) {
-        card.appendChild(el("p", { class: "grp", text: "Recipients: they open the apps, and nothing else" }));
+        if (role !== "recipient") card.appendChild(el("p", { class: "grp", text: "Recipients: they open the apps, and nothing else" }));
         recips.forEach(function (m) { card.appendChild(memberRow(m, owners)); });
       }
       if (gone.length) {

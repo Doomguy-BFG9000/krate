@@ -303,7 +303,8 @@
         "release.download": "open " + app(),
         "audit.read": "read the activity",
       }[ev.action] || "do " + ev.action;
-      return a + " tried to " + tried + ". Refused: " + (SHORT_WHY[ev.reason] || ev.reason || "not allowed") + ".";
+      // Shown beside a Refused badge, so the sentence says why, not "refused" again.
+      return a + " tried to " + tried + ": " + (SHORT_WHY[ev.reason] || ev.reason || "not allowed") + ".";
     }
     switch (ev.action) {
       case "org.create": return a + " created the organisation.";
