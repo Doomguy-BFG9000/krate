@@ -322,6 +322,13 @@
     "invite-revoked": "the invitation was withdrawn",
     "slug-taken": "the name is taken",
     "idempotency-key-reused": "a reused request",
+    "org-closing": "the organisation is closing",
+    "org-closed": "the organisation is closed",
+    "org-suspended": "paused for billing",
+    "close-statement-mismatch": "the closing had changed",
+    "close-confirm-mismatch": "the short name did not match",
+    "sso-required": "company sign-in required",
+    "recovery-not-waiting": "no recovery was waiting",
   };
 
   /// One audit event as a sentence. `names` maps a digest to "Ledger 1.2".
@@ -329,7 +336,10 @@
     names = names || {};
     var a = who(ev.actor).label;
     var t = targetOf(ev.target);
-    var app = function () { return names[t.value] || "version " + String(t.value).slice(0, 12); };
+    var app = function () {
+      if (t.kind !== "candidate" && t.kind !== "release") return "an app";
+      return names[t.value] || "version " + String(t.value).slice(0, 12);
+    };
     var invitee = function () {
       var v = t.value, slash = v.lastIndexOf("/");
       return { p: who(slash > 0 ? v.slice(0, slash) : v).label, role: slash > 0 ? v.slice(slash + 1) : "" };
@@ -351,6 +361,22 @@
         "release.list": "see the releases",
         "release.download": "open " + app(),
         "audit.read": "read the activity",
+        // The store's own command names, which a lifecycle or billing gate
+        // refuses before the command runs (Addendum 3 D).
+        approve: "approve " + app(),
+        "add-candidate": "send an app for approval",
+        "check-candidate": "send an app for approval",
+        invite: "invite someone",
+        accept: "accept an invitation",
+        "set-role": "change a role",
+        remove: "remove someone",
+        "set-root": "set the root key",
+        close: "close the organisation",
+        "close-approve": "approve the closing",
+        "close-cancel": "cancel the closing",
+        export: "build an export",
+        "billing-checkout": "open checkout",
+        "recover-object": "object to a recovery",
       }[ev.action] || "do " + ev.action;
       // Shown beside a Refused badge, so the sentence says why, not "refused" again.
       return a + " tried to " + tried + ": " + (SHORT_WHY[ev.reason] || ev.reason || "not allowed") + ".";
