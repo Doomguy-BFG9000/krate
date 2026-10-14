@@ -88,18 +88,61 @@ fn ask(session: &access::OrgSession, name: &str, digest: &str) -> Answer {
     }
 }
 
-/// The credential part of the hub's answer, as the runtime's seam takes it.
-/// Under the organisation keyring (F-316) this reads the sealed blob instead.
-fn delivered(answer: &Value) -> Delivered {
-    Delivered::Header {
-        name: answer["header"]["name"]
-            .as_str()
-            .unwrap_or_default()
-            .to_string(),
-        value: answer["header"]["value"]
-            .as_str()
-            .unwrap_or_default()
-            .to_string(),
+/// The credential part of the hub's answer, as the runtime's seam takes it:
+/// the blob sealed to the organisation's key where it was typed (F-316),
+/// and what it is sealed for. The hub cannot open it; neither does this.
+fn delivered(org: &str, name: &str, answer: &Value) -> Delivered {
+    let c = &answer["credential"];
+    Delivered {
+        org: org.to_string(),
+        name: name.to_string(),
+        base: answer["base"].as_str().unwrap_or_default().to_string(),
+        header_name: c["header"].as_str().unwrap_or_default().to_string(),
+        version: c["v"]
+            .as_u64()
+            .and_then(|v| u32::try_from(v).ok())
+            .unwrap_or(0),
+        sealed: c["sealed"].as_str().unwrap_or_default().to_string(),
+    }
+}
+
+/// This computer's copy of the organisation's key, taken from the hub's
+/// envelope for this device (and this device doing its share of the
+/// keyring, as any member device online with an organisation's app open
+/// does), or the plain words of why it has none yet.
+fn this_computers_key(session: &access::OrgSession) -> Result<krate_orgkeys::Keyring, String> {
+    use krate_orgkeys::agent::{Agent, AgentError, Status};
+    let org = &session.slug;
+    let device = access::org_device_key().map_err(|err| format!("{err:#}"))?;
+    let agent = Agent::new(
+        &session.hub,
+        org,
+        session.authorization.clone(),
+        device,
+        &access::device_name(
+            crate::github_auth::current()
+                .map(|identity| crate::org::principal_of(&identity.login))
+                .as_deref(),
+        ),
+    );
+    match agent.refresh(None) {
+        Ok(Status::Holds(held)) => Ok(held.keyring),
+        Ok(Status::Waiting) => Err(format!(
+            "this computer does not have {org}'s encryption key yet, and the credential is \
+             encrypted with it. It gets it by itself the next time another member's computer \
+             is online with one of {org}'s apps open; then open this app again"
+        )),
+        Ok(Status::NoKey) => Err(format!(
+            "{org} has not turned on encryption yet: an owner runs `krate org keys init {org}`"
+        )),
+        Err(AgentError::Offline) => Err(format!(
+            "{} could not be reached for {org}'s encryption key: connect to the internet and \
+             open the app again",
+            session.hub
+        )),
+        Err(err) => Err(format!(
+            "this computer could not take {org}'s encryption key: {err}"
+        )),
     }
 }
 
@@ -158,6 +201,8 @@ pub fn resolve(
         return Connections::default();
     };
     let mut out = Vec::new();
+    // Taken once, the first time the hub hands over a credential.
+    let mut keyring: Option<Result<krate_orgkeys::Keyring, String>> = None;
     for name in names {
         let known = access::known_connection(&digest, &name);
         let known_base = known
@@ -184,8 +229,18 @@ pub fn resolve(
                     paths: strings(&answer["allow"]["paths"]),
                     // Opened in exactly one place, the runtime's side of
                     // the credential seam (F-316).
-                    state: open_credential(delivered(&answer)).unwrap_or_else(|why| {
-                        let words = format!("the {name} connection could not be used: {why}");
+                    state: open_credential(
+                        delivered(&session.slug, &name, &answer),
+                        keyring
+                            .get_or_insert_with(|| this_computers_key(&session))
+                            .as_ref()
+                            .map_err(Clone::clone),
+                    )
+                    .unwrap_or_else(|why| {
+                        let words = format!(
+                            "the {name} connection is not available to this app, which opens \
+                             without it: {why}"
+                        );
                         eprintln!("{words}");
                         ConnectionState::Unavailable(words)
                     }),

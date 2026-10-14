@@ -10,6 +10,8 @@ on:
       # exactly what happened to docs/open and docs/cloud.
       - "docs/book/**"
       - "docs/landing/**"
+      # The cross-language sealing vector the dashboard's page test reads.
+      - "crates/orgkeys/tests/vectors/**"
       - "docs/open/**"
       - "docs/cloud/**"
       - "docs/support/**"
@@ -278,6 +280,10 @@ jobs:
           # Company connections in Settings: only owners and admins manage
           # them, the credential is sent once and never shown again (IC-952).
           node docs/landing/studio/org-connections-test.mjs
+          # The credential is sealed in the browser (F-316): the page's
+          # sealing makes the exact bytes crates/orgkeys makes and opens what
+          # it seals, on one cross-language vector both test suites read.
+          node docs/landing/studio/org-seal-test.mjs
           # And the doors security asks for (IC-955): SAML, SCIM and the
           # audit export are each shown only to the roles the matrix gives
           # them, a token or secret is shown once and kept nowhere, nothing

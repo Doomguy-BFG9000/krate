@@ -9,8 +9,9 @@
 //! The credential is never an argument, because an argument stays in the
 //! shell's history and shows in the list of running processes. It is read
 //! from a file (`--value-file`) or typed at a prompt that does not show it,
-//! sent once, and never printed back: the hub keeps it encrypted and shows
-//! only who set it and when.
+//! encrypted here to the organisation's key (F-316), sent once, and never
+//! printed back: the hub keeps only what it cannot read, and shows who set
+//! it and when.
 
 use std::io::{BufRead, IsTerminal, Write};
 use std::path::PathBuf;
@@ -163,34 +164,156 @@ impl Drop for Quiet {
     }
 }
 
-/// The credential part of a request body.
+/// The longest header value the runtime sends (adapter-common net.rs).
+const MAX_VALUE: usize = 4096;
+
+/// Headers the transport owns: a credential in one would be rewritten or
+/// refused on the way out.
+const TRANSPORT_HEADERS: &[&str] = &[
+    "host",
+    "content-length",
+    "transfer-encoding",
+    "connection",
+    "upgrade",
+    "te",
+    "trailer",
+    "keep-alive",
+    "expect",
+];
+
+/// A credential as typed, checked here because the hub cannot look inside
+/// the seal: the kind, the header it goes in, and the header's value.
+struct Typed {
+    kind: &'static str,
+    header: String,
+    value: String,
+}
+
+/// What the credential is, read and checked. Never from an argument.
 fn credential(
     header: Option<&str>,
     basic: Option<&str>,
     value_file: Option<&PathBuf>,
-) -> Result<serde_json::Value> {
-    match (header, basic) {
+) -> Result<Typed> {
+    let typed = match (header, basic) {
         (Some(name), None) => {
+            let name = name.trim();
+            if name.is_empty()
+                || name.len() > 64
+                || !name
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b"!#$%&'*+.^_`|~-".contains(&b))
+            {
+                anyhow::bail!("the header name is one word, such as Authorization or X-Api-Key");
+            }
+            let lower = name.to_ascii_lowercase();
+            if TRANSPORT_HEADERS.contains(&lower.as_str()) || lower.starts_with("proxy-") {
+                anyhow::bail!(
+                    "{name} is a header the connection itself sets, so it cannot carry a \
+                     credential: use the one your API names, like Authorization"
+                );
+            }
             let value = read_value(value_file, &format!("{name} value"))?;
-            Ok(serde_json::json!({ "header": { "name": name, "value": value } }))
+            Typed {
+                kind: "header",
+                header: name.to_string(),
+                value,
+            }
         }
         (None, Some(user)) => {
+            if user.is_empty() || user.contains(':') || user.len() > 256 {
+                anyhow::bail!("the user is one line without a colon");
+            }
             let password = read_value(value_file, &format!("password for {user}"))?;
-            Ok(serde_json::json!({ "basic": { "user": user, "password": password } }))
+            if password.len() > 1024 {
+                anyhow::bail!("nothing was sent: the password is longer than 1024 characters");
+            }
+            Typed {
+                kind: "basic",
+                header: "Authorization".to_string(),
+                value: format!(
+                    "Basic {}",
+                    krate_orgkeys::b64_encode(format!("{user}:{password}").as_bytes())
+                ),
+            }
         }
         _ => anyhow::bail!(
             "say what the credential is: --header <name> (like --header Authorization), or \
              --basic <user>; its value is read from --value-file or asked for"
         ),
+    };
+    if typed.value.len() > MAX_VALUE || typed.value.contains(['\r', '\n', '\0']) {
+        anyhow::bail!(
+            "nothing was sent: the credential is one line of up to {MAX_VALUE} characters"
+        );
     }
+    Ok(typed)
 }
 
-/// The entry side of the credential seam (F-316): what leaves this machine
-/// for the hub. Today the credential goes as typed, over TLS, and the hub
-/// seals it at rest. Under the organisation keyring this seals it to the
-/// organisation's public key first, so the hub only ever holds the blob.
-fn seal_for_hub(body: serde_json::Value) -> serde_json::Value {
-    body
+/// A connection's address as the hub keeps it (cloud/worker
+/// org-connections.js normalBase): scheme and host in lower case, no
+/// default port, no trailing slash. The credential is sealed for exactly
+/// this text, so it is what is sent; the hub refuses one that differs.
+fn normal_base(raw: &str) -> String {
+    let raw = raw.trim();
+    let Some((scheme, rest)) = raw.split_once("://") else {
+        return raw.to_string();
+    };
+    let scheme = scheme.to_ascii_lowercase();
+    let (authority, path) = match rest.find('/') {
+        Some(at) => rest.split_at(at),
+        None => (rest, ""),
+    };
+    let authority = authority.to_ascii_lowercase();
+    let authority = match (scheme.as_str(), authority.rsplit_once(':')) {
+        ("https", Some((host, "443"))) | ("http", Some((host, "80"))) => host.to_string(),
+        _ => authority,
+    };
+    format!("{scheme}://{authority}{}", path.trim_end_matches('/'))
+}
+
+/// The entry side of the credential seam (F-316): the one place a typed
+/// credential becomes what leaves this machine. It is sealed here to the
+/// organisation's current public key -- checked against the copy this
+/// computer holds, when it holds one -- for the connection's name, header
+/// and address; only the sealed blob and its key version are sent, so
+/// Krate's hub cannot read it.
+fn seal_for_hub(
+    client: &super::Client,
+    slug: &str,
+    name: &str,
+    base: &str,
+    typed: Typed,
+) -> Result<serde_json::Value> {
+    use krate_orgkeys::agent::Status;
+    let agent = super::key_agent(client, slug)?;
+    let held = match agent
+        .refresh(None)
+        .map_err(|err| super::key_words(err, slug))?
+    {
+        Status::Holds(held) => Some(held),
+        Status::Waiting => None,
+        Status::NoKey => anyhow::bail!(
+            "nothing was sent: {slug} has not turned on encryption yet, and a credential is \
+             always encrypted so that only {slug}'s computers can read it. An owner turns it on \
+             once: `krate org keys init {slug}`"
+        ),
+    };
+    let Some((version, public)) = agent
+        .org_public_key(held.as_ref())
+        .map_err(|err| super::key_words(err, slug))?
+    else {
+        anyhow::bail!(
+            "nothing was sent: {slug} has not turned on encryption yet. An owner turns it on \
+             once: `krate org keys init {slug}`"
+        );
+    };
+    let context = krate_orgkeys::connection_context(slug, name, &typed.header, base);
+    let sealed = krate_orgkeys::seal_for_org(&public, &context, typed.value.as_bytes())
+        .map_err(|err| anyhow::anyhow!("could not encrypt the credential: {err}"))?;
+    Ok(serde_json::json!({
+        "credential": { "kind": typed.kind, "header": typed.header, "v": version, "sealed": sealed },
+    }))
 }
 
 fn spoken_list(items: &[String]) -> String {
@@ -251,6 +374,18 @@ fn describe(c: &serde_json::Value) -> Vec<String> {
             c["uses"]["today"].as_u64().unwrap_or(0),
             c["uses"]["last_30_days"].as_u64().unwrap_or(0),
         ),
+        if c["credential"]["state"] == "needs-entry" {
+            format!(
+                "    enter this credential again: it was saved before Krate encrypted \
+                 credentials, so Krate deleted it rather than keep a copy it could read. Apps \
+                 cannot use it until an owner or admin runs `krate org connection replace {} \
+                 --header {}`",
+                text(c, "name"),
+                text(&c["credential"], "header"),
+            )
+        } else {
+            "    encrypted: Krate cannot read this credential".to_string()
+        },
     ]
 }
 
@@ -299,11 +434,9 @@ pub(super) fn run(client: &Client, me: &str, command: ConnectionCommand) -> Resu
             apps,
         } => {
             let name = name.trim().to_ascii_lowercase();
-            let mut body = seal_for_hub(credential(
-                header.as_deref(),
-                basic.as_deref(),
-                value_file.as_ref(),
-            )?);
+            let base = normal_base(&base);
+            let typed = credential(header.as_deref(), basic.as_deref(), value_file.as_ref())?;
+            let mut body = seal_for_hub(client, &slug, &name, &base, typed)?;
             body["name"] = serde_json::json!(name);
             body["base"] = serde_json::json!(base);
             body["allow"] = serde_json::json!({
@@ -335,6 +468,10 @@ pub(super) fn run(client: &Client, me: &str, command: ConnectionCommand) -> Resu
             println!("  cap = \"net.connection:{name}\"");
             println!("  rationale = \"<what it reads or sends>\"");
             println!("The app never sees the credential: Krate adds it to the app's requests.");
+            println!(
+                "It was encrypted on this computer before it was sent: Krate cannot read it, \
+                 only {slug}'s members' computers can."
+            );
             Ok(0)
         }
         ConnectionCommand::Replace {
@@ -345,11 +482,32 @@ pub(super) fn run(client: &Client, me: &str, command: ConnectionCommand) -> Resu
             value_file,
         } => {
             let name = name.trim().to_ascii_lowercase();
-            let body = seal_for_hub(credential(
-                header.as_deref(),
-                basic.as_deref(),
-                value_file.as_ref(),
-            )?);
+            let typed = credential(header.as_deref(), basic.as_deref(), value_file.as_ref())?;
+            // Sealed for the address the connection has now.
+            let listed = worded(
+                client.send(
+                    "GET",
+                    &format!("/orgs/{}/connections", seg(&slug)?),
+                    &Body::Empty,
+                ),
+                &slug,
+                me,
+                Action::Connection,
+            )?;
+            let base = listed["connections"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .find(|c| c["name"] == name.as_str())
+                .and_then(|c| c["base"].as_str())
+                .map(str::to_string)
+                .with_context(|| {
+                    format!(
+                        "{slug} has no connection called {name}: `krate org connection list \
+                         {slug}` shows the ones there are"
+                    )
+                })?;
+            let body = seal_for_hub(client, &slug, &name, &base, typed)?;
             worded(
                 client.send(
                     "PUT",

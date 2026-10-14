@@ -204,6 +204,26 @@ it was used. `krate org connection replace` gives it a new credential, which
 every app gets the next time it opens; `krate org connection remove` deletes
 it. Moving a connection to another address needs its credential again.
 
+**Krate cannot read the credential.** It is encrypted on the computer it is
+typed on, in the dashboard or by the CLI, to the organisation's key, and
+only the encrypted copy is sent. Krate's hub keeps that copy and hands it to
+a member's computer when an allowed app opens; only the computers of the
+organisation's members hold the key that opens it. An owner turns this on
+once with `krate org keys init acme`, and until then no credential can be
+saved. When someone is removed, the next member's computer online encrypts
+every credential again to a new key that the removed person never had. A
+credential saved before this existed was deleted rather than kept where
+Krate could read it; the dashboard and `krate org connection list` say to
+enter it again.
+
+The exact terms: HPKE (RFC 9180) base mode with X25519, HKDF-SHA256 and
+ChaCha20-Poly1305, bound to the organisation, the connection's name, its
+header and its address, so a credential moved to another address does not
+open. The limit to know: the hub hands the dashboard the organisation's
+public key, and decides who is a member, so a hub that lied could ask for a
+credential to be encrypted to a key of its own; a computer that already
+holds the organisation's key checks the one it is given against its own.
+
 An app asks for it by name in its manifest:
 
 ```toml

@@ -202,6 +202,18 @@ fn hpke_seal(
     aad: &[u8],
     plaintext: &[u8],
 ) -> Result<Vec<u8>, KeyError> {
+    hpke_seal_with(recipient, info, aad, plaintext, &mut rng())
+}
+
+/// [`hpke_seal`] with the randomness the ephemeral key is made from given:
+/// the operating system's everywhere but the cross-language test vector.
+fn hpke_seal_with<R: rand_core::CryptoRng + rand_core::RngCore>(
+    recipient: &[u8; 32],
+    info: &[u8],
+    aad: &[u8],
+    plaintext: &[u8],
+    random: &mut R,
+) -> Result<Vec<u8>, KeyError> {
     let pk = <Kem as hpke::Kem>::PublicKey::from_bytes(recipient)
         .map_err(|_| KeyError::Malformed("X25519 public key"))?;
     let (encapped, ciphertext) = hpke::single_shot_seal::<HpkeAead, Kdf, Kem, _>(
@@ -210,7 +222,7 @@ fn hpke_seal(
         info,
         plaintext,
         aad,
-        &mut rng(),
+        random,
     )
     .map_err(|_| KeyError::Malformed("X25519 public key"))?;
     let mut out = encapped.to_bytes().to_vec();
@@ -477,6 +489,17 @@ pub fn seal_for_org(
     Ok(b64_encode(&hpke_seal(
         org_public, &info, org_public, plaintext,
     )?))
+}
+
+/// The context a company connection's credential is sealed for: the
+/// organisation, the connection's name, the header it goes in and the
+/// address it goes to, as the hub keeps them. Binding the address means a
+/// hub that moved a connection to a server of its own would hand devices a
+/// credential that no longer opens; binding the name, that it cannot pass
+/// one connection's credential off as another's. The admin's browser
+/// (docs/landing/org/orgseal.js) builds the same text.
+pub fn connection_context(org: &str, name: &str, header_name: &str, base: &str) -> String {
+    format!("connection:{org}/{name}\n{header_name}\n{base}")
 }
 
 /// Open what [`seal_for_org`] sealed to version `version` of the key.
@@ -925,6 +948,26 @@ mod tests {
         );
     }
 
+    /// Prints a `rust_random` value for the vector file: run once by hand
+    /// when the vector is remade (`-- --ignored --nocapture`).
+    #[test]
+    #[ignore]
+    fn print_a_rust_sealed_vector_value() {
+        let vector: serde_json::Value =
+            serde_json::from_str(include_str!("../tests/vectors/org-seal.json")).unwrap();
+        let org = KeyPair::derive(&hex32(vector["org_ikm"].as_str().unwrap()).unwrap());
+        let case = &vector["rust_random"];
+        println!(
+            "rust_random.sealed = {}",
+            seal_for_org(
+                &org.public(),
+                case["context"].as_str().unwrap(),
+                case["plaintext"].as_str().unwrap().as_bytes()
+            )
+            .unwrap()
+        );
+    }
+
     #[test]
     fn a_secret_sealed_to_the_organisation_opens_only_with_its_keyring() {
         let ring = Keyring::create("acme");
@@ -948,6 +991,133 @@ mod tests {
             ),
             Err(KeyError::Open)
         );
+    }
+
+    /// The randomness a vector's ephemeral key is made from: its `ikm_e`.
+    struct Fixed([u8; 32]);
+
+    impl rand_core::RngCore for Fixed {
+        fn next_u32(&mut self) -> u32 {
+            unreachable!("the KEM asks for bytes")
+        }
+        fn next_u64(&mut self) -> u64 {
+            unreachable!("the KEM asks for bytes")
+        }
+        fn fill_bytes(&mut self, dest: &mut [u8]) {
+            dest.copy_from_slice(&self.0[..dest.len()]);
+        }
+    }
+
+    impl rand_core::CryptoRng for Fixed {}
+
+    /// The cross-language vector the dashboard's page test reads too
+    /// (docs/landing/studio/org-seal-test.mjs): this crate makes exactly
+    /// the bytes the page's hpke-js makes for the same ephemeral key, and
+    /// opens what the page sealed with a random one.
+    #[test]
+    fn a_secret_sealed_by_the_dashboard_opens_here_and_the_bytes_agree() {
+        let vector: serde_json::Value =
+            serde_json::from_str(include_str!("../tests/vectors/org-seal.json")).unwrap();
+        let ikm = hex32(vector["org_ikm"].as_str().unwrap()).unwrap();
+        let org = KeyPair::derive(&ikm);
+        assert_eq!(org.public_hex(), vector["org_public"].as_str().unwrap());
+        let mut keys = BTreeMap::new();
+        keys.insert(1, org.clone());
+        let ring = Keyring {
+            org: "acme".into(),
+            keys,
+        };
+        let opens = |case: &serde_json::Value| {
+            let context = case["context"].as_str().unwrap();
+            let sealed = case["sealed"].as_str().unwrap();
+            let plain = open_for_org(&ring, 1, context, sealed).expect(context);
+            assert_eq!(
+                String::from_utf8(plain).unwrap(),
+                case["plaintext"].as_str().unwrap()
+            );
+        };
+        let cases = vector["cases"].as_array().unwrap();
+        assert!(cases.len() >= 2);
+        for case in cases {
+            let context = case["context"].as_str().unwrap();
+            let mut info = ORG_SEAL_INFO.to_vec();
+            info.extend_from_slice(context.as_bytes());
+            let made = hpke_seal_with(
+                &org.public(),
+                &info,
+                &org.public(),
+                case["plaintext"].as_str().unwrap().as_bytes(),
+                &mut Fixed(hex32(case["ikm_e"].as_str().unwrap()).unwrap()),
+            )
+            .unwrap();
+            assert_eq!(
+                b64_encode(&made),
+                case["sealed"].as_str().unwrap(),
+                "{context}"
+            );
+            opens(case);
+            // The context is bound: another connection's does not open it.
+            assert_eq!(
+                open_for_org(
+                    &ring,
+                    1,
+                    &context.replace("acme/", "globex/"),
+                    case["sealed"].as_str().unwrap()
+                ),
+                Err(KeyError::Open)
+            );
+        }
+        opens(&vector["page_random"]);
+        opens(&vector["rust_random"]);
+    }
+
+    #[test]
+    fn a_connections_context_binds_its_name_header_and_address() {
+        let ring = Keyring::create("acme");
+        let (v, key) = ring.current();
+        let at = connection_context(
+            "acme",
+            "finance-api",
+            "Authorization",
+            "https://api.acme.example/finance",
+        );
+        let sealed = seal_for_org(&key.public(), &at, b"Bearer s3cret").unwrap();
+        assert_eq!(
+            open_for_org(&ring, v, &at, &sealed).unwrap(),
+            b"Bearer s3cret"
+        );
+        for other in [
+            connection_context(
+                "acme",
+                "payroll",
+                "Authorization",
+                "https://api.acme.example/finance",
+            ),
+            connection_context(
+                "acme",
+                "finance-api",
+                "X-Debug",
+                "https://api.acme.example/finance",
+            ),
+            connection_context(
+                "acme",
+                "finance-api",
+                "Authorization",
+                "https://evil.example/collect",
+            ),
+            connection_context(
+                "globex",
+                "finance-api",
+                "Authorization",
+                "https://api.acme.example/finance",
+            ),
+        ] {
+            assert_eq!(
+                open_for_org(&ring, v, &other, &sealed),
+                Err(KeyError::Open),
+                "{other}"
+            );
+        }
     }
 
     #[test]
