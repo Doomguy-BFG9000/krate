@@ -1,0 +1,26 @@
+[package]
+name = "krate-http"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+description = "The one way Krate makes an HTTPS client: the computer's own trust store and proxy settings, so it works on a company network (IC-949 N)."
+
+[dependencies]
+ureq.workspace = true
+rustls = { version = "0.23", default-features = false, features = ["std", "ring"] }
+# The roots ureq bundles, for the phones and for a machine with no store.
+webpki-roots = "1"
+
+# The phone players keep the bundled roots they ship today (IC-949 N): the
+# platform verifier needs JNI set-up on Android, and the phones are not part
+# of this change.
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+rustls-platform-verifier = "0.7"
+
+# Linux: the system store, plus Mozilla's roots, so a fresh machine with no
+# CA bundle installed still reaches the public internet.
+[target.'cfg(all(unix, not(target_vendor = "apple"), not(target_os = "android")))'.dependencies]
+webpki-root-certs = "1"

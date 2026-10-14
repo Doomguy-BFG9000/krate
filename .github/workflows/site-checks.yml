@@ -25,6 +25,8 @@ on:
       - "scripts/test-studio-redesign.mjs"
       - "scripts/fingerprint-css.py"
       - "scripts/ensure-touch-targets.py"
+      - "scripts/check-security-txt.py"
+      - "scripts/build-policy-templates.py"
   push:
     branches: [main]
     paths:
@@ -50,6 +52,8 @@ on:
       - "scripts/test-studio-redesign.mjs"
       - "scripts/fingerprint-css.py"
       - "scripts/ensure-touch-targets.py"
+      - "scripts/check-security-txt.py"
+      - "scripts/build-policy-templates.py"
   workflow_dispatch:
 
 permissions:
@@ -88,3 +92,7 @@ jobs:
         run: python3 scripts/site_kit.py --self-test && python3 scripts/site_kit.py --check
       - name: Stylesheet fingerprinting and phone rules
         run: python3 scripts/fingerprint-css.py --self-test && python3 scripts/ensure-touch-targets.py --self-test
+      - name: security.txt is valid and not expired
+        run: python3 scripts/check-security-txt.py --self-test && python3 scripts/check-security-txt.py
+      - name: Organisation policy templates match their generator
+        run: python3 scripts/build-policy-templates.py --self-test && python3 scripts/build-policy-templates.py --check

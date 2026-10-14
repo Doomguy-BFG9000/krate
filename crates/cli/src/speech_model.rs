@@ -73,7 +73,7 @@ fn download_verified_model(destination: &Path) -> Result<()> {
         .with_context(|| format!("create speech model cache {}", parent.display()))?;
     let partial = parent.join(format!("{MODEL_FILENAME}.download"));
 
-    let response = ureq::get(MODEL_URL)
+    let response = krate_http::get(MODEL_URL)
         .call()
         .with_context(|| format!("download the local speech model from {MODEL_URL}"))?;
     let mut reader = response.into_reader();

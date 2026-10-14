@@ -48,6 +48,10 @@ run "site kit self-test" python3 scripts/site_kit.py --self-test
 run "site kit pages" python3 scripts/site_kit.py --check
 run "fingerprint self-test" python3 scripts/fingerprint-css.py --self-test
 run "site tests deployed" python3 scripts/check-site-tests-deployed.py
+run "security.txt self-test" python3 scripts/check-security-txt.py --self-test
+run "security.txt" python3 scripts/check-security-txt.py
+run "policy templates self-test" python3 scripts/build-policy-templates.py --self-test
+run "policy templates" python3 scripts/build-policy-templates.py --check
 
 # Browser checks, when a Playwright module is available (it is not in CI).
 if [ -n "$KRATE_PLAYWRIGHT_MODULE" ] || node -e "import('playwright')" >/dev/null 2>&1; then

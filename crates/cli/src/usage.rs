@@ -475,7 +475,7 @@ pub fn flush_spool_now() {
         // Oldest first, and never more than the cap: a long offline spell
         // sends recent history rather than a flood.
         let start = events.len().saturating_sub(SPOOL_MAX_EVENTS);
-        let agent = ureq::AgentBuilder::new()
+        let agent = krate_http::builder(&endpoint)
             .timeout_connect(Duration::from_secs(3))
             .timeout_read(Duration::from_secs(3))
             .build();

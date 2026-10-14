@@ -132,7 +132,7 @@ struct GitHubUser {
 
 /// Run the device flow, printing what the person needs to do.
 pub fn sign_in() -> Result<Identity> {
-    let device = ureq::post(DEVICE_CODE_URL)
+    let device = krate_http::post(DEVICE_CODE_URL)
         .set("Accept", "application/json")
         .send_form(&[("client_id", CLIENT_ID), ("scope", SCOPE)])
         .context("could not reach GitHub to start signing in")?
@@ -169,7 +169,7 @@ pub fn sign_in() -> Result<Identity> {
         print!(".");
         let _ = std::io::stdout().flush();
 
-        let response = ureq::post(TOKEN_URL)
+        let response = krate_http::post(TOKEN_URL)
             .set("Accept", "application/json")
             .send_form(&[
                 ("client_id", CLIENT_ID),
@@ -235,7 +235,7 @@ pub fn sign_in_json() -> Result<Identity> {
         let _ = std::io::stdout().flush();
     };
 
-    let device = ureq::post(DEVICE_CODE_URL)
+    let device = krate_http::post(DEVICE_CODE_URL)
         .set("Accept", "application/json")
         .send_form(&[("client_id", CLIENT_ID), ("scope", SCOPE)])
         .context("could not reach GitHub to start signing in")?
@@ -255,7 +255,7 @@ pub fn sign_in_json() -> Result<Identity> {
     let mut interval = Duration::from_secs(device.interval.max(1));
     while Instant::now() < deadline {
         std::thread::sleep(interval);
-        let response = ureq::post(TOKEN_URL)
+        let response = krate_http::post(TOKEN_URL)
             .set("Accept", "application/json")
             .send_form(&[
                 ("client_id", CLIENT_ID),
@@ -305,7 +305,7 @@ pub fn sign_in_json() -> Result<Identity> {
 }
 
 fn fetch_identity(token: &str) -> Result<Identity> {
-    let user = ureq::get(USER_URL)
+    let user = krate_http::get(USER_URL)
         .set("Authorization", &format!("Bearer {token}"))
         .set("Accept", "application/vnd.github+json")
         // GitHub rejects API requests with no user agent.

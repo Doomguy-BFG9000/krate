@@ -832,7 +832,7 @@ fn call_api_with(
         ),
     };
 
-    let mut request = ureq::post(url)
+    let mut request = krate_http::post(url)
         .set("Content-Type", "application/json")
         .set(auth_header, &auth_value);
     if vendor == ApiVendor::Anthropic {

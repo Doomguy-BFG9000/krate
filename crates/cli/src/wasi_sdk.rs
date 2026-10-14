@@ -351,7 +351,7 @@ pub fn install(from: Option<&Path>, sha256: Option<&str>) -> Result<WasiSdk> {
 }
 
 fn fetch(url: &str, destination: &Path) -> Result<()> {
-    let response = ureq::get(url)
+    let response = krate_http::get(url)
         .call()
         .with_context(|| format!("download {url}"))?;
     let mut reader = response.into_reader();

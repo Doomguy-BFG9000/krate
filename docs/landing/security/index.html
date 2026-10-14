@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="description" content="How Krate runs an app: what a .krate can and cannot do, how it is checked, how apps are kept apart, what the network allows, what is stored and what Krate's hub sees. Written from the source code." />
+  <link rel="canonical" href="https://krate.tech/security/" />
+  <meta property="og:title" content="Krate: security model" />
+  <meta property="og:description" content="How Krate runs an app: what a .krate can and cannot do, how it is checked, how apps are kept apart, what the network allows, what is stored and what Krate's hub sees." />
+  <meta property="og:type" content="website" />
+  <meta property="og:url" content="https://krate.tech/security/" />
+  <meta property="og:image" content="https://krate.tech/og-v4.png" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <title>Krate: security model</title>
+  <link rel="icon" href="/krate-favicon.png" />
+  <link rel="apple-touch-icon" href="/krate-favicon.png" />
+<meta name="theme-color" content="#fbfbfd" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#08080a" media="(prefers-color-scheme: dark)">
+<script>(() => { const d = document.documentElement; d.classList.add('js'); let t = null; try { t = localStorage.getItem('krate-theme'); } catch (e) {} if (t !== 'light' && t !== 'dark') t = null; d.dataset.theme = t || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'); })();</script>
+<link rel="preload" href="/fonts/geist-var-latin.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="/kit/site.css">
+<style>
+.ph .updated { display: block; margin-top: 16px; }
+.lg { margin-top: 64px; padding-bottom: 8px; }
+.lg .toc { padding-top: 6px; }
+.lg .prose { max-width: 680px; }
+.lg .prose > h2:first-child { margin-top: 0; }
+.lg .prose code { overflow-wrap: anywhere; }
+.lg .prose .back { display: inline-flex; align-items: center; gap: 6px; margin-top: 44px; font-size: 14.5px; font-weight: 500; color: var(--ink-2); text-decoration: none; }
+.lg .prose .back:hover { color: var(--ink); }
+@media (pointer: coarse) { .lg .prose .back { min-height: 44px; } }
+@media (max-width: 680px) { .lg { margin-top: 40px; } .lg .prose h2 { margin-top: 44px; font-size: 23px; } }
+</style>
+</head>
+<body>
+<header class="hd">
+  <a class="brand" href="/"><img src="/krate-mark-3d-96.png" alt="" width="26" height="26">Krate</a>
+  <nav class="menu" id="menu" aria-label="Main">
+    <a class="mi" href="/" data-set="product">Product</a>
+    <a class="mi" href="/studio/" data-set="studio">Studio</a>
+    <a class="mi" href="/cloud/" data-set="apps">Apps</a>
+    <a class="mi" href="/docs/" data-set="docs">Docs</a>
+    <a class="mi" href="/download/">Download</a>
+    <div class="drawer" id="drawer" role="menu">
+      <div class="set" data-set="product"><a href="/">Overview</a><a href="/reports/">Measurements</a><a href="/progress/">Progress</a><a href="/faq/">Questions</a><a href="https://github.com/incyashraj/krate/releases" target="_blank" rel="noopener">Changelog <span class="ext">↗</span></a></div>
+      <div class="set" data-set="studio"><a href="/studio/">Krate Studio</a><a href="/app/">Make an app in your browser</a><a href="/download/">Download Studio</a></div>
+      <div class="set" data-set="apps"><a href="/cloud/">Apps</a><a href="/open/">Received an app?</a><a href="/publish/">Publish an app</a></div>
+      <div class="set" data-set="docs"><a href="/docs/">Docs</a><a href="/docs/quickstart.html">Quickstart</a><a href="/docs/pages/make-an-app-with-ai.html">Make an app with AI</a><a href="https://github.com/incyashraj/krate" target="_blank" rel="noopener">GitHub <span class="ext">↗</span></a></div>
+    </div>
+  </nav>
+  <div class="hr">
+    <button class="thm" id="thm" aria-label="Switch between light and dark"><svg class="sun" width="17" height="17" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="9" cy="9" r="3.4"/><path d="M9 1.8v1.6M9 14.6v1.6M1.8 9h1.6M14.6 9h1.6M3.9 3.9l1.1 1.1M13 13l1.1 1.1M3.9 14.1L5 13M13 5l1.1-1.1"/></svg><svg class="moon" width="16" height="16" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><path d="M15.2 11.2A6.6 6.6 0 0 1 6.8 2.8a6.6 6.6 0 1 0 8.4 8.4z"/></svg></button>
+    <a class="signin" href="/login/">Sign in</a>
+    <a class="cta" href="/app/">Try Krate</a>
+    <button class="burger" id="burger" aria-label="Menu" aria-expanded="false"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M3 6.5h12M3 11.5h12"/></svg></button>
+  </div>
+</header>
+<nav class="mnav" id="mnav" aria-label="Menu">
+  <h6>Krate</h6><a href="/">Overview</a><a href="/studio/">Studio</a><a href="/app/">Make an app in your browser</a><a href="/cloud/">Apps</a><a href="/download/">Download</a>
+  <h6>Help</h6><a href="/docs/">Docs</a><a href="/faq/">Questions</a><a href="/open/">Received an app?</a><a href="/contact/">Contact</a><a href="/login/">Sign in</a>
+</nav>
+
+<main>
+<section class="ph sm l wrap">
+  <span class="eye">Security</span>
+  <h1>How Krate keeps an app inside its limits.</h1>
+  <p class="lede">For the security team deciding whether Krate may run on your computers. Every line is written from the source code, which is public, so each one can be checked.</p>
+  <span class="updated">Last updated 2026-10-14</span>
+</section>
+
+<div class="wrap doc lg">
+  <aside class="toc" aria-label="On this page">
+    <h6>On this page</h6>
+    <a href="#file">What a .krate is</a>
+    <a href="#nothing">An app with nothing granted</a>
+    <a href="#asking">Everything else is asked for</a>
+    <a href="#files">Files and storage</a>
+    <a href="#network">Network</a>
+    <a href="#apart">Apps kept apart</a>
+    <a href="#signing">Signed apps</a>
+    <a href="#computer">What stays on the computer</a>
+    <a href="#hub">What Krate's hub sees</a>
+    <a href="#report">Reporting a problem</a>
+  </aside>
+  <article class="prose">
+    <h2 id="file">What a .krate is</h2>
+    <p>A <code>.krate</code> file is a zip archive. It holds
+    <code>manifest.toml</code>, which names the app and every capability it
+    asks for, and <code>code.wasm</code>, the app itself as a WebAssembly
+    component. It can also carry images and sounds, the source code it was
+    built from, and a signature.</p>
+    <p>Krate checks the whole archive before it writes anything: a size limit
+    on the archive, on each entry and on the total actually unpacked (counted
+    as it decompresses, not as the archive claims), and a limit on the number
+    of entries. A path that climbs out with <code>..</code>, starts at the
+    root or uses a backslash is refused, and a symbolic link in the archive is
+    unpacked as a plain file. Opening a file grants it nothing.</p>
+
+    <h2 id="nothing">An app with nothing granted</h2>
+    <p>An app runs inside Wasmtime, a WebAssembly runtime, and Krate gives it
+    no access to the operating system's own calls (no WASI). The only doors
+    out are Krate's interfaces, and each one is checked. A component that
+    imports operating-system calls is refused when it is packed.</p>
+    <p>Without asking, an app may only: read its own input and arguments,
+    print, read the clock and wait, read the language and number format, open
+    a window, show a message or a yes/no question, draw with the graphics
+    card, and play sound. That is the whole list. Files, the network, the
+    camera, the microphone, location, the clipboard and the rest are not on
+    it.</p>
+
+    <h2 id="asking">Everything else is asked for</h2>
+    <p>Every other ability is a named capability that the app's manifest must
+    declare, for example <code>fs.read:notes/**</code>,
+    <code>net.connect:api.example.com:443</code>,
+    <code>camera.capture</code>, <code>audio.capture</code> (the microphone)
+    or <code>location.read</code>. The person sees that list before the app
+    runs and decides. A call to anything the manifest did not declare is
+    refused even if it was granted, and anything declared but not granted is
+    refused.</p>
+    <p>An answer is remembered only for a signed app, under its publisher's
+    key, and a newer release reuses it only for the same or a narrower list:
+    a wider request is asked again. An unsigned app is asked every time it
+    opens. <code>krate permissions</code> shows what was remembered, and
+    <code>krate permissions --forget &lt;app id&gt;</code> takes it back.</p>
+
+    <h2 id="files">Files and storage</h2>
+    <p>An app names files by paths that Krate resolves inside one folder,
+    chosen when the app opens (the folder it is run from, or a folder of its
+    own for an app installed as a Mac app), and only where an
+    <code>fs.*</code> grant covers them.
+    <code>..</code> is refused, a symbolic link that leads outside is refused,
+    and a path starting with <code>/</code> stays inside that folder. A
+    manifest cannot use <code>~</code> or environment variables. A folder the
+    person picks in a dialog is reached through a token that lasts for that
+    run only.</p>
+    <p>An app's own data (key-value store, database, secrets) is kept in
+    Krate's folder, never at a path the app chooses. A signed app's data is
+    filed under its publisher's key, so an app from another publisher cannot
+    reach it. Secrets are encrypted with ChaCha20-Poly1305 under a key derived
+    for that app.</p>
+
+    <h2 id="network">Network</h2>
+    <p>An app reaches only the hosts and ports it was granted, as
+    <code>net.connect:&lt;host&gt;:&lt;port&gt;</code> with an exact host or a
+    <code>*.example.com</code> pattern. The check happens before a connection
+    is opened, for web requests, WebSockets and raw sockets alike, and a DNS
+    lookup is allowed only for a host some grant names. HTTPS certificates are
+    always checked. When an app fetches a URL, a redirect is never followed,
+    so a granted host cannot send the request somewhere else.</p>
+
+    <h2 id="apart">Apps kept apart</h2>
+    <p>Each app that is opened runs in its own process, with its own
+    WebAssembly instance and memory; one app cannot read another's memory. An
+    app has 256 MiB of memory unless it asks for more with
+    <code>memory.budget</code> and is granted it. <code>krate run
+    --untrusted</code> also puts a limit on how much work an app may do.</p>
+    <p>By default Krate compiles WebAssembly to machine code as it loads it
+    (Cranelift, through Wasmtime), so it needs to create executable memory.
+    On macOS the signed Krate carries Apple's entitlement for that, under the
+    hardened runtime.</p>
+
+    <h2 id="signing">Signed apps</h2>
+    <p>A publisher signs an app with an Ed25519 key. The signature covers a
+    statement that lists every file in the app with its SHA-256, and Krate
+    rebuilds that statement from the file each time, so any change after
+    signing shows. An app changed after it was signed is refused. A root key
+    can be kept offline and authorise release keys for a while, and a release
+    key can be withdrawn; an app signed by a key withdrawn before it signed is
+    refused.</p>
+    <p>An organisation's private app also carries a mark, covered by the
+    signature, and opens only for that organisation's members (see
+    <a href="/docs/organisations.html">Organisations</a>). Apps without that
+    mark never check in with Krate's hub when they open. Apps that Krate's hub
+    has removed are refused from a list kept on the computer, offline too
+    (refreshed with <code>krate blocklist --update</code>).</p>
+
+    <h2 id="computer">What stays on the computer</h2>
+    <p>Krate keeps what it remembers in <code>~/.krate</code> in the person's
+    home folder: the permissions they granted, each app's data, and the
+    GitHub sign-in token if they signed in. <code>krate run --log-grants
+    &lt;file&gt;</code> appends the permissions each run was given to a file
+    you choose. Krate itself sends nothing an app reads, writes or shows.</p>
+
+    <h2 id="hub">What Krate's hub sees</h2>
+    <p><strong>Usage counts.</strong> A random install id, the Krate version,
+    the operating system's name, which of four actions happened (install,
+    make, open, publish), whether an app was made with AI, and for some of
+    them whether it worked and, if not, a reason from a fixed list. Never app
+    names, file paths, prompts or anything about the person. The server limits
+    request rates by the connection's address, and records only whether a
+    count came from a home or a cloud network. Off with <code>krate telemetry off</code>,
+    <code>KRATE_NO_USAGE=1</code> or <code>DO_NOT_TRACK=1</code>.</p>
+    <p><strong>Only when someone asks.</strong> Publishing uploads the app.
+    Signing in with GitHub asks only to read the person's profile. An organisation's private app checks in with the hub, by the
+    app's fingerprint and the person's sign-in, to confirm the person may
+    still open it; it can then work offline for a time the organisation sets,
+    30 days at most. Krate sends no crash reports: a support report is
+    uploaded only when the person runs <code>krate support-send</code>.</p>
+
+    <h2 id="report">Reporting a problem</h2>
+    <p>Email <a href="mailto:yashraj@krate.tech">yashraj@krate.tech</a>, not a
+    public issue. You will hear back within 72 hours, with a first assessment
+    within 7 days. The full policy is
+    <a href="https://github.com/incyashraj/krate/blob/main/SECURITY.md">SECURITY.md</a>,
+    and <a href="/.well-known/security.txt">security.txt</a> has the same
+    contact for scanners. Running Krate across an organisation's computers is
+    in <a href="/docs/running-in-an-organisation.html">Running Krate in an
+    organisation</a>.</p>
+
+    <a class="back" href="/">&larr; Back to krate.tech</a>
+  </article>
+</div>
+</main>
+
+<footer class="foot">
+  <div class="fm"><img src="/krate-mark-3d-96.png" alt="Krate" width="30" height="30"></div>
+  <div><h5>Krate</h5><a href="/studio/">Studio</a><a href="/app/">Make in your browser</a><a href="/cloud/">Apps</a><a href="/download/">Download</a><a href="/about/">About</a></div>
+  <div><h5>Developers</h5><a href="/docs/">Docs</a><a href="/docs/quickstart.html">Quickstart</a><a href="https://github.com/incyashraj/krate" target="_blank" rel="noopener">GitHub</a><a href="https://github.com/incyashraj/krate/releases" target="_blank" rel="noopener">Changelog</a></div>
+  <div><h5>Ship an app</h5><a href="/how-to-distribute-a-desktop-app.html">Ship a desktop app</a><a href="/krate-vs-electron.html">Krate vs Electron</a><a href="/krate-vs-tauri.html">Krate vs Tauri</a><a href="/electron-alternatives.html">Electron alternatives</a><a href="/answers/">All answers</a><a href="/facts/">Facts</a></div>
+  <div><h5>Help</h5><a href="/faq/">Questions</a><a href="/open/">Received an app?</a><a href="/contact/">Contact</a><a href="/account/">Account</a></div>
+  <div><h5>Terms &amp; policies</h5><a href="/terms/">Terms</a><a href="/privacy/">Privacy</a><a href="/copyright/">Copyright</a><a href="/reports/">Measurements</a></div>
+  <div class="copy"><span>Krate © 2026 Krate Labs</span><span>Open source under MIT or Apache-2.0</span></div>
+</footer>
+<script src="/kit/site.js"></script>
+</body>
+</html>

@@ -31,6 +31,12 @@ jobs:
       ${{ contains(inputs.target, 'windows') && 'windows-latest'
        || contains(inputs.target, 'darwin') && 'macos-latest'
        || 'ubuntu-latest' }}
+    # id-token and attestations: the build provenance step below signs a
+    # statement about every file this run uploads (Sigstore, through GitHub).
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
@@ -77,6 +83,73 @@ jobs:
             cp out-tool/bin/cargo-component out/ 2>/dev/null || true
           fi
           ls -la out
+
+      # This lane is where the release's supply-chain files are proved,
+      # because release.yml only runs on a tag and a tag is too late to find
+      # out a new step is broken. The steps below are the same scripts the
+      # release runs: an SBOM, the installer packages, and build provenance
+      # for every file uploaded.
+      #
+      # The bill of materials (CycloneDX JSON) for exactly this build: the
+      # crates the CLI links for this target with this lane's features (the
+      # default set, so no speech-to-text), plus Studio's Rust shell and the
+      # JavaScript bundled into its interface. Read from the lockfiles by
+      # `cargo metadata` and npm; nothing is compiled for it.
+      - name: Bill of materials (CycloneDX)
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo install cargo-cyclonedx --locked --version 0.5.7
+          bash scripts/build-sbom.sh "${{ inputs.target }}" out --no-speech --studio
+
+      # What an IT team deploys: a .pkg on macOS, a .deb and an .rpm on
+      # Linux, from the binary built above. The .pkg is unsigned here (this
+      # lane has no signing secrets) and its name ends in -unsigned to say so.
+      - name: Installer packages (.pkg, .deb, .rpm)
+        if: contains(inputs.target, 'darwin') || contains(inputs.target, 'linux')
+        shell: bash
+        run: |
+          set -euo pipefail
+          tool=()
+          if [ -f out/cargo-component ]; then tool=(--tooling out/cargo-component); fi
+          case "${{ inputs.target }}" in
+            *darwin*)
+              # The Player as the release assembles it, so the package is
+              # the release's shape: CLI in /usr/local/bin, Player in
+              # /Applications. Unsigned in this lane, like everything here.
+              python3 -m pip install --quiet pillow || true
+              KRATE_BINARY=out/krate scripts/make-macos-app.sh player-app
+              bash scripts/build-org-packages.sh macos "${{ inputs.target }}" out/krate out \
+                ${tool[@]+"${tool[@]}"} --player "player-app/Krate Player.app"
+              ;;
+            *linux*)
+              bash scripts/build-org-packages.sh install-nfpm "$RUNNER_TEMP/bin"
+              PATH="$RUNNER_TEMP/bin:$PATH" bash scripts/build-org-packages.sh linux \
+                "${{ inputs.target }}" out/krate out ${tool[@]+"${tool[@]}"}
+              # What each package installs, in the log.
+              for f in out/*.deb; do dpkg-deb -c "$f"; dpkg-deb -I "$f"; done
+              ;;
+          esac
+          ls -la out
+
+      # Build provenance (SLSA, signed through GitHub's Sigstore instance)
+      # for every file this run uploads, then checked the way a security
+      # team would check a download: `gh attestation verify`.
+      - name: Build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: out/*
+      - name: The provenance verifies
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          for f in out/*; do
+            [ -f "$f" ] || continue
+            gh attestation verify "$f" --repo "${{ github.repository }}" >/dev/null
+            echo "verified: $(basename "$f")"
+          done
 
       # Unsigned on purpose: this is for testing a fix, not for distribution.
       # Anything that reaches a user goes through the release workflow, which

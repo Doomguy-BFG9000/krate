@@ -10,6 +10,7 @@
 - [Create and Share an App](create-and-share.md)
 - [Publishing and opening big apps](publishing-big-apps.md)
 - [Organisations](organisations.md)
+  - [Running Krate in an organisation](running-in-an-organisation.md)
 - [Porting an app you already have](porting.md)
 - [What Krate cannot do yet](limits.md)
 

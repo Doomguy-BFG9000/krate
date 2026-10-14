@@ -1867,6 +1867,12 @@ fn friendly_error(err: &anyhow::Error) -> String {
                  Details: {text}"
             );
         }
+        // A company network that inspects secure traffic with a root this
+        // computer does not trust yet reads, raw, as a TLS error nobody can
+        // act on (IC-949 N). Say what it usually is and who fixes it.
+        if let Some(words) = krate_http::explain(&text) {
+            return format!("{words}.\n\n  Details: {err:#}");
+        }
     }
     format!("{err:#}")
 }
@@ -5759,7 +5765,7 @@ fn blocklist_command(update: bool) -> Result<u8> {
     if update {
         let hub = org::hub_url(None)?;
         let endpoint = format!("{}/takedowns", hub.trim_end_matches('/'));
-        let response = ureq::AgentBuilder::new()
+        let response = krate_http::builder(&endpoint)
             .timeout(std::time::Duration::from_secs(30))
             .build()
             .get(&endpoint)
@@ -8101,7 +8107,7 @@ fn publish_bundle(
     // Free text goes percent-encoded, and the hub is told so: a header
     // cannot carry UTF-8, and a name like "Mom’s" or "番茄钟" arrived garbled
     // (K-891).
-    let mut request = ureq::post(&endpoint)
+    let mut request = krate_http::post(&endpoint)
         .set("Content-Type", "application/octet-stream")
         .set("X-Krate-Encoding", "uri");
     if unlisted {
@@ -8230,7 +8236,7 @@ fn publish_bundle(
             if png.is_empty() || png.len() > limit {
                 return;
             }
-            let _ = ureq::post(&format!("{}/{route}/{id}", hub.trim_end_matches('/')))
+            let _ = krate_http::post(&format!("{}/{route}/{id}", hub.trim_end_matches('/')))
                 .set("Authorization", &format!("Bearer {}", identity.token))
                 .set("Content-Type", "image/png")
                 .send_bytes(png);
@@ -8349,7 +8355,7 @@ fn publish_big(
 ) -> Result<String> {
     let hub = hub.trim_end_matches('/');
     let sha256 = krate_bundle::sha256_hex(bytes);
-    let agent = ureq::AgentBuilder::new()
+    let agent = krate_http::builder(hub)
         .timeout_connect(std::time::Duration::from_secs(20))
         .timeout_read(std::time::Duration::from_secs(600))
         .timeout_write(std::time::Duration::from_secs(600))
@@ -9043,7 +9049,7 @@ fn report_send_command(
     // to is worth more. It is simply never a condition of sending.
     let identity = github_auth::current();
     let hub = org::hub_url(hub_override)?;
-    let mut request = ureq::post(&format!("{}/report", hub.trim_end_matches('/')))
+    let mut request = krate_http::post(&format!("{}/report", hub.trim_end_matches('/')))
         .set("Content-Type", "application/zip")
         .set("X-Krate-Session", session)
         .set("X-Krate-Version", krate_version())
@@ -16561,7 +16567,7 @@ fn launch_target(bundle: &Path) -> Result<PathBuf> {
     // A private organisation link needs the person's session, sent only to
     // a Krate hub, exactly as `krate run` sends it (IC-948 H); a refusal is
     // said in words with the sign-in to try, and nothing is saved or run.
-    let mut request = ureq::get(&raw).timeout(std::time::Duration::from_secs(60));
+    let mut request = krate_http::get(&raw).timeout(std::time::Duration::from_secs(60));
     if let Some(authorization) = org::link_authorization(&raw) {
         request = request.set("Authorization", &authorization);
     }
@@ -22393,7 +22399,7 @@ fn preflight_toolchain(assume_yes: bool, no_install: bool) -> Result<()> {
             }
             eprintln!("    winget could not install it; fetching rustup directly");
             let dest = std::env::temp_dir().join("krate-rustup-init.exe");
-            let response = ureq::get("https://win.rustup.rs/x86_64")
+            let response = krate_http::get("https://win.rustup.rs/x86_64")
                 .timeout(std::time::Duration::from_secs(120))
                 .call()
                 .context("downloading rustup-init.exe")?;

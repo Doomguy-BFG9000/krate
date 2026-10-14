@@ -106,6 +106,15 @@ LOOSE_TARGETS = [
 def artifact_role(name):
     if name.endswith(".AppImage") or name.endswith("-setup.exe") or name.endswith(".dmg"):
         return "installer"
+    # The organisation installers of the CLI (.pkg, .deb, .rpm), the bills
+    # of materials and the build-provenance bundle are not the CLI itself,
+    # and reading them as "cli" would count four extra CLIs per platform.
+    if name.endswith((".pkg", ".deb", ".rpm")):
+        return "installer"
+    if name.endswith(".cdx.json"):
+        return "sbom"
+    if name.endswith(".sigstore.json"):
+        return "provenance"
     if name.startswith("krate-app-"):
         return "player"
     if name.startswith("krate-studio-"):
