@@ -1,0 +1,94 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Krate GUI app in a tab (Worker + Atomics)</title>
+<style>body{margin:0;background:#fff}canvas{display:block}</style>
+<canvas id="c" width="640" height="480"></canvas>
+<script type="module">
+// apps/krate-hello-gui in a Web Worker. Its run() blocks for real: events.wait
+// is Atomics.wait on a SharedArrayBuffer this page writes input into. That
+// needs cross-origin isolation (COOP + COEP), which is what this page tests.
+//
+// ?draw=shared   the worker paints into a shared frame buffer and this page
+//                puts it on the canvas (works while the worker is blocked)
+// ?draw=offscreen the worker owns the canvas through an OffscreenCanvas
+const report = (window.__krate = { path: 'worker', marks: {}, latencies: [], frames: 0,
+  isolated: self.crossOriginIsolated, sab: typeof SharedArrayBuffer === 'function' });
+const draw = new URLSearchParams(location.search).get('draw') || 'shared';
+report.path = `worker-${draw}`;
+const canvas = document.getElementById('c');
+
+if (!self.crossOriginIsolated || typeof SharedArrayBuffer !== 'function') {
+  report.error = `not cross-origin isolated (crossOriginIsolated=${self.crossOriginIsolated}, SharedArrayBuffer=${typeof SharedArrayBuffer})`;
+} else {
+  // Input ring: [head, tail] then SLOTS slots of SLOT bytes ([len u32][utf8 JSON]).
+  const SLOTS = 64, SLOT = 256, HEAD = 64;
+  const ring = new SharedArrayBuffer(HEAD + SLOTS * SLOT);
+  const ctrl = new Int32Array(ring, 0, 2);
+  const bytes = new Uint8Array(ring);
+  const dv = new DataView(ring);
+  const enc = new TextEncoder();
+  const backlog = [];
+  const push = (raw) => {
+    backlog.push(raw);
+    while (backlog.length) {
+      const head = Atomics.load(ctrl, 0), tail = Atomics.load(ctrl, 1);
+      if (head - tail >= SLOTS) return; // full: keep the rest for the next input
+      const b = enc.encode(JSON.stringify(backlog.shift()));
+      const off = HEAD + (head % SLOTS) * SLOT;
+      dv.setUint32(off, b.length, true);
+      bytes.set(b, off + 4);
+      Atomics.store(ctrl, 0, head + 1);
+      Atomics.notify(ctrl, 0);
+    }
+  };
+  const at = (e) => performance.timeOrigin + e.timeStamp;
+  canvas.addEventListener('pointerdown', (e) => push({ type: 'down', x: e.offsetX, y: e.offsetY, at: at(e) }));
+  canvas.addEventListener('pointerup', (e) => push({ type: 'up', x: e.offsetX, y: e.offsetY, at: at(e) }));
+  window.addEventListener('keydown', (e) => {
+    if (e.key.length === 1) push({ type: 'text', text: e.key, at: at(e) });
+    else push({ type: 'key', key: e.key, at: at(e) });
+  });
+
+  const worker = new Worker('./gui-worker.js', { type: 'module' });
+  const ctx = draw === 'shared' ? canvas.getContext('2d') : null;
+  let frame = null, scratch = null;
+  worker.onmessage = ({ data }) => {
+    switch (data.type) {
+      case 'window':
+        if (ctx) { canvas.width = data.width; canvas.height = data.height; }
+        frame = data.frame ? new Uint8Array(data.frame) : null;
+        scratch = frame ? new Uint8ClampedArray(frame.length) : null;
+        break;
+      case 'frame': {
+        let done;
+        if (ctx) {
+          // ImageData cannot wrap shared memory, so one copy out of it.
+          scratch.set(frame);
+          ctx.putImageData(new ImageData(scratch, data.width, data.height), 0, 0);
+          done = performance.timeOrigin + performance.now();
+        } else {
+          done = data.paintedAt; // the worker drew it on the OffscreenCanvas
+        }
+        report.frames++;
+        if (report.firstFrame === undefined) report.firstFrame = done - performance.timeOrigin;
+        if (data.inputAt !== undefined) report.latencies.push(done - data.inputAt);
+        break;
+      }
+      case 'marks': Object.assign(report.marks, data.marks); report.workerMemories = data.memories; break;
+      case 'stdout': report.stdout = (report.stdout || '') + data.text; break;
+      case 'exit': report.exit = data.code; break;
+      case 'error': report.error = data.error; break;
+    }
+  };
+  worker.onerror = (e) => { report.error = `worker: ${e.message}`; };
+  const msg = { type: 'start', ring, draw };
+  if (draw === 'offscreen') {
+    const off = canvas.transferControlToOffscreen();
+    msg.canvas = off;
+    worker.postMessage(msg, [off]);
+  } else {
+    worker.postMessage(msg);
+  }
+  report.running = true;
+}
+</script>

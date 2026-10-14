@@ -1,0 +1,31 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Krate CLI app on pulley in a tab</title>
+<pre id="out"></pre>
+<script type="module">
+// The rejected alternative, measured once: wasmtime's pulley interpreter,
+// itself compiled to wasm32, interpreting apps/krate-diceroll
+// (precompiled for pulley64 on this machine).
+import init, { run_dice } from '../build/pulley/krate_pulley_probe.js';
+const report = (window.__krate = { path: 'pulley', marks: {} });
+try {
+  const t = performance.now();
+  const [probe, cwasm] = await Promise.all([
+    init(),
+    fetch('../build/pulley/diceroll.cwasm').then((r) => r.arrayBuffer()),
+  ]);
+  report.marks.loaded = performance.now() - t;
+  const t2 = performance.now();
+  const answer = run_dice(new Uint8Array(cwasm));
+  report.marks.run = performance.now() - t2;
+  if (answer.startsWith('error')) throw new Error(answer);
+  const [code, text] = [answer.slice(0, answer.indexOf('|')), answer.slice(answer.indexOf('|') + 1)];
+  document.getElementById('out').textContent = text;
+  report.firstOutput = performance.now();
+  report.exit = Number(code);
+  report.output = text;
+  report.memories = [probe.memory.buffer.byteLength];
+} catch (e) {
+  report.error = String(e && e.stack || e);
+}
+</script>

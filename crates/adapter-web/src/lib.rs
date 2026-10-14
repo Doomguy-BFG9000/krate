@@ -31,8 +31,10 @@
 // The symbols wasmtime asks a host it does not recognise to supply.
 // Declared before anything else uses the runtime, since without them the
 // module loads and then fails to find them.
-#[cfg(target_arch = "wasm32")]
+#[cfg(all(target_arch = "wasm32", feature = "engine-probe"))]
 mod platform;
+
+pub mod web_ui;
 
 use krate_adapter_common::painter::{self, PaintInteraction};
 use krate_adapter_common::ui::{WidgetPlacement, WidgetTree};
@@ -178,9 +180,9 @@ mod web {
         };
         frame.paint(&placements, 1.0);
 
-        let mut rgba = frame.to_rgba();
+        let rgba = frame.to_rgba();
         let data = web_sys::ImageData::new_with_u8_clamped_array_and_sh(
-            Clamped(&mut rgba),
+            Clamped(&rgba),
             width,
             height,
         )?;
@@ -200,6 +202,7 @@ mod web {
             height: None,
             grow: 1.0,
             padding: 24.0,
+            ..WidgetStyle::default()
         };
         let mut tree = WidgetTree::new(root).ok()?;
 
@@ -214,6 +217,7 @@ mod web {
                     height: Some(height),
                     grow: 0.0,
                     padding: 0.0,
+                    ..WidgetStyle::default()
                 };
                 let _ = tree.upsert(node);
             };
@@ -316,6 +320,8 @@ mod web {
             clickable: matches!(kind, WidgetKind::Button),
             role: None,
             pixels: None,
+            text: None,
+            r#box: None,
         }
     }
 }
@@ -456,7 +462,7 @@ mod tests {
 /// wasm32-unknown-unknown has no clock and `std::time::Instant` is
 /// unimplemented there. That is the next piece of work, and it is
 /// plumbing -- the browser has `performance.now()`.
-#[cfg(target_arch = "wasm32")]
+#[cfg(all(target_arch = "wasm32", feature = "engine-probe"))]
 mod runtime_probe {
     use wasm_bindgen::prelude::*;
 

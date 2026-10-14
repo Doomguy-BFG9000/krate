@@ -1,0 +1,52 @@
+{
+  "chromium": {
+    "version": "153.0.8010.12",
+    "coi": {
+      "isolated": true,
+      "sab": true
+    },
+    "cred": {
+      "isolated": true,
+      "sab": true
+    },
+    "plain": {
+      "isolated": false,
+      "sab": false
+    },
+    "serviceWorker": {
+      "registration": "ready",
+      "controlled": true,
+      "isolated": true,
+      "sab": true
+    },
+    "offscreen_block0": 87,
+    "offscreen_block0_red": "rgb(255,0,0)",
+    "offscreen_block1": 87,
+    "offscreen_block1_red": "rgb(255,255,255)"
+  },
+  "webkit": {
+    "version": "26.6",
+    "coi": {
+      "isolated": true,
+      "sab": true
+    },
+    "cred": {
+      "isolated": false,
+      "sab": false
+    },
+    "plain": {
+      "isolated": false,
+      "sab": false
+    },
+    "serviceWorker": {
+      "registration": "ready",
+      "controlled": true,
+      "isolated": true,
+      "sab": true
+    },
+    "offscreen_block0": 163,
+    "offscreen_block0_red": "rgb(255,0,0)",
+    "offscreen_block1": 161,
+    "offscreen_block1_red": "rgb(255,255,255)"
+  }
+}
