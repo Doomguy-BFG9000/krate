@@ -8,7 +8,9 @@
  * use it, when its credential was set and how often it was used), and lets
  * an owner or admin make one, replace its credential, change what it allows
  * and who uses it, and remove it. The credential is typed once and never
- * shown again: the hub answers only who set it and when.
+ * shown again: it is sealed in this browser to the organisation's key
+ * (F-316, orgseal.js) and only the sealed blob is sent, so Krate's hub
+ * cannot read it; the hub answers only who set it and when.
  *
  * dashboard.js owns the page and hands this part what it needs (D). Like the
  * rest of the page it hides only what the role matrix says a role can never
@@ -18,14 +20,47 @@
   "use strict";
 
   var METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE"];
+  /// The runtime refuses a header value over 4 KiB (adapter-common net.rs),
+  /// so a longer credential could never be sent.
+  var MAX_VALUE = 4096;
+  /// Headers the transport owns: a credential in one would be rewritten or
+  /// refused on the way out.
+  var TRANSPORT = ["host", "content-length", "transfer-encoding", "connection", "upgrade", "te", "trailer", "keep-alive", "expect"];
 
-  /// The entry side of the credential seam (F-316): what this page sends the
-  /// hub for a credential. Today it goes as typed, over TLS, and the hub
-  /// seals it at rest. Under the organisation keyring this seals it to the
-  /// organisation's public key in the browser first, so the hub only ever
-  /// holds the blob. Every credential the page sends passes through here.
-  function sealForHub(body) {
-    return Promise.resolve(body);
+  /// A connection's address as the hub keeps it (cloud/worker
+  /// org-connections.js normalBase, the same steps): the credential is
+  /// sealed for exactly that text.
+  function normalBase(raw) {
+    var u;
+    try { u = new URL(String(raw || "").trim()); } catch (e) { return null; }
+    return u.protocol + "//" + u.hostname.toLowerCase() + (u.port ? ":" + u.port : "") + u.pathname.replace(/\/+$/, "");
+  }
+
+  /// What was typed, checked here because the hub cannot look inside the
+  /// seal: one header (name and value, one line), or a user and password.
+  /// Answers `{header, value}` or `{problem: [title, words]}`.
+  function credentialOf(typed) {
+    if (typed.kind === "basic") {
+      var user = typed.user, password = typed.password;
+      if (!user || user.indexOf(":") >= 0 || /[\r\n\0]/.test(user + password) || user.length > 256 || password.length > 1024) {
+        return { problem: ["Check the user and password", "A user without a colon, and a password, each on one line."] };
+      }
+      var bytes = new TextEncoder().encode(user + ":" + password);
+      var s = "";
+      for (var i = 0; i < bytes.length; i += 1) s += String.fromCharCode(bytes[i]);
+      var basic = "Basic " + btoa(s);
+      if (basic.length > MAX_VALUE) return { problem: ["That user and password are too long", "Krate sends up to " + MAX_VALUE + " characters."] };
+      return { header: "Authorization", value: basic };
+    }
+    var name = String(typed.header || "").trim();
+    if (!/^[A-Za-z0-9!#$%&'*+.^_`|~-]{1,64}$/.test(name)) return { problem: ["The header name is one word", "Such as Authorization or X-Api-Key."] };
+    if (TRANSPORT.indexOf(name.toLowerCase()) >= 0 || name.toLowerCase().indexOf("proxy-") === 0) {
+      return { problem: ["That header cannot carry a credential", name + " is one the connection itself sets. Use the header your API names, like Authorization."] };
+    }
+    if (!typed.value.trim() || typed.value.length > MAX_VALUE || /[\r\n\0]/.test(typed.value)) {
+      return { problem: ["The value is one line", "Up to " + MAX_VALUE + " characters, with no line breaks."] };
+    }
+    return { header: name, value: typed.value };
   }
 
   root.KrateOrgConnections = function (D) {
@@ -36,6 +71,28 @@
     var nameOf = function () { return (D.S.org && D.S.org.name) || slug; };
     var can = function (action) { return K.can(D.roleOf(), action) === "yes"; };
     var ctx = { what: "set up or change connections", whoCan: "owners and admins" };
+
+    /// The entry side of the credential seam (F-316): the one place a typed
+    /// credential becomes what this page sends. It is checked, then sealed
+    /// here to the organisation's current public key for this connection's
+    /// name, header and address; only the sealed blob and its key version
+    /// leave the browser. Answers `{credential}`, `{problem}`, or
+    /// `{refused: res}` for the hub's refusal.
+    function sealForHub(typed, where) {
+      var c = credentialOf(typed);
+      if (c.problem) return Promise.resolve({ problem: c.problem });
+      return K.api("GET", "/orgs/" + slug + "/keys").then(function (res) {
+        if (!res.ok) return { refused: res };
+        var cur = res.body && res.body.current;
+        if (!cur || !cur.public_key) return { refused: { ok: false, status: 409, body: { error: "no-org-key", message: "" } } };
+        var S = root.KrateOrgSeal;
+        return S.sealForOrg(cur.public_key, S.connectionContext(slug, where.name, c.header, where.base), c.value).then(function (sealed) {
+          return { credential: { kind: typed.kind, header: c.header, v: cur.version, sealed: sealed } };
+        });
+      }).catch(function () {
+        return { problem: ["The credential could not be sealed", "Nothing was sent. Reload the page and try again."] };
+      });
+    }
 
     function said(list, last) {
       var l = (list || []).slice();
@@ -62,6 +119,7 @@
       var card = el("div", { class: "card conn", id: "connCard" }, [
         el("h3", { text: "Company connections" }),
         el("p", { text: "An API's address and credential, set up once. Apps in " + nameOf() + " reach it by name and never hold the credential: Krate adds it to their requests." }),
+        el("p", { class: "connsafe", text: "Encrypted: Krate cannot read your credentials. Only your members' computers can." }),
         el("p", { class: "loading", text: "Loading" }),
       ]);
       pane.appendChild(card);
@@ -69,7 +127,8 @@
     }
 
     function draw(card) {
-      while (card.children.length > 2) card.lastChild.remove();
+      // The heading and the two lines under it stay.
+      while (card.children.length > 3) card.lastChild.remove();
       card.appendChild(el("p", { class: "loading", text: "Loading" }));
       K.api("GET", path()).then(function (res) {
         card.lastChild.remove();
@@ -114,12 +173,24 @@
       var note = el("p", { class: "note", hidden: true });
       var cred = c.credential || {};
       var uses = c.uses || {};
+      var again = cred.state === "needs-entry";
       var facts = [
         el("b", {}, [c.name, " ", el("span", { class: "tag blue", text: allowWords(c) })]),
         el("small", { class: "dg", text: c.base }),
         el("small", { text: scopeWords(c) }),
         el("small", { text: "Credential: the " + (cred.kind === "basic" ? "user and password" : cred.header + " header") + ", set by " + K.who(cred.set_by).label + " on " + K.day(cred.set_at) +
           " · used " + (uses.today || 0) + (uses.today === 1 ? " time" : " times") + " today, " + (uses.last_30_days || 0) + " in 30 days" }),
+        again ? K.refusalBlock({
+          title: "Enter this credential again",
+          body: "It was saved before Krate encrypted credentials, so Krate deleted it rather than keep a copy it could read. Apps cannot use " + c.name + " until an owner or admin enters it again with Replace credential.",
+          action: null,
+        }, "warn") : el("small", { class: "connsafe", text: "Encrypted: Krate cannot read this credential." }),
+        // The exact terms, for whoever wants them.
+        cred.version ? el("details", { class: "conndetails" }, [
+          el("summary", { text: "Details" }),
+          el("small", { text: "Sealed on the computer it was typed on (in the browser, or by the krate command) to " + nameOf() + "'s organisation key, version " + cred.version +
+            ", with HPKE (RFC 9180: X25519, HKDF-SHA256, ChaCha20-Poly1305) for this connection's name, header and address. Krate's hub keeps only the sealed copy; members' computers open it when an app uses the connection." }),
+        ]) : null,
         note,
       ];
       var r = el("div", { class: "rw flat connrow" }, [el("div", { class: "t" }, facts)]);
@@ -162,9 +233,9 @@
       var password = el("input", { class: "inp", name: "credPassword", type: "password", autocomplete: "new-password" });
       var asHeader = el("div", { class: "form" }, [
         fld("Header", headerName, "Usually Authorization, or the one your API names, like X-Api-Key."),
-        fld("Value", value, "Stored encrypted. It is never shown again, here or to an app. A server that echoes request headers back would show it to the app."),
+        fld("Value", value, "Encrypted on this computer before it is sent: Krate cannot read it. It is never shown again, here or to an app. A server that echoes request headers back would show it to the app."),
       ]);
-      var asBasic = el("div", { class: "form", hidden: true }, [fld("User", user), fld("Password", password, "Stored encrypted. It is never shown again.")]);
+      var asBasic = el("div", { class: "form", hidden: true }, [fld("User", user), fld("Password", password, "Encrypted on this computer before it is sent: Krate cannot read it. It is never shown again.")]);
       [["header", "A header"], ["basic", "User and password"]].forEach(function (p) {
         var b = el("button", { type: "button", "aria-pressed": p[0] === kind ? "true" : "false", text: p[1] });
         b.dataset.kind = p[0];
@@ -178,9 +249,10 @@
       });
       return {
         node: el("div", { class: "fld" }, [el("span", { text: "Credential" }), seg, asHeader, asBasic]),
-        body: function () {
-          if (kind === "basic") return user.value.trim() ? { basic: { user: user.value.trim(), password: password.value } } : null;
-          return value.value.trim() ? { header: { name: headerName.value.trim(), value: value.value } } : null;
+        /// What was typed, for sealForHub alone: never a request body.
+        typed: function () {
+          if (kind === "basic") return user.value.trim() ? { kind: "basic", user: user.value.trim(), password: password.value } : null;
+          return value.value.trim() ? { kind: "header", header: headerName.value.trim(), value: value.value } : null;
         },
         clear: function () { value.value = ""; password.value = ""; },
       };
@@ -285,18 +357,25 @@
         if (!/^[a-z][a-z0-9-]{1,38}$/.test(n)) return hint(out, "The name is short and plain", "2 to 39 lower-case letters, digits and dashes, like finance-api. Apps ask for it by this name.");
         var local = /^(127\.0\.0\.1|localhost)$/.test(location.hostname) && /^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?\//.test(b + "/");
         if (!/^https:\/\/[^\s<>]+$/.test(b) && !local) return hint(out, "The address starts with https://", "A host and a path, like https://api.acme.com/finance. Requests under it get the credential.");
-        var c = cred.body();
+        var c = cred.typed();
         if (!c) return hint(out, "The credential is missing", "Paste the header's value, or the user and password, your API gave you.");
         var a = allow.body();
         if (!a.methods.length) return hint(out, "Tick at least one thing apps may do", "GET alone lets them read.");
         var s = scope.body();
         if (s.pickedNone) return hint(out, "Pick at least one group", "Or choose Everyone.");
-        var body = Object.assign({ name: n, base: b, allow: a, audience: s.audience, apps: s.apps }, c);
+        var where = { name: n, base: normalBase(b) };
+        if (!where.base) return hint(out, "The address starts with https://", "A host and a path, like https://api.acme.com/finance.");
         out.textContent = "";
-        var done = saving(save, "Adding");
-        sealForHub(body).then(function (sealed) { return K.api("POST", path(), sealed, { key: K.key() }); }).then(function (res) {
+        var done = saving(save, "Encrypting and adding");
+        sealForHub(c, where).then(function (sealed) {
+          if (sealed.problem || sealed.refused) return sealed;
+          var body = { name: n, base: where.base, allow: a, audience: s.audience, apps: s.apps, credential: sealed.credential };
+          return K.api("POST", path(), body, { key: K.key() });
+        }).then(function (res) {
           done();
+          if (res.problem) return hint(out, res.problem[0], res.problem[1]);
           cred.clear();
+          res = res.refused || res;
           if (!res.ok) { out.appendChild(K.refusalBlock(D.words(res, ctx), "bad")); return; }
           D.toast("The " + n + " connection is ready. Apps that ask for net.connection:" + n + " can use it.");
           draw(card);
@@ -316,13 +395,18 @@
       var save = el("button", { class: "btn dark", type: "button", text: "Replace credential" });
       var cancel = el("button", { class: "btn ghost", type: "button", text: "Cancel", onclick: function () { box.hidden = true; } });
       save.addEventListener("click", function () {
-        var body = cred.body();
-        if (!body) return hint(out, "The new credential is missing", "Paste the new value. The old one is deleted when you save.");
+        var typed = cred.typed();
+        if (!typed) return hint(out, "The new credential is missing", "Paste the new value. The old one is deleted when you save.");
         out.textContent = "";
-        var done = saving(save, "Replacing");
-        sealForHub(body).then(function (sealed) { return K.api("PUT", path("/" + encodeURIComponent(c.name) + "/credential"), sealed, { key: K.key() }); }).then(function (res) {
+        var done = saving(save, "Encrypting and replacing");
+        sealForHub(typed, { name: c.name, base: c.base }).then(function (sealed) {
+          if (sealed.problem || sealed.refused) return sealed;
+          return K.api("PUT", path("/" + encodeURIComponent(c.name) + "/credential"), { credential: sealed.credential }, { key: K.key() });
+        }).then(function (res) {
           done();
+          if (res.problem) return hint(out, res.problem[0], res.problem[1]);
           cred.clear();
+          res = res.refused || res;
           if (!res.ok) { out.appendChild(K.refusalBlock(D.words(res, ctx), "bad")); return; }
           D.toast(c.name + " has a new credential. Apps get it the next time they open.");
           draw(card);

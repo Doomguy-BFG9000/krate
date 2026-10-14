@@ -7,16 +7,23 @@
 // who may use it (everyone, or groups) and which apps (any of the
 // organisation's, or named app ids).
 //
-// The credential is write-only. For now the Worker encrypts it at rest with
-// the hub's organisation secret key (ORG_SECRET_KEY, AES-GCM, bound to the
-// organisation and the connection's name) before the store sees it, so the
-// hub could read it; F-316 moves it onto the organisation keyring through
-// the credential seam below, after which only members' devices can. No
-// answer but the one to an allowed device, no audit event and no log line
-// ever carries it, and it is replaced,
-// never edited. Moving a connection to another base needs a new
-// credential: otherwise an admin who never knew the secret could send it
-// to a server of their own and read it there.
+// The credential is end-to-end encrypted (founder decision F-316): the
+// admin's browser or the CLI seals it to the organisation's public key
+// (HPKE, crates/orgkeys `seal_for_org`, for a context that binds the
+// organisation, the connection's name, its header and its address), and
+// this hub keeps the sealed blob as it came, with the key version. Only a
+// member's device, holding the organisation key, opens it. The hub cannot
+// read it, so it cannot check the value either: the page and the CLI do,
+// before sealing, and the device again after opening. It is write-only and
+// replaced, never edited. Moving a connection to another base needs a new
+// credential: the old one is sealed for the old address and would not open,
+// and an admin who never knew the secret must not be able to send it to a
+// server of their own.
+//
+// When the organisation key is replaced after a removal, the member device
+// that makes the new version also seals every credential again to it
+// (org-keys.js rotate, extended below), and the hub refuses a rotation that
+// would leave one on the old version.
 //
 // A device fetches the credential when an app that asks for
 // `net.connection:<name>` opens (GET .../connections/<name>/credential/
@@ -37,22 +44,28 @@ import { Org, extendOrg, addReasons, allows } from "./org.js";
 // Release control first: a credential fetch reuses its audience and
 // withdrawn checks, and this module's order is its own, not index.js's.
 import { GROUP, appOf } from "./org-releases.js";
-import { sealSecret, openSecret, keyedDigest } from "./org-sso.js";
+// The keyring first too: its rotation and its view are extended here.
+import "./org-keys.js";
 
 export const CONNECTION = /^[a-z][a-z0-9-]{1,38}$/;
 export const METHODS = ["GET", "HEAD", "OPTIONS", "POST", "PUT", "PATCH", "DELETE"];
 const APP_ID = /^[a-z0-9][a-z0-9._-]{0,119}$/;
 const MAX_PATHS = 50;
 const MAX_APPS = 100;
-/// The runtime refuses a header value over 4 KiB (adapter-common net.rs),
-/// so a longer credential could never be sent.
-const MAX_VALUE = 4096;
 /// Headers the transport owns. A credential in one would be rewritten or
 /// refused on the way out, so it is refused here, when it can be fixed.
 const TRANSPORT_HEADERS = new Set([
   "host", "content-length", "transfer-encoding", "connection", "upgrade", "te", "trailer", "keep-alive", "expect",
 ]);
+const HEADER_NAME = /^[A-Za-z0-9!#$%&'*+.^_`|~-]{1,64}$/;
+const B64 = /^[A-Za-z0-9+/]+={0,2}$/;
+/// A sealed credential: base64 of HPKE's 32-byte encapsulated key and the
+/// ciphertext with its 16-byte tag; the value inside is at most 4 KiB.
+const SEALED_MIN = 68;
+const SEALED_MAX = 8192;
 const DAY = 24 * 60 * 60;
+
+const goodSealed = (s) => typeof s === "string" && s.length >= SEALED_MIN && s.length <= SEALED_MAX && s.length % 4 === 0 && B64.test(s);
 
 addReasons({
   "no-such-connection": {
@@ -78,6 +91,11 @@ addReasons({
     status: 403,
     message: (o, d) => d || "this version of the app did not ask for that connection, so it does not get it",
   },
+  "credential-needs-entry": {
+    status: 409,
+    message: (o, d) =>
+      d || `that connection's credential must be entered again by an owner or admin of ${o}: it was kept the old way, which Krate's hub could read`,
+  },
 });
 
 const SCHEMA = [
@@ -95,8 +113,11 @@ const SCHEMA = [
 ];
 
 // Which connections each candidate asked for (its manifest's
-// `net.connection:<name>` capabilities), kept when it is uploaded.
-const COLUMNS = [["candidates", "connections", "TEXT"]];
+// `net.connection:<name>` capabilities), kept when it is uploaded; and the
+// version of the organisation key each credential is sealed to (F-316).
+// NULL is a credential kept the old way, sealed with this hub's own key;
+// 0 is one that must be entered again (the one-time migration below).
+const COLUMNS = [["candidates", "connections", "TEXT"], ["connections", "credential_v", "INTEGER"]];
 
 const isoDay = (seconds) => new Date(seconds * 1000).toISOString().slice(0, 10);
 
@@ -182,33 +203,32 @@ export function normalAllow(raw) {
   return { allow: { methods: METHODS.filter((x) => m.includes(x)), paths: p.sort() } };
 }
 
-/// The credential a person typed: one header, or Basic. Answers
-/// `{kind, header_name, value}` or `{problem}`. Never echoes the value.
-export function credentialOf(v) {
-  if (v && v.header && typeof v.header === "object") {
-    const name = String(v.header.name || "").trim();
-    const value = String(v.header.value == null ? "" : v.header.value);
-    if (!/^[A-Za-z0-9!#$%&'*+.^_`|~-]{1,64}$/.test(name)) return { problem: "the header name is one word, such as Authorization or X-Api-Key" };
-    if (TRANSPORT_HEADERS.has(name.toLowerCase()) || name.toLowerCase().startsWith("proxy-")) {
-      return { problem: `${name} is a header the connection itself sets, so it cannot carry a credential` };
-    }
-    if (!value.trim() || value.length > MAX_VALUE || /[\r\n\0]/.test(value)) {
-      return { problem: `the header value is one line of up to ${MAX_VALUE} characters` };
-    }
-    return { kind: "header", header_name: name, value };
+/// The sealed credential a create or replace carried: `{credential: {kind,
+/// header, v, sealed}}`, sealed where it was typed. Answers `{kind,
+/// header_name, v, sealed}`, `{problem}`, or null when it carried none. The
+/// header's name is in the clear (the dashboard shows it, and the seal binds
+/// it); its value is inside the seal, where this hub cannot look -- so a
+/// request carrying a value in the clear is refused, never kept.
+export function sealedCredentialOf(v) {
+  if (v && (v.header !== undefined || v.basic !== undefined)) {
+    return {
+      problem:
+        "this hub keeps a credential only sealed to the organisation's key where it is typed, so it never sees the value: reload the dashboard, or update Krate (krate.tech/install)",
+    };
   }
-  if (v && v.basic && typeof v.basic === "object") {
-    const user = String(v.basic.user || "");
-    const password = String(v.basic.password == null ? "" : v.basic.password);
-    if (!user || user.includes(":") || /[\r\n\0]/.test(user + password) || user.length > 256 || password.length > 1024) {
-      return { problem: "a user (without a colon) and a password, each one line" };
-    }
-    const bytes = new TextEncoder().encode(`${user}:${password}`);
-    const value = `Basic ${btoa(String.fromCharCode(...bytes))}`;
-    if (value.length > MAX_VALUE) return { problem: "that user and password are too long" };
-    return { kind: "basic", header_name: "Authorization", value };
+  const c = v && v.credential;
+  if (c === undefined || c === null) return null;
+  if (typeof c !== "object") return { problem: "the credential is a sealed blob with its key version" };
+  const kind = c.kind === "basic" ? "basic" : c.kind === "header" ? "header" : null;
+  if (!kind) return { problem: "the credential is one header, or a user and password" };
+  const name = kind === "basic" ? "Authorization" : String(c.header || "").trim();
+  if (!HEADER_NAME.test(name)) return { problem: "the header name is one word, such as Authorization or X-Api-Key" };
+  if (TRANSPORT_HEADERS.has(name.toLowerCase()) || name.toLowerCase().startsWith("proxy-")) {
+    return { problem: `${name} is a header the connection itself sets, so it cannot carry a credential` };
   }
-  return null;
+  if (!Number.isInteger(c.v) || c.v < 1) return { problem: "the credential says which version of the organisation's key it is sealed to" };
+  if (!goodSealed(c.sealed)) return { problem: "the sealed credential is base64, up to 8 KiB" };
+  return { kind, header_name: name, v: c.v, sealed: c.sealed };
 }
 
 // ------------------------------------------------------------ the store
@@ -230,7 +250,13 @@ const ops = {
       allow: { methods: JSON.parse(c.methods), paths: JSON.parse(c.paths) },
       audience: list(c.audience),
       apps: list(c.apps),
-      credential: { kind: c.kind, header: c.header_name, set_at: c.credential_at, set_by: c.credential_by },
+      // `sealed`: to version `version` of the organisation key, so only
+      // members' devices open it. `needs-entry`: it was kept the old way and
+      // is gone; an owner or admin enters it again.
+      credential: {
+        kind: c.kind, header: c.header_name, set_at: c.credential_at, set_by: c.credential_by,
+        state: c.credential_v >= 1 ? "sealed" : "needs-entry", version: c.credential_v >= 1 ? c.credential_v : null,
+      },
       created_at: c.created_at,
       created_by: c.created_by,
       changed_at: c.changed_at,
@@ -240,6 +266,19 @@ const ops = {
         last_30_days: uses.reduce((s, u) => s + u.n, 0),
       },
     };
+  },
+
+  /// A credential sealed to the organisation key the hub has now, or the
+  /// refusal: no key yet, or sealed to a version that is no longer current.
+  connectionKeyRefusal(ctx, action, target, a) {
+    const cur = this.currentKey();
+    if (!credentialsOn(this)) {
+      return this.deny(ctx, action, target, "no-org-key", `${ctx.slug} has no organisation key yet, and a credential is sealed to it -- an owner runs \`krate org keys init ${ctx.slug}\``);
+    }
+    if (a.credential_v !== cur.version) {
+      return this.deny(ctx, action, target, "key-rotated", `${ctx.slug}'s key is now version ${cur.version}: the credential is sealed again to it`);
+    }
+    return null;
   },
 
   /// The command's member, refused unless their role may do `action`.
@@ -299,8 +338,9 @@ const ops = {
     return this.ok({ connections: this.rows("SELECT * FROM connections ORDER BY name").map((c) => this.connectionView(c, ctx.now)) });
   },
 
-  /// POST /orgs/<slug>/connections. The Worker has sealed the credential;
-  /// it arrives as ciphertext with its kind and header name.
+  /// POST /orgs/<slug>/connections. The credential arrives sealed to the
+  /// organisation key where it was typed, with its kind, header name and
+  /// key version; it is kept as it came.
   op_connection_create(ctx) {
     const a = ctx.args;
     const name = String(a.name || "").trim().toLowerCase();
@@ -313,15 +353,17 @@ const ops = {
     if (this.connectionRow(name)) return this.deny(ctx, "connection.manage", target, "connection-taken", `${ctx.slug} already has a connection called ${name}`);
     if (!a.base || !a.allow) return this.deny(ctx, "connection.manage", target, "connection-invalid", "give its address and what it allows");
     if (!a.sealed) return this.deny(ctx, "connection.manage", target, "connection-invalid", "give its credential: a header and its value, or a user and password");
+    const unkeyed = this.connectionKeyRefusal(ctx, "connection.manage", target, a);
+    if (unkeyed) return unkeyed;
     const scope = this.connectionScope(ctx, "connection.manage", target, null);
     if (scope.refusal) return scope.refusal;
     this.sql.exec(
       `INSERT INTO connections (name, base, methods, paths, audience, apps, kind, header_name, sealed,
-         created_at, created_by, changed_at, changed_by, credential_at, credential_by)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         created_at, created_by, changed_at, changed_by, credential_at, credential_by, credential_v)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       name, a.base, JSON.stringify(a.allow.methods), JSON.stringify(a.allow.paths), scope.audience, scope.apps,
-      a.kind, a.header_name, JSON.stringify(a.sealed),
-      ctx.now, me.principal, ctx.now, me.principal, ctx.now, me.principal,
+      a.kind, a.header_name, a.sealed,
+      ctx.now, me.principal, ctx.now, me.principal, ctx.now, me.principal, a.credential_v,
     );
     this.audit(me.principal, "connection.create", target, "allowed", a.base);
     return this.ok({ connection: this.connectionView(this.connectionRow(name), ctx.now) }, 201);
@@ -339,6 +381,10 @@ const ops = {
     if (!c) return this.deny(ctx, "connection.manage", target, "no-such-connection", `${ctx.slug} has no connection called ${name || "that"}`);
     const base = a.base || c.base;
     if (base !== c.base && !a.sealed) return this.deny(ctx, "connection.manage", target, "credential-required");
+    if (a.sealed) {
+      const unkeyed = this.connectionKeyRefusal(ctx, "connection.manage", target, a);
+      if (unkeyed) return unkeyed;
+    }
     const scope = this.connectionScope(ctx, "connection.manage", target, c);
     if (scope.refusal) return scope.refusal;
     const methods = a.allow ? JSON.stringify(a.allow.methods) : c.methods;
@@ -362,8 +408,8 @@ const ops = {
 
   connectionNewCredential(name, a, me, now) {
     this.sql.exec(
-      "UPDATE connections SET kind = ?, header_name = ?, sealed = ?, credential_at = ?, credential_by = ? WHERE name = ?",
-      a.kind, a.header_name, JSON.stringify(a.sealed), now, me.principal, name,
+      "UPDATE connections SET kind = ?, header_name = ?, sealed = ?, credential_v = ?, credential_at = ?, credential_by = ? WHERE name = ?",
+      a.kind, a.header_name, a.sealed, a.credential_v, now, me.principal, name,
     );
   },
 
@@ -377,6 +423,8 @@ const ops = {
     if (refusal) return refusal;
     if (!this.connectionRow(name)) return this.deny(ctx, "connection.manage", target, "no-such-connection", `${ctx.slug} has no connection called ${name || "that"}`);
     if (!a.sealed) return this.deny(ctx, "connection.manage", target, "connection-invalid", "give the new credential: a header and its value, or a user and password");
+    const unkeyed = this.connectionKeyRefusal(ctx, "connection.manage", target, a);
+    if (unkeyed) return unkeyed;
     this.connectionNewCredential(name, a, me, ctx.now);
     this.sql.exec("UPDATE connections SET changed_at = ?, changed_by = ? WHERE name = ?", ctx.now, me.principal, name);
     this.audit(me.principal, "connection.credential", target, "allowed");
@@ -437,6 +485,9 @@ const ops = {
     if (apps && !apps.includes(app)) return refuse("app-not-allowed", `${orgName} has not let ${c.name || app} use the ${name} connection -- an owner or admin of ${orgName} can add ${app} to it`);
     const asked = list(c.connections) || [];
     if (!asked.includes(name)) return refuse("connection-not-requested", `this version of ${c.name || app} did not ask for the ${name} connection (net.connection:${name} in its manifest), so it does not get it`);
+    if (!(conn.credential_v >= 1)) {
+      return refuse("credential-needs-entry", `the ${name} credential must be entered again by an owner or admin of ${orgName} before apps can use it: it was kept the old way, which Krate's hub could read, so it was deleted`);
+    }
     this.sql.exec(
       `INSERT INTO connection_uses (name, day, n) VALUES (?, ?, 1)
        ON CONFLICT (name, day) DO UPDATE SET n = n + 1`,
@@ -449,8 +500,30 @@ const ops = {
       allow: { methods: JSON.parse(conn.methods), paths: JSON.parse(conn.paths) },
       kind: conn.kind,
       header_name: conn.header_name,
-      sealed: JSON.parse(conn.sealed),
+      credential_v: conn.credential_v,
+      sealed: conn.sealed,
     });
+  },
+
+  /// The one-time migration (F-316): a credential kept the old way was
+  /// sealed with this hub's own key, so the hub could read it, and the hub
+  /// cannot seal it to the organisation key without reading it. It is
+  /// deleted and marked to be entered again; the dashboard and `krate org
+  /// connection list` say so, and a device asking for it is told so.
+  connectionMigrateOldCredentials() {
+    const old = this.rows("SELECT name FROM connections WHERE credential_v IS NULL");
+    for (const c of old) {
+      this.sql.exec("UPDATE connections SET sealed = '', credential_v = 0 WHERE name = ?", c.name);
+      this.audit("system:krate", "connection.needs-entry", `connection:${c.name}`, "allowed", "kept the old way: enter it again");
+    }
+  },
+
+  /// What the device that replaces the organisation key needs to seal every
+  /// credential again: each one's name, address, header, version and blob.
+  connectionsToReseal() {
+    return this.rows("SELECT name, base, kind, header_name, credential_v, sealed FROM connections WHERE credential_v >= 1 ORDER BY name").map(
+      (c) => ({ name: c.name, base: c.base, kind: c.kind, header: c.header_name, v: c.credential_v, sealed: c.sealed }),
+    );
   },
 
   /// One audit line per connection per finished day: how many times its
@@ -475,11 +548,70 @@ function install(OrgClass) {
     schema: SCHEMA,
     columns: COLUMNS,
     mutations: ["connection-create", "connection-update", "connection-credential", "connection-remove"],
-    // Yesterday's counts become audit lines with the first command of today.
+    // Yesterday's counts become audit lines with the first command of today;
+    // a credential kept the old way is gone before anything can use it.
     tick(ctx) {
+      this.connectionMigrateOldCredentials();
       this.connectionFlushUses(ctx.now);
     },
   });
+  const P = OrgClass.prototype;
+  for (const name of ["op_keys_view", "op_keys_rotate"]) {
+    if (typeof P[name] !== "function") throw new Error(`org-connections: ${name} is not installed`);
+  }
+
+  // A device that will replace the stale key is also handed every sealed
+  // credential, to seal again to the new version.
+  const view = P.op_keys_view;
+  P.op_keys_view = function (ctx) {
+    const answer = view.call(this, ctx);
+    if (answer.status === 200 && answer.body && Array.isArray(answer.body.seal_to) && answer.body.seal_to.length) {
+      answer.body.credentials = this.connectionsToReseal();
+    }
+    return answer;
+  };
+
+  // And the rotation is refused unless every credential comes back sealed
+  // to the new version (or, one that did not open on that device, marked
+  // to be entered again): none is left on a key a removed member holds.
+  const rotate = P.op_keys_rotate;
+  P.op_keys_rotate = function (ctx) {
+    const a = ctx.args;
+    const cur = this.currentKey();
+    const by = this.deviceRow(String(a.by_device || ""));
+    const mine = by && (by.principal === ctx.actor || (Array.isArray(ctx.principals) && ctx.principals.includes(by.principal)));
+    const held = mine && by.state === "active" ? this.envelopeOf(by.device_id) : null;
+    // Judged only for a rotation the keyring itself would take, so nobody
+    // else learns a connection's name from the refusal.
+    const due = cur && cur.state === "stale" && held && held.version === cur.version ? this.connectionsToReseal() : [];
+    const given = a.credentials && typeof a.credentials === "object" ? a.credentials : {};
+    const back = (c) => {
+      const g = given[c.name];
+      if (g && g.unopened === true) return "unopened";
+      return g && g.v === a.version && goodSealed(g.sealed) ? "sealed" : null;
+    };
+    const missing = due.find((c) => !back(c));
+    if (missing) {
+      return {
+        status: 400,
+        body: { error: "bad-request", message: `every connection's credential is sealed again to the new version: ${missing.name} is missing` },
+      };
+    }
+    const answer = rotate.call(this, ctx);
+    if (answer.status !== 200) return answer;
+    let sealed = 0;
+    for (const c of due) {
+      if (back(c) === "sealed") {
+        this.sql.exec("UPDATE connections SET sealed = ?, credential_v = ? WHERE name = ?", given[c.name].sealed, a.version, c.name);
+        sealed += 1;
+      } else {
+        this.sql.exec("UPDATE connections SET sealed = '', credential_v = 0 WHERE name = ?", c.name);
+        this.audit(ctx.actor, "connection.needs-entry", `connection:${c.name}`, "allowed", `did not open on ${by.device_id}: enter it again`);
+      }
+    }
+    if (sealed) this.audit(ctx.actor, "connection.reseal", `key:v${a.version}`, "allowed", `${sealed} credential${sealed === 1 ? "" : "s"} sealed again by ${by.device_id}`);
+    return answer;
+  };
   // A candidate keeps the connections its manifest asks for.
   const add = OrgClass.prototype.op_add_candidate;
   OrgClass.prototype.op_add_candidate = function (ctx) {
@@ -507,46 +639,31 @@ export function connectionsAsked(judgement) {
 
 // ------------------------------------------------- the credential seam
 //
-// Every place a credential is sealed, kept or handed to a device goes
+// Every place a credential is taken, kept or handed to a device goes
 // through these three functions, and nothing else in the hub touches one.
-// Today the hub seals it at rest with ORG_SECRET_KEY (AES-GCM, bound to the
-// organisation and the connection's name), so the hub itself could open it.
-// Founder decision F-316 replaces this with the organisation keyring: the
-// admin's browser or CLI seals the credential to the organisation's public
-// key (HPKE), the hub keeps that blob as it came, and only a member's
-// device opens it. The switch changes these three functions (and their
-// partners in the page, the CLI and the runtime) and nothing around them:
-// the store keeps whatever `blob` is, and every check made before a
-// credential is handed out stays as it is.
+// Under the organisation keyring (F-316) none of them can read it: the
+// admin's browser or CLI sealed it to the organisation's public key (HPKE),
+// the hub keeps that blob as it came, and only a member's device opens it.
+// Every check made before a credential is handed out stays as it was.
 
-const purpose = (slug, name) => `krate-org-connection:${slug}:${name}`;
-
-/// Can this hub take and hand out credentials at all?
-export function credentialsOn(env) {
-  return Boolean(env && env.ORG_SECRET_KEY);
+/// Can this organisation's store take and hand out credentials? Only once
+/// it has an organisation key: a credential is sealed to it.
+export function credentialsOn(store) {
+  return Boolean(store && store.currentKey());
 }
 
-/// What a create or replace carried, made into what the store keeps.
-/// Answers null when it carried no credential, `{problem}` for one that
-/// cannot be used, `{off: true}` when the hub cannot keep one, or
-/// `{blob, kind, header_name, binding}`: the opaque blob the store keeps,
-/// and the text the Idempotency-Key is bound to in place of the secret.
-export async function credentialToStore(env, slug, name, body) {
-  const cred = credentialOf(body);
-  if (!cred || cred.problem) return cred;
-  const blob = await sealSecret(env, slug, cred.value, purpose(slug, name));
-  if (!blob) return { off: true };
-  const binding = `${cred.kind}:${cred.header_name}:${await keyedDigest(env, cred.value)}`;
-  return { blob, kind: cred.kind, header_name: cred.header_name, binding };
+/// What a create or replace carried, made into what the store keeps:
+/// null when it carried no credential, `{problem}` for one that cannot be
+/// kept, or `{sealed, v, kind, header_name}` -- the blob exactly as it came,
+/// which the Idempotency-Key is bound to as it is (it is ciphertext).
+export function credentialToStore(body) {
+  return sealedCredentialOf(body);
 }
 
-/// What a device that may use the connection is handed for it: today the
-/// header itself, opened here; null when the blob does not open with this
-/// hub's key.
-export async function credentialForDevice(env, slug, name, kept) {
-  const value = await openSecret(env, slug, kept.blob, purpose(slug, name));
-  if (value === null) return null;
-  return { header: { name: kept.header_name, value } };
+/// What a device that may use the connection is handed for it: the sealed
+/// blob, unopened, with what it is sealed for.
+export function credentialForDevice(kept) {
+  return { credential: { kind: kept.kind, header: kept.header_name, v: kept.credential_v, sealed: kept.sealed } };
 }
 
 // ---------------------------------------------------------------- routes
@@ -554,24 +671,27 @@ export async function credentialForDevice(env, slug, name, kept) {
 const noStore = (value, status = 200) =>
   new Response(JSON.stringify(value), { status, headers: { "content-type": "application/json", "cache-control": "private, no-store" } });
 
-const off = () =>
-  noStore({ error: "connections-off", message: "company connections are not switched on on this hub (it has no ORG_SECRET_KEY)" }, 503);
-
 /// /orgs/<slug>/connections... Answers a Response, or null.
 export async function connectionRoute(h) {
-  const { request, env, slug, rest, method, askRaw, readBody, idempotencyOf, orgAnswer, url } = h;
+  const { request, env, rest, method, askRaw, readBody, idempotencyOf, orgAnswer, url } = h;
   if (rest[0] !== "connections") return null;
   const bad = (message) => orgAnswer({ status: 400, body: { error: "connection-invalid", message } });
 
   if (rest.length === 1 && method === "GET") return orgAnswer(await askRaw("connections-list"));
 
-  // The settings and credential of a create or change, checked and sealed
-  // here: the store never sees a credential in the clear.
-  const prepare = async (name, v, needsCredential) => {
+  // The settings and the sealed credential of a create or change, checked.
+  const prepare = (name, v, needsCredential) => {
     const args = { name };
+    const stored = credentialToStore(v);
+    if (stored && stored.problem) return { refusal: bad(stored.problem) };
     if (v.base !== undefined) {
       const b = normalBase(v.base, env);
       if (b.problem) return { refusal: bad(b.problem) };
+      // The credential is sealed for the address the hub keeps, so it must
+      // arrive with that address exactly: the device opens it with it.
+      if (stored && String(v.base) !== b.base) {
+        return { refusal: bad(`the credential is sealed for the address exactly as it is kept: send it as ${b.base}`) };
+      }
       args.base = b.base;
     }
     if (v.allow !== undefined || needsCredential) {
@@ -581,25 +701,15 @@ export async function connectionRoute(h) {
     }
     if (v.audience !== undefined) args.audience = v.audience;
     if (v.apps !== undefined) args.apps = v.apps;
-    const bound = { ...v };
-    const stored = await credentialToStore(env, slug, name, v);
-    if (stored && stored.problem) return { refusal: bad(stored.problem) };
-    if (stored && stored.off) return { refusal: off() };
     if (stored) {
-      Object.assign(args, { sealed: stored.blob, kind: stored.kind, header_name: stored.header_name });
-      // The Idempotency-Key is bound to the request, and the request holds
-      // the credential: bind it to the seam's stand-in for it instead.
-      delete bound.header;
-      delete bound.basic;
-      bound.credential = stored.binding;
+      Object.assign(args, { sealed: stored.sealed, credential_v: stored.v, kind: stored.kind, header_name: stored.header_name });
     } else if (needsCredential) {
       return { refusal: bad("give its credential: a header and its value, or a user and password") };
     }
-    return { args, bound };
+    return { args, bound: v };
   };
 
   if (rest.length === 1 && method === "POST") {
-    if (!credentialsOn(env)) return off();
     const body = await readBody();
     if (body.tooLarge || body.bad) return bad("the body is JSON, under 64 KiB");
     const name = String(body.value.name || "").trim().toLowerCase();
@@ -607,7 +717,7 @@ export async function connectionRoute(h) {
       return bad("a connection's name is 2 to 39 characters: lower-case letters, digits and dashes, starting with a letter");
     }
     if (body.value.base === undefined) return bad("give its address, such as https://api.acme.com/finance");
-    const p = await prepare(name, body.value, true);
+    const p = prepare(name, body.value, true);
     if (p.refusal) return p.refusal;
     return orgAnswer(await askRaw("connection-create", p.args, await idempotencyOf(request, url.pathname, JSON.stringify(p.bound))));
   }
@@ -618,8 +728,7 @@ export async function connectionRoute(h) {
   if (rest.length === 2 && method === "PUT") {
     const body = await readBody();
     if (body.tooLarge || body.bad) return bad("the body is JSON, under 64 KiB");
-    if ((body.value.header || body.value.basic) && !credentialsOn(env)) return off();
-    const p = await prepare(name, body.value, false);
+    const p = prepare(name, body.value, false);
     if (p.refusal) return p.refusal;
     return orgAnswer(await askRaw("connection-update", p.args, await idempotencyOf(request, url.pathname, JSON.stringify(p.bound))));
   }
@@ -627,10 +736,10 @@ export async function connectionRoute(h) {
     return orgAnswer(await askRaw("connection-remove", { name }, await idempotencyOf(request, url.pathname, "")));
   }
   if (rest.length === 3 && rest[2] === "credential" && method === "PUT") {
-    if (!credentialsOn(env)) return off();
     const body = await readBody();
     if (body.tooLarge || body.bad) return bad("the body is JSON, under 64 KiB");
-    const p = await prepare(name, { header: body.value.header, basic: body.value.basic }, false);
+    const v = body.value;
+    const p = prepare(name, { header: v.header, basic: v.basic, credential: v.credential }, false);
     if (p.refusal) return p.refusal;
     if (!p.args.sealed) return bad("give the new credential: a header and its value, or a user and password");
     return orgAnswer(await askRaw("connection-credential", p.args, await idempotencyOf(request, url.pathname, JSON.stringify(p.bound))));
@@ -640,15 +749,10 @@ export async function connectionRoute(h) {
     if (!/^[0-9a-f]{64}$/.test(digest)) {
       return orgAnswer({ status: 404, body: { error: "digest-mismatch", message: "a digest is the release's 64-hex sha256" } });
     }
-    if (!credentialsOn(env)) return off();
     const decided = await askRaw("connection-use", { name, digest });
     if (decided.status !== 200) return noStore(decided.body, decided.status);
     const d = decided.body;
-    const handed = await credentialForDevice(env, slug, name, { blob: d.sealed, kind: d.kind, header_name: d.header_name });
-    if (handed === null) {
-      return noStore({ error: "connections-off", message: `the ${name} credential does not open with this hub's key -- an owner or admin replaces it in Settings` }, 503);
-    }
-    return noStore({ name: d.name, base: d.base, allow: d.allow, ...handed });
+    return noStore({ name: d.name, base: d.base, allow: d.allow, ...credentialForDevice(d) });
   }
   return null;
 }

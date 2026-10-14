@@ -205,6 +205,13 @@ dialog.sheet .sheetin { margin-top: 14px; text-align: left; }
 .mchecks .chk { min-height: 28px; align-items: center; }
 .mchecks .chk input { margin-top: 0; }
 .connout:empty { display: none; }
+/* F-316: what encryption means, plainly; the exact terms behind Details */
+p.connsafe, small.connsafe { color: var(--ink-2); }
+p.connsafe { margin-top: 6px; font-size: 14px; }
+p.connsafe::before, small.connsafe::before { content: ""; display: inline-block; width: 8px; height: 8px; margin-right: 7px; border-radius: 50%; background: var(--green); vertical-align: 1px; }
+.conndetails summary { display: inline-flex; align-items: center; min-height: 44px; cursor: pointer; font-size: 13px; color: var(--ink-2); }
+.conndetails summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 6px; }
+.conndetails small { display: block; max-width: 62ch; color: var(--ink-2); line-height: 1.45; }
 .connuse { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line); }
 .connuse span { display: block; font-size: 14px; color: var(--ink-2); }
 .connuse pre.k { margin-top: 6px; white-space: pre; overflow-x: auto; font-size: 12.5px; }
@@ -332,6 +339,8 @@ dialog.sheet .sheetin { margin-top: 14px; text-align: left; }
 <script src="/org/doors.js"></script>
 <script src="/org/parts.js"></script>
 <script src="/org/releases.js"></script>
+<script src="/org/vendor/hpke-js-1.9.0.js"></script>
+<script src="/org/orgseal.js"></script>
 <script src="/org/connections.js"></script>
 <script src="/org/dashboard.js"></script>
 </body>

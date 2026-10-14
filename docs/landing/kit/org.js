@@ -345,6 +345,13 @@
         return { title: "A new address needs its credential again", body: "The stored credential is never sent anywhere new. Remove this connection and add it again with the new address.", action: null };
       case "connections-off":
         return { title: "Connections are not switched on on this hub yet", body: "Nothing changed.", action: null };
+      // The organisation keyring (F-316): a credential is sealed to it.
+      case "no-org-key":
+        return { title: org + " needs one setup step first", body: "Credentials are encrypted so that only " + org + "'s computers can read them, never Krate. An owner turns that on once, on their computer: krate org keys init. Nothing was sent.", action: null };
+      case "key-rotated":
+        return { title: "Save once more", body: org + "'s encryption was just renewed after someone left. Nothing was saved: save again and it is encrypted the new way.", action: null };
+      case "credential-needs-entry":
+        return { title: "This credential must be entered again", body: "It was saved before Krate encrypted credentials, so Krate deleted it rather than keep a copy it could read. An owner or admin of " + org + " enters it again with Replace credential.", action: null };
       case "connection-not-in-audience":
       case "app-not-allowed":
       case "connection-not-requested":
@@ -414,6 +421,7 @@
     "connection-not-in-audience": "the connection is not for their groups",
     "app-not-allowed": "the connection does not allow that app",
     "connection-not-requested": "that version did not ask for it",
+    "credential-needs-entry": "its credential must be entered again",
   };
 
   /// One audit event as a sentence. `names` maps a digest to "Ledger 1.2".
@@ -583,6 +591,8 @@
       case "connection.change": return a + " changed the " + t.value + " connection: " + (ev.reason || "its settings") + ".";
       case "connection.credential": return a + " replaced the credential of the " + t.value + " connection.";
       case "connection.remove": return a + " removed the " + t.value + " connection and its credential.";
+      case "connection.reseal": return a + "'s computer encrypted the connections' credentials again, after someone left.";
+      case "connection.needs-entry": return "The credential of the " + t.value + " connection must be entered again: Krate deleted the copy it could have read.";
       case "connection.use": {
         var cu = String(ev.reason || "").match(/^(\d+) uses? on (\d{4}-\d{2}-\d{2})$/);
         return cu

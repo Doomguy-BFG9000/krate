@@ -53,40 +53,77 @@ impl std::fmt::Debug for Credential {
 /// What the hub handed over for one connection, before it is a header: the
 /// device's side of the credential seam (F-316).
 ///
-/// Today the hub opens its own at-rest seal and hands over the header
-/// itself. Under the organisation keyring it hands over a blob sealed to the
-/// organisation's public key, a new variant here, which only
-/// [`open_credential`] opens, with the organisation key this device holds.
-/// Nothing else on the device ever sees which it was.
-#[derive(Clone, PartialEq, Eq)]
-pub enum Delivered {
-    /// The header, as the hub opened it.
-    Header { name: String, value: String },
+/// The credential was sealed where it was typed (the admin's browser or
+/// CLI) to the organisation's public key, for a context binding the
+/// organisation, the connection's name, its header and its address. The hub
+/// keeps and hands over that blob; it cannot open it. Only
+/// [`open_credential`] does, with the organisation key this device holds.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Delivered {
+    /// The organisation's short name.
+    pub org: String,
+    pub name: String,
+    /// The connection's address, as the hub keeps it.
+    pub base: String,
+    pub header_name: String,
+    /// The version of the organisation key it is sealed to.
+    pub version: u32,
+    /// Base64 of the HPKE seal. Ciphertext: printing it shows nothing.
+    pub sealed: String,
 }
 
-impl std::fmt::Debug for Delivered {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Delivered::Header { name, .. } => write!(f, "Header({name}: <hidden>)"),
-        }
-    }
-}
+/// The longest header value the runtime sends (adapter-common net.rs).
+const MAX_VALUE: usize = 4096;
 
 /// Turn what the hub handed over into the header this run adds, or the
 /// words of why it cannot be used. The one place on the device a credential
-/// is opened.
-pub fn open_credential(delivered: Delivered) -> Result<ConnectionState, String> {
-    match delivered {
-        Delivered::Header { name, value } => {
-            if name.is_empty() || value.is_empty() {
-                return Err("the hub's answer held no credential".to_string());
-            }
-            Ok(ConnectionState::Ready {
-                header_name: name,
-                value: Credential::new(value),
-            })
-        }
+/// is opened. `keyring` is this device's copy of the organisation's key, or
+/// the words of why it has none.
+pub fn open_credential(
+    delivered: Delivered,
+    keyring: Result<&krate_orgkeys::Keyring, String>,
+) -> Result<ConnectionState, String> {
+    let org = &delivered.org;
+    let keyring = keyring?;
+    if keyring.version(delivered.version).is_none() {
+        return Err(format!(
+            "this computer does not have {org}'s newest encryption key yet, which the credential \
+             needs: it gets it the next time another member's computer is online with one of \
+             {org}'s apps open, then open the app again"
+        ));
     }
+    let context = krate_orgkeys::connection_context(
+        org,
+        &delivered.name,
+        &delivered.header_name,
+        &delivered.base,
+    );
+    let opened =
+        krate_orgkeys::open_for_org(keyring, delivered.version, &context, &delivered.sealed)
+            .map_err(|_| {
+                format!(
+                "its credential does not open on this computer: it was changed on the way, or was \
+                 entered for another address. An owner or admin of {org} enters it again with \
+                 Replace credential"
+            )
+            })?;
+    let value = String::from_utf8(opened).map_err(|_| {
+        format!("its credential is not text: an owner or admin of {org} enters it again")
+    })?;
+    if delivered.header_name.is_empty()
+        || value.trim().is_empty()
+        || value.len() > MAX_VALUE
+        || value.contains(['\r', '\n', '\0'])
+    {
+        return Err(format!(
+            "its credential is not one line of up to {MAX_VALUE} characters: an owner or admin of \
+             {org} enters it again"
+        ));
+    }
+    Ok(ConnectionState::Ready {
+        header_name: delivered.header_name,
+        value: Credential::new(value),
+    })
 }
 
 /// Where a connection stands for this run.
@@ -504,31 +541,55 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn the_seam_opens_a_header_and_refuses_an_empty_one() {
-        let ready = open_credential(Delivered::Header {
-            name: "Authorization".into(),
-            value: SECRET.into(),
-        })
-        .expect("a header");
-        assert_eq!(ready, ready_state());
-        assert!(open_credential(Delivered::Header {
-            name: "Authorization".into(),
-            value: String::new(),
-        })
-        .is_err());
-        let printed = format!(
-            "{:?}",
-            Delivered::Header {
-                name: "Authorization".into(),
-                value: SECRET.into()
-            }
-        );
-        assert!(!printed.contains("sk-test-only"), "{printed}");
+    /// What the hub hands over: `value` sealed to `ring`'s current key for
+    /// finance-api at its address.
+    fn delivered(ring: &krate_orgkeys::Keyring, value: &str) -> Delivered {
+        let (version, key) = ring.current();
+        let base = "https://api.acme.example/finance";
+        let context =
+            krate_orgkeys::connection_context("acme", "finance-api", "Authorization", base);
+        Delivered {
+            org: "acme".into(),
+            name: "finance-api".into(),
+            base: base.into(),
+            header_name: "Authorization".into(),
+            version,
+            sealed: krate_orgkeys::seal_for_org(&key.public(), &context, value.as_bytes()).unwrap(),
+        }
     }
 
-    fn ready_state() -> ConnectionState {
-        ready()
+    #[test]
+    fn the_seam_opens_the_sealed_credential_with_this_devices_key() {
+        let ring = krate_orgkeys::Keyring::create("acme");
+        let d = delivered(&ring, SECRET);
+        assert!(!format!("{d:?}").contains("sk-test-only"), "{d:?}");
+        assert_eq!(open_credential(d.clone(), Ok(&ring)).unwrap(), ready());
+        // Another organisation key, as a removed member keeps: refused.
+        let other = krate_orgkeys::Keyring::create("acme");
+        let words = open_credential(d.clone(), Ok(&other)).unwrap_err();
+        assert!(words.contains("does not open on this computer"), "{words}");
+        // A hub that moved it to another address hands over a blob that no
+        // longer opens.
+        let mut moved = d.clone();
+        moved.base = "https://evil.example/collect".into();
+        assert!(open_credential(moved, Ok(&ring)).is_err());
+        // Sealed to a version this device does not hold yet.
+        let mut newer = d.clone();
+        newer.version = 2;
+        let words = open_credential(newer, Ok(&ring)).unwrap_err();
+        assert!(words.contains("newest encryption key yet"), "{words}");
+        // No key on this computer: the caller's words, unchanged.
+        assert_eq!(
+            open_credential(d, Err("waiting".into())),
+            Err("waiting".to_string())
+        );
+        // Opened, but not a header value the runtime could send.
+        for bad in ["", "Bearer a\r\nX-Evil: 1", &"x".repeat(4097)] {
+            assert!(
+                open_credential(delivered(&ring, bad), Ok(&ring)).is_err(),
+                "{bad:?}"
+            );
+        }
     }
 
     #[test]

@@ -13598,8 +13598,12 @@ struct FakeConnection {
     audience: Option<Vec<String>>,
     /// The app ids that may use it; `None` is any.
     apps: Option<Vec<String>>,
+    kind: String,
     header_name: String,
-    value: String,
+    /// The credential as the admin's machine sealed it to the organisation
+    /// key (F-316), and that key's version; 0 is "enter it again".
+    sealed: String,
+    credential_v: u64,
     set_by: String,
     set_at: u64,
 }
@@ -13705,6 +13709,7 @@ fn fake_status(reason: &str) -> u16 {
         "slug-invalid" | "bad-request" | "reason-required" | "group-invalid" => 400,
         "no-such-group" | "no-such-connection" => 404,
         "group-taken" | "connection-taken" => 409,
+        "no-org-key" | "key-rotated" | "credential-needs-entry" => 409,
         "connection-invalid" => 400,
         _ => 403,
     }
@@ -14026,6 +14031,13 @@ impl FakeOrgHub {
                             .iter()
                             .map(|(id, d)| serde_json::json!({ "device_id": id, "principal": d.principal, "public_key": d.public_key }))
                             .collect::<Vec<_>>());
+                        // Every sealed credential, to seal again (org-connections.js).
+                        out["credentials"] = serde_json::json!(org
+                            .connections
+                            .iter()
+                            .filter(|(_, x)| x.credential_v >= 1)
+                            .map(|(name, x)| serde_json::json!({ "name": name, "base": x.base, "kind": x.kind, "header": x.header_name, "v": x.credential_v, "sealed": x.sealed }))
+                            .collect::<Vec<_>>());
                     }
                     if let Some(r) = &org.keys.recovery {
                         out["recovery"] = serde_json::json!({ "version": r["version"], "public_key": r["public_key"], "params": r["params"] });
@@ -14199,6 +14211,36 @@ impl FakeOrgHub {
                     .any(|id| ask["envelopes"][id].as_str().is_none())
                 {
                     return fake_refuse(400, "bad-request");
+                }
+                // Every credential comes back sealed to the new version, or
+                // marked as one that did not open there.
+                let back = |x: &serde_json::Value| {
+                    x["unopened"] == true
+                        || (x["v"].as_u64() == Some(next) && x["sealed"].as_str().is_some())
+                };
+                if org
+                    .connections
+                    .iter()
+                    .filter(|(_, x)| x.credential_v >= 1)
+                    .any(|(name, _)| !back(&ask["credentials"][name]))
+                {
+                    return fake_refuse(400, "bad-request");
+                }
+                for (name, x) in org.connections.iter_mut() {
+                    if x.credential_v < 1 {
+                        continue;
+                    }
+                    let given = &ask["credentials"][name];
+                    match given["sealed"].as_str() {
+                        Some(sealed) if given["unopened"] != true => {
+                            x.sealed = sealed.to_string();
+                            x.credential_v = next;
+                        }
+                        _ => {
+                            x.sealed.clear();
+                            x.credential_v = 0;
+                        }
+                    }
                 }
                 if let Some(last) = org.keys.versions.last_mut() {
                     last.2 = "old".into();
@@ -15445,7 +15487,11 @@ impl FakeOrgHub {
                             "name": name, "base": c.base,
                             "allow": { "methods": c.methods, "paths": c.paths },
                             "audience": c.audience, "apps": c.apps,
-                            "credential": { "kind": "header", "header": c.header_name, "set_by": c.set_by, "set_at": c.set_at },
+                            "credential": {
+                                "kind": c.kind, "header": c.header_name, "set_by": c.set_by, "set_at": c.set_at,
+                                "state": if c.credential_v >= 1 { "sealed" } else { "needs-entry" },
+                                "version": (c.credential_v >= 1).then_some(c.credential_v),
+                            },
                             "uses": { "today": 0, "last_30_days": 0 },
                         })
                     })
@@ -15456,20 +15502,37 @@ impl FakeOrgHub {
                 if !is(&["owner", "admin"]) {
                     return deny(org, "role-cannot");
                 }
-                let credential = || -> Option<(String, String)> {
-                    let h = &json["header"];
+                // Sealed where it was typed (F-316): kind, header, key
+                // version and blob. A value in the clear is never kept.
+                let credential = || -> Option<(String, String, u64, String)> {
+                    if !json["header"].is_null() || !json["basic"].is_null() {
+                        return None;
+                    }
+                    let c = &json["credential"];
                     Some((
-                        h["name"].as_str()?.to_string(),
-                        h["value"].as_str()?.to_string(),
+                        c["kind"].as_str()?.to_string(),
+                        c["header"].as_str()?.to_string(),
+                        c["v"].as_u64()?,
+                        c["sealed"].as_str().filter(|s| s.len() >= 68)?.to_string(),
                     ))
                 };
+                let key_now = org.keys.versions.last().map(|v| v.0);
+                if method != "DELETE" {
+                    match (key_now, credential()) {
+                        (None, _) => return deny(org, "no-org-key"),
+                        (Some(now), Some((_, _, v, _))) if v != now => {
+                            return deny(org, "key-rotated")
+                        }
+                        _ => {}
+                    }
+                }
                 match method {
                     "POST" => {
                         let name = json["name"].as_str().unwrap_or("").to_string();
                         if org.connections.contains_key(&name) {
                             return deny(org, "connection-taken");
                         }
-                        let Some((header_name, value)) = credential() else {
+                        let Some((kind, header_name, credential_v, sealed)) = credential() else {
                             return deny(org, "connection-invalid");
                         };
                         let strings = |v: &serde_json::Value| -> Vec<String> {
@@ -15500,8 +15563,10 @@ impl FakeOrgHub {
                             paths: strings(&json["allow"]["paths"]),
                             audience,
                             apps,
+                            kind,
                             header_name,
-                            value,
+                            sealed,
+                            credential_v,
                             set_by: who.clone(),
                             set_at: now,
                         };
@@ -15509,7 +15574,7 @@ impl FakeOrgHub {
                             "name": name, "base": connection.base,
                             "allow": { "methods": connection.methods, "paths": connection.paths },
                             "audience": connection.audience, "apps": connection.apps,
-                            "credential": { "kind": "header", "header": connection.header_name, "set_by": who, "set_at": now },
+                            "credential": { "kind": connection.kind, "header": connection.header_name, "set_by": who, "set_at": now, "state": "sealed", "version": credential_v },
                             "uses": { "today": 0, "last_30_days": 0 },
                         });
                         let base = connection.base.clone();
@@ -15526,14 +15591,16 @@ impl FakeOrgHub {
                     }
                     "PUT" => {
                         let name = parts[3].to_string();
-                        let Some((header_name, value)) = credential() else {
+                        let Some((kind, header_name, credential_v, sealed)) = credential() else {
                             return deny(org, "connection-invalid");
                         };
                         let Some(c) = org.connections.get_mut(&name) else {
                             return deny(org, "no-such-connection");
                         };
+                        c.kind = kind;
                         c.header_name = header_name;
-                        c.value = value;
+                        c.sealed = sealed;
+                        c.credential_v = credential_v;
                         c.set_by = who.clone();
                         c.set_at = now;
                         org.record(now, &who, "connection.credential", &target, "allowed", None);
@@ -15614,13 +15681,20 @@ impl FakeOrgHub {
                     );
                 }
                 let conn = &org.connections[&name];
+                if conn.credential_v == 0 {
+                    return fake_json(
+                        409,
+                        serde_json::json!({ "error": "credential-needs-entry", "message": format!("the {name} credential must be entered again by an owner or admin of {}", org.name), "base": base }),
+                    );
+                }
                 self.connection_fetches += 1;
+                // The blob as it came, unopened: the hub cannot open it.
                 fake_json(
                     200,
                     serde_json::json!({
                         "name": name, "base": conn.base,
                         "allow": { "methods": conn.methods, "paths": conn.paths },
-                        "header": { "name": conn.header_name, "value": conn.value },
+                        "credential": { "kind": conn.kind, "header": conn.header_name, "v": conn.credential_v, "sealed": conn.sealed },
                     }),
                 )
             }
@@ -19796,10 +19870,44 @@ fn a_company_connection_reaches_the_api_and_the_app_never_holds_the_credential()
         "{listed}"
     );
     assert!(!listed.contains("sk-live"), "{listed}");
+    assert!(
+        made.contains("Krate cannot read it") && listed.contains("encrypted: Krate cannot read"),
+        "{made}{listed}"
+    );
+    // Nothing but the sealed credential left Alice's computer.
+    if world.real_hub().is_none() {
+        for body in &world.hub.lock().unwrap().bodies {
+            assert!(
+                !contains_bytes(body, b"sk-live"),
+                "the credential left the machine in the clear: {}",
+                String::from_utf8_lossy(body)
+            );
+        }
+    }
 
     let ledger = world.probe_bundle("ledger.krate", "com.acme.ledger", "1.0.0", true);
     let (digest, link) = world.release(&root, &ledger);
     let invoices = format!("{base}/invoices");
+
+    // 0. The credential is encrypted to acme's key (F-316), and Dan's
+    // computer does not have that key yet: the app opens, says why in plain
+    // words, and nothing reaches the API.
+    let early = world.probe("dan", &link, &["GET", &invoices]);
+    assert!(early.status.success(), "{}", stderr_of(&early));
+    assert!(
+        probe_said(&early).contains("does not have acme's encryption key yet"),
+        "{}",
+        probe_said(&early)
+    );
+    assert!(
+        stderr_of(&early).contains("which opens without it"),
+        "{}",
+        stderr_of(&early)
+    );
+    assert_eq!(api.count(), 0, "nothing reached the API");
+    // Alice's computer is online once: it passes the key to Dan's.
+    let shown = world.says("alice", &["org", "keys", "show", "acme"], true);
+    assert!(shown.contains("holds acme's key, version 1"), "{shown}");
 
     // 1. Dan, in finance, opens the app: the request arrives with the
     // credential, and the app's own Authorization header does not survive.
@@ -19978,6 +20086,46 @@ fn a_company_connection_reaches_the_api_and_the_app_never_holds_the_credential()
         ],
         true,
     );
+    // What Dan's computer holds of acme's key before he is removed: his
+    // device key (kept sealed with his computer's machine key) and the
+    // keyring his envelope opens to. He keeps this copy.
+    let dans_home = world.homes["dan"].path().join(".krate");
+    let machine = std::fs::read(dans_home.join("machine.key")).expect("Dan's machine key");
+    let stored: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(dans_home.join("org-keys/device.json")).expect("Dan's device"),
+    )
+    .unwrap();
+    let dans_device = krate_orgkeys::KeyPair::from_secret(
+        &krate_orgkeys::open_local(
+            &machine,
+            "krate org device key v1",
+            stored["sealed"].as_str().unwrap(),
+        )
+        .expect("Dan's device key opens"),
+    )
+    .unwrap();
+    let dans_view: serde_json::Value = serde_json::from_str(
+        &ureq::get(&format!(
+            "{}/orgs/acme/keys?device={}",
+            world.url(),
+            dans_device.id()
+        ))
+        .set("Authorization", "Bearer tok-dan@acme.example")
+        .call()
+        .expect("Dan's keyring view")
+        .into_string()
+        .unwrap(),
+    )
+    .unwrap();
+    let dans_keyring = krate_orgkeys::Keyring::open(
+        dans_view["envelope"]["blob"]
+            .as_str()
+            .expect("Dan holds the key"),
+        &dans_device,
+        "acme",
+    )
+    .expect("Dan's envelope opens");
+    assert_eq!(dans_keyring.versions(), vec![1]);
     world.says(
         "alice",
         &["org", "remove", "acme", "dan@acme.example"],
@@ -20009,6 +20157,81 @@ fn a_company_connection_reaches_the_api_and_the_app_never_holds_the_credential()
     // nobody else (the fake counts; a real hub keeps its own daily count).
     if world.real_hub().is_none() {
         assert!(world.hub.lock().unwrap().connection_fetches >= 2);
+    }
+
+    // 11. Dan's removal replaced acme's key: the next member computer
+    // online (Alice's) makes version 2 and encrypts the credential again to
+    // it. What the hub hands out now does not open with the copy Dan kept,
+    // and still reaches the API for Alice.
+    let shown = world.says("alice", &["org", "keys", "show", "acme"], true);
+    assert!(shown.contains("holds acme's key, version 2"), "{shown}");
+    let handed: serde_json::Value = serde_json::from_str(
+        &ureq::get(&format!(
+            "{}/orgs/acme/connections/finance-api/credential/{digest}",
+            world.url()
+        ))
+        .set("Authorization", "Bearer tok-alice")
+        .call()
+        .expect("Alice's hand-out")
+        .into_string()
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(handed["credential"]["v"], 2, "{handed}");
+    let context = krate_orgkeys::connection_context(
+        "acme",
+        "finance-api",
+        handed["credential"]["header"].as_str().unwrap(),
+        handed["base"].as_str().unwrap(),
+    );
+    let sealed = handed["credential"]["sealed"].as_str().unwrap();
+    assert!(!sealed.contains("sk-live"));
+    for v in [1, 2] {
+        assert!(
+            krate_orgkeys::open_for_org(&dans_keyring, v, &context, sealed).is_err(),
+            "Dan's kept keyring opened the new credential at version {v}"
+        );
+    }
+    let alices = world.probe("alice", &link, &["GET", &invoices]);
+    assert_eq!(
+        probe_said(&alices),
+        r#"status=200 body={"invoices":3}"#,
+        "{}",
+        stderr_of(&alices)
+    );
+    assert_eq!(
+        api.authorizations().last().cloned().flatten().as_deref(),
+        Some(secret)
+    );
+
+    // Nothing the hub keeps, or wrote to its log, holds either credential,
+    // though it took two creates and a replace, handed them out and saw a
+    // rotation (a real hub: KRATE_ORG_E2E_STATE names its --persist-to
+    // directory, KRATE_ORG_E2E_LOG the file its output went to).
+    let clear = |bytes: &[u8]| {
+        [secret, rotated].iter().any(|s| {
+            contains(bytes, &s[7..])
+                || contains(bytes, &krate_orgkeys::b64_encode(s.as_bytes())[..24])
+        })
+    };
+    if world.real_hub().is_none() {
+        let hub = world.hub.lock().unwrap();
+        for body in &hub.bodies {
+            assert!(!clear(body), "{}", String::from_utf8_lossy(body));
+        }
+    }
+    for var in ["KRATE_ORG_E2E_STATE", "KRATE_ORG_E2E_LOG"] {
+        if let Ok(path) = std::env::var(var) {
+            let path = std::path::Path::new(&path);
+            let mut kept = Vec::new();
+            if path.is_dir() {
+                all_bytes_under(path, &mut kept);
+            } else {
+                kept = std::fs::read(path).expect(var);
+            }
+            assert!(!kept.is_empty(), "{var} names nothing");
+            assert!(!clear(&kept), "{var} holds a credential");
+        }
     }
 }
 

@@ -734,6 +734,16 @@ pub fn words(refusal: &HubRefusal, org: &str, me: &str, action: Action) -> Strin
             "company connections are switched off on this hub: {}",
             hub_detail(refusal)
         ),
+        // The organisation keyring (F-316): a credential is encrypted to it.
+        "no-org-key" => format!(
+            "nothing was sent: {org} has not turned on encryption yet, and a credential is always \
+             encrypted so that only {org}'s computers can read it. An owner turns it on once: \
+             `krate org keys init {org}`"
+        ),
+        "key-rotated" => format!(
+            "nothing was saved: {org}'s encryption was just renewed after someone left. Run the \
+             same command again and the credential is encrypted the new way"
+        ),
         "connection-not-in-audience" | "app-not-allowed" | "connection-not-requested" => {
             format!(
                 "the app does not get the connection's credential, so nothing is sent with it \

@@ -15,6 +15,7 @@
 //! sealing a secret for the organisation needs (connections).
 
 use serde_json::Value;
+use zeroize::Zeroize;
 
 use crate::{
     device_id, hex32, recovery_keypair, KeyError, KeyPair, Keyring, RecoveryCode, RecoveryParams,
@@ -75,6 +76,54 @@ impl From<KeyError> for AgentError {
     fn from(error: KeyError) -> Self {
         AgentError::Key(error)
     }
+}
+
+/// A rotation's share of the company connections (IC-952): each
+/// connection's credential, as the hub listed it (`name`, `base`, `header`,
+/// `v`, `sealed`), opened with the version it was sealed to and sealed again
+/// to the newest version of `keyring`, which the hub refuses a rotation
+/// without. The plaintext lives in this function only. One that does not
+/// open here -- changed, or sealed for another address -- is answered
+/// `{"unopened": true}`: the hub then marks it to be entered again, rather
+/// than leave it on a key a removed member holds.
+pub fn reseal_credentials(
+    keyring: &Keyring,
+    org: &str,
+    credentials: &Value,
+) -> serde_json::Map<String, Value> {
+    let (version, key) = keyring.current();
+    let mut out = serde_json::Map::new();
+    for c in credentials.as_array().into_iter().flatten() {
+        let Some(name) = c["name"].as_str() else {
+            continue;
+        };
+        let context = crate::connection_context(
+            org,
+            name,
+            c["header"].as_str().unwrap_or(""),
+            c["base"].as_str().unwrap_or(""),
+        );
+        let opened = c["v"]
+            .as_u64()
+            .and_then(|v| u32::try_from(v).ok())
+            .ok_or(KeyError::Open)
+            .and_then(|v| {
+                crate::open_for_org(keyring, v, &context, c["sealed"].as_str().unwrap_or(""))
+            });
+        let answer = match opened {
+            Ok(mut plain) => {
+                let sealed = crate::seal_for_org(&key.public(), &context, &plain);
+                plain.zeroize();
+                match sealed {
+                    Ok(sealed) => serde_json::json!({ "v": version, "sealed": sealed }),
+                    Err(_) => serde_json::json!({ "unopened": true }),
+                }
+            }
+            Err(_) => serde_json::json!({ "unopened": true }),
+        };
+        out.insert(name.to_string(), answer);
+    }
+    out
 }
 
 /// One device, one organisation, one sign-in.
@@ -289,12 +338,13 @@ impl Agent {
             Some(public) => Some(next.seal_to(&hex32(public)?)?),
             None => None,
         };
+        let credentials = reseal_credentials(&next, &self.slug, &view["credentials"]);
         self.call(
             "POST",
             "/rotate",
             Some(&serde_json::json!({
                 "version": version, "public_key": next.current().1.public_hex(), "by_device": self.device.id(),
-                "envelopes": envelopes, "recovery_blob": recovery_blob,
+                "envelopes": envelopes, "recovery_blob": recovery_blob, "credentials": credentials,
             })),
         )?;
         Ok(Held {
@@ -344,5 +394,44 @@ impl Agent {
             })),
         )?;
         Ok(Held { keyring, envelope })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// After a removal: what the remaining devices re-seal opens with the
+    /// new version, and not with the keyring the removed member kept.
+    #[test]
+    fn a_rotation_reseals_every_credential_beyond_a_removed_members_reach() {
+        let mut ring = Keyring::create("acme");
+        let kept_by_removed = ring.clone();
+        let base = "https://api.acme.example/finance";
+        let context = crate::connection_context("acme", "finance-api", "Authorization", base);
+        let sealed =
+            crate::seal_for_org(&ring.current().1.public(), &context, b"Bearer s3cret").unwrap();
+        let listed = serde_json::json!([
+            { "name": "finance-api", "base": base, "header": "Authorization", "v": 1, "sealed": sealed },
+            // The hub moved this one to another address: it no longer opens.
+            { "name": "payroll", "base": "https://evil.example", "header": "Authorization", "v": 1, "sealed": sealed },
+        ]);
+        ring.rotate();
+        let out = reseal_credentials(&ring, "acme", &listed);
+        assert_eq!(out["payroll"], serde_json::json!({ "unopened": true }));
+        assert_eq!(out["finance-api"]["v"], 2);
+        let resealed = out["finance-api"]["sealed"].as_str().unwrap();
+        assert_ne!(resealed, sealed);
+        assert_eq!(
+            crate::open_for_org(&ring, 2, &context, resealed).unwrap(),
+            b"Bearer s3cret"
+        );
+        for v in [1, 2] {
+            assert_eq!(
+                crate::open_for_org(&kept_by_removed, v, &context, resealed),
+                Err(KeyError::Open),
+                "the removed member's keyring, version {v}"
+            );
+        }
     }
 }

@@ -1,0 +1,30 @@
+{
+  "about": "Sealing to an organisation's key (F-316), across languages: crates/orgkeys seal_for_org and open_for_org, and the dashboard's docs/landing/org/orgseal.js on the vendored hpke-js. Both test suites read this file. The organisation key is RFC 9180 DeriveKeyPair(org_ikm); info is \"krate org seal v1\\u0000\" + context; the associated data is org_public; sealed is base64 of enc || ciphertext. Each case's ephemeral key is DeriveKeyPair(ikm_e), so both sides must make exactly `sealed` and open it. page_random was sealed by the page with a random ephemeral key and must open in Rust; rust_random was sealed by crates/orgkeys the same way and must open in the page.",
+  "suite": "RFC 9180 base mode, DHKEM(X25519, HKDF-SHA256), HKDF-SHA256, ChaCha20-Poly1305",
+  "org_ikm": "6b72617465206f7267207365616c20766563746f72206f7267206b6579203031",
+  "org_public": "75e2ebaf58430d53add516fce3a8808f543334bccdb5517710151af2da762068",
+  "cases": [
+    {
+      "context": "connection:acme/finance-api\nAuthorization\nhttps://api.acme.example/finance",
+      "plaintext": "Bearer sk-vector-only-0123456789abcdef",
+      "ikm_e": "6b72617465206f7267207365616c20766563746f7220657068656d6572616c31",
+      "sealed": "bnYvRnCT6RdNEJPxjYl2yPNCZs5GmoLP3cV1n6UYFHfA4zCB55g2v4sAYc/2ezh+4P5Fm1PBP248zhKQB7HvrgEeEFlFn71on98IDtR41Ro0v7Ox5CY="
+    },
+    {
+      "context": "connection:acme/payroll\nX-Api-Key\nhttp://127.0.0.1:9000/payroll",
+      "plaintext": "pässwörd-✓-vector",
+      "ikm_e": "6b72617465206f7267207365616c20766563746f7220657068656d6572616c32",
+      "sealed": "Q+DSZwOA6VF9wgT7gH85Yn0tj5GoAZeCfeJHLLfisVTi7uARtYKF1HCrOe2TsJ3Gy2Cmnj3v3RgdFhTqwc4mho2VvnEB"
+    }
+  ],
+  "page_random": {
+    "context": "connection:acme/finance-api\nAuthorization\nhttps://api.acme.example/finance",
+    "plaintext": "Bearer sk-vector-only-0123456789abcdef",
+    "sealed": "qvLQnXS2cFJZYaXMSiPCNe98BvGp8hsjbpRlrCBWw0JKy41DoE4+ma20nbDpby+7SIRq7GsAHIk2bwDsnvbj7zzTzpV8Gr0Ea9tDHQiftXPZS2GOJY0="
+  },
+  "rust_random": {
+    "context": "connection:acme/finance-api\nAuthorization\nhttps://api.acme.example/finance",
+    "plaintext": "Bearer sk-vector-only-0123456789abcdef",
+    "sealed": "44i4bjUBJCS91Lf1qRfL3aXz6zVx1deOs1ZxiKbsWTHzVE2I6GPWv7irxnm3hH2iaQmVWKHGTNH1CKMWVXlG0oIeuIcjr/nw95JVozxuLcfJMwg/wc8="
+  }
+}

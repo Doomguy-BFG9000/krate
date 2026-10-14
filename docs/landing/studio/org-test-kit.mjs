@@ -8,8 +8,11 @@ import { webcrypto } from "node:crypto";
 const KIT = readFileSync("docs/landing/kit/org.js", "utf8");
 const ORGS = readFileSync("docs/landing/orgs/orgs.js", "utf8");
 // The page loads parts.js (Addendum 3) before dashboard.js; so does this.
-// And doors.js (IC-955), releases.js (IC-949 R) and connections.js (IC-952) between them, in the page's order.
-const DASH = readFileSync("docs/landing/org/doors.js", "utf8") + "\n;\n" + readFileSync("docs/landing/org/parts.js", "utf8") + "\n;\n" + readFileSync("docs/landing/org/releases.js", "utf8") + "\n;\n" + readFileSync("docs/landing/org/connections.js", "utf8") + "\n;\n" + readFileSync("docs/landing/org/dashboard.js", "utf8");
+// And doors.js (IC-955), releases.js (IC-949 R) and connections.js (IC-952) between them, in the page's order,
+// with the sealing it uses (F-316): the vendored hpke-js and orgseal.js.
+const DASH = ["doors.js", "parts.js", "releases.js", "vendor/hpke-js-1.9.0.js", "orgseal.js", "connections.js", "dashboard.js"]
+  .map((f) => readFileSync(`docs/landing/org/${f}`, "utf8"))
+  .join("\n;\n");
 const JOIN = readFileSync("docs/landing/join/join.js", "utf8");
 const OPEN = readFileSync("docs/open/index.html", "utf8");
 
@@ -147,7 +150,7 @@ async function page(url, script, { token = "", routes = {}, ua = "Mozilla/5.0 (M
   };
   const win = {
     document, localStorage, location, URLSearchParams, URL, JSON, Date, Math, Promise, setTimeout, clearTimeout,
-    Uint8Array, crypto: webcrypto, navigator: { userAgent: ua, clipboard: { writeText: async () => {} } },
+    Uint8Array, crypto: webcrypto, TextEncoder, TextDecoder, btoa, atob, navigator: { userAgent: ua, clipboard: { writeText: async () => {} } },
     history: { replaceState(_s, _t, to) { location.href = new URL(to, u.origin).href; } },
     fetch: hubFetch(routes, sent), console,
   };
