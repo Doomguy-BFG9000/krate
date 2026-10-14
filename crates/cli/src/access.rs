@@ -1,29 +1,31 @@
-//! Opening an organisation's private app, online or off (IC-948 G and H).
+//! Opening an organisation's private app, online or off (IC-948 G and H,
+//! Addendum 5).
 //!
 //! Every door that runs an app -- `krate run`, `krate launch`, a double-click
 //! through the Player, Studio's Open, the MCP tools -- reaches [`gate`] once
-//! the bytes are in hand. For a signed bundle it asks the hub whether these
-//! exact bytes are an organisation's private release:
+//! the bytes are in hand. Only a bundle that carries an organisation's mark
+//! (`ext/krate/org/private.json`) under a signature that holds is an
+//! organisation's private app, and only such a bundle ever talks to a hub
+//! here. An unmarked bundle, signed or not, opens without a single request.
+//! A marked bundle whose signature does not hold is refused in words: the
+//! mark says it is private, and nothing proves it is the organisation's.
 //!
 //! - **Online**, the hub's answer is the check-in. A member opens it, and the
 //!   offline lease is fetched, or refreshed once it is past half its life. A
 //!   refused check-in (removed, never shared) deletes the lease and nothing
 //!   runs; the person's app data is not touched.
-//! - **Offline**, a private app opens only on a stored lease for this digest
-//!   and this sign-in that verifies under the pinned hub key and has not run
-//!   out ([`krate_lease::check`]).
+//! - **Offline**, a private app opens only on a stored lease for this
+//!   organisation, digest and sign-in that verifies under the pinned hub key
+//!   and has not run out ([`krate_lease::check`]).
 //!
 //! Before the first private open the person is shown the offline terms with
 //! the exact date, and again whenever a shorter class replaces a longer one.
-//!
-//! Leases live in `~/.krate/leases/<digest>.json`. Which bytes the hub said
-//! were public is remembered beside them, so an ordinary signed app asks
-//! once and never again. Unsigned bundles are never asked about: an
-//! organisation only ever releases signed ones.
+//! Leases live in `~/.krate/leases/<digest>.json`.
 //!
 //! The honest limit, said in the docs too: this is enforced by Krate on the
-//! device. Somebody who copies the bytes and rebuilds them is no longer
-//! opening the organisation's signed app, but Krate cannot stop a copy.
+//! device. Somebody who strips the mark and the signature has an unsigned
+//! copy of the code, not the organisation's app, and Krate cannot stop a
+//! copy.
 
 use std::path::{Path, PathBuf};
 
@@ -54,10 +56,6 @@ fn leases_dir() -> PathBuf {
 
 fn record_path(digest: &str) -> PathBuf {
     leases_dir().join(format!("{digest}.json"))
-}
-
-fn public_path() -> PathBuf {
-    leases_dir().join("known.json")
 }
 
 fn now() -> u64 {
@@ -104,58 +102,15 @@ fn forget(digest: &str) {
     }
 }
 
-/// What the hub said about signed bytes that are not an organisation's:
-/// `public` for good, `unknown` (never published) for a day, after which
-/// it is asked again -- bytes the hub has never seen may become a
-/// candidate later.
-fn already_answered(digest: &str) -> bool {
-    let known: Value = std::fs::read_to_string(public_path())
-        .ok()
-        .and_then(|text| serde_json::from_str(&text).ok())
-        .unwrap_or_default();
-    let entry = &known[digest];
-    match entry["state"].as_str() {
-        Some("public") => true,
-        Some("unknown") => entry["at"].as_u64().unwrap_or(0) + 86_400 > now(),
-        _ => false,
-    }
-}
-
-fn remember(digest: &str, state: &str) {
-    let mut known: Value = std::fs::read_to_string(public_path())
-        .ok()
-        .and_then(|text| serde_json::from_str(&text).ok())
-        .filter(Value::is_object)
-        .unwrap_or_else(|| serde_json::json!({}));
-    known[digest] = serde_json::json!({ "state": state, "at": now() });
-    // Bounded: the newest thousand are plenty to stop repeat questions.
-    if let Some(map) = known.as_object_mut() {
-        while map.len() > 1000 {
-            let oldest = map
-                .iter()
-                .min_by_key(|(_, v)| v["at"].as_u64().unwrap_or(0))
-                .map(|(k, _)| k.clone());
-            match oldest {
-                Some(key) => {
-                    map.remove(&key);
-                }
-                None => break,
-            }
-        }
-    }
-    let _ = std::fs::create_dir_all(leases_dir());
-    let _ = std::fs::write(public_path(), known.to_string());
-}
-
-/// The hub's view of these bytes for this person.
-enum Look {
-    /// Not an organisation's: open as any app.
-    Public,
-    /// The hub has never heard of these bytes.
-    Unknown,
-    /// An organisation's private app: the hub's answer for this person.
-    Private(std::result::Result<Value, krate_bundle::BundleError>),
-    /// The hub could not be reached.
+/// The hub's answer to a marked bundle's check-in.
+enum CheckIn {
+    /// This person may open it: the hub's small JSON about the release.
+    Allowed(Value),
+    /// Refused, with the hub's stable reason.
+    Refused(krate_bundle::BundleError),
+    /// The hub holds no such release.
+    NotReleased,
+    /// The hub could not be reached, or gave no answer that means anything.
     Offline,
 }
 
@@ -166,40 +121,30 @@ fn agent() -> ureq::Agent {
         .build()
 }
 
-/// Ask the hub about `digest`. A HEAD first, which downloads nothing and is
-/// not counted as a download, then for a private app the small JSON answer
-/// (Addendum 2, item 6) that names the organisation or the reason.
-fn look(hub: &str, digest: &str, authorization: Option<&str>) -> Look {
+/// Check in: `GET /a/<digest>` asking for the small JSON answer (Addendum
+/// 2, item 6), which names the organisation or the reason. No bytes.
+fn check_in(hub: &str, digest: &str, authorization: Option<&str>) -> CheckIn {
     let url = format!("{hub}/a/{digest}");
-    let with_auth = |request: ureq::Request| match authorization {
-        Some(value) => request.set("Authorization", value),
-        None => request,
-    };
-    let head = with_auth(agent().head(&url).set("Accept", "application/json")).call();
-    match head {
+    let mut request = agent().get(&url).set("Accept", "application/json");
+    if let Some(value) = authorization {
+        request = request.set("Authorization", value);
+    }
+    match request.call() {
         Ok(response) => {
             if !response.content_type().contains("json") {
-                return Look::Public;
+                // Served as ordinary bytes: not a private release here.
+                return CheckIn::NotReleased;
+            }
+            match response.into_string() {
+                Ok(text) => CheckIn::Allowed(serde_json::from_str(&text).unwrap_or_default()),
+                Err(_) => CheckIn::Offline,
             }
         }
-        Err(ureq::Error::Status(401 | 403, _)) => {}
-        // Never heard of: an ordinary app. Anything else (busy, rate
-        // limited, broken) says nothing about these bytes, so it is treated
-        // as no answer at all -- never as permission.
-        Err(ureq::Error::Status(404, _)) => return Look::Unknown,
-        Err(ureq::Error::Status(_, _)) => return Look::Offline,
-        Err(ureq::Error::Transport(_)) => return Look::Offline,
-    }
-    let answer = with_auth(agent().get(&url).set("Accept", "application/json")).call();
-    match answer {
-        Ok(response) => match response.into_string() {
-            Ok(text) => Look::Private(Ok(serde_json::from_str(&text).unwrap_or_default())),
-            Err(_) => Look::Offline,
-        },
-        Err(ureq::Error::Status(status, response)) => {
+        Err(ureq::Error::Status(404, _)) => CheckIn::NotReleased,
+        Err(ureq::Error::Status(status @ (401 | 403), response)) => {
             let body = response.into_string().unwrap_or_default();
             let answer: Value = serde_json::from_str(&body).unwrap_or_default();
-            Look::Private(Err(krate_bundle::BundleError::HubRefused {
+            CheckIn::Refused(krate_bundle::BundleError::HubRefused {
                 url: url.clone(),
                 status,
                 reason: answer["error"]
@@ -208,9 +153,42 @@ fn look(hub: &str, digest: &str, authorization: Option<&str>) -> Look {
                     .to_string(),
                 message: answer["message"].as_str().unwrap_or("").to_string(),
                 org: answer["org"].as_str().map(str::to_string),
-            }))
+            })
         }
-        Err(ureq::Error::Transport(_)) => Look::Offline,
+        // Busy, rate limited, broken: no answer, and never permission.
+        Err(ureq::Error::Status(_, _)) | Err(ureq::Error::Transport(_)) => CheckIn::Offline,
+    }
+}
+
+/// What a bundle's mark says, and whether its signature binds it.
+pub enum Mark {
+    /// No organisation mark: an ordinary app, never checked with a hub.
+    None,
+    /// `slug`'s mark, under a signature that holds.
+    Signed(String),
+    /// A mark the signature does not hold, or one that cannot be read.
+    Broken(String),
+}
+
+/// The mark a bundle carries, and whether its signature covers it. The
+/// signed statement covers every entry, so a signature that holds is what
+/// makes the mark the organisation's.
+pub fn mark_of(bundle: &krate_bundle::OpenBundle) -> Mark {
+    match bundle.org_mark() {
+        Ok(None) => Mark::None,
+        Err(_) => Mark::Broken("an organisation".to_string()),
+        Ok(Some(slug)) => {
+            let holds = bundle
+                .full_verdict(&krate_bundle::delegation::RevocationState::Known(Vec::new()))
+                .ok()
+                .flatten()
+                .is_some_and(|verdict| verdict.is_trustworthy());
+            if holds {
+                Mark::Signed(slug)
+            } else {
+                Mark::Broken(slug)
+            }
+        }
     }
 }
 
@@ -332,27 +310,32 @@ fn notice(org_name: &str, class: &str, expires_at: Option<u64>) -> String {
     }
 }
 
-/// May these bytes open? `Ok` for anything that is not an organisation's
-/// private app, and for a private one this person may open now.
-///
-/// `authority` is the root the bundle's signature chains to, `None` for an
-/// unsigned one. Only signed bytes are asked about -- an organisation never
-/// releases unsigned ones -- and each public one only once.
-pub fn gate(bytes: Bytes, authority: Option<&str>, door: Door) -> Result<()> {
-    if authority.is_none() {
-        return Ok(());
-    }
+/// May these bytes open? `Ok` at once, with no request anywhere, for any
+/// bundle without an organisation's mark; for a marked one, `Ok` only when
+/// this person may open it now.
+pub fn gate(bytes: Bytes, mark: Mark, door: Door) -> Result<()> {
+    let slug = match mark {
+        Mark::None => return Ok(()),
+        Mark::Broken(slug) => {
+            return refuse(
+                door,
+                &format!(
+                    "this app is marked as {slug}'s private app, but its signature does not \
+                     hold, so it does not open: it was changed after it was signed, or the \
+                     copy is damaged. Ask {slug} for a fresh copy"
+                ),
+            )
+        }
+        Mark::Signed(slug) => slug,
+    };
     let (digest, link) = match bytes {
         Bytes::Fetched { sha256, link } => (sha256.to_string(), Some(link)),
         Bytes::File(path) => match std::fs::read(path) {
             Ok(bytes) => (krate_bundle::sha256_hex(&bytes), None),
-            Err(_) => return Ok(()),
+            Err(err) => anyhow::bail!("could not read {}: {err}", path.display()),
         },
     };
     let record = load_record(&digest);
-    if record.is_none() && already_answered(&digest) {
-        return Ok(());
-    }
     let identity = github_auth::current();
     // The hub to ask: the one that served the link, the one this app came
     // from before, or the one this machine uses.
@@ -373,64 +356,41 @@ pub fn gate(bytes: Bytes, authority: Option<&str>, door: Door) -> Result<()> {
     let me = identity
         .as_ref()
         .map(|identity| org::principal_of(&identity.login));
+    // What is known before the hub answers: the mark's organisation.
+    let known = record.clone().unwrap_or_else(|| {
+        serde_json::json!({
+            "digest": digest, "hub": hub, "org": { "slug": slug, "name": slug },
+            "class": "online", "answer": null,
+        })
+    });
 
-    match look(&hub, &digest, authorization.as_deref()) {
-        Look::Public => {
-            if record.is_some() {
-                let _ = std::fs::remove_file(record_path(&digest));
-            }
-            remember(&digest, "public");
-            Ok(())
+    match check_in(&hub, &digest, authorization.as_deref()) {
+        CheckIn::NotReleased => {
+            save_record(&digest, &known);
+            forget(&digest);
+            refuse(
+                door,
+                &format!(
+                    "this is {slug}'s private app, and {hub} has no release of it, so it does \
+                     not open: ask {slug} for the link its reviewer's approval gave"
+                ),
+            )
         }
-        Look::Unknown => match record {
-            // The hub no longer knows bytes it once released.
-            Some(record) => {
-                forget(&digest);
-                let org_name = record["org"]["name"].as_str().unwrap_or("its organisation");
-                refuse(
-                    door,
-                    &format!(
-                        "this was {org_name}'s private app, and the hub no longer has it, so \
-                         it does not open: ask {org_name} for its current link"
-                    ),
-                )
-            }
-            None => {
-                remember(&digest, "unknown");
-                Ok(())
-            }
-        },
-        Look::Offline => match record {
-            Some(record) => offline(&digest, &record, me.as_deref(), door),
-            // Never seen online: there is nothing to say it is private.
-            None => Ok(()),
-        },
-        Look::Private(Err(krate_bundle::BundleError::HubRefused {
+        CheckIn::Offline => offline(&digest, &known, me.as_deref(), door),
+        CheckIn::Refused(krate_bundle::BundleError::HubRefused {
             reason,
             message,
             org,
             ..
-        })) => {
+        }) => {
             if matches!(
                 reason.as_str(),
                 "removed" | "not-a-member" | "digest-mismatch" | "no-such-org"
             ) {
-                if record.is_none() {
-                    save_record(
-                        &digest,
-                        &serde_json::json!({
-                            "digest": digest, "hub": hub, "org": { "slug": org, "name": org },
-                            "class": "online", "answer": null,
-                        }),
-                    );
-                }
+                save_record(&digest, &known);
                 forget(&digest);
             }
-            let org = org.or_else(|| {
-                record
-                    .as_ref()
-                    .and_then(|r| r["org"]["slug"].as_str().map(str::to_string))
-            });
+            let org = org.or(Some(slug));
             let words = org::download_refusal(
                 &format!("{hub}/a/{digest}"),
                 &reason,
@@ -439,8 +399,8 @@ pub fn gate(bytes: Bytes, authority: Option<&str>, door: Door) -> Result<()> {
             );
             refuse(door, &words)
         }
-        Look::Private(Err(other)) => refuse(door, &other.to_string()),
-        Look::Private(Ok(meta)) => online(
+        CheckIn::Refused(other) => refuse(door, &other.to_string()),
+        CheckIn::Allowed(meta) => online(
             &digest,
             &hub,
             &meta,

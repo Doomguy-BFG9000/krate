@@ -479,6 +479,17 @@ pub fn words(refusal: &HubRefusal, org: &str, me: &str, action: Action) -> Strin
              again with `krate pack`, then publish again",
             refusal.message
         ),
+        "not-marked-for-this-org" => format!(
+            "{org} did not take it: it is not marked as {org}'s private app under a signature \
+             that holds. Mark and sign it for {org} (krate sign app.krate --org {org} --key \
+             <your-release.pkcs8> --delegation {org}-release.json), and publish again"
+        ),
+        "private-app" => format!(
+            "this app carries an organisation's mark, so it never goes to the public gallery: {}",
+            Some(refusal.message.as_str())
+                .filter(|m| !m.is_empty())
+                .unwrap_or("this app is private: publish it with krate publish --org <org>")
+        ),
         "bytes-held-elsewhere" => format!(
             "these exact bytes are already on the hub outside {org} -- published publicly, or \
              held by another organisation -- so they cannot be {org}'s private release: change \
@@ -1348,37 +1359,55 @@ fn release_key_command(slug: &str, delegation: Option<&Path>) -> Result<u8> {
 /// Before anything is uploaded to an organisation: the bundle must carry a
 /// signature that verifies. Unsigned, it says exactly what to run.
 pub fn require_signed(opened: &krate_bundle::OpenBundle, file: &Path, slug: &str) -> Result<()> {
-    let app = opened
-        .manifest()
-        .app
-        .id
-        .rsplit('.')
-        .next()
-        .unwrap_or("app")
-        .to_ascii_lowercase();
-    let namespace = format!("{slug}/{app}");
     let file = file.display();
-    match opened.signature_verdict() {
-        Ok(Some(verdict)) if verdict.is_genuinely_signed() => Ok(()),
-        Ok(Some(_)) => anyhow::bail!(
-            "{file}'s signature does not match its contents, so nothing was uploaded: it was \
-             changed after it was signed. Sign it again (krate sign {file} --key <release key> \
-             --namespace {namespace} --delegation {slug}-release.json), then publish again."
+    // The one line that fixes both a missing mark and a missing signature.
+    let fix = format!(
+        "krate sign {file} --org {slug} --key <release.pkcs8> --delegation {slug}-release.json"
+    );
+    let signed = matches!(opened.signature_verdict(), Ok(Some(ref v)) if v.is_genuinely_signed());
+    match opened.org_mark() {
+        Ok(Some(marked)) if marked != slug => anyhow::bail!(
+            "{file} is marked as {marked}'s private app, not {slug}'s, so nothing was \
+             uploaded: publish it with `krate publish {file} --org {marked}`, or mark and sign \
+             it for {slug}:\n  {fix}"
         ),
-        _ => anyhow::bail!(
-            "{file} is not signed, so nothing was uploaded: {slug} takes only apps signed by \
-             its root key, or by a release key that root delegated.\n\
+        Ok(Some(_)) if signed => Ok(()),
+        Ok(Some(_)) => match opened.signature_verdict() {
+            Ok(Some(_)) => anyhow::bail!(
+                "{file}'s signature does not match its contents, so nothing was uploaded: it \
+                 was changed after it was signed. Mark and sign it again:\n  {fix}"
+            ),
+            _ => anyhow::bail!(
+                "{file} is marked for {slug} but not signed, so nothing was uploaded. Sign \
+                 it:\n  {fix}"
+            ),
+        },
+        Ok(None) | Err(_) if signed => anyhow::bail!(
+            "{file} is signed but not marked as {slug}'s private app, so nothing was \
+             uploaded: {slug} takes only apps it is marked for. Mark and sign it for \
+             {slug}:\n  {fix}"
+        ),
+        Ok(None) | Err(_) => anyhow::bail!(
+            "{file} is not signed or marked for {slug}, so nothing was uploaded: {slug} takes \
+             only apps marked as its private apps and signed by its root key, or by a release \
+             key that root delegated.\n\
              \n  The shortest way: make this machine a release key, and send its public half \
              to an owner of {slug}:\n    \
              krate org release-key {slug}\n\
-             \n  With {slug}'s root key:\n    \
-             krate sign {file} --key <{slug}-root.pkcs8> --namespace {namespace}\n\
              \n  With a release key ({slug}'s owner runs the first line once):\n    \
              krate delegate --root <{slug}-root.pkcs8> --key <release.pkcs8> --namespace '{slug}/*' -o {slug}-release.json\n    \
-             krate sign {file} --key <release.pkcs8> --namespace {namespace} --delegation {slug}-release.json\n\
+             {fix}\n\
+             \n  With {slug}'s root key:\n    \
+             krate sign {file} --org {slug} --key <{slug}-root.pkcs8>\n\
              \nThen run this publish again."
         ),
     }
+}
+
+/// The app part of a namespace, from an app id: its last dotted label,
+/// lower-case. `dev.acme.demo` is `demo`.
+pub fn app_label(id: &str) -> String {
+    id.rsplit('.').next().unwrap_or("app").to_ascii_lowercase()
 }
 
 /// `krate publish app.krate --org <slug>`: upload a signed bundle as a
@@ -1574,6 +1603,8 @@ mod tests {
             "slug-invalid",
             "idempotency-key-reused",
             "no-such-org",
+            "not-marked-for-this-org",
+            "private-app",
             "invalid-bundle",
             "bytes-held-elsewhere",
             "too-large",

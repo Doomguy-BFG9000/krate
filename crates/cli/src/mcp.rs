@@ -335,7 +335,7 @@ fn run_component_tool(arguments: &Value) -> Result<Value> {
                     sha256: &fetched.sha256,
                     link: target,
                 },
-                fetched.bundle.signing_authority().ok().flatten().as_deref(),
+                crate::access::mark_of(&fetched.bundle),
                 crate::access::Door::Terminal,
             )?;
             Some(fetched.bundle)
@@ -345,7 +345,7 @@ fn run_component_tool(arguments: &Value) -> Result<Value> {
                 krate_bundle::open(Path::new(target)).with_context(|| format!("open {target}"))?;
             crate::access::gate(
                 crate::access::Bytes::File(Path::new(target)),
-                bundle.signing_authority().ok().flatten().as_deref(),
+                crate::access::mark_of(&bundle),
                 crate::access::Door::Terminal,
             )?;
             Some(bundle)

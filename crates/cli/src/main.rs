@@ -677,9 +677,18 @@ enum Command {
         /// Not read from the manifest: a manifest is written by whoever made
         /// the file, so taking the namespace from it would let a bundle name
         /// its own publisher -- exactly the authority the signature exists to
-        /// establish.
-        #[arg(long)]
-        namespace: String,
+        /// establish. With --org it defaults to `<org>/<app>`, or the
+        /// delegation's own namespace.
+        #[arg(long, required_unless_present = "org")]
+        namespace: Option<String>,
+
+        /// Mark the app as this organisation's private app, then sign it
+        /// (IC-948, Addendum 5): `ext/krate/org/private.json`, covered by the
+        /// signature, so the mark cannot be removed without breaking it.
+        /// Only a marked app is taken by `krate publish --org`, and only a
+        /// marked app checks in with the hub when it opens.
+        #[arg(long, value_name = "SLUG")]
+        org: Option<String>,
 
         /// A delegation written by `krate delegate`, when --key is a release
         /// key the publisher root authorised rather than the root itself.
@@ -1986,9 +1995,29 @@ fn run() -> Result<u8> {
             key,
             generate_key,
             namespace,
+            org,
             delegation,
             groups,
         } => {
+            let namespace = match &org {
+                Some(slug) => {
+                    let namespace = namespace.unwrap_or_else(|| {
+                        let app = krate_bundle::read_manifest(&file)
+                            .map(|m| org::app_label(&m.app.id))
+                            .unwrap_or_else(|_| "app".to_string());
+                        match &delegation {
+                            Some(slip) => org::namespace_for(slip, slug, &app),
+                            None => format!("{slug}/{app}"),
+                        }
+                    });
+                    krate_bundle::add_org_mark(&file, slug).map_err(|err| {
+                        anyhow::anyhow!("could not mark {} for {slug}: {err}", file.display())
+                    })?;
+                    println!("marked {} as {slug}'s private app", file.display());
+                    namespace
+                }
+                None => namespace.unwrap_or_default(),
+            };
             let code =
                 sign_bundle_command(&file, &key, generate_key, &namespace, delegation.as_deref())?;
             if code == 0 && !groups.is_empty() {
@@ -7871,6 +7900,10 @@ fn publish_to_org(
                 .unwrap_or("app")
                 .to_ascii_lowercase();
             let namespace = org::namespace_for(&delegation, slug, &app);
+            // `krate sign --org`: mark, then sign.
+            krate_bundle::add_org_mark(bundle, slug).map_err(|err| {
+                anyhow::anyhow!("could not mark {} for {slug}: {err}", bundle.display())
+            })?;
             sign_bundle_command(bundle, &key, false, &namespace, Some(&delegation))?;
             bytes = fs::read(bundle)
                 .with_context(|| format!("could not read bundle {}", bundle.display()))?;
@@ -7960,6 +7993,14 @@ fn publish_bundle(
         let detail = err.user_message().unwrap_or_else(|| err.to_string());
         anyhow::anyhow!("this bundle cannot be opened, so it will not be published: {detail}")
     })?;
+    // An organisation's private app never goes to the public door
+    // (IC-948, Addendum 5); said here, before anything leaves the machine.
+    if let Ok(Some(slug)) = opened.org_mark() {
+        anyhow::bail!(
+            "this app is private to {slug}: publish it with krate publish {} --org {slug}",
+            bundle.display()
+        );
+    }
 
     let hub = hub_override
         .map(str::to_string)
@@ -8084,6 +8125,15 @@ fn publish_bundle(
             let detail = response
                 .into_string()
                 .unwrap_or_else(|_| "(no detail)".to_string());
+            // A refusal with a stable reason is said in its own words, never
+            // as the raw JSON it came in.
+            let answer: serde_json::Value = serde_json::from_str(&detail).unwrap_or_default();
+            if let Some(message) = answer["message"]
+                .as_str()
+                .filter(|_| answer["error"].is_string())
+            {
+                anyhow::bail!("the hub did not take it: {message}");
+            }
             anyhow::bail!(
                 "the hub rejected the bundle (HTTP {code}): {}",
                 detail.trim()
@@ -15370,7 +15420,6 @@ fn run_component_inner(request: RunRequest) -> Result<u8> {
     // offline only on a lease that holds (IC-948 G). A preview picture is
     // Krate looking at the app, not a person opening it.
     if let Some(opened) = bundle.as_ref().filter(|_| !request.for_screenshot) {
-        let authority = opened.signing_authority().ok().flatten();
         let door = if request.consent {
             access::Door::Window
         } else {
@@ -15383,7 +15432,7 @@ fn run_component_inner(request: RunRequest) -> Result<u8> {
             },
             None => access::Bytes::File(Path::new(&request.target)),
         };
-        access::gate(bytes, authority.as_deref(), door)?;
+        access::gate(bytes, access::mark_of(opened), door)?;
     }
 
     if !file.exists() {
@@ -16569,12 +16618,18 @@ fn launch_gate(bundle_path: &Path) -> Result<()> {
     if !krate_bundle::is_bundle_path(bundle_path) {
         return Ok(());
     }
-    let authority = krate_bundle::read_signing_authority(bundle_path)
-        .ok()
-        .flatten();
+    // An unmarked app needs nothing here, and is not unpacked to learn so.
+    if !matches!(
+        krate_bundle::read_org_mark(bundle_path),
+        Ok(Some(_)) | Err(_)
+    ) {
+        return Ok(());
+    }
+    let opened = krate_bundle::open(bundle_path)
+        .with_context(|| format!("could not open bundle {}", bundle_path.display()))?;
     access::gate(
         access::Bytes::File(bundle_path),
-        authority.as_deref(),
+        access::mark_of(&opened),
         access::Door::Window,
     )
 }

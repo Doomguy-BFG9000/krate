@@ -13606,7 +13606,7 @@ fn fake_status(reason: &str) -> u16 {
         "not-signed-in" => 401,
         "last-owner" | "slug-taken" | "idempotency-key-reused" | "bytes-held-elsewhere" => 409,
         "digest-mismatch" | "no-such-org" => 404,
-        "not-signed-for-this-org" | "invalid-bundle" => 422,
+        "not-signed-for-this-org" | "not-marked-for-this-org" | "invalid-bundle" => 422,
         "invite-expired" | "invite-used" | "invite-revoked" => 410,
         "slug-invalid" | "bad-request" => 400,
         _ => 403,
@@ -13769,6 +13769,16 @@ fn fake_signed_for(
     }
     let app = &opened.manifest().app;
     Ok((app.name.clone(), app.version.clone(), envelope.public_key))
+}
+
+/// Addendum 5: a candidate carries a mark naming its organisation, under
+/// the signature `fake_signed_for` has already found to hold.
+fn fake_marked_for(bytes: &[u8], slug: &str) -> bool {
+    krate_bundle::open_bytes(bytes)
+        .ok()
+        .and_then(|opened| opened.org_mark().ok().flatten())
+        .as_deref()
+        == Some(slug)
 }
 
 impl FakeOrgHub {
@@ -14268,6 +14278,13 @@ impl FakeOrgHub {
                             )
                         }
                     };
+                if !fake_marked_for(body, &slug) {
+                    return deny_with(
+                        org,
+                        "not-marked-for-this-org",
+                        &format!("this app is not marked as {slug}'s private app"),
+                    );
+                }
                 if let Some(existing) = org.candidates.get(&digest) {
                     return fake_json(
                         200,
@@ -14496,7 +14513,26 @@ impl FakeOrgHub {
                     org.root.as_deref(),
                     &org.revoked,
                 ) {
-                    Ok(app) => app,
+                    Ok(app) if fake_marked_for(&bytes, &slug) => app,
+                    Ok(_) => {
+                        org.record(
+                            now,
+                            &big.who,
+                            "candidate.publish",
+                            &format!("candidate:{digest}"),
+                            "denied",
+                            Some("not-marked-for-this-org"),
+                        );
+                        return fake_json(
+                            200,
+                            serde_json::json!({
+                                "id": "orgup1", "kind": "bundle", "status": "refused", "org": slug,
+                                "problem": format!(
+                                    "not-marked-for-this-org: this app is not marked as {slug}'s private app"
+                                ),
+                            }),
+                        );
+                    }
                     Err(why) => {
                         org.record(
                             now,
@@ -14849,10 +14885,10 @@ impl OrgWorld {
             &[
                 "sign",
                 bundle.to_str().unwrap(),
+                "--org",
+                "acme",
                 "--key",
                 release.to_str().unwrap(),
-                "--namespace",
-                "acme/demo",
                 "--delegation",
                 delegation.to_str().unwrap(),
             ],
@@ -15233,7 +15269,7 @@ fn publish_to_an_org_refuses_an_unsigned_bundle_before_uploading() {
         false,
     );
     assert!(
-        said.contains("is not signed, so nothing was uploaded"),
+        said.contains("is not signed or marked for acme, so nothing was uploaded"),
         "{said}"
     );
     assert!(
@@ -15243,8 +15279,11 @@ fn publish_to_an_org_refuses_an_unsigned_bundle_before_uploading() {
         "{said}"
     );
     assert!(
-        said.contains("--namespace acme/demo --delegation acme-release.json"),
-        "{said}"
+        said.contains(&format!(
+            "krate sign {} --org acme --key <release.pkcs8> --delegation acme-release.json",
+            bundle.display()
+        )),
+        "the exact line that fixes it: {said}"
     );
     assert_eq!(
         world.hub.lock().unwrap().seen.len(),
@@ -15296,8 +15335,8 @@ fn publish_to_an_org_uploads_a_signed_candidate_and_prints_its_digest() {
             "--key",
             key.to_str().unwrap(),
             "--generate-key",
-            "--namespace",
-            "acme/demo",
+            "--org",
+            "acme",
         ],
         true,
     );
@@ -16301,32 +16340,351 @@ fn a_copied_private_file_does_not_open_for_a_stranger() {
         stderr_of(&refused)
     );
 
-    // Carol's own signed app, never published: asked once, then remembered.
-    let own = world.bundle("own.krate", "9.9.9", 64);
-    world.sign_delegated(&root, "carol", &own);
-    let heads = |world: &OrgWorld| {
+    let _ = digest;
+}
+
+/// Addendum 5: an unmarked app, signed or not, opens without a single
+/// request to any hub -- counted by the fake, which sees every one.
+#[test]
+fn an_unmarked_app_opens_with_no_hub_request() {
+    let Some(world) = OrgWorld::new(&["alice", "bob", "carol", "dan"]) else {
+        eprintln!("skipping an_unmarked_app_opens_with_no_hub_request: no local port");
+        return;
+    };
+    let root = world.acme();
+    let unsigned = world.bundle("plain.krate", "1.0.0", 64);
+    let signed = world.bundle("signed.krate", "1.0.1", 64);
+    // Signed with the same delegated key an acme app uses -- but not marked.
+    let release = world.dir.path().join("carol-release.pkcs8");
+    std::fs::write(&release, krate_lease::generate_pkcs8().unwrap()).unwrap();
+    let slip = world.dir.path().join("carol-acme.json");
+    world.says(
+        "alice",
+        &[
+            "delegate",
+            "--root",
+            root.to_str().unwrap(),
+            "--key",
+            release.to_str().unwrap(),
+            "--namespace",
+            "acme/*",
+            "-o",
+            slip.to_str().unwrap(),
+        ],
+        true,
+    );
+    world.says(
+        "carol",
+        &[
+            "sign",
+            signed.to_str().unwrap(),
+            "--key",
+            release.to_str().unwrap(),
+            "--namespace",
+            "acme/demo",
+            "--delegation",
+            slip.to_str().unwrap(),
+        ],
+        true,
+    );
+    let before = world.hub.lock().unwrap().seen.len();
+    for (who, app) in [("dan", &unsigned), ("dan", &signed), ("nobody", &signed)] {
+        let ran = org_command(&world, who, &["run", app.to_str().unwrap(), "--headless"])
+            .output()
+            .expect("run");
+        assert!(ran.status.success(), "{}", stderr_of(&ran));
+    }
+    let hub = world.hub.lock().unwrap();
+    assert_eq!(
+        hub.seen.len(),
+        before,
+        "not one request for an unmarked app: {:?}",
+        &hub.seen[before..]
+    );
+}
+
+/// Addendum 5: a marked app checks in, every time it opens; one the hub has
+/// no release of is refused in words.
+#[test]
+fn a_marked_app_checks_in_and_an_unreleased_one_is_refused() {
+    let Some(world) = OrgWorld::new(&["alice", "bob", "carol", "dan"]) else {
+        eprintln!(
+            "skipping a_marked_app_checks_in_and_an_unreleased_one_is_refused: no local port"
+        );
+        return;
+    };
+    let root = world.acme();
+    let (bundle, digest, _link) = world.released_app(&root, "1.0.0");
+    let copy = dans_copy(&world, &bundle);
+    let check_ins = |world: &OrgWorld| {
         world
             .hub
             .lock()
             .unwrap()
             .seen
             .iter()
-            .filter(|(m, p, _)| m == "HEAD" && p.starts_with("/a/"))
+            .filter(|(m, p, _)| m == "GET" && *p == format!("/a/{digest}"))
             .count()
     };
-    let before = heads(&world);
-    for _ in 0..2 {
+    for round in 1..=2 {
         let ran = org_command(
             &world,
-            "carol",
-            &["run", own.to_str().unwrap(), "--headless"],
+            "dan",
+            &["run", copy.to_str().unwrap(), "--headless"],
         )
         .output()
         .expect("run");
         assert!(ran.status.success(), "{}", stderr_of(&ran));
+        assert_eq!(check_ins(&world), round, "every open checks in");
     }
-    assert_eq!(heads(&world), before + 1, "asked once, then remembered");
-    let _ = digest;
+    // Marked and signed, but never released: refused, and says so.
+    let own = world.bundle("own.krate", "9.9.9", 64);
+    world.sign_delegated(&root, "carol", &own);
+    let ran = org_command(
+        &world,
+        "carol",
+        &["run", own.to_str().unwrap(), "--headless"],
+    )
+    .output()
+    .expect("run");
+    assert!(!ran.status.success());
+    assert!(
+        stderr_of(&ran).contains("this is acme's private app")
+            && stderr_of(&ran).contains("has no release of it"),
+        "{}",
+        stderr_of(&ran)
+    );
+}
+
+/// The zip a bundle is, rewritten without its organisation mark: the
+/// mark's file gone and its declaration with it.
+fn strip_mark(bundle: &std::path::Path, out: &std::path::Path) {
+    use std::io::Read as _;
+    let mut archive = zip::ZipArchive::new(std::fs::File::open(bundle).unwrap()).unwrap();
+    let mut writer = zip::ZipWriter::new(std::fs::File::create(out).unwrap());
+    for index in 0..archive.len() {
+        let mut entry = archive.by_index(index).unwrap();
+        let name = entry.name().to_string();
+        let mut body = Vec::new();
+        entry.read_to_end(&mut body).unwrap();
+        if name == krate_bundle::ORG_MARK_ENTRY {
+            continue;
+        }
+        if name == krate_bundle::EXTENSIONS_ENTRY {
+            let mut record: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            record["extensions"]
+                .as_array_mut()
+                .unwrap()
+                .retain(|e| e["owner"] != "krate");
+            if record["extensions"].as_array().unwrap().is_empty() {
+                continue;
+            }
+            body = serde_json::to_vec(&record).unwrap();
+        }
+        writer
+            .start_file(name, zip::write::SimpleFileOptions::default())
+            .unwrap();
+        std::io::Write::write_all(&mut writer, &body).unwrap();
+    }
+    writer.finish().unwrap();
+}
+
+/// Addendum 5: the signature covers the mark. Stripping it leaves a bundle
+/// whose signature no longer holds -- refused as changed after signing,
+/// with no hub asked -- and a mark whose signature does not hold is
+/// refused in words before anything is asked either.
+#[test]
+fn a_stripped_or_unsigned_mark_does_not_open() {
+    let Some(world) = OrgWorld::new(&["alice", "bob", "carol", "dan"]) else {
+        eprintln!("skipping a_stripped_or_unsigned_mark_does_not_open: no local port");
+        return;
+    };
+    let root = world.acme();
+    let (bundle, _digest, _link) = world.released_app(&root, "1.0.0");
+    let stripped = world.homes["dan"].path().join("stripped.krate");
+    strip_mark(&bundle, &stripped);
+    assert!(krate_bundle::read_org_mark(&stripped).unwrap().is_none());
+    let before = world.hub.lock().unwrap().seen.len();
+    let ran = org_command(
+        &world,
+        "dan",
+        &["run", stripped.to_str().unwrap(), "--headless"],
+    )
+    .output()
+    .expect("run");
+    assert!(!ran.status.success());
+    assert!(
+        stderr_of(&ran).contains("this app was changed after it was signed"),
+        "{}",
+        stderr_of(&ran)
+    );
+    // A mark added after signing: the signature no longer holds.
+    let remarked = world.homes["dan"].path().join("remarked.krate");
+    std::fs::copy(&stripped, &remarked).unwrap();
+    krate_bundle::add_org_mark(&remarked, "globex").unwrap();
+    let ran = org_command(
+        &world,
+        "dan",
+        &["run", remarked.to_str().unwrap(), "--headless"],
+    )
+    .output()
+    .expect("run");
+    assert!(!ran.status.success());
+    assert!(
+        stderr_of(&ran).contains("marked as globex's private app, but its signature does not hold"),
+        "{}",
+        stderr_of(&ran)
+    );
+    // And a mark on an app nobody signed.
+    let bare = world.bundle("bare.krate", "3.0.0", 64);
+    krate_bundle::add_org_mark(&bare, "acme").unwrap();
+    let ran = org_command(
+        &world,
+        "dan",
+        &["run", bare.to_str().unwrap(), "--headless"],
+    )
+    .output()
+    .expect("run");
+    assert!(!ran.status.success());
+    assert!(
+        stderr_of(&ran).contains("its signature does not hold"),
+        "{}",
+        stderr_of(&ran)
+    );
+    assert_eq!(
+        world.hub.lock().unwrap().seen.len(),
+        before,
+        "no hub was asked"
+    );
+}
+
+/// Addendum 5: `krate publish --org` takes only a bundle marked for that
+/// organisation, and says the exact line to fix it; the hub refuses one
+/// that slips past (`not-marked-for-this-org`); and the public door is
+/// closed to a marked app before anything is sent.
+#[test]
+fn only_a_marked_app_goes_to_an_organisation_and_never_to_the_public_door() {
+    let Some(world) = OrgWorld::new(&["alice", "bob", "carol"]) else {
+        eprintln!("skipping only_a_marked_app_goes_to_an_organisation_and_never_to_the_public_door: no local port");
+        return;
+    };
+    let root = world.acme();
+    // Signed with an acme release key, but unmarked: turned back locally.
+    let app = world.bundle("unmarked.krate", "1.0.0", 64);
+    let release = world.dir.path().join("carol-release.pkcs8");
+    std::fs::write(&release, krate_lease::generate_pkcs8().unwrap()).unwrap();
+    let slip = world.dir.path().join("carol-acme.json");
+    world.says(
+        "alice",
+        &[
+            "delegate",
+            "--root",
+            root.to_str().unwrap(),
+            "--key",
+            release.to_str().unwrap(),
+            "--namespace",
+            "acme/*",
+            "-o",
+            slip.to_str().unwrap(),
+        ],
+        true,
+    );
+    world.says(
+        "carol",
+        &[
+            "sign",
+            app.to_str().unwrap(),
+            "--key",
+            release.to_str().unwrap(),
+            "--namespace",
+            "acme/demo",
+            "--delegation",
+            slip.to_str().unwrap(),
+        ],
+        true,
+    );
+    let before = world.hub.lock().unwrap().seen.len();
+    let said = world.says(
+        "carol",
+        &["publish", app.to_str().unwrap(), "--org", "acme"],
+        false,
+    );
+    assert!(
+        said.contains("is signed but not marked as acme's private app"),
+        "{said}"
+    );
+    assert!(
+        said.contains(&format!(
+            "krate sign {} --org acme --key <release.pkcs8> --delegation acme-release.json",
+            app.display()
+        )),
+        "{said}"
+    );
+    assert_eq!(
+        world.hub.lock().unwrap().seen.len(),
+        before,
+        "nothing was sent"
+    );
+
+    // Marked for another organisation: also turned back.
+    let other = world.bundle("globex.krate", "1.0.1", 64);
+    krate_bundle::add_org_mark(&other, "globex").unwrap();
+    let said = world.says(
+        "carol",
+        &["publish", other.to_str().unwrap(), "--org", "acme"],
+        false,
+    );
+    assert!(
+        said.contains("is marked as globex's private app, not acme's"),
+        "{said}"
+    );
+
+    // The hub's own refusal, for a client that does not check first: the
+    // unmarked signed bytes sent straight to the candidates route.
+    let bytes = std::fs::read(&app).unwrap();
+    let answer = ureq::post(&format!("{}/orgs/acme/candidates", world.url()))
+        .set("Authorization", "Bearer tok-carol")
+        .set("Idempotency-Key", "k1")
+        .send_bytes(&bytes);
+    match answer {
+        Err(ureq::Error::Status(422, response)) => {
+            let body: serde_json::Value =
+                serde_json::from_str(&response.into_string().unwrap()).unwrap();
+            assert_eq!(body["error"], "not-marked-for-this-org");
+        }
+        Err(ureq::Error::Status(code, response)) => panic!(
+            "the hub must refuse an unmarked candidate: {code} {}",
+            response.into_string().unwrap_or_default()
+        ),
+        other => panic!("the hub must refuse an unmarked candidate: {other:?}"),
+    }
+
+    // The public door: a marked app never leaves the machine.
+    world.sign_delegated(&root, "carol", &app);
+    let before = world.hub.lock().unwrap().seen.len();
+    let said = world.says(
+        "carol",
+        &["publish", app.to_str().unwrap(), "--hub", &world.url()],
+        false,
+    );
+    assert!(
+        said.contains(&format!(
+            "this app is private to acme: publish it with krate publish {} --org acme",
+            app.display()
+        )),
+        "{said}"
+    );
+    assert_eq!(
+        world.hub.lock().unwrap().seen.len(),
+        before,
+        "nothing was sent"
+    );
+
+    // `krate sign --org` marked it, and the mark is in the bundle.
+    assert_eq!(
+        krate_bundle::read_org_mark(&app).unwrap().as_deref(),
+        Some("acme")
+    );
 }
 
 /// H: `krate launch`, the door behind double-click and Studio's Open,

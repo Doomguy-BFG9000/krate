@@ -127,6 +127,150 @@ pub const EXTENSIONS_SCHEMA: &str = "krate.bundle.extensions.v1";
 /// Schema tag mixed into an extension group's digest.
 pub const EXTENSION_DIGEST_SCHEMA: &str = "krate.bundle.extension.v1";
 
+/// The organisation mark (IC-948, Addendum 5): a declared extension group
+/// `ext/krate/org/` holding `private.json` = `{"v":1,"org":"<slug>"}`. It
+/// says "this app is <slug>'s private app". The signed statement covers
+/// every entry, so the mark cannot be added, changed or removed without
+/// breaking the signature, and only a validly signed, marked app ever
+/// checks in with a hub.
+pub const ORG_MARK_OWNER: &str = "krate";
+/// The mark's extension group name, within [`ORG_MARK_OWNER`].
+pub const ORG_MARK_NAME: &str = "org";
+/// The one entry the mark group holds.
+pub const ORG_MARK_ENTRY: &str = "ext/krate/org/private.json";
+
+/// An organisation's name as the hub allows it: `^[a-z][a-z0-9-]{1,38}$`.
+pub fn valid_org_slug(slug: &str) -> bool {
+    (2..=39).contains(&slug.len())
+        && slug.as_bytes()[0].is_ascii_lowercase()
+        && slug
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+}
+
+/// The slug a mark's bytes name, or why they are not a mark.
+pub fn parse_org_mark(bytes: &[u8]) -> Result<String> {
+    let damaged = |detail: &str| BundleError::DamagedExtensions {
+        detail: format!("the organisation mark ({ORG_MARK_ENTRY}) {detail}"),
+    };
+    let value: serde_json::Value =
+        serde_json::from_slice(bytes).map_err(|_| damaged("is not JSON"))?;
+    if value["v"].as_u64() != Some(1) {
+        return Err(damaged("is a format this Krate does not read"));
+    }
+    match value["org"].as_str() {
+        Some(slug) if valid_org_slug(slug) => Ok(slug.to_string()),
+        _ => Err(damaged("names no organisation")),
+    }
+}
+
+/// The bytes of a mark for `slug`.
+pub fn org_mark_bytes(slug: &str) -> Vec<u8> {
+    serde_json::json!({ "v": 1, "org": slug })
+        .to_string()
+        .into_bytes()
+}
+
+/// The mark a bundle on disk carries, read without unpacking it. It selects
+/// -- whether the organisation's check applies -- and verifies nothing: a
+/// caller that acts on it opens the bundle and checks the signature.
+pub fn read_org_mark(bundle_path: &Path) -> Result<Option<String>> {
+    with_limits(LOCAL_LIMITS, || {
+        let file = File::open(bundle_path).map_err(|err| io_err(bundle_path, err))?;
+        let mut archive = ZipArchive::new(file)?;
+        let mut entry = match archive.by_name(ORG_MARK_ENTRY) {
+            Ok(entry) => entry,
+            Err(zip::result::ZipError::FileNotFound) => return Ok(None),
+            Err(err) => return Err(err.into()),
+        };
+        let mut bytes = Vec::new();
+        entry
+            .by_ref()
+            .take(4096)
+            .read_to_end(&mut bytes)
+            .map_err(|err| io_err(bundle_path, err))?;
+        parse_org_mark(&bytes).map(Some)
+    })
+}
+
+/// Put `slug`'s mark into a bundle in place: `ext/krate/org/private.json`,
+/// declared in `extensions.json` beside whatever else it declares. Any
+/// earlier mark is replaced. A signature the bundle carried no longer
+/// covers it afterwards; sign it again (`krate sign --org` does both).
+pub fn add_org_mark(bundle_path: &Path, slug: &str) -> Result<()> {
+    if !valid_org_slug(slug) {
+        return Err(BundleError::Manifest(format!(
+            "{slug:?} is not an organisation's name"
+        )));
+    }
+    let source = fs::read(bundle_path).map_err(|err| io_err(bundle_path, err))?;
+    let mut archive = ZipArchive::new(io::Cursor::new(&source))?;
+    let mark_prefix = format!("{EXTENSION_PREFIX}{ORG_MARK_OWNER}/{ORG_MARK_NAME}/");
+    let mut kept: Vec<(String, Vec<u8>)> = Vec::new();
+    let mut declared: Option<ExtensionsRecord> = None;
+    for index in 0..archive.len() {
+        let mut entry = archive.by_index(index)?;
+        let name = entry.name().to_string();
+        let mut body = Vec::new();
+        entry
+            .read_to_end(&mut body)
+            .map_err(|err| BundleError::Io {
+                path: PathBuf::from(&name),
+                source: err,
+            })?;
+        if name == EXTENSIONS_ENTRY {
+            let record: ExtensionsRecord =
+                serde_json::from_slice(&body).map_err(|err| BundleError::DamagedExtensions {
+                    detail: err.to_string(),
+                })?;
+            declared = Some(record);
+            continue;
+        }
+        if name.starts_with(&mark_prefix) {
+            continue;
+        }
+        kept.push((name, body));
+    }
+    let mark = org_mark_bytes(slug);
+    let mut group = BTreeMap::new();
+    group.insert(ORG_MARK_ENTRY.to_string(), mark.clone());
+    let mut record = declared.unwrap_or(ExtensionsRecord {
+        schema: EXTENSIONS_SCHEMA.to_string(),
+        extensions: Vec::new(),
+    });
+    record
+        .extensions
+        .retain(|e| !(e.owner == ORG_MARK_OWNER && e.name == ORG_MARK_NAME));
+    record.extensions.push(ExtensionRecord {
+        owner: ORG_MARK_OWNER.to_string(),
+        name: ORG_MARK_NAME.to_string(),
+        version: "1".to_string(),
+        size: mark.len() as u64,
+        digest: extension_digest(&group),
+    });
+    let declaration = serde_json::to_vec_pretty(&record)
+        .map_err(|err| BundleError::Manifest(format!("{EXTENSIONS_ENTRY}: {err}")))?;
+    let temporary = bundle_path.with_extension("krate.marking");
+    {
+        let file = File::create(&temporary).map_err(|err| io_err(&temporary, err))?;
+        let mut writer = DeterministicZip::new(io::BufWriter::new(file));
+        for (name, body) in &kept {
+            writer
+                .add(name, body)
+                .map_err(|err| io_err(&temporary, err))?;
+        }
+        writer
+            .add(EXTENSIONS_ENTRY, &declaration)
+            .map_err(|err| io_err(&temporary, err))?;
+        writer
+            .add(ORG_MARK_ENTRY, &mark)
+            .map_err(|err| io_err(&temporary, err))?;
+        writer.finish().map_err(|err| io_err(&temporary, err))?;
+    }
+    fs::rename(&temporary, bundle_path).map_err(|err| io_err(bundle_path, err))?;
+    Ok(())
+}
+
 /// One declared extension group, as the bundle records it.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ExtensionRecord {
@@ -2126,6 +2270,21 @@ impl OpenBundle {
         Ok(Some(signing::verify_full(&envelope, &entries, revocations)))
     }
 
+    /// The organisation whose private app this is, from its mark (IC-948,
+    /// Addendum 5). `None` for an unmarked bundle. Like the signature, the
+    /// mark is the bundle's own claim: what makes it binding is that the
+    /// signature covers it, which the caller checks with [`full_verdict`].
+    ///
+    /// [`full_verdict`]: OpenBundle::full_verdict
+    pub fn org_mark(&self) -> Result<Option<String>> {
+        let Some(root) = self.extension_path(ORG_MARK_OWNER, ORG_MARK_NAME) else {
+            return Ok(None);
+        };
+        let path = root.join("private.json");
+        let bytes = fs::read(&path).map_err(|err| io_err(&path, err))?;
+        parse_org_mark(&bytes).map(Some)
+    }
+
     /// The publisher root whose revocation list applies to this bundle.
     ///
     /// The root named in the delegation, or the signing key itself when the
@@ -2504,39 +2663,6 @@ pub fn open_with_limits(bundle_path: &Path, limits: Limits) -> Result<OpenBundle
 /// signature or the assets, and a caller that runs the app opens it with
 /// [`open`], which does. Opening a whole game to read its name cost three
 /// seconds an unpack, and a double-click unpacked it three times (K-1075).
-/// The root a bundle's signature chains to -- the delegation's root, or the
-/// signing key itself -- read from the archive without unpacking it, or
-/// `None` when it carries no signature that parses. Like
-/// [`OpenBundle::signing_authority`], it selects; it does not verify. Used
-/// to decide whether an organisation's check-in applies before a desktop
-/// door wraps or spawns anything (IC-948 H).
-pub fn read_signing_authority(bundle_path: &Path) -> Result<Option<String>> {
-    with_limits(LOCAL_LIMITS, || {
-        let file = File::open(bundle_path).map_err(|err| io_err(bundle_path, err))?;
-        let mut archive = ZipArchive::new(file)?;
-        let mut entry = match archive.by_name(SIGNATURE_ENTRY) {
-            Ok(entry) => entry,
-            Err(zip::result::ZipError::FileNotFound) => return Ok(None),
-            Err(err) => return Err(err.into()),
-        };
-        let mut text = Vec::new();
-        entry
-            .by_ref()
-            .take(lim().entry_bytes + 1)
-            .read_to_end(&mut text)
-            .map_err(|err| io_err(bundle_path, err))?;
-        Ok(serde_json::from_slice::<signing::SignatureEnvelope>(&text)
-            .ok()
-            .map(|envelope| {
-                envelope
-                    .delegation
-                    .as_ref()
-                    .map(|d| d.delegation.root.clone())
-                    .unwrap_or(envelope.public_key)
-            }))
-    })
-}
-
 pub fn read_manifest(bundle_path: &Path) -> Result<Manifest> {
     with_limits(LOCAL_LIMITS, || {
         let size = fs::metadata(bundle_path)
@@ -2801,6 +2927,11 @@ pub struct Judgement {
     /// What built the component and what it takes to build it again, when
     /// the bundle carries source (CP1, the editable closure).
     pub closure: Option<Closure>,
+    /// The organisation the bundle's mark names, when it carries one
+    /// (IC-948, Addendum 5): the hub takes such a bundle only as that
+    /// organisation's candidate, and never at the public door.
+    #[serde(default)]
+    pub org_mark: Option<String>,
 }
 
 /// The signature's state, in words a door can act on.
@@ -3064,6 +3195,19 @@ fn judge_bytes_here(bytes: &[u8], max_expanded: u64) -> Result<Judgement> {
     }
 
     let extensions = check_extensions(profile, &raw)?;
+    let org_mark = if extensions
+        .iter()
+        .any(|e| e.owner == ORG_MARK_OWNER && e.name == ORG_MARK_NAME)
+    {
+        let bytes = raw
+            .get(ORG_MARK_ENTRY)
+            .ok_or_else(|| BundleError::DamagedExtensions {
+                detail: format!("the organisation mark has no {ORG_MARK_ENTRY}"),
+            })?;
+        Some(parse_org_mark(bytes)?)
+    } else {
+        None
+    };
     let closure = check_closure(&raw)?;
     let manifest_raw = raw
         .get(MANIFEST_ENTRY)
@@ -3207,6 +3351,7 @@ fn judge_bytes_here(bytes: &[u8], max_expanded: u64) -> Result<Judgement> {
         records,
         extensions,
         closure,
+        org_mark,
     })
 }
 

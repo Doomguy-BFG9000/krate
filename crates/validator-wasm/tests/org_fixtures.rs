@@ -78,9 +78,19 @@ fn write_org_fixtures() {
     let stolen = key();
     let foreign = key();
 
-    let make = |name: &str, signer: &SigningKey, version: &str, slip: Option<SignedDelegation>| {
+    // Every candidate fixture carries acme's mark (Addendum 5) unless its
+    // name says otherwise; the mark goes in before the signature, which
+    // covers it.
+    let make_marked = |name: &str,
+                       signer: &SigningKey,
+                       version: &str,
+                       slip: Option<SignedDelegation>,
+                       mark: Option<&str>| {
         let path = out.join(name);
         fs::copy(&base, &path).unwrap();
+        if let Some(org) = mark {
+            krate_bundle::add_org_mark(&path, org).unwrap();
+        }
         match slip {
             Some(slip) => {
                 krate_bundle::sign_bundle_delegated(
@@ -98,6 +108,9 @@ fn write_org_fixtures() {
                     .unwrap();
             }
         }
+    };
+    let make = |name: &str, signer: &SigningKey, version: &str, slip: Option<SignedDelegation>| {
+        make_marked(name, signer, version, slip, Some("acme"))
     };
 
     let good = || slip(&root, &root, &release, SLIP_FROM, SLIP_UNTIL);
@@ -140,6 +153,16 @@ fn write_org_fixtures() {
         &stolen,
         "1.0.0",
         Some(slip(&root, &root, &stolen, SLIP_FROM, SLIP_UNTIL)),
+    );
+    // Validly signed for acme, but with no mark at all, and with another
+    // organisation's mark (Addendum 5).
+    make_marked("unmarked.krate", &release, "1.0.3", Some(good()), None);
+    make_marked(
+        "marked-globex.krate",
+        &release,
+        "1.0.4",
+        Some(good()),
+        Some("globex"),
     );
 
     let list = SignedRevocationList::create(
@@ -191,6 +214,18 @@ fn the_org_fixtures_say_what_their_names_say() {
         assert_eq!(answer["ok"], true, "{name}: {answer}");
         answer["judgement"]["signature"].clone()
     };
+    let mark = |name: &str| -> serde_json::Value {
+        let bytes = fs::read(dir.join(name)).unwrap();
+        let answer: serde_json::Value =
+            serde_json::from_str(&krate_validator_wasm::judge_to_json(&bytes)).unwrap();
+        answer["judgement"]["org_mark"].clone()
+    };
+    assert_eq!(mark("candidate-v1.krate"), "acme");
+    assert_eq!(mark("revoked.krate"), "acme");
+    assert!(mark("unmarked.krate").is_null());
+    assert_eq!(mark("marked-globex.krate"), "globex");
+    assert_eq!(judge("unmarked.krate")["state"], "valid");
+    assert_eq!(judge("marked-globex.krate")["state"], "valid");
     let v1 = judge("candidate-v1.krate");
     assert_eq!(v1["state"], "valid");
     assert_eq!(v1["chain"]["state"], "revocation-unchecked");
