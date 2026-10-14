@@ -43,6 +43,11 @@ on:
       # very commit that added the script.
       - "scripts/ensure-touch-targets.py"
       - "scripts/site_kit.py"
+      # security.txt is checked on the assembled site, so the checker is a
+      # site source like the rest.
+      - "scripts/check-security-txt.py"
+      # The policy templates under docs/landing/deploy/ are written by it.
+      - "scripts/build-policy-templates.py"
       - "scripts/test-inline-scripts.mjs"
       - "scripts/test-studio-redesign.mjs"
       - "scripts/install.sh"
@@ -472,12 +477,45 @@ jobs:
           python3 scripts/test-site-seo.py
           python3 scripts/site-seo.py finalize _site
           python3 scripts/site-seo.py check _site --require-priority
+          # krate.tech/.well-known/security.txt (RFC 9116): present, valid,
+          # not expired, and its Policy link is a page on this site.
+          python3 scripts/check-security-txt.py --self-test
+          python3 scripts/check-security-txt.py --site _site
+          # The policy templates an IT team downloads from /deploy/ are the
+          # generator's output, not hand edits that drifted from the keys.
+          python3 scripts/build-policy-templates.py --self-test
+          python3 scripts/build-policy-templates.py --check
       - name: Setup Pages
         uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b # v5
+      # The site archived here rather than by actions/upload-pages-artifact.
+      #
+      # That action tars the site with --exclude=".[^/]*", which drops every
+      # path that starts with a dot -- so docs/landing/.well-known reached
+      # _site and never reached krate.tech, and security.txt (RFC 9116) 404'd
+      # from a green deploy. This is the same archive, made the same way
+      # (dereferenced, .git and .github left out, uploaded as the
+      # github-pages artifact with the same upload-artifact release the
+      # action pins), with one difference: .well-known is kept. Any other
+      # dot-file is still removed first, so nothing else that was not
+      # published before is published now.
+      - name: Archive the site, keeping .well-known
+        run: |
+          set -euo pipefail
+          find _site -mindepth 1 -name '.*' ! -path '_site/.well-known' -print -prune \
+            | while IFS= read -r hidden; do rm -rf "$hidden"; done
+          test -f _site/.well-known/security.txt \
+            || { echo "::error::_site/.well-known/security.txt is missing"; exit 1; }
+          tar --dereference --hard-dereference --directory _site \
+            -cvf "$RUNNER_TEMP/artifact.tar" --exclude=.git --exclude=.github .
+          tar -tf "$RUNNER_TEMP/artifact.tar" | grep -qx './.well-known/security.txt' \
+            || { echo "::error::the Pages archive does not carry .well-known/security.txt"; exit 1; }
       - name: Upload artifact
-        uses: actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b # v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          path: _site
+          name: github-pages
+          path: ${{ runner.temp }}/artifact.tar
+          retention-days: 1
+          if-no-files-found: error
 
   deploy:
     name: Deploy to GitHub Pages
