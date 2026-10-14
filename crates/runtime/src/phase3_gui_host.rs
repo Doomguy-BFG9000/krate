@@ -1791,6 +1791,12 @@ impl Phase3GuiHost {
                 }
                 let driver = self.usability.as_mut()?;
                 let started = driver.started?;
+                // Nothing to watch for: a run that only does its task (`krate
+                // run --task`) ends when the task does, not fifteen seconds on.
+                if !driver.plan.check_stay_open {
+                    driver.step = DriveStep::Done;
+                    return Some(ui::types::Event::CloseRequested(window.get()));
+                }
                 if std::time::Instant::now().duration_since(started)
                     < crate::usability::STAY_OPEN_WATCH
                 {
@@ -2348,7 +2354,8 @@ impl Phase3GuiHost {
             return Vec::new();
         };
         let layout = dispatcher.compute_layout(window, viewport).ok();
-        tree.nodes()
+        let mut seen: Vec<OnScreen> = tree
+            .nodes()
             .iter()
             .map(|(id, node)| OnScreen {
                 widget: *id,
@@ -2359,7 +2366,48 @@ impl Phase3GuiHost {
                     .and_then(|layout| absolute_rect(&tree, layout, *id))
                     .map(|r| (r.x, r.y, r.width, r.height)),
             })
-            .collect()
+            .collect();
+        // A canvas app draws its own buttons and text, so the tree holds no
+        // labels -- but it tells the screen reader what each one is and where
+        // (IC-926). Those are on screen as surely as a widget's label, so a
+        // task can press "New note" and expect "Order chairs" in a canvas
+        // app too, at the place the app said it drew them. Values count as
+        // text on screen (a field's contents), without a place to press.
+        let described = self
+            .described
+            .borrow()
+            .get(&window.get())
+            .cloned()
+            .unwrap_or_default();
+        let canvas = seen
+            .iter()
+            .find(|n| n.kind == format!("{:?}", WidgetKind::Canvas))
+            .map(|n| (n.widget, n.rect.unwrap_or_default()));
+        if let Some((widget, (ox, oy, _, _))) = canvas {
+            for element in described {
+                let kind = format!("{:?}", element.role);
+                if !element.value.trim().is_empty() {
+                    seen.push(OnScreen {
+                        widget,
+                        kind: kind.clone(),
+                        label: element.value.clone(),
+                        rect: None,
+                    });
+                }
+                seen.push(OnScreen {
+                    widget,
+                    kind,
+                    label: element.label,
+                    rect: Some((
+                        ox + element.x,
+                        oy + element.y,
+                        element.width,
+                        element.height,
+                    )),
+                });
+            }
+        }
+        seen
     }
 
     /// One turn of the task oracle (IC-743, test 1506): dispatch the next

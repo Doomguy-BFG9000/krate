@@ -204,7 +204,10 @@ expect_text = \"milk\"   # a label containing this must now be on screen\n\
 \n\
 Steps: `click`, `type`, `key`, `wait_ms`, `expect_text`, `expect_no_text`,\n\
 one per step. A task with no expectation is refused: completing it has to\n\
-mean something.\n\
+mean something. In an app drawn on a canvas, `click` and `expect_text`\n\
+find what the app tells the screen reader (`krate::layout::Said`), at the\n\
+place it said. `krate run <app> --task steps.toml` does the steps alone\n\
+and fails naming the step that could not be done.\n\
 \n\
 The one hard rule: a Krate component may import ONLY `krate:*` interfaces.
 Reaching the operating system through `std` instead of through Krate pulls
@@ -1057,7 +1060,26 @@ stop offering edits. `OverQuota` and `TooLarge` are the limits above; \
 the hub holds ciphertext only, and only the organisation's members' \
 devices hold the key -- a new member's computer gets it from another \
 member's in the background, so the first sync on a new computer can show \
-`pending` until then. Never add encryption of your own on top.\n\n";
+`pending` until then. Never add encryption of your own on top.\n\n\
+5. **In a window, `sync` is not free.** It can wait on the network (and on \
+the runtime's own background sync), so a GUI app reads with `org::records` \
+from a kept cursor every second -- local, instant -- and calls `sync` only \
+after the first frame is on screen and then every twenty seconds or so \
+while nobody is typing. Never after each write: the runtime sends writes \
+by itself within seconds and again on close. After an online sync, \
+`org::who()` still `None` means this computer is waiting for a teammate's \
+computer to let it in: say \"waiting to be let in\" and keep accepting \
+input, never show an empty list as if the team had nothing.\n\n\
+6. **Model the data so two people never overwrite each other.** Who made \
+a record is a field you write (`spent_by`, `made_by`), never \
+`changed_by`, which moves to whoever touched it last; an edit writes only \
+the fields that changed. A number two people change at once (a stock \
+count, a tally) is one field per person, `n:<who>`, summed when read: a \
+single `count` field loses one of two simultaneous presses.\n\n\
+`apps/krate-team-notes` is the worked organisation app (`apps/krate-expenses` \
+and `apps/krate-stock-list` beside it share its kit): every store state as \
+a screen with words, the cursor read loop, Undo after a delete, and a \
+canvas interface laid out with `krate::layout` for any screen.\n\n";
 
 /// Section 2e: capabilities the runtime has had all along that no app ever
 /// used, because nothing taught them. The coverage matrix
