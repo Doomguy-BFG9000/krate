@@ -21,6 +21,8 @@ key the macOS profile lacks, or name it differently:
     python3 scripts/build-policy-templates.py           write them
     python3 scripts/build-policy-templates.py --check   fail if any differs from this table
     python3 scripts/build-policy-templates.py --self-test
+    python3 scripts/build-policy-templates.py --org-pack DIR --name Acme --slug acme --root Acme=<64 hex>
+                                                        one organisation's IT pack, as krate.tech makes it
 
 How each kind of value is carried (P1 of the fleet contract):
     TOML table         plist dictionary     registry subkey
@@ -38,6 +40,7 @@ malformed key fails closed) instead of trusting a key nobody chose.
 """
 
 import argparse
+import json
 import pathlib
 import plistlib
 import sys
@@ -63,6 +66,9 @@ KEYS = [
     dict(table="", key="name", kind="string", sample="Acme Labs",
          title="Organisation name",
          help="Your organisation's name. Every message Krate shows about the policy uses it, for example \"Acme Labs does not allow this app\". Optional."),
+    dict(table="org", key="slug", kind="string", sample="acme-labs",
+         title="Organisation on Krate",
+         help="The organisation on Krate's hub that these computers belong to: its short name, as in krate.tech/org/acme-labs. Krate shows that organisation's apps to the people signed in to it. Optional."),
     dict(table="trust", key="roots", kind="roots",
          sample=[{"name": "Acme Labs", "key": PLACEHOLDER_KEY}],
          title="Trusted signing roots",
@@ -111,13 +117,42 @@ KEYS = [
          help="true: every app runs on Krate's interpreter (Pulley) instead of compiled machine code, so Krate never makes executable memory. For endpoint protection that blocks code generated at run time, and Windows Arbitrary Code Guard. Apps may run slower this way."),
 ]
 
-TABLES = ["trust", "capabilities", "network", "usage", "hub", "studio", "updates", "audit", "runtime"]
+TABLES = ["org", "trust", "capabilities", "network", "usage", "hub", "studio", "updates", "audit", "runtime"]
+
+# The keys an organisation's own IT pack sets (IC-958 B4). krate.tech makes
+# the same three files in the browser with docs/landing/kit/policy.js, and
+# docs/landing/studio/org-policy-test.mjs proves the two write the same bytes.
+ORG_PACK = {("", "version"), ("", "name"), ("org", "slug"), ("trust", "roots"), ("hub", "url")}
 
 
-def sample_dict():
+def clean(text):
+    """A name as it may appear in a comment or a plist: no control characters."""
+    return "".join(" " if ord(c) < 0x20 or ord(c) == 0x7F else c for c in text)
+
+
+def org_keys(name, slug, hub, roots):
+    """KEYS for one organisation: its name, short name, hub and roots set,
+    every other key left to Krate's default (shown commented out in the TOML,
+    absent from the other files)."""
+    values = {("", "version"): 1, ("", "name"): clean(name), ("org", "slug"): slug,
+              ("trust", "roots"): [{"name": clean(r["name"]), "key": r["key"]} for r in roots], ("hub", "url"): hub}
+    out = []
+    for k in KEYS:
+        k = dict(k)
+        at = (k["table"], k["key"])
+        if at in ORG_PACK:
+            k["sample"] = values[at]
+        else:
+            k.setdefault("example", k["sample"])
+            k["sample"] = None
+        out.append(k)
+    return out
+
+
+def sample_dict(keys=None):
     """The sample as nested dictionaries, the shape of a plist and of TOML."""
     d = {}
-    for k in KEYS:
+    for k in keys or KEYS:
         if k["sample"] is None:
             continue
         target = d if not k["table"] else d.setdefault(k["table"], {})
@@ -152,9 +187,10 @@ def wrap(text, width=76, prefix="# "):
     return "\n".join(lines)
 
 
-def build_toml():
+def build_toml(keys=None, org=None):
+    keys = keys or KEYS
     out = [
-        "# Krate organisation policy, version 1. A sample with every key.",
+        f"# Krate organisation policy, version 1, for {clean(org)}." if org else "# Krate organisation policy, version 1. A sample with every key.",
         "#",
         "# Place it at:",
         "#   Linux    /etc/krate/policy.toml",
@@ -170,12 +206,12 @@ def build_toml():
         "",
     ]
     current = None
-    for k in KEYS:
+    for k in keys:
         if k["table"] != current and k["table"]:
             current = k["table"]
             # A table whose every key is left to its default is shown
             # commented out, so the sample stays the same policy everywhere.
-            shown = any(x["sample"] is not None for x in KEYS if x["table"] == current)
+            shown = any(x["sample"] is not None for x in keys if x["table"] == current)
             out.append(f"[{current}]" if shown else f"# [{current}]")
         out.append(wrap(k["help"]))
         if k["kind"] == "roots":
@@ -203,26 +239,30 @@ PROFILE_UUID = str(uuid.uuid5(uuid.NAMESPACE_URL, "https://krate.tech/deploy/kra
 PAYLOAD_UUID = str(uuid.uuid5(uuid.NAMESPACE_URL, "https://krate.tech/deploy/krate-policy.mobileconfig#tech.krate.policy"))
 
 
-def build_mobileconfig():
+def build_mobileconfig(keys=None, org=None, slug=None):
     # com.apple.ManagedClient.preferences with Forced settings: macOS writes
     # exactly mcx_preference_settings into
     # /Library/Managed Preferences/tech.krate.policy.plist, nothing else.
+    # One organisation's profile has its own fixed identifiers, from its
+    # short name, so a second download is the same profile, not a new one.
+    at = f"https://krate.tech/org/{slug}/krate-policy.mobileconfig" if slug else "https://krate.tech/deploy/krate-policy.mobileconfig"
     profile = {
         "PayloadContent": [{
-            "PayloadContent": {DOMAIN: {"Forced": [{"mcx_preference_settings": sample_dict()}]}},
+            "PayloadContent": {DOMAIN: {"Forced": [{"mcx_preference_settings": sample_dict(keys)}]}},
             "PayloadDisplayName": "Krate organisation policy",
             "PayloadIdentifier": f"{DOMAIN}.settings",
             "PayloadType": "com.apple.ManagedClient.preferences",
-            "PayloadUUID": PAYLOAD_UUID,
+            "PayloadUUID": str(uuid.uuid5(uuid.NAMESPACE_URL, at + "#" + DOMAIN)) if slug else PAYLOAD_UUID,
             "PayloadVersion": 1,
         }],
-        "PayloadDescription": "Sets the Krate organisation policy (tech.krate.policy, version 1). Replace the sample root key before deploying.",
-        "PayloadDisplayName": "Krate organisation policy",
+        "PayloadDescription": f"Sets the Krate organisation policy for {clean(org)} (tech.krate.policy, version 1)." if org
+        else "Sets the Krate organisation policy (tech.krate.policy, version 1). Replace the sample root key before deploying.",
+        "PayloadDisplayName": f"Krate policy for {clean(org)}" if org else "Krate organisation policy",
         "PayloadIdentifier": f"{DOMAIN}.profile",
-        "PayloadOrganization": "Krate",
+        "PayloadOrganization": clean(org) if org else "Krate",
         "PayloadScope": "System",
         "PayloadType": "Configuration",
-        "PayloadUUID": PROFILE_UUID,
+        "PayloadUUID": str(uuid.uuid5(uuid.NAMESPACE_URL, at)) if slug else PROFILE_UUID,
         "PayloadVersion": 1,
     }
     return plistlib.dumps(profile, sort_keys=False).decode()
@@ -231,7 +271,7 @@ def build_mobileconfig():
 # ---------------------------------------------------------------- ADMX / ADML
 
 NS = "http://schemas.microsoft.com/GroupPolicy/2006/07/PolicyDefinitions"
-CATEGORY = {"": "Krate", "trust": "Krate_Trust", "capabilities": "Krate_Apps", "network": "Krate_Apps",
+CATEGORY = {"": "Krate", "org": "Krate_Krate", "trust": "Krate_Trust", "capabilities": "Krate_Apps", "network": "Krate_Apps",
             "runtime": "Krate_Apps", "usage": "Krate_Krate", "hub": "Krate_Krate", "updates": "Krate_Krate",
             "audit": "Krate_Krate", "studio": "Krate_Studio"}
 CATEGORY_TEXT = {"Krate": "Krate", "Krate_Trust": "Which apps may open",
@@ -373,9 +413,9 @@ def reg_string(s):
     return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
-def build_reg():
+def build_reg(policy_keys=None, org=None):
     keys = {}
-    for k in KEYS:
+    for k in policy_keys or KEYS:
         if k["sample"] is None:
             continue
         key = "HKEY_LOCAL_MACHINE\\" + reg_key(k).replace("Software", "SOFTWARE", 1)
@@ -395,9 +435,11 @@ def build_reg():
             line += reg_string(v)
         keys.setdefault(key, []).append(line)
     out = ["Windows Registry Editor Version 5.00", "",
-           "; Krate organisation policy, version 1: the sample policy as registry values.",
+           f"; Krate organisation policy, version 1, for {clean(org)}, as registry values." if org
+           else "; Krate organisation policy, version 1: the sample policy as registry values.",
            "; For a test computer. Fleets use the ADMX template (krate.admx) instead.",
-           "; Replace the sample root key before importing. Generated by scripts/build-policy-templates.py.", ""]
+           "; Generated by scripts/build-policy-templates.py." if org
+           else "; Replace the sample root key before importing. Generated by scripts/build-policy-templates.py.", ""]
     for key in sorted(keys, key=lambda x: (x.count("\\"), x)):
         out.append(f"[{key}]")
         out += keys[key]
@@ -406,7 +448,14 @@ def build_reg():
     return "\r\n".join(out)
 
 
+def build_keys_json():
+    """The table itself, for docs/landing/kit/policy.js: krate.tech builds an
+    organisation's pack in the browser from these same keys and words."""
+    return json.dumps({"keys": KEYS, "org_pack": sorted([t, k] for t, k in ORG_PACK)}, indent=1, ensure_ascii=False) + "\n"
+
+
 FILES = {
+    "policy-keys.json": build_keys_json,
     "policy.toml": build_toml,
     "tech.krate.policy.plist": build_plist,
     "krate-policy.mobileconfig": build_mobileconfig,
@@ -414,6 +463,17 @@ FILES = {
     "windows/en-US/krate.adml": build_adml,
     "windows/krate-policy-example.reg": build_reg,
 }
+
+
+def org_pack(name, slug, hub, roots):
+    """One organisation's IT pack: {file name: bytes}, the same three files
+    krate.tech's dashboard makes in the browser (docs/landing/kit/policy.js)."""
+    keys = org_keys(name, slug, hub, roots)
+    return {
+        "policy.toml": encode("policy.toml", build_toml(keys, name)),
+        f"krate-policy-{slug}.mobileconfig": encode(".mobileconfig", build_mobileconfig(keys, name, slug)),
+        f"krate-policy-{slug}.reg": encode(".reg", build_reg(keys, name)),
+    }
 
 
 def encode(name, text):
@@ -528,6 +588,19 @@ def self_test():
     # A broken reference is caught.
     assert structure_problems(admx.replace("Krate_Trust\" />", "Krate_Nope\" />", 1), adml)
     assert structure_problems(admx, adml.replace('<presentation id="HubUrl">', '<presentation id="HubUrlX">'))
+    # One organisation's pack sets exactly its name, short name, hub and
+    # roots, and parses back to that; nothing of the sample comes along.
+    pack = org_pack("Acme & Co", "acme", "https://hub.krate.tech", [{"name": "Acme & Co", "key": "ab" * 32}])
+    want_pack = {"version": 1, "name": "Acme & Co", "org": {"slug": "acme"},
+                 "trust": {"roots": [{"name": "Acme & Co", "key": "ab" * 32}]}, "hub": {"url": "https://hub.krate.tech"}}
+    if tomllib:
+        assert tomllib.loads(pack["policy.toml"].decode()) == want_pack
+    prof = plistlib.loads(pack["krate-policy-acme.mobileconfig"])
+    assert prof["PayloadContent"][0]["PayloadContent"][DOMAIN]["Forced"][0]["mcx_preference_settings"] == want_pack
+    assert prof["PayloadUUID"] != PROFILE_UUID
+    reg = pack["krate-policy-acme.reg"].decode("utf-16")
+    assert '[HKEY_LOCAL_MACHINE\\SOFTWARE\\Policies\\Krate\\org]\r\n"slug"="acme"' in reg
+    assert "REPLACE-WITH" not in reg and "camera" not in reg
     # --check notices drift.
     with tempfile.TemporaryDirectory() as tmp:
         t = pathlib.Path(tmp)
@@ -543,9 +616,21 @@ def main(argv):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--check", action="store_true")
     ap.add_argument("--self-test", action="store_true")
+    ap.add_argument("--org-pack", metavar="DIR", help="write one organisation's IT pack into DIR")
+    ap.add_argument("--name", help="with --org-pack: the organisation's name")
+    ap.add_argument("--slug", help="with --org-pack: its short name")
+    ap.add_argument("--hub", default="https://hub.krate.tech", help="with --org-pack: its hub")
+    ap.add_argument("--root", action="append", default=[], metavar="NAME=KEY", help="with --org-pack: a trusted root, repeatable")
     args = ap.parse_args(argv)
     if args.self_test:
         return self_test()
+    if args.org_pack:
+        roots = [{"name": r.split("=", 1)[0], "key": r.split("=", 1)[1]} for r in args.root]
+        out = pathlib.Path(args.org_pack)
+        out.mkdir(parents=True, exist_ok=True)
+        for name, data in org_pack(args.name or args.slug, args.slug, args.hub, roots).items():
+            (out / name).write_bytes(data)
+        return 0
     if args.check:
         return check()
     return write()

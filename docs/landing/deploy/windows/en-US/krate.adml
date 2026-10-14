@@ -13,6 +13,8 @@
       <string id="Krate_Studio">Krate Studio and AI builds</string>
       <string id="Name">Organisation name</string>
       <string id="Name_Help">Your organisation's name. Every message Krate shows about the policy uses it, for example &quot;Acme Labs does not allow this app&quot;. Optional. Registry: the value name in HKLM\SOFTWARE\Policies\Krate.</string>
+      <string id="OrgSlug">Organisation on Krate</string>
+      <string id="OrgSlug_Help">The organisation on Krate's hub that these computers belong to: its short name, as in krate.tech/org/acme-labs. Krate shows that organisation's apps to the people signed in to it. Optional. Registry: the value slug in HKLM\SOFTWARE\Policies\Krate\org.</string>
       <string id="TrustRoots">Trusted signing roots</string>
       <string id="TrustRoots_Help">The signing roots this computer trusts: each a name and the public half of an Ed25519 root key, as 64 hex characters. An app passes when its signature verifies and its root (the delegation's root, or the signing key itself) is listed. Empty or absent: no limit on roots. Enter each root on its own row: the name in the first column (Value name) and the 64 hex characters in the second (Value). Registry: one value per root in HKLM\SOFTWARE\Policies\Krate\trust\roots.</string>
       <string id="TrustAllowUnsigned">Allow unsigned apps</string>
@@ -47,6 +49,7 @@
     </stringTable>
     <presentationTable>
       <presentation id="Name"><textBox refId="name"><label>Organisation name</label></textBox></presentation>
+      <presentation id="OrgSlug"><textBox refId="slug"><label>Organisation on Krate</label></textBox></presentation>
       <presentation id="TrustRoots"><listBox refId="roots">Trusted signing roots</listBox></presentation>
       <presentation id="CapabilitiesDeny"><text>Blocked capabilities, one per line:</text><multiTextBox refId="deny" defaultHeight="6" /></presentation>
       <presentation id="NetworkAllow"><text>Network ceiling, one per line:</text><multiTextBox refId="allow" defaultHeight="6" /></presentation>
