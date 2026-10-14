@@ -1779,6 +1779,9 @@ fn main() -> ExitCode {
         .without_time()
         .init();
 
+    // The organisation's proxy, before any connection is made (IC-949 N).
+    fleet::install_proxy();
+
     match run() {
         Ok(code) => ExitCode::from(code),
         Err(err) => {

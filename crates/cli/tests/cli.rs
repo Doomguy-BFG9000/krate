@@ -17898,3 +17898,62 @@ fn policy_check_says_whether_an_app_would_open_here() {
     assert_eq!(json["opens"], true);
     assert!(fleet.records().is_empty(), "a check records nothing");
 }
+
+/// `[network] proxy` is the route every connection takes, in place of the
+/// environment's proxy, and `krate policy` shows it with any password
+/// hidden. Both proxies are local listeners, so nothing leaves the machine.
+#[test]
+fn the_policy_proxy_replaces_the_environments() {
+    let fleet = Fleet::new();
+    let (policy_proxy, policy_count) = counting_listener();
+    let (env_proxy, env_count) = counting_listener();
+    let policy_hostport = policy_proxy.trim_start_matches("http://").to_string();
+    fleet.policy(&format!(
+        "[network]\nproxy = \"http://me:secret@{policy_hostport}\"\nno_proxy = \"internal.acme.com\"\n"
+    ));
+    let shown = fleet.krate().arg("policy").output().expect("policy");
+    let words = String::from_utf8_lossy(&shown.stdout);
+    assert!(
+        words.contains(&format!(
+            "through the proxy http://me:***@{policy_hostport}, except internal.acme.com"
+        )),
+        "{words}"
+    );
+    assert!(
+        !words.contains("secret"),
+        "the password is never shown: {words}"
+    );
+    let json: serde_json::Value = serde_json::from_slice(
+        &fleet
+            .krate()
+            .args(["policy", "--json"])
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap();
+    assert_eq!(
+        json["policy"]["network"]["proxy"],
+        format!("http://me:***@{policy_hostport}")
+    );
+    assert_eq!(json["policy"]["network"]["no_proxy"], "internal.acme.com");
+
+    // A hub that is not on this machine, so the proxy is asked for it.
+    let _ = fleet
+        .krate()
+        .env("KRATE_HUB_URL", "https://hub.example.invalid")
+        .env("HTTPS_PROXY", &env_proxy)
+        .env("https_proxy", &env_proxy)
+        .args(["blocklist", "--update"])
+        .output()
+        .expect("blocklist");
+    assert!(
+        wait_for(&policy_count, 1, 10) >= 1,
+        "the policy's proxy carried it"
+    );
+    assert_eq!(
+        env_count.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "the environment's proxy was not used"
+    );
+}

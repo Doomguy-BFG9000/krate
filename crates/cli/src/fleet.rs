@@ -1384,6 +1384,30 @@ pub fn updates_mode() -> UpdateMode {
     }
 }
 
+/// `[network] proxy`, installed once at process start, before any
+/// connection: the organisation decides how traffic leaves this computer,
+/// and "direct" means no proxy whatever the environment says. With no proxy
+/// key the environment's proxy variables apply, as they always have.
+pub fn install_proxy() {
+    let Some(policy) = policy() else {
+        return;
+    };
+    let Some(proxy) = &policy.proxy else {
+        return;
+    };
+    krate_http::set_policy_proxy(policy_proxy(proxy, policy.no_proxy.as_deref()));
+}
+
+fn policy_proxy(proxy: &Proxy, no_proxy: Option<&str>) -> krate_http::PolicyProxy {
+    krate_http::PolicyProxy {
+        proxy: match proxy {
+            Proxy::Direct => None,
+            Proxy::Via(url) => Some(url.clone()),
+        },
+        no_proxy: no_proxy.map(str::to_string),
+    }
+}
+
 /// Does this computer run every app on the interpreter?
 pub fn interpreter() -> bool {
     policy().is_some_and(|p| p.interpreter)
@@ -1552,10 +1576,11 @@ fn words_for(state: &State, record: &audit::Location) -> String {
             problem,
             ignored,
         } => {
-            line(format!(
+            line(
                 "Your organisation's policy on this computer cannot be used, so Krate opens no \
                  apps until it is fixed."
-            ));
+                    .to_string(),
+            );
             line(format!(
                 "  From: {} ({})",
                 source.location,
@@ -2082,14 +2107,14 @@ interpreter = true
         assert!(!policy.interpreter);
     }
 
-    /// The sample policy.toml published at /deploy (docs/landing/deploy,
-    /// copied here as a fixture) is a policy this parser reads, key for
+    /// The sample policy.toml published at /deploy (read from
+    /// docs/landing/deploy itself, so the two cannot drift) is a policy this parser reads, key for
     /// key -- and as published, with its placeholder root key, it refuses
     /// in words naming that key, which is what an IT team who forgot to
     /// replace it should see.
     #[test]
     fn the_published_sample_policy_toml_is_read_key_for_key() {
-        let sample = include_str!("../tests/fixtures/deploy/policy.toml");
+        let sample = include_str!("../../../docs/landing/deploy/policy.toml");
         let err = toml_policy(sample).expect_err("the placeholder key is not a key");
         assert!(
             err.contains("`trust.roots[0].key` should be 64 hex"),
@@ -2104,7 +2129,7 @@ interpreter = true
     #[cfg(target_os = "macos")]
     #[test]
     fn the_published_sample_plist_is_read_key_for_key() {
-        let sample = include_str!("../tests/fixtures/deploy/tech.krate.policy.plist")
+        let sample = include_str!("../../../docs/landing/deploy/tech.krate.policy.plist")
             .replace(SAMPLE_PLACEHOLDER, KEY)
             .replacen(
                 "<dict>",
@@ -2187,7 +2212,7 @@ interpreter = true
     #[test]
     fn the_published_sample_registry_layout_is_read_key_for_key() {
         let mut value = read_reg_export(include_bytes!(
-            "../tests/fixtures/deploy/krate-policy-example.reg"
+            "../../../docs/landing/deploy/windows/krate-policy-example.reg"
         ));
         // The placeholder, as in the other samples.
         if let PValue::Table(top) = &mut value {
