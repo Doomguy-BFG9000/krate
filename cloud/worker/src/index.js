@@ -3091,7 +3091,7 @@ function signInEmailHtml(link) {
 <body style="margin:0;padding:0;background:${BG};">
 <!-- Preheader: the grey line a client shows beside the subject. Hidden in
      the body, or it prints twice. -->
-<div style="display:none;max-height:0;overflow:hidden;opacity:0;">krate login &mdash; your link is good for 15 minutes.</div>
+<div style="display:none;max-height:0;overflow:hidden;opacity:0;">krate account login &mdash; your link is good for 15 minutes.</div>
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:${BG};">
 <tr><td align="center" style="padding:32px 16px;">
   <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:600px;">
@@ -3136,7 +3136,7 @@ function signInEmailHtml(link) {
       <!-- Body: a session, read top to bottom. -->
       <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
         <tr><td style="padding:20px 18px 0 18px;font:400 14px/1.75 ${MONO};color:${TEXT};">
-          <span style="color:${GOOD};">$</span> <span style="color:${TEXT};">krate login</span>
+          <span style="color:${GOOD};">$</span> <span style="color:${TEXT};">krate account login</span>
         </td></tr>
 
         <tr><td style="padding:6px 18px 0 18px;font:400 14px/1.75 ${MONO};color:${DIM};">
@@ -7151,7 +7151,10 @@ async function fetchPrivate(request, hash, object, slug, big, env) {
   const noStore = { "cache-control": "private, no-store", vary: "authorization" };
   if (answer.status !== 200) {
     await drop();
-    return new Response(JSON.stringify(answer.body), {
+    // A removed member already knows which organisation sent the app, so
+    // the refusal names it; a stranger holding a copied link learns nothing.
+    const body = answer.body && answer.body.error === "removed" ? { ...answer.body, org: slug } : answer.body;
+    return new Response(JSON.stringify(body), {
       status: 403,
       headers: { "content-type": "application/json", ...noStore },
     });

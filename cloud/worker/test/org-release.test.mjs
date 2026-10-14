@@ -186,6 +186,10 @@ test("a private release downloads only for a current member or recipient, asked 
   assert.strictEqual((await call(env, "alice", "DELETE", "/orgs/acme/members/dan")).status, 204);
   const gone = await call(env, "dan", "GET", `/a/${digest}`);
   assert.deepStrictEqual([gone.status, gone.body.error], [403, "removed"]);
+  // The removed member is told which organisation; a stranger is not.
+  assert.strictEqual(gone.body.org, "acme");
+  const stranger = await call(env, "erin", "GET", `/a/${digest}`);
+  assert.strictEqual(stranger.body.org, undefined, "a stranger holding the link learns no organisation name");
   // A short link or a ?dl=1 is no way round it.
   assert.strictEqual((await call(env, null, "GET", `/a/${digest}?dl=1`)).status, 403);
   assert.strictEqual((await call(env, "dan", "GET", `/a/${digest.slice(0, 12)}`)).status, 404, "no alias is minted for a private release");

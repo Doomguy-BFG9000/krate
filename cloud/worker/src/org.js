@@ -60,7 +60,7 @@ export const GENESIS = "0".repeat(64);
 /// Plain-words messages for each stable reason. The reason is the contract;
 /// the message is for the person, and says what to do next.
 const MESSAGES = {
-  "not-signed-in": "sign in first -- run `krate login`, then try again",
+  "not-signed-in": "sign in first -- run `krate account login`, then try again",
   "not-a-member": (o) => `you are not a member of ${o} -- ask one of its owners to invite you`,
   removed: (o) => `you were removed from ${o} -- ask one of its owners if that is a mistake`,
   "role-cannot": (o, d) => d || `your role in ${o} cannot do that`,
