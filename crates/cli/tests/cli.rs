@@ -15009,8 +15009,22 @@ impl OrgWorld {
         })
     }
 
-    /// The fake hub's lease public key, as hex.
+    /// The hub's lease public key, as hex: the fake's, or the real hub's own
+    /// (`/lease-key`) when KRATE_ORG_E2E_HUB names one, so a lease the real
+    /// hub signs verifies here.
     fn lease_key_hex(&self) -> String {
+        if let Some(hub) = self.real_hub() {
+            let text = ureq::get(&format!("{hub}/lease-key"))
+                .call()
+                .expect("the real hub answers /lease-key (is ORG_LEASE_KEY set?)")
+                .into_string()
+                .expect("text");
+            let answer: serde_json::Value = serde_json::from_str(&text).expect("JSON");
+            return answer["public_key"]
+                .as_str()
+                .expect("public_key")
+                .to_string();
+        }
         krate_lease::public_key_hex(&self.hub.lock().unwrap().lease_pkcs8).expect("public key")
     }
 
