@@ -2334,6 +2334,25 @@ fn capability_pairs(list: &serde_json::Value) -> Vec<(String, String)> {
         .unwrap_or_default()
 }
 
+/// Write a private key readable by this person only.
+fn write_private_key(path: &Path, bytes: &[u8]) -> Result<()> {
+    if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+        std::fs::create_dir_all(parent)?;
+    }
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    use std::io::Write;
+    options
+        .open(path)
+        .and_then(|mut f| f.write_all(bytes))
+        .map_err(|err| anyhow::anyhow!("could not write {}: {err}", path.display()))
+}
+
 #[cfg(test)]
 mod tests {
 
@@ -2492,23 +2511,4 @@ mod tests {
             "2026-10-21T00:00:00Z"
         );
     }
-}
-
-/// Write a private key readable by this person only.
-fn write_private_key(path: &Path, bytes: &[u8]) -> Result<()> {
-    if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
-        std::fs::create_dir_all(parent)?;
-    }
-    let mut options = std::fs::OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    use std::io::Write;
-    options
-        .open(path)
-        .and_then(|mut f| f.write_all(bytes))
-        .map_err(|err| anyhow::anyhow!("could not write {}: {err}", path.display()))
 }
