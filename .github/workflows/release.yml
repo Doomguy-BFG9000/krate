@@ -984,6 +984,107 @@ jobs:
             fi
           fi
 
+      # Installer packages for organisations: what Intune, Jamf, Kandji, apt
+      # and dnf deploy. Built from the binary this job just built (and, on
+      # macOS, just signed), by the same script the test-build lane proves.
+      #
+      # continue-on-error, like the Studio steps: these are new, and this
+      # workflow only runs on a tag, so a tag is the first time they run
+      # here. A missing package must not cost a platform its runtime
+      # release; the publish job says loudly when one is missing.
+      #
+      # The .pkg is signed with a Developer ID Installer identity when one is
+      # in the keychain -- from APPLE_INSTALLER_CERT_P12, or inside
+      # APPLE_CERT_P12 if that certificate file carries one -- and then
+      # notarized and stapled. Without one it ships unsigned, and its file
+      # name ends in -unsigned, so the release page says which it is.
+      - name: Installer package for organisations (.pkg)
+        if: contains(matrix.target, 'apple-darwin')
+        continue-on-error: true
+        shell: bash
+        env:
+          KRATE_VERSION: ${{ inputs.tag || github.ref_name }}
+          INSTALLER_P12: ${{ secrets.APPLE_INSTALLER_CERT_P12 }}
+          INSTALLER_PASSWORD: ${{ secrets.APPLE_INSTALLER_CERT_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        run: |
+          set -euo pipefail
+          keychain=""
+          if security show-keychain-info build.keychain >/dev/null 2>&1; then
+            keychain=build.keychain
+          fi
+          if [ -n "$INSTALLER_P12" ]; then
+            if [ -z "$keychain" ]; then
+              security create-keychain -p actions build.keychain
+              security default-keychain -s build.keychain
+              keychain=build.keychain
+            fi
+            security unlock-keychain -p actions build.keychain
+            echo "$INSTALLER_P12" | base64 --decode > "$RUNNER_TEMP/installer.p12"
+            security import "$RUNNER_TEMP/installer.p12" -k build.keychain \
+              -P "$INSTALLER_PASSWORD" -T /usr/bin/productbuild -T /usr/bin/productsign
+            rm -f "$RUNNER_TEMP/installer.p12"
+            security set-key-partition-list -S apple-tool:,apple: \
+              -s -k actions build.keychain >/dev/null
+          fi
+          installer_identity="" app_identity=""
+          if [ -n "$keychain" ]; then
+            installer_identity="$(security find-identity -v -p basic "$keychain" \
+              | grep 'Developer ID Installer' | head -1 | sed -E 's/.*"(.*)"/\1/' || true)"
+            app_identity="$(security find-identity -v -p codesigning "$keychain" \
+              | grep 'Developer ID Application' | head -1 | sed -E 's/.*"(.*)"/\1/' || true)"
+          fi
+          args=()
+          if [ -f tooling/bin/cargo-component ]; then args+=(--tooling tooling/bin/cargo-component); fi
+          if [ -d "dist/Krate Opener.app" ]; then args+=(--opener "dist/Krate Opener.app"); fi
+          if [ -d "dist/Krate Player.app" ]; then args+=(--player "dist/Krate Player.app"); fi
+          if [ -n "$installer_identity" ]; then
+            echo "signing the .pkg with: $installer_identity"
+            args+=(--installer-identity "$installer_identity" --keychain "$keychain")
+            if [ -n "$app_identity" ]; then args+=(--app-identity "$app_identity"); fi
+          else
+            echo "::warning::No Developer ID Installer identity, so the macOS .pkg ships unsigned (named -unsigned.pkg). Set APPLE_INSTALLER_CERT_P12 and APPLE_INSTALLER_CERT_PASSWORD to sign it."
+          fi
+          bash scripts/build-org-packages.sh macos "${{ matrix.target }}" \
+            "target/${{ matrix.target }}/release/krate" dist ${args[@]+"${args[@]}"}
+
+          # Notarize a signed package, judged by the notary's verdict (see
+          # the note on notarize() in the signing step: --wait exits 0 for a
+          # rejection).
+          version="${KRATE_VERSION#v}"
+          pkg="dist/krate-${version}-${{ matrix.target }}.pkg"
+          if [ -f "$pkg" ] && [ -n "$APPLE_ID" ]; then
+            out="$(xcrun notarytool submit "$pkg" \
+              --apple-id "$(printf '%s' "$APPLE_ID" | tr -d '[:space:]')" \
+              --team-id "$(printf '%s' "$APPLE_TEAM_ID" | tr -d '[:space:]')" \
+              --password "$(printf '%s' "$APPLE_APP_PASSWORD" | tr -d '[:space:]')" \
+              --wait 2>&1)" || true
+            printf '%s\n' "$out"
+            if printf '%s' "$out" | grep -q "status: Accepted"; then
+              xcrun stapler staple "$pkg"
+              echo "the .pkg is notarized and stapled"
+            else
+              echo "::warning::The signed .pkg was not notarized. MDM installs it as is; a person who double-clicks a downloaded copy meets a Gatekeeper warning."
+            fi
+          fi
+
+      - name: Installer packages for organisations (.deb, .rpm)
+        if: contains(matrix.target, 'linux')
+        continue-on-error: true
+        shell: bash
+        env:
+          KRATE_VERSION: ${{ inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          args=()
+          if [ -f tooling/bin/cargo-component ]; then args+=(--tooling tooling/bin/cargo-component); fi
+          bash scripts/build-org-packages.sh install-nfpm "$RUNNER_TEMP/bin"
+          PATH="$RUNNER_TEMP/bin:$PATH" bash scripts/build-org-packages.sh linux \
+            "${{ matrix.target }}" "target/${{ matrix.target }}/release/krate" dist ${args[@]+"${args[@]}"}
+          for f in dist/*.deb; do dpkg-deb -c "$f"; done
+
       # The gift opener leaves this job as its own asset, from the arm64
       # runner only.
       #
@@ -1048,12 +1149,71 @@ jobs:
             dist/krate-studio-*.dmg
             dist/krate-studio-*.exe
             dist/krate-studio-*.AppImage
+            dist/krate-*.pkg
+            dist/krate-*.deb
+            dist/krate-*.rpm
+          if-no-files-found: error
+
+  # The bills of materials (CycloneDX JSON) the release publishes beside
+  # each download: for every target in the build matrix, the crates the CLI
+  # links with that target's features (speech-to-text where the build adds
+  # it), and for the three Studio installers, Studio's Rust shell and the
+  # JavaScript bundled into its interface. They are read from the lockfiles
+  # by `cargo metadata` and npm, so one Linux job writes all of them without
+  # compiling anything. scripts/build-sbom.sh is the same script the
+  # test-build lane runs, which is where it is proved.
+  #
+  # Not a gate on publishing: if this job fails, the release still
+  # publishes (exactly as it did before SBOMs existed) and the publish job
+  # says loudly that the SBOMs are missing.
+  sbom:
+    name: Bills of materials (CycloneDX)
+    needs: gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@9376cdc5a5e25b16da71af47712785cf06b0d6d4 # 1.94.1
+      - name: Write the SBOMs
+        shell: bash
+        env:
+          KRATE_VERSION: ${{ inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          cargo install cargo-cyclonedx --locked --version 0.5.7
+          mkdir -p sbom
+          # Keep in step with the build matrix: --no-speech where the matrix
+          # says no-speech, --studio where a Studio installer is built.
+          bash scripts/build-sbom.sh x86_64-unknown-linux-gnu sbom --studio
+          bash scripts/build-sbom.sh aarch64-unknown-linux-gnu sbom --no-speech
+          bash scripts/build-sbom.sh x86_64-apple-darwin sbom
+          bash scripts/build-sbom.sh aarch64-apple-darwin sbom --studio
+          bash scripts/build-sbom.sh x86_64-pc-windows-msvc sbom --studio
+          bash scripts/build-sbom.sh aarch64-pc-windows-msvc sbom --no-speech
+          ls -la sbom
+      - name: Upload the SBOMs
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: krate-sbom
+          path: sbom/*.cdx.json
           if-no-files-found: error
 
   publish:
     name: Publish GitHub Release
     runs-on: ubuntu-latest
-    needs: build
+    needs: [build, sbom]
+    # Publish whenever the builds succeeded, as before, whether or not the
+    # SBOM job did: a release is not held back by a missing bill of
+    # materials, it is published with a warning that says so.
+    if: ${{ !cancelled() && needs.build.result == 'success' }}
+    # id-token and attestations: the build provenance step signs a statement
+    # about every published file through GitHub's Sigstore instance.
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
@@ -1076,8 +1236,11 @@ jobs:
           # verifies what it downloads against this file before running it --
           # refused every update with "no checksum for this platform". An
           # updater that cannot verify is an updater that cannot update.
+          # And the organisation installers and the bills of materials, so
+          # every one of them can be checked the same way.
           find dist -type f \( -name '*.tar.gz' -o -name '*.zip' -o -name '*.dmg' \
-            -o -name '*.exe' -o -name '*.AppImage' \) -print0 \
+            -o -name '*.exe' -o -name '*.AppImage' \
+            -o -name '*.pkg' -o -name '*.deb' -o -name '*.rpm' -o -name '*.cdx.json' \) -print0 \
             | sort -z \
             | xargs -0 sha256sum \
             | sed -E 's#(^[0-9a-f]+  ).*/#\1#' > SHA256SUMS
@@ -1111,6 +1274,48 @@ jobs:
             echo "aarch64-apple-darwin job."
           fi
 
+      # Say out loud whether the supply-chain files made it, for the same
+      # reason as the opener check above: they come from steps that are
+      # allowed to fail, and a release missing them looks complete.
+      - name: Check the SBOMs and organisation installers are here
+        shell: bash
+        run: |
+          for pattern in '*.cdx.json' '*.pkg' '*.deb' '*.rpm'; do
+            n="$(find dist -type f -name "$pattern" | wc -l | tr -d ' ')"
+            if [ "$n" = 0 ]; then
+              echo "::warning::No $pattern among the artifacts, so this release publishes without one. Check the SBOM job and the installer package steps."
+            else
+              echo "$pattern: $n"
+            fi
+          done
+          if find dist -type f -name '*-unsigned.pkg' | grep -q .; then
+            echo "::warning::The macOS .pkg is unsigned (no Developer ID Installer identity); its name says so."
+          fi
+
+      # Build provenance for every file SHA256SUMS lists: GitHub signs, with
+      # its Sigstore instance, a statement that this workflow, at this
+      # commit, built those exact bytes. Anyone can check a download with
+      #   gh attestation verify <file> --repo incyashraj/krate
+      # The signed bundle is also published, for checking offline.
+      - name: Build provenance
+        id: provenance
+        continue-on-error: true
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-checksums: SHA256SUMS
+      - name: Keep the provenance bundle beside the downloads
+        shell: bash
+        env:
+          BUNDLE: ${{ steps.provenance.outputs.bundle-path }}
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          if [ -n "$BUNDLE" ] && [ -f "$BUNDLE" ]; then
+            cp "$BUNDLE" "krate-${TAG#v}-provenance.sigstore.json"
+            echo "provenance bundle: krate-${TAG#v}-provenance.sigstore.json"
+          else
+            echo "::warning::No build provenance was made for this release. The downloads are still checkable against SHA256SUMS."
+          fi
+
       - name: Upload release assets
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
@@ -1134,6 +1339,11 @@ jobs:
             dist/**/*.dmg
             dist/**/*.exe
             dist/**/*.AppImage
+            dist/**/*.pkg
+            dist/**/*.deb
+            dist/**/*.rpm
+            dist/**/*.cdx.json
+            krate-*-provenance.sigstore.json
             SHA256SUMS
           generate_release_notes: true
 
@@ -1206,6 +1416,19 @@ jobs:
           else
             grep " $archive\$" SHA256SUMS | sha256sum -c -
           fi
+
+      # The provenance a security team would check, on the file they would
+      # download. Allowed to fail for now: release provenance is new, and
+      # this is its first run on a tag; a failure is a warning in the run,
+      # not a held release.
+      - name: The download's build provenance verifies
+        continue-on-error: true
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh attestation verify "verify/$archive" --repo "${{ github.repository }}"
 
       - name: Unpack, and prove the binary is the version on the tin
         shell: bash

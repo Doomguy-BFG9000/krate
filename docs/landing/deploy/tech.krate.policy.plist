@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>version</key>
+	<integer>1</integer>
+	<key>name</key>
+	<string>Acme Labs</string>
+	<key>trust</key>
+	<dict>
+		<key>roots</key>
+		<array>
+			<dict>
+				<key>name</key>
+				<string>Acme Labs</string>
+				<key>key</key>
+				<string>REPLACE-WITH-YOUR-ROOT-PUBLIC-KEY-64-HEX-CHARACTERS</string>
+			</dict>
+		</array>
+		<key>allow_unsigned</key>
+		<false/>
+		<key>allow_other_signed</key>
+		<false/>
+	</dict>
+	<key>capabilities</key>
+	<dict>
+		<key>deny</key>
+		<array>
+			<string>camera.capture</string>
+			<string>audio.capture</string>
+			<string>location.read</string>
+		</array>
+	</dict>
+	<key>network</key>
+	<dict>
+		<key>allow</key>
+		<array>
+			<string>*.acme.com:443</string>
+			<string>api.github.com:443</string>
+		</array>
+	</dict>
+	<key>usage</key>
+	<dict>
+		<key>counting</key>
+		<false/>
+	</dict>
+	<key>hub</key>
+	<dict>
+		<key>url</key>
+		<string>https://hub.krate.tech</string>
+	</dict>
+	<key>studio</key>
+	<dict>
+		<key>ai</key>
+		<true/>
+		<key>providers</key>
+		<array>
+			<string>claude</string>
+			<string>codex</string>
+		</array>
+	</dict>
+	<key>updates</key>
+	<dict>
+		<key>mode</key>
+		<string>notify</string>
+	</dict>
+	<key>runtime</key>
+	<dict>
+		<key>interpreter</key>
+		<false/>
+	</dict>
+</dict>
+</plist>
