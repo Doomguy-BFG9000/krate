@@ -1,0 +1,15 @@
+{
+  "list": {
+    "schema": "krate.revocations.v1",
+    "root": "0d9219f281efdb72dede3a3461fb042b595a3763e94c2f03e65d1e48660a4ca2",
+    "issued_at": 1760000000,
+    "revocations": [
+      {
+        "key": "db243c623887133a272488400e0f787c922a4e72eb3e2080e97833b11712ba4a",
+        "compromised_from": 1700000000,
+        "reason": "laptop lost"
+      }
+    ]
+  },
+  "signature": "95d4f63f827bfa8450e9b8aad7202b12dddfcd64720cbec3c6e31b5bc7cc86ab774a17f7e138901fd1877da12bd68f9bb2b403fe30d85287745356c4832ba507"
+}
