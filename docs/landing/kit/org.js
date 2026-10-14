@@ -95,6 +95,11 @@
       return base;
     }
     var s = String(p || "");
+    // Who acts for Krate itself in the audit (Addendum 3 D, E).
+    if (s === "system:krate") return { principal: s, kind: "krate", display: "Krate", label: "Krate" };
+    if (s === "stripe") return { principal: s, kind: "stripe", display: "Stripe", label: "Stripe" };
+    var sup = s.match(/^krate-support:(.*)$/);
+    if (sup) return { principal: s, kind: "krate-support", display: sup[1], label: "Krate support" + (sup[1] ? " (" + sup[1].replace(/^github:/, "@") + ")" : "") };
     var m = s.match(/^(github|email):(.+)$/);
     if (m) return { principal: s, kind: m[1], display: m[2], label: m[1] === "github" ? "@" + m[2] : m[2] };
     return { principal: s, kind: "", display: s || "someone", label: s || "someone" };
@@ -373,6 +378,38 @@
       case "candidate.publish": return a + " sent " + app() + " for approval.";
       case "candidate.approve": return a + " approved " + app() + ". It is released.";
       case "release.download": return a + " opened " + app() + ".";
+      // Addendum 3: closing, export, recovery, billing, SSO, offline.
+      case "org.close":
+        return /second owner/.test(ev.reason || "") ? a + " asked to close the organisation. It waits for a second owner." : a + " scheduled the organisation to close.";
+      case "org.close.approve": return a + " approved closing the organisation. The window has started.";
+      case "org.close.cancel": return a + " cancelled the closing. Nothing closes.";
+      case "org.closed": return "The organisation closed. Its apps no longer open.";
+      case "org.export": return a + " built an export.";
+      case "org.files.deleted": {
+        var n = String(ev.reason || "").match(/^(\d+)/);
+        return "Krate deleted the closed organisation's files after the export window" + (n ? " (" + n[1] + " files)" : "") + ".";
+      }
+      case "member.recover.request": return a + " asked to make " + who(t.value).label + " an owner, because: " + (ev.reason || "no reason given") + ".";
+      case "member.recover": return "Krate support restored ownership to " + who(t.value).label + ", by " + who(ev.actor).display + ", reason: " + (ev.reason || "none given") + ".";
+      case "member.recover.object": return a + " objected. The ownership recovery is cancelled.";
+      case "billing.customer": return a + " set up billing with Stripe.";
+      case "billing.checkout": return a + " opened checkout" + (ev.reason ? " for " + ev.reason : "") + ".";
+      case "billing.update": return "Stripe updated billing" + (ev.reason ? ": " + ev.reason : "") + ".";
+      case "billing.manual": return a + " marked the organisation as invoiced" + (ev.reason ? ", reference " + ev.reason : "") + ".";
+      case "offline.set": {
+        var to = String(ev.reason || "").split("->")[1] || "";
+        return a + " set " + (t.value || "an app") + " to " + offlineName(to).toLowerCase() + ".";
+      }
+      case "offline.default": return a + " set new apps to " + offlineName(String(ev.reason || "").split("->")[1] || "").toLowerCase() + ".";
+      case "lease.issue": {
+        var u = String(ev.reason || "").match(/until (\d{4}-\d{2}-\d{2})/);
+        return "Offline access issued to " + a + " for " + app() + (u ? ", until " + day(Date.parse(u[1] + "T12:00:00Z") / 1000) : "") + ".";
+      }
+      case "sso.set": return a + " set up company sign-in.";
+      case "sso.update": return a + " changed company sign-in.";
+      case "sso.clear": return a + " turned off company sign-in.";
+      case "sso.verify-domain": return a + " verified the domain " + (t.value || "") + ".";
+      case "sso.join": return a + " joined through company sign-in as " + roleWord(ev.reason || "") + ".";
       default: return a + " " + ev.action + (ev.target ? " " + ev.target : "") + ".";
     }
   }
