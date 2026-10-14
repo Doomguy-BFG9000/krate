@@ -3474,6 +3474,10 @@ async fn app_contents(path: String) -> Result<Vec<serde_json::Value>, String> {
 #[tauri::command]
 async fn latest_release() -> Result<serde_json::Value, String> {
     tauri::async_runtime::spawn_blocking(|| {
+        // `[updates] mode = "off"`: never checked (IC-949).
+        if org_update_mode() == "off" {
+            return Err(ORG_UPDATES_OFF.to_string());
+        }
         let response = ureq::get("https://api.github.com/repos/incyashraj/krate/releases/latest")
             .set("User-Agent", "krate-studio")
             .timeout(std::time::Duration::from_secs(15))
@@ -4952,8 +4956,48 @@ fn engine_lags(studio: &str, engine: &str) -> bool {
 /// The bytes are verified against the release's SHA256SUMS before anything
 /// is run: an update channel that installs whatever it downloaded is a
 /// worse hole than the one it closes.
+/// What the organisation that manages this computer says about updates
+/// (IC-949 `[updates] mode`), as the engine reads its policy: `auto`,
+/// `notify` or `off`. An engine too old to have `krate policy` has no
+/// policy to report, which is `auto`; a policy that cannot be read turns
+/// updates off, as the engine itself does.
+fn org_update_mode() -> String {
+    let Ok(engine) = engine() else {
+        return "auto".to_string();
+    };
+    let Ok(out) = silent_cmd(&engine).args(["policy", "--json"]).output() else {
+        return "auto".to_string();
+    };
+    org_update_mode_from(&out.stdout)
+}
+
+fn org_update_mode_from(stdout: &[u8]) -> String {
+    let Ok(answer) = serde_json::from_slice::<serde_json::Value>(stdout) else {
+        return "auto".to_string();
+    };
+    match answer["state"].as_str() {
+        Some("unreadable") => "off".to_string(),
+        Some("in-force") => answer["policy"]["updates"]["mode"]
+            .as_str()
+            .unwrap_or("auto")
+            .to_string(),
+        _ => "auto".to_string(),
+    }
+}
+
+const ORG_UPDATES_OFF: &str =
+    "Your organisation manages Krate updates on this computer, so Studio does not check for them.";
+const ORG_UPDATES_NOTIFY: &str =
+    "Your organisation installs Krate updates on this computer, so Studio does not install this one.";
+
 #[tauri::command]
 fn install_update(version: String) -> Result<String, String> {
+    // `notify` tells and never installs; `off` never even checks (IC-949).
+    match org_update_mode().as_str() {
+        "auto" => {}
+        "off" => return Err(ORG_UPDATES_OFF.to_string()),
+        _ => return Err(ORG_UPDATES_NOTIFY.to_string()),
+    }
     // The tag is ours, but it arrives from the network, so it is checked
     // rather than trusted into a URL.
     if !version

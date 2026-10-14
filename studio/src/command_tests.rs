@@ -1187,6 +1187,39 @@ fn an_update_version_that_could_reach_a_path_is_refused_before_any_download() {
     assert!(!t.studio().join("updates").exists());
 }
 
+/// An organisation's `[updates] mode` (IC-949), as the engine reports it:
+/// `notify` tells and never installs, `off` never checks, and a policy
+/// that cannot be read is `off`.
+#[test]
+fn the_organisations_update_mode_stops_the_install_before_any_download() {
+    let t = TestHome::new();
+    t.engine(r#"echo '{"v":1,"state":"in-force","policy":{"updates":{"mode":"notify"}}}'"#);
+    assert_eq!(org_update_mode(), "notify");
+    assert_eq!(
+        install_update("9.9.9".to_string()).unwrap_err(),
+        ORG_UPDATES_NOTIFY
+    );
+    assert!(
+        !t.studio().join("updates").exists(),
+        "nothing was downloaded"
+    );
+    assert_eq!(t.args(), vec!["policy", "--json"]);
+
+    t.engine(r#"echo '{"v":1,"state":"unreadable","policy":null}'"#);
+    assert_eq!(org_update_mode(), "off");
+    assert_eq!(
+        install_update("9.9.9".to_string()).unwrap_err(),
+        ORG_UPDATES_OFF
+    );
+
+    // An engine with no `policy` command has no policy to report.
+    assert_eq!(org_update_mode_from(b""), "auto");
+    assert_eq!(
+        org_update_mode_from(br#"{"v":1,"state":"none","policy":null}"#),
+        "auto"
+    );
+}
+
 #[test]
 fn the_staged_update_record_must_be_whole_to_be_trusted() {
     let t = TestHome::new();

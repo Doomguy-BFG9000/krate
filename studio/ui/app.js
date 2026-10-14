@@ -9462,6 +9462,15 @@ async function checkForUpdate() {
     }
   } catch (e) {
     updIcon("ready");
+    // The organisation that manages this computer turned checking off
+    // (IC-949): say so, and offer nothing to retry.
+    if (/^Your organisation/.test(String(e))) {
+      $("updT").textContent = "Updates are managed for you";
+      $("updS").textContent = String(e);
+      $("upd").classList.remove("ready", "working", "done");
+      $("updAct").innerHTML = "";
+      return;
+    }
     // Title first, then the body. Setting them in the other order left
     // "Checking for updates..." sitting above "No internet", which reads
     // as two different states at once.
@@ -9495,6 +9504,16 @@ async function runUpdate(latest) {
       $("updS").textContent = `Could not restart: ${String(err && err.message ? err.message : err).replace(/^error:\s*/i, "")}. Quit Krate and open it again to finish.`;
     }));
   } catch (err) {
+    // `notify`: the organisation installs updates itself (IC-949). Told,
+    // never installed, and no download offered in its place.
+    if (/^Your organisation/.test(String(err))) {
+      card.classList.remove("working");
+      updIcon("ready");
+      $("updT").textContent = `Version ${latest} is out`;
+      $("updS").textContent = String(err);
+      $("updAct").innerHTML = "";
+      return;
+    }
     // Falling back to the browser is honest, not a failure: the file is
     // real and the person can finish it by hand.
     card.classList.remove("working");
