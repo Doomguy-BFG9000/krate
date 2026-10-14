@@ -15,7 +15,8 @@ import { writeFileSync, mkdtempSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
-import { orgEnv, call, acme, fixture, worker } from "./org-tools.mjs";
+import { orgEnv, call, acme, fixture, worker, sqlStorage } from "./org-tools.mjs";
+import { Org } from "../src/index.js";
 import { streamExport, exportStats, EXPORT_PART_BYTES } from "../src/org-lifecycle.js";
 import { addressFor } from "../src/org-mail.js";
 
@@ -195,4 +196,28 @@ test("the streamed package is a zip other tools read", async () => {
     { encoding: "utf8" },
   );
   assert.match(said, /^ok 6/, said);
+});
+
+test("an organisation made before a column existed gets the column, and a recovery on it works", async () => {
+  const seen = { commands: [], mails: [] };
+  const env = orgEnv({ GMAIL_APP_PASSWORD: "app password", SMTP_CONNECT: fakeGmail(seen), KRATE_ADMINS: "support" });
+  // The store as an older build left it: recoveries without not_mailed.
+  const storage = sqlStorage();
+  storage.sql.exec(`CREATE TABLE recoveries (
+     id TEXT PRIMARY KEY, state TEXT NOT NULL, principal TEXT NOT NULL, by TEXT NOT NULL,
+     reason TEXT NOT NULL, requested_at INTEGER NOT NULL, effective_at INTEGER NOT NULL,
+     closed_by TEXT, closed_at INTEGER)`);
+  const before = storage.sql.exec("PRAGMA table_info(recoveries)").toArray().map((c) => c.name);
+  assert.ok(!before.includes("not_mailed"), "the fixture really is the old table");
+  env.ORGS.objects.set("org:acme", new Org({ storage }, env));
+  await acme(env);
+  const after = storage.sql.exec("PRAGMA table_info(recoveries)").toArray().map((c) => c.name);
+  assert.ok(after.includes("not_mailed"), "opening the store adds the column");
+
+  const r = await call(env, "support", "POST", "/orgs/acme/recover", {
+    json: { principal: "github:carol", reason: "the only owner lost their account; checked by phone" },
+  });
+  assert.strictEqual(r.status, 201, JSON.stringify(r.body));
+  const seenBy = (await call(env, "alice", "GET", "/orgs/acme")).body.org.recovery;
+  assert.ok(Array.isArray(seenBy.not_mailed), "the owners' banner reads who was not told");
 });

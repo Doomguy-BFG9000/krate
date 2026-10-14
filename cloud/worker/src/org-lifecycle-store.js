@@ -688,6 +688,8 @@ export { seatsUsed, lifecycle };
 
 extendOrg({
   schema: SCHEMA,
+  // Added after organisations already existed (84643f288).
+  columns: [["recoveries", "not_mailed", "TEXT"]],
   ops,
   // An export is not one: building a second one is harmless, and its answer
   // carries the store's data, which is not for the idempotency table.
