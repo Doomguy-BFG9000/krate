@@ -2840,6 +2840,95 @@ async fn publish(
     .map_err(|err| err.to_string())?
 }
 
+/// The organisations this person can send an app to for approval: the
+/// ones where their role may publish (owner, developer), from the engine's
+/// `krate org list --json` (the hub's `GET /orgs`). Signed out, or with a
+/// hub that has no organisations, the list is empty and the Send menu
+/// simply has no organisation rows (IC-948 I).
+#[tauri::command]
+async fn org_targets() -> Result<Vec<serde_json::Value>, String> {
+    tauri::async_runtime::spawn_blocking(org_targets_blocking)
+        .await
+        .map_err(|err| err.to_string())?
+}
+
+fn org_targets_blocking() -> Result<Vec<serde_json::Value>, String> {
+    let engine = engine()?;
+    let out = silent_cmd(&engine)
+        .args(["org", "list", "--json"])
+        .output()
+        .map_err(|err| err.to_string())?;
+    if !out.status.success() {
+        return Ok(Vec::new());
+    }
+    let list: serde_json::Value =
+        serde_json::from_slice(&out.stdout).unwrap_or(serde_json::Value::Null);
+    Ok(list
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|org| matches!(org["role"].as_str(), Some("owner" | "developer")))
+        .collect())
+}
+
+/// The dashboard tab where an organisation's candidates wait.
+fn waiting_url(slug: &str) -> String {
+    let slug: String = slug
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '-')
+        .collect();
+    format!("https://krate.tech/org/?o={slug}&tab=waiting")
+}
+
+/// "Send to <org> for approval" (IC-948 I): the engine signs the app with
+/// this machine's delegated release key for the organisation and uploads
+/// it as a candidate. Without a key it uploads nothing, and its words --
+/// the `krate org release-key` and `krate delegate` lines -- come back as
+/// the refusal. On success: the digest and the Waiting tab's link.
+#[tauri::command]
+async fn send_to_org(path: String, slug: String) -> Result<serde_json::Value, String> {
+    tauri::async_runtime::spawn_blocking(move || send_to_org_blocking(&path, &slug))
+        .await
+        .map_err(|err| err.to_string())?
+}
+
+fn send_to_org_blocking(path: &str, slug: &str) -> Result<serde_json::Value, String> {
+    let path = existing(path)?;
+    let engine = engine()?;
+    let out = silent_cmd(&engine)
+        .arg("publish")
+        .arg(&path)
+        .arg("--org")
+        .arg(slug)
+        .output()
+        .map_err(|err| err.to_string())?;
+    let text = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    if !out.status.success() {
+        // The engine's own sentence, without its "error:" label.
+        let words = text.trim().trim_start_matches("error:").trim().to_string();
+        return Err(if words.is_empty() {
+            format!("{slug} did not take it")
+        } else {
+            words
+        });
+    }
+    let digest = text
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("digest "))
+        .map(|d| d.trim().to_string())
+        .ok_or_else(|| "sent, but the engine named no digest".to_string())?;
+    Ok(serde_json::json!({
+        "org": slug,
+        "digest": digest,
+        "waiting_url": waiting_url(slug),
+    }))
+}
+
 /// Everything knowable about one app, for the details screen.
 ///
 /// Read through the engine, so the studio never parses a .krate itself and
@@ -3137,6 +3226,14 @@ async fn open_krate(app: tauri::AppHandle) -> Result<(), String> {
     else {
         return Ok(());
     };
+    launch_and_watch(&path)
+}
+
+/// `krate launch <path>`, watched just long enough to catch a refusal, and
+/// the engine's own words when it refuses: a private app that is not
+/// shared with this person, or a removed member's, says so and names the
+/// sign-in to try (IC-948 H), rather than calling the file damaged.
+fn launch_and_watch(path: &std::path::Path) -> Result<(), String> {
     let engine = engine()?;
     // `launch`, not a bare `run`: a GUI-spawned child gets no LaunchServices
     // activation, so its window is created and never shown (K-110). launch
@@ -3145,9 +3242,23 @@ async fn open_krate(app: tauri::AppHandle) -> Result<(), String> {
     let mut child = silent_cmd(&engine)
         .current_dir(studio_dir())
         .arg("launch")
-        .arg(&path)
+        .arg(path)
+        .stderr(std::process::Stdio::piped())
         .spawn()
         .map_err(|err| err.to_string())?;
+    // A refusal's words, read only when the child has already failed.
+    let words = |child: &mut std::process::Child| -> String {
+        use std::io::Read as _;
+        let mut said = String::new();
+        if let Some(mut stderr) = child.stderr.take() {
+            let _ = stderr.read_to_string(&mut said);
+        }
+        said.lines()
+            .map(|line| line.trim().trim_start_matches("error:").trim())
+            .filter(|line| !line.is_empty())
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
     // Wait only long enough to catch an IMMEDIATE refusal.
     //
     // This was `.spawn().map(|_| ())`, so the child's exit was never
@@ -3164,21 +3275,47 @@ async fn open_krate(app: tauri::AppHandle) -> Result<(), String> {
     loop {
         match child.try_wait() {
             Ok(Some(status)) if !status.success() => {
-                return Err("that file could not be opened as a Krate app. It may be \
+                let said = words(&mut child);
+                // An organisation's refusal is the engine's own sentence,
+                // with what to do next; anything else keeps the plain
+                // "could not be opened" (K-769).
+                let private = ["private", "removed from", "not signed in", "sign-in"]
+                    .iter()
+                    .any(|w| said.contains(w));
+                return Err(if private {
+                    said
+                } else {
+                    "that file could not be opened as a Krate app. It may be \
                      damaged, or not a Krate app at all."
-                    .to_string());
+                        .to_string()
+                });
             }
             // Exited cleanly inside the grace period: an app that opened and
             // was closed at once is still an app that opened.
-            Ok(Some(_)) => return Ok(()),
+            Ok(Some(_)) => {
+                drain(&mut child);
+                return Ok(());
+            }
             Ok(None) => {
                 if std::time::Instant::now() >= deadline {
+                    drain(&mut child);
                     return Ok(());
                 }
                 std::thread::sleep(std::time::Duration::from_millis(50));
             }
             Err(err) => return Err(err.to_string()),
         }
+    }
+}
+
+/// Keep reading a launched app's stderr until it closes, so a running app
+/// (or the run it spawned, which inherits the pipe) never blocks on a full
+/// pipe or meets a closed one.
+fn drain(child: &mut std::process::Child) {
+    if let Some(mut stderr) = child.stderr.take() {
+        std::thread::spawn(move || {
+            let _ = std::io::copy(&mut stderr, &mut std::io::sink());
+        });
     }
 }
 
@@ -5461,6 +5598,8 @@ fn main() {
             report_collect,
             report_send,
             publish,
+            org_targets,
+            send_to_org,
             make_card,
             make_wrap,
             share_file,

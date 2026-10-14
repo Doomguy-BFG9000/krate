@@ -5655,9 +5655,23 @@ const pubState = { shotPath: null, iconPath: null };
 /* Share: a small menu on the Share button, not a sheet. Three things you can
  * do with the app, each one row; the link, once there is one, is the first
  * row and pressing it copies. `which` is the version a chip asked about. */
-function openSendSheet(which, version, anchor) {
+/* The organisations this person can send to for approval (IC-948 I): the
+ * engine's `krate org list`, kept between opens so the menu opens at once;
+ * the first open waits for it. */
+const orgTargets = { list: null, asked: null };
+function refreshOrgTargets() {
+  if (!tauri) return Promise.resolve([]);
+  orgTargets.asked = invoke("org_targets")
+    .then((list) => { orgTargets.list = Array.isArray(list) ? list : []; return orgTargets.list; })
+    .catch(() => { orgTargets.list = orgTargets.list || []; return orgTargets.list; });
+  return orgTargets.asked;
+}
+
+async function openSendSheet(which, version, anchor) {
   const app = (which && which.path) ? which : currentApp();
   if (!app) return;
+  const orgs = orgTargets.list || await refreshOrgTargets();
+  if (orgTargets.list) refreshOrgTargets();
   const url = !which && state.session && state.session.result && state.session.result.share_url;
   const items = [];
   if (url) {
@@ -5669,6 +5683,12 @@ function openSendSheet(which, version, anchor) {
     items.push({ label: "Share a link", value: "anyone can open it", run: () => openPublishSheet() });
   }
   items.push({ label: "Send the file", value: "a picture with the app inside", run: (row, label) => { sendCard(app, label); return true; } });
+  // One row per organisation that lets this person publish: the app goes
+  // up signed, as a candidate, and someone else approves it.
+  for (const org of orgs) {
+    const name = org.name || org.slug;
+    items.push({ label: `Send to ${name} for approval`, value: "a second person approves it first", run: (row, label) => { sendToOrg(app, org, row, label); return true; } });
+  }
   // The third way: a gift file that installs Krate once and then opens the
   // app. Only the krate binary on this computer can make one, so in a tab
   // the row says what does work from here instead of pretending.
@@ -5693,6 +5713,33 @@ function openSendSheet(which, version, anchor) {
     items.push({ label: `Sharing v${version}`, value: `newest is v${state.session.builds}` });
   }
   popMenu(anchor || $("barShare"), items);
+}
+
+/* "Send to <org> for approval": signed with this machine's delegated
+ * release key for the organisation, uploaded as a candidate. Without a key
+ * nothing goes up, and the row says exactly how to get one -- the engine's
+ * own `krate org release-key` / `krate delegate` lines. After sending:
+ * "Waiting for approval in <org>", and the row opens the Waiting tab. */
+async function sendToOrg(app, org, row, label) {
+  const name = org.name || org.slug;
+  if (row.dataset.waiting) {
+    invoke("open_external", { url: row.dataset.waiting }).catch(() => {});
+    return;
+  }
+  const was = label.textContent;
+  label.textContent = `Signing and sending to ${name}…`;
+  try {
+    const sent = await invoke("send_to_org", { path: app.path, slug: org.slug });
+    row.dataset.waiting = sent.waiting_url;
+    label.textContent = `Waiting for approval in ${name}`;
+    const value = row.querySelector(".pop-val");
+    if (value && value !== label) value.textContent = "open the Waiting tab";
+    toastish(`Waiting for approval in ${name}. A reviewer approves digest ${String(sent.digest).slice(0, 12)}.`);
+  } catch (err) {
+    label.textContent = was;
+    // The engine's words carry the exact commands to get a release key.
+    toastish(String(err && err.message ? err.message : err || "").replace(/^error:\s*/i, ""));
+  }
 }
 
 async function sendCard(app, label) {

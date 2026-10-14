@@ -2797,6 +2797,94 @@ echo '   '"#,
             "no answer field reads as an empty answer"
         );
     }
+
+    /* ---- organisations (IC-948 I and H) ------------------------------- */
+
+    #[test]
+    fn the_send_menu_offers_only_organisations_that_let_this_person_publish() {
+        let t = TestHome::new();
+        t.engine(
+            r#"echo '[{"slug":"acme","name":"Acme","role":"developer"},{"slug":"globex","name":"Globex","role":"reviewer"},{"slug":"initech","name":"Initech","role":"owner"}]'"#,
+        );
+        let orgs = block(org_targets()).unwrap();
+        assert_eq!(t.args(), vec!["org", "list", "--json"]);
+        let slugs: Vec<&str> = orgs.iter().filter_map(|o| o["slug"].as_str()).collect();
+        assert_eq!(slugs, vec!["acme", "initech"], "a reviewer cannot publish");
+        // Signed out, or no organisations: no rows, and no error to show.
+        t.engine("echo 'error: you are not signed in' >&2; exit 1");
+        assert!(block(org_targets()).unwrap().is_empty());
+    }
+
+    #[test]
+    fn sending_to_an_organisation_waits_for_approval_with_a_link() {
+        let t = TestHome::new();
+        let app = t.root().join("tip.krate");
+        std::fs::write(&app, "x").unwrap();
+        t.engine(&format!(
+            "echo 'signed {app}'; echo 'uploaded to acme as a candidate. It waits for approval and opens for nobody yet.'; echo '  digest  {digest}'",
+            app = app.display(),
+            digest = "ab".repeat(32),
+        ));
+        let sent = block(send_to_org(app.display().to_string(), "acme".into())).unwrap();
+        let p = app.display().to_string();
+        assert_eq!(t.args(), vec!["publish", p.as_str(), "--org", "acme"]);
+        assert_eq!(sent["digest"], "ab".repeat(32));
+        assert_eq!(
+            sent["waiting_url"],
+            "https://krate.tech/org/?o=acme&tab=waiting"
+        );
+    }
+
+    #[test]
+    fn sending_without_a_release_key_uploads_nothing_and_says_how_to_get_one() {
+        let t = TestHome::new();
+        let app = t.root().join("tip.krate");
+        std::fs::write(&app, "x").unwrap();
+        // The engine's own refusal, which it gives before any upload.
+        t.engine(
+            "echo 'error: tip.krate is not signed, so nothing was uploaded: acme takes only apps signed by its root key, or by a release key that root delegated.' >&2; echo '    krate org release-key acme' >&2; exit 1",
+        );
+        let err = block(send_to_org(app.display().to_string(), "acme".into())).unwrap_err();
+        assert!(
+            err.starts_with("tip.krate is not signed, so nothing was uploaded"),
+            "{err}"
+        );
+        assert!(err.contains("krate org release-key acme"), "{err}");
+        // A gone file never reaches the engine.
+        let gone = t.root().join("gone.krate").display().to_string();
+        t.engine("echo should-not-run");
+        assert!(block(send_to_org(gone, "acme".into())).is_err());
+    }
+
+    #[test]
+    fn opening_a_private_app_says_why_it_did_not_open() {
+        let t = TestHome::new();
+        let app = t.root().join("acme.krate");
+        std::fs::write(&app, "x").unwrap();
+        t.engine(
+            "echo 'error: you were removed from acme, so this app no longer opens for you: ask an owner of acme if that is a mistake' >&2; exit 1",
+        );
+        let err = launch_and_watch(&app).unwrap_err();
+        assert_eq!(
+            err,
+            "you were removed from acme, so this app no longer opens for you: ask an owner of acme if that is a mistake"
+        );
+        assert_eq!(t.args(), vec!["launch", app.display().to_string().as_str()]);
+        t.engine(
+            "echo 'error: this app is private to an organisation and you are not signed in, so nothing was downloaded or run: sign in with `krate account login`' >&2; exit 1",
+        );
+        assert!(launch_and_watch(&app)
+            .unwrap_err()
+            .contains("krate account login"));
+        // Anything else keeps the plain sentence (K-769).
+        t.engine("echo 'error: zip: invalid archive' >&2; exit 1");
+        assert!(launch_and_watch(&app)
+            .unwrap_err()
+            .starts_with("that file could not be opened as a Krate app"));
+        // Still running at the deadline: opened.
+        t.engine("sleep 2");
+        assert!(launch_and_watch(&app).is_ok());
+    }
 }
 
 #[test]
