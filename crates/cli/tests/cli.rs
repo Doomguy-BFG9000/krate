@@ -14470,7 +14470,17 @@ impl OrgWorld {
     }
 
     fn url(&self) -> String {
-        format!("http://{}", self.addr)
+        self.real_hub()
+            .unwrap_or_else(|| format!("http://{}", self.addr))
+    }
+
+    /// KRATE_ORG_E2E_HUB names a real hub (a local `wrangler dev` started
+    /// with KRATE_TEST_IDENTITIES mapping tok-<login> to <login>): the same
+    /// proof then runs against the hub's own code instead of this fake.
+    fn real_hub(&self) -> Option<String> {
+        std::env::var("KRATE_ORG_E2E_HUB")
+            .ok()
+            .filter(|url| !url.is_empty())
     }
 
     /// `krate <args>` as `who` ("nobody" is signed out), with the fake as
@@ -15573,7 +15583,16 @@ fn the_org_pilot_proof_runs_end_to_end_through_the_cli() {
         "{lost}"
     );
     let owner = if a.status.success() { "bob" } else { "alice" };
-    assert_eq!(world.hub.lock().unwrap().orgs["acme"].owners(), 1);
+    if world.real_hub().is_none() {
+        assert_eq!(world.hub.lock().unwrap().orgs["acme"].owners(), 1);
+    } else {
+        // The real hub's store is out of reach here; the one who stayed is
+        // still an owner, and the one who left is no longer a member.
+        let left = if owner == "bob" { "alice" } else { "bob" };
+        let said = world.says(owner, &["org", "show", "acme"], true);
+        assert!(said.contains(owner), "{said}");
+        world.says(left, &["org", "show", "acme"], false);
+    }
 
     // 7. The audit lists every step and denial, and the chain holds.
     let said = world.says(owner, &["org", "audit", "acme"], true);
@@ -15597,6 +15616,11 @@ fn the_org_pilot_proof_runs_end_to_end_through_the_cli() {
         assert!(said.contains(step), "the audit lacks {step}: {said}");
     }
     assert!(said.contains("chain intact"), "{said}");
+    if world.real_hub().is_some() {
+        // Tampering with the real hub's stored events is the hub's own
+        // proof (cloud/worker/test, and the wrangler run's tamper step).
+        return;
+    }
     world
         .hub
         .lock()
