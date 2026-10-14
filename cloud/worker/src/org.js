@@ -90,8 +90,8 @@ const MESSAGES = {
   "role-cannot": (o, d) => d || `your role in ${o} cannot do that`,
   "last-owner": (o) =>
     `that would leave ${o} with no owner -- make someone else an owner first`,
-  "self-approval": () =>
-    "you uploaded this candidate, so someone else with review authority has to approve it",
+  "self-approval": (o, d) =>
+    d || "you uploaded this candidate, so someone else with review authority has to approve it",
   "digest-mismatch": (o, d) => d || `no candidate with that digest in ${o} -- check the digest with \`krate org releases\``,
   "not-signed-for-this-org": (o, d) =>
     `this app is not signed for ${o}: ${d || "it needs the organisation's root key or a release key that root delegated"}`,
@@ -107,6 +107,15 @@ const MESSAGES = {
     "that Idempotency-Key was already used for a different request -- use a new key",
   "no-such-org": (o) => `there is no organisation called ${o}`,
 };
+
+/// More stable reasons, from a module that extends the store (Addendum 3):
+/// `{ reason: { message: string | (slug, detail) => string, status } }`.
+export function addReasons(reasons) {
+  for (const [reason, { message, status }] of Object.entries(reasons)) {
+    MESSAGES[reason] = message;
+    STATUS[reason] = status;
+  }
+}
 
 export function messageFor(reason, slug, detail) {
   const m = MESSAGES[reason];
@@ -307,6 +316,29 @@ const SCHEMA = [
      prev_hash TEXT NOT NULL, hash TEXT NOT NULL)`,
 ];
 
+/// What other modules add to the store (Addendum 3: lifecycle, billing,
+/// sign-in, offline access), each in its own `org-*.js`, so two people
+/// building different areas do not edit the same lines. Order is the
+/// order they were added.
+const EXTENSIONS = { schema: [], gates: [], ticks: [], views: [] };
+
+/// Add to the store:
+/// - `schema`: CREATE statements, run with the store's own;
+/// - `ops`: `{ "op-name": function(ctx) }`, methods on the store;
+/// - `mutations`: which of those ops take an Idempotency-Key;
+/// - `tick(ctx)`: applies what is due before any command (a window that
+///   ended, a wait that passed), inside the command's transaction;
+/// - `gate(ctx)`: answers a refusal before the command runs, or null;
+/// - `view(org, me)`: adds fields to `org` in GET /orgs/<slug>.
+export function extendOrg({ schema = [], ops = {}, mutations = [], tick, gate, view }) {
+  EXTENSIONS.schema.push(...schema);
+  for (const [name, fn] of Object.entries(ops)) Org.prototype[`op_${name.replace(/-/g, "_")}`] = fn;
+  for (const m of mutations) MUTATIONS.add(m);
+  if (tick) EXTENSIONS.ticks.push(tick);
+  if (gate) EXTENSIONS.gates.push(gate);
+  if (view) EXTENSIONS.views.push(view);
+}
+
 /// The commands that change state. Each takes an Idempotency-Key.
 const MUTATIONS = new Set([
   "create",
@@ -337,7 +369,7 @@ export class Org {
     this.ctx = ctx;
     this.env = env;
     this.sql = ctx.storage.sql;
-    for (const statement of SCHEMA) this.sql.exec(statement);
+    for (const statement of [...SCHEMA, ...EXTENSIONS.schema]) this.sql.exec(statement);
   }
 
   /// Seconds since the epoch. A method so a test can move the clock.
@@ -381,6 +413,7 @@ export class Org {
     const now = this.now();
     const actor = this.actingAs(principals);
     const ctx = { op, slug, actor, principals, args, now };
+    if (this.org()) for (const tick of EXTENSIONS.ticks) tick.call(this, ctx);
 
     // The door's pre-check before storing bytes replays too, so a retried
     // upload is answered without storing anything twice.
@@ -401,6 +434,12 @@ export class Org {
     const handler = this[`op_${op.replace(/-/g, "_")}`];
     if (typeof handler !== "function") {
       return { status: 400, body: { error: "bad-command", message: `no such command: ${op}` } };
+    }
+    if (this.org()) {
+      for (const gate of EXTENSIONS.gates) {
+        const refusal = gate.call(this, ctx);
+        if (refusal) return refusal;
+      }
     }
     const answer = handler.call(this, ctx);
     if (MUTATIONS.has(op) && actor && idem && idem.key && answer.status >= 200 && answer.status < 300) {
@@ -586,7 +625,9 @@ export class Org {
       rule === "yes"
         ? this.rows("SELECT * FROM members ORDER BY added_at, rowid").map((m) => this.membership(m))
         : [this.membership(me)];
-    return this.ok({ org: this.orgView(), me: this.membership(me), members });
+    const org = this.orgView();
+    for (const view of EXTENSIONS.views) view.call(this, org, me);
+    return this.ok({ org, me: this.membership(me), members });
   }
 
   inviteView(invite, site) {
