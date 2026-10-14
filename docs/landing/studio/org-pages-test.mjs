@@ -27,11 +27,11 @@ import { KIT, ORGS, DASH, JOIN, OPEN, check, page, settle, storage, P, ACME, mem
 
   // Tabs per role, from the contract's matrix.
   const tabs = (r) => K.tabsFor(r).join(",");
-  check(tabs("owner") === "releases,apps,waiting,people,activity,billing,settings", "an owner sees all seven tabs, Apps and Billing among them");
-  check(tabs("admin") === "releases,apps,waiting,people,activity,billing,settings", "an admin sees the apps, the activity and billing");
-  check(tabs("developer") === "releases,waiting,people,settings", "a developer has no Activity tab");
-  check(tabs("reviewer") === "releases,apps,waiting,people,settings", "a reviewer sees the apps and has no Activity tab");
-  check(tabs("recipient") === "releases,people", "a recipient sees releases and their own entry, nothing else");
+  check(tabs("owner") === "releases,apps,insights,waiting,people,activity,billing,settings", "an owner sees all eight tabs, Apps, Insights and Billing among them");
+  check(tabs("admin") === "releases,apps,insights,waiting,people,activity,billing,settings", "an admin sees the apps, the insights, the activity and billing");
+  check(tabs("developer") === "releases,insights,waiting,people,settings", "a developer has no Activity tab");
+  check(tabs("reviewer") === "releases,apps,insights,waiting,people,settings", "a reviewer sees the apps and has no Activity tab");
+  check(tabs("recipient") === "releases,insights,people", "a recipient sees releases, their own insights and their own entry, nothing else");
 
   check(K.invitable("owner").join() === "owner,admin,developer,reviewer,recipient", "an owner invites any role");
   check(K.invitable("admin").join() === "developer,reviewer,recipient", "an admin invites developers, reviewers and recipients only");
@@ -114,14 +114,14 @@ import { KIT, ORGS, DASH, JOIN, OPEN, check, page, settle, storage, P, ACME, mem
 
 {
   const owner = await page("https://krate.tech/org/?o=acme", DASH, { token: "tok-alice", routes: orgRoutes("github:alice") });
-  check(tabNames(owner) === "releases,apps,waiting,people,activity,billing,settings", "/org/ shows an owner all seven tabs, Apps (IC-954) beside Releases");
+  check(tabNames(owner) === "releases,apps,insights,waiting,people,activity,billing,settings", "/org/ shows an owner all eight tabs, Apps (IC-954) beside Releases, then Insights (IC-959)");
   check(/you are an owner/.test(owner.el("oMeta").textContent), "and says which role they hold");
   check(/Bounce 1\.0\.0/.test(owner.el("pane").shown) && /Sent by @carol · approved by @bob/.test(owner.el("pane").shown), "Releases names who sent and who approved");
   check(button(owner.el("pane"), "Open in Krate") && button(owner.el("pane"), "Copy link"), "each release has Open in Krate and Copy link");
   check(/Waiting for approval|Waiting/.test(owner.el("tabs").shown) && owner.el("tab-waiting").shown.includes("1"), "the Waiting tab counts what is waiting");
 
   const dan = await page("https://krate.tech/org/?o=acme&tab=activity", DASH, { token: "tok-dan", routes: orgRoutes("github:dan") });
-  check(tabNames(dan) === "releases,people", "a recipient's /org/ has Releases and People only");
+  check(tabNames(dan) === "releases,insights,people", "a recipient's /org/ has Releases, their own Insights and People only");
   check(dan.location.href.endsWith("tab=releases"), "and a link to a tab they cannot see lands on Releases instead");
 
   // A reviewer approves somebody else's upload, and the confirmation names the digest it sends.

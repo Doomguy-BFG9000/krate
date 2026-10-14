@@ -81,6 +81,15 @@ export const MATRIX = {
   "inventory.people": { owner: "yes", admin: "yes" },
   "app.owner": { owner: "yes", admin: "yes" },
   "usage.view": { owner: "yes", admin: "yes" },
+  // Insights (IC-959): org-insights.js. Every member reads the section
+  // about themselves; owners and admins the organisation's; whoever sends
+  // apps the one about their apps; whoever approves the queue's. Names of
+  // people, and counts under 3 people, only for owners and admins.
+  "insights.view": { owner: "yes", admin: "yes", developer: "yes", reviewer: "yes", recipient: "yes" },
+  "insights.org": { owner: "yes", admin: "yes" },
+  "insights.developer": { owner: "yes", developer: "yes" },
+  "insights.reviewer": { owner: "yes", reviewer: "yes" },
+  "insights.people": { owner: "yes", admin: "yes" },
 };
 
 /// What `role` may do for `action`: "yes", a narrower rule, or null.

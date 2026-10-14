@@ -292,6 +292,11 @@ jobs:
           # how it was made, an app whose owner left first with the fix, the
           # spreadsheet, and no machinery words outside Details.
           node docs/landing/studio/org-inventory-test.mjs
+          # The Insights tab (IC-959): each role's sections, every number
+          # with its meaning and where to act, every chart's numbers as
+          # text, "fewer than 3" where the hub masked a count, every state,
+          # and 500 people drawn well inside a second.
+          node docs/landing/studio/org-insights-test.mjs
           # And the doors security asks for (IC-955): SAML, SCIM and the
           # audit export are each shown only to the roles the matrix gives
           # them, a token or secret is shown once and kept nowhere, nothing
