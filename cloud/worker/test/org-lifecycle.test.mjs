@@ -357,7 +357,7 @@ test("a Krate admin restores a lost owner only after 72 hours with no objection,
   assert.deepStrictEqual([notAdmin.status, notAdmin.body.error], [403, "role-cannot"]);
   const r = await call(env, "support", "POST", "/orgs/acme/recover", body);
   assert.strictEqual(r.status, 201, JSON.stringify(r.body));
-  assert.deepStrictEqual(Object.keys(r.body.recovery).sort(), ["by", "effective_at", "for", "id", "reason", "requested_at", "state"]);
+  assert.deepStrictEqual(Object.keys(r.body.recovery).sort(), ["by", "effective_at", "for", "id", "not_mailed", "reason", "requested_at", "state"]);
   assert.deepStrictEqual([r.body.recovery.state, r.body.recovery.by, r.body.recovery.for], ["waiting", "github:support", "email:new-owner@acme.example"]);
   assert.strictEqual(r.body.recovery.effective_at - r.body.recovery.requested_at, 72 * 3600);
   assert.deepStrictEqual(r.body.mailed, ["email:ops@acme.example"]);

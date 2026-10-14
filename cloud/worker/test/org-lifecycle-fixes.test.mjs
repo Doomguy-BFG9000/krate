@@ -90,8 +90,19 @@ test("a recovery notice reaches a GitHub owner at their account's address; only 
   assert.deepStrictEqual(r.body.not_mailed, ["github:frank"], "only an owner or admin with no address at all");
   const to = seen.mails.map((m) => m.commands.find((c) => c.startsWith("RCPT TO:<") && !c.includes("yashraj@krate.tech"))).sort();
   assert.deepStrictEqual(to, ["RCPT TO:<alice@acme.example>", "RCPT TO:<erin@acme.example>"]);
-  // The banner and the audit are unchanged.
-  assert.strictEqual((await call(env, "frank", "GET", "/orgs/acme")).body.org.recovery.id, r.body.recovery.id);
+  // Who could not be told is kept with the recovery, for the owners' banner:
+  // shown to owners and admins on GET /orgs/<slug>, and to nobody else.
+  assert.deepStrictEqual(r.body.recovery.not_mailed, ["github:frank"]);
+  for (const who of ["alice", "erin", "frank"]) {
+    const seenBy = (await call(env, who, "GET", "/orgs/acme")).body.org.recovery;
+    assert.deepStrictEqual([seenBy.id, seenBy.not_mailed], [r.body.recovery.id, ["github:frank"]], who);
+  }
+  for (const who of ["bob", "carol", "dan"]) {
+    assert.strictEqual((await call(env, who, "GET", "/orgs/acme")).body.org.recovery, null, `${who} sees no recovery at all`);
+  }
+  // It stays with the recovery after it is cancelled.
+  await call(env, "alice", "POST", `/orgs/acme/recover/${r.body.recovery.id}/object`);
+  assert.deepStrictEqual((await call(env, "alice", "GET", "/orgs/acme")).body.org.recovery.not_mailed, ["github:frank"]);
 
   // An account made by email that only later linked GitHub: its plain
   // `email` is not one GitHub showed, so it is not used.
