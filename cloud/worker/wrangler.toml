@@ -7,6 +7,10 @@
 name = "krate-hub"
 main = "src/index.js"
 compatibility_date = "2026-01-01"
+# Node's APIs (node:crypto, node:zlib, node:stream, Buffer) for SAML sign-in
+# (IC-955): @node-saml/node-saml and xml-crypto verify XML signatures with
+# them, and no SAML stack runs on WebCrypto alone. Added 2026-10-14.
+compatibility_flags = ["nodejs_compat"]
 
 # The bundle validator, compiled from crates/bundle to WebAssembly by
 # scripts/build-hub-validator.sh (run it before deploying). The publish

@@ -122,8 +122,11 @@ function ssoOps() {
       const issuer = String(a.issuer || "");
       const clientId = String(a.client_id || "").trim();
       const domain = String(a.domain || "").trim().toLowerCase();
-      if (!issuer) return bad("the issuer is the sign-in provider's URL, such as https://accounts.google.com");
-      if (!clientId || clientId.length > 256) return bad("the client id is the one your sign-in provider gave Krate");
+      // With SAML set (org-saml.js) these settings may carry no OIDC issuer:
+      // the domain, auto-join and enforce are company sign-in's either way.
+      const samlSet = typeof this.samlRow === "function" && Boolean(this.samlRow());
+      if (!issuer && !samlSet) return bad("the issuer is the sign-in provider's URL, such as https://accounts.google.com");
+      if (issuer && (!clientId || clientId.length > 256)) return bad("the client id is the one your sign-in provider gave Krate");
       if (!DOMAIN.test(domain)) return bad("the domain is your company's email domain, such as acme.com");
       let autoJoin = a.auto_join_role === undefined || a.auto_join_role === null || a.auto_join_role === "" || a.auto_join_role === "none" ? null : String(a.auto_join_role);
       if (autoJoin !== null && !AUTO_JOIN_ROLES.includes(autoJoin)) {
@@ -360,7 +363,7 @@ export function ssoMarks(identity) {
   return Array.isArray(identity && identity.sso) ? identity.sso.map((s) => `sso:${String(s).toLowerCase()}`) : [];
 }
 
-async function markSsoSession(env, userId, token, slug) {
+export async function markSsoSession(env, userId, token, slug) {
   const key = `user:${userId}`;
   const record = JSON.parse((await env.APPS.get(key)) || "null");
   if (!record) return;
@@ -486,8 +489,9 @@ export async function ssoRoute({ request, env, slug, rest, method, askRaw, readB
     const body = await readBody();
     if (body.tooLarge || body.bad) return bad("the body is JSON, under 64 KiB");
     const v = body.value;
-    const issuer = validIssuer(v.issuer, env);
-    if (!issuer) return bad("the issuer is an https URL, such as https://accounts.google.com");
+    // Empty only for an organisation that signs in by SAML; the store says.
+    const issuer = v.issuer === undefined || v.issuer === null || v.issuer === "" ? "" : validIssuer(v.issuer, env);
+    if (issuer === null) return bad("the issuer is an https URL, such as https://accounts.google.com");
     let secret;
     let bound = { ...v };
     if (v.client_secret !== undefined && v.client_secret !== null && v.client_secret !== "") {
@@ -563,7 +567,7 @@ const randomB64url = (n) => b64url(crypto.getRandomValues(new Uint8Array(n)));
 /// A sign-in that did not finish: back to the sign-in page for that
 /// organisation, with the stable reason (Addendum 4, F3). Tagged so the
 /// sign-in counts record it as the failure it is.
-function failed(env, slug, reason) {
+export function failed(env, slug, reason) {
   const site = String(env.SITE_BASE || "https://krate.tech").replace(/\/$/, "");
   const q = new URLSearchParams();
   if (slug) q.set("org", slug);
@@ -602,6 +606,10 @@ export async function oidcStart(url, env, deps) {
   const config = await deps.orgAsk(env, slug, { op: "sso-config", principals: [] });
   if (config.status !== 200) return failed(env, slug, "sso-not-set-up");
   const c = config.body;
+  // An organisation that signs in by SAML (org-saml.js) is sent there, so
+  // https://krate.tech/login/?org=<slug> is the one door for both.
+  if (c.saml) return Response.redirect(`${String(env.PUBLIC_BASE).replace(/\/$/, "")}/login/saml/start${url.search}`, 302);
+  if (!c.issuer) return failed(env, slug, "sso-not-set-up");
   let doc;
   try {
     doc = await discover(env, c.issuer);
