@@ -8,8 +8,8 @@ import { webcrypto } from "node:crypto";
 const KIT = readFileSync("docs/landing/kit/org.js", "utf8");
 const ORGS = readFileSync("docs/landing/orgs/orgs.js", "utf8");
 // The page loads parts.js (Addendum 3) before dashboard.js; so does this.
-// And releases.js (IC-949 R) between them.
-const DASH = readFileSync("docs/landing/org/parts.js", "utf8") + "\n;\n" + readFileSync("docs/landing/org/releases.js", "utf8") + "\n;\n" + readFileSync("docs/landing/org/dashboard.js", "utf8");
+// And releases.js (IC-949 R) and connections.js (IC-952) between them.
+const DASH = readFileSync("docs/landing/org/parts.js", "utf8") + "\n;\n" + readFileSync("docs/landing/org/releases.js", "utf8") + "\n;\n" + readFileSync("docs/landing/org/connections.js", "utf8") + "\n;\n" + readFileSync("docs/landing/org/dashboard.js", "utf8");
 const JOIN = readFileSync("docs/landing/join/join.js", "utf8");
 const OPEN = readFileSync("docs/open/index.html", "utf8");
 

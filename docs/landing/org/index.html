@@ -179,6 +179,30 @@ dialog.sheet .sheetin { margin-top: 14px; text-align: left; }
 .chip.member .x:hover { color: var(--danger); background: var(--s2); }
 .gform { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; margin-top: 16px; }
 .gform .btn { height: 46px; }
+/* IC-952: company connections in Settings */
+.card .rows.connrows { padding: 0; margin-top: 8px; }
+.connrow { flex-wrap: wrap; }
+.connrow .ra.manage, .connrow .connform { flex-basis: 100%; }
+.connrow .ra.manage { margin-top: -4px; flex-wrap: wrap; }
+.connrow b .tag { height: 22px; margin-left: 4px; font-size: 12px; vertical-align: 1px; }
+.connbox { margin-top: 12px; padding: 16px; border-radius: 16px; background: var(--soft); }
+.connbox > * + * { margin-top: 14px; }
+.connbox > b { display: block; font-weight: 500; font-size: 15px; }
+.connbox .seg { flex-wrap: wrap; }
+.connbox .fld > .form { margin-top: 10px; }
+.mchecks { display: flex; flex-wrap: wrap; gap: 6px 18px; }
+.mchecks .chk { min-height: 28px; align-items: center; }
+.mchecks .chk input { margin-top: 0; }
+.connout:empty { display: none; }
+.connuse { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line); }
+.connuse span { display: block; font-size: 14px; color: var(--ink-2); }
+.connuse pre.k { margin-top: 6px; white-space: pre; overflow-x: auto; font-size: 12.5px; }
+@media (max-width: 680px) {
+  .connrow .ra { padding-left: 0; }
+  .connbox { padding: 14px 12px; }
+  .connbox .row2 .btn { flex: 1; }
+  .mchecks .chk, .connbox .gchecks .chk { min-height: 44px; }
+}
 @media (max-width: 680px) {
   .orgp { padding-top: 28px; }
   .tab .long { display: none; } .tab .short { display: inline; }
@@ -291,6 +315,7 @@ dialog.sheet .sheetin { margin-top: 14px; text-align: left; }
 <script src="/kit/org.js"></script>
 <script src="/org/parts.js"></script>
 <script src="/org/releases.js"></script>
+<script src="/org/connections.js"></script>
 <script src="/org/dashboard.js"></script>
 </body>
 </html>
