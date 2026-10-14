@@ -24,6 +24,15 @@ use crate::github_auth;
 /// `krate org connection ...` (IC-952).
 mod connection;
 
+/// Signing nobody has to think about (IC-958): the organisation's signing
+/// key on its owners' and admins' computers, permission to publish asked
+/// for and given in the background, withdrawal when someone leaves.
+mod signing;
+pub use signing::{
+    automatic as automatic_permission, finish_background, in_background,
+    permission as publish_permission, Permission, EXIT_WAITING,
+};
+
 /// A role in an organisation, exactly as the hub names it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum Role {
@@ -171,6 +180,61 @@ pub enum OrgCommand {
         #[command(subcommand)]
         command: KeysCommand,
     },
+    /// Do this computer's share for your organisations now: pass their keys
+    /// to new devices, approve people waiting to publish, withdraw the
+    /// rights of people who left. Krate does this by itself after every
+    /// `krate org` command, while an organisation's app runs, and every
+    /// minute while Studio is open.
+    Sync {
+        /// Say only what was done.
+        #[arg(long)]
+        quiet: bool,
+    },
+    /// Make this computer one of an organisation's devices (what Studio
+    /// does for a krate://org/setup link): an owner of an organisation that
+    /// has no keys yet makes them here; anyone else's computer registers and
+    /// takes what it may hold from the devices that already do.
+    Setup { slug: String },
+}
+
+impl OrgCommand {
+    /// The organisation the command is about, when there is one.
+    fn slug(&self) -> Option<&str> {
+        use OrgCommand::*;
+        match self {
+            Create { slug, .. }
+            | ReleaseKey { slug, .. }
+            | Show { slug }
+            | Invite { slug, .. }
+            | CancelInvite { slug, .. }
+            | Join { slug, .. }
+            | Role { slug, .. }
+            | Remove { slug, .. }
+            | RootKey { slug, .. }
+            | Approve { slug, .. }
+            | Releases { slug }
+            | Candidates { slug }
+            | Audit { slug }
+            | Setup { slug } => Some(slug),
+            Release { command } => Some(match command {
+                ReleaseCommand::Withdraw { slug, .. }
+                | ReleaseCommand::Current { slug, .. }
+                | ReleaseCommand::Audience { slug, .. } => slug,
+            }),
+            Group { command } => Some(match command {
+                GroupCommand::Create { slug, .. }
+                | GroupCommand::Add { slug, .. }
+                | GroupCommand::Remove { slug, .. }
+                | GroupCommand::List { slug } => slug,
+            }),
+            Keys { command } => Some(match command {
+                KeysCommand::Init { slug }
+                | KeysCommand::Show { slug }
+                | KeysCommand::Recover { slug, .. } => slug,
+            }),
+            Connection { .. } | List { .. } | Sync { .. } => None,
+        }
+    }
 }
 
 /// `krate org keys ...` (F-316).
@@ -747,6 +811,24 @@ pub fn words(refusal: &HubRefusal, org: &str, me: &str, action: Action) -> Strin
                 hub_detail(refusal).split(" -- ").next().unwrap_or_default()
             )
         }
+        // Signing nobody has to think about (IC-958).
+        "needs-approval" => format!(
+            "{org} approves new publishers by hand: {owner_or_admin} approves you in the \
+             dashboard (https://krate.tech/org/?o={org}&tab=people), then publish again"
+        ),
+        "no-signing-key" => format!(
+            "{org} cannot sign apps by itself yet: {an_owner} opens Krate once (or runs `krate \
+             org sync`), and Krate sets it up"
+        ),
+        "signing-key-not-held" => format!(
+            "this computer cannot sign for {org} yet: another owner's or admin's computer passes \
+             it on the next time it runs Krate"
+        ),
+        "signing-key-exists" => format!("nothing changed: {}", hub_detail(refusal)),
+        "not-a-publisher" | "slip-invalid" => format!(
+            "nothing changed: {}. Publish again and Krate asks {org} for you",
+            hub_detail(refusal)
+        ),
         _ => format!("the hub refused: {}", refusal.message),
     }
 }
@@ -901,6 +983,17 @@ pub fn run(command: OrgCommand, hub_override: Option<&str>) -> Result<u8> {
     let hub = hub_url(hub_override)?;
     let identity = identity_or_sign_in("Organisations know people by their sign-in.")?;
     let client = Client::new(hub, identity);
+    let slug = command.slug().map(str::to_string);
+    let code = run_command(&client, command)?;
+    // This computer's share for the organisation, after every command
+    // about one (IC-958): quiet unless it did something.
+    if let Some(slug) = slug {
+        signing::after_command(&client, &slug);
+    }
+    Ok(code)
+}
+
+fn run_command(client: &Client, command: OrgCommand) -> Result<u8> {
     let me = client.me();
     match command {
         OrgCommand::Create { slug, name } => {
@@ -926,15 +1019,25 @@ pub fn run(command: OrgCommand, hub_override: Option<&str>) -> Result<u8> {
             // The key its apps' data is sealed with, made here, on the
             // owner's computer (F-316). A hub that cannot take it yet is
             // not a failed create: the line to run is said.
-            if let Err(err) = keys_init(&client, slug) {
+            if let Err(err) = keys_init(client, slug) {
                 println!("The organisation's key was not made yet ({err}). Make it with:");
                 println!("  krate org keys init {slug}");
             }
+            // And the key its apps are signed with, held by its owners' and
+            // admins' computers (IC-958): nobody handles it.
+            match signing::ring_init(client, slug) {
+                Ok(()) => println!(
+                    "Every app {name} releases is signed by {name}: this computer does it, and \
+                     the computers of {name}'s owners and admins do it too. Nobody has to handle \
+                     anything."
+                ),
+                Err(err) => println!(
+                    "{name} cannot sign apps by itself yet ({err}): run `krate org sync` to try again."
+                ),
+            }
             println!("Next:");
-            println!("  register its root key:  krate org root-key {slug} <publisher-root.pub>");
-            println!(
-                "  invite people:          krate org invite {slug} <github-login> --role developer"
-            );
+            println!("  release an app:  krate publish app.krate --org {slug}");
+            println!("  invite people:   krate org invite {slug} <github-login> --role developer");
             Ok(0)
         }
         OrgCommand::ReleaseKey { .. } => unreachable!("handled before signing in"),
@@ -1313,7 +1416,15 @@ pub fn run(command: OrgCommand, hub_override: Option<&str>) -> Result<u8> {
             let released = Some(text(release, "digest"))
                 .filter(|d| !d.is_empty())
                 .unwrap_or(&digest);
-            println!("approved. {} is now a release of {slug}.", short(released));
+            if release["solo"].as_bool() == Some(true) {
+                println!(
+                    "released. {} is now a release of {slug}, released by you: {slug} has \
+                     nobody else who can approve yet.",
+                    short(released)
+                );
+            } else {
+                println!("approved. {} is now a release of {slug}.", short(released));
+            }
             let url = text(release, "url");
             if !url.is_empty() {
                 println!("Its members and recipients run it with:");
@@ -1464,10 +1575,12 @@ pub fn run(command: OrgCommand, hub_override: Option<&str>) -> Result<u8> {
             }
             Ok(0)
         }
-        OrgCommand::Release { command } => release_command(&client, &me, command),
-        OrgCommand::Group { command } => group_command(&client, &me, command),
-        OrgCommand::Connection { command } => connection::run(&client, &me, command),
-        OrgCommand::Keys { command } => keys_command(&client, command),
+        OrgCommand::Release { command } => release_command(client, &me, command),
+        OrgCommand::Group { command } => group_command(client, &me, command),
+        OrgCommand::Connection { command } => connection::run(client, &me, command),
+        OrgCommand::Keys { command } => keys_command(client, command),
+        OrgCommand::Sync { quiet } => signing::sync_all(client, quiet),
+        OrgCommand::Setup { slug } => signing::setup(client, &slug),
         OrgCommand::Audit { slug } => {
             let answer = worded(
                 client.send("GET", &format!("/orgs/{}/audit", seg(&slug)?), &Body::Empty),
@@ -1818,8 +1931,37 @@ pub fn publish_candidate(
         .filter(|d| !d.is_empty())
         .unwrap_or(&local)
         .to_string();
-    println!("uploaded to {slug} as a candidate. It waits for approval and opens for nobody yet.");
     let app = format!("{} {}", text(&answer, "name"), text(&answer, "version"));
+    // Nobody else in the organisation may approve yet, and its owner sent
+    // it: released now, and said so (IC-958, solo release).
+    if answer["solo_release"].as_bool() == Some(true) {
+        let approver = Client::new(client.hub.clone(), client.identity.clone());
+        let released = worded(
+            approver.send(
+                "POST",
+                &format!("/orgs/{}/candidates/{}/approve", seg(slug)?, seg(&digest)?),
+                &Body::Json(serde_json::json!({ "accept": [] })),
+            ),
+            slug,
+            &me,
+            Action::Approve(&digest),
+        )?;
+        let url = text(&released["release"], "url");
+        println!(
+            "released {} to {slug}. Everyone in {slug} can use it now.",
+            Some(app.trim()).filter(|a| !a.is_empty()).unwrap_or("it")
+        );
+        println!("  digest  {digest}");
+        if !url.is_empty() {
+            println!("  open it: krate run {url}");
+        }
+        println!(
+            "Released by you: {slug} has nobody else who can approve yet. Once someone who can \
+             approve joins, every release waits for a second person."
+        );
+        return Ok(0);
+    }
+    println!("uploaded to {slug} as a candidate. It waits for approval and opens for nobody yet.");
     if !app.trim().is_empty() {
         println!("  app     {}", app.trim());
     }
@@ -1830,6 +1972,22 @@ pub fn publish_candidate(
              stored is not byte-for-byte what was sent",
             short(&local)
         );
+    }
+    let approvers: Vec<String> = answer["approvers"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|a| a.as_str().map(str::to_string))
+        .collect();
+    match approvers.as_slice() {
+        [] => {}
+        [one] => println!(
+            "Waiting for {one} to approve it: https://krate.tech/org/?o={slug}&tab=waiting"
+        ),
+        [first, ..] => println!(
+            "Waiting for {first} or another reviewer to approve it: \
+             https://krate.tech/org/?o={slug}&tab=waiting"
+        ),
     }
     println!("A reviewer in {slug} (not you) releases it with:");
     println!("  krate org approve {slug} {digest}");
@@ -2197,6 +2355,11 @@ fn keys_command(client: &Client, command: KeysCommand) -> Result<u8> {
                 "restored {slug}'s key (version {}) on this computer from the recovery code",
                 held.keyring.current().0
             );
+            // And, for an owner or admin, signing for the organisation
+            // (IC-958): the same code opens it.
+            if agent.signing_recover(&code).is_ok() {
+                println!("This computer signs {slug}'s apps again.");
+            }
             Ok(0)
         }
     }
@@ -2332,6 +2495,25 @@ fn capability_pairs(list: &serde_json::Value) -> Vec<(String, String)> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// Write a private key readable by this person only.
+fn write_private_key(path: &Path, bytes: &[u8]) -> Result<()> {
+    if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+        std::fs::create_dir_all(parent)?;
+    }
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    use std::io::Write;
+    options
+        .open(path)
+        .and_then(|mut f| f.write_all(bytes))
+        .map_err(|err| anyhow::anyhow!("could not write {}: {err}", path.display()))
 }
 
 #[cfg(test)]
@@ -2492,23 +2674,4 @@ mod tests {
             "2026-10-21T00:00:00Z"
         );
     }
-}
-
-/// Write a private key readable by this person only.
-fn write_private_key(path: &Path, bytes: &[u8]) -> Result<()> {
-    if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
-        std::fs::create_dir_all(parent)?;
-    }
-    let mut options = std::fs::OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    use std::io::Write;
-    options
-        .open(path)
-        .and_then(|mut f| f.write_all(bytes))
-        .map_err(|err| anyhow::anyhow!("could not write {}: {err}", path.display()))
 }

@@ -13561,6 +13561,690 @@ struct FakeKeys {
     recovery: Option<serde_json::Value>,
 }
 
+/// The signing ring and publishers as the hub keeps them (IC-958,
+/// cloud/worker/src/org-signing.js): the ring's public key and one opaque
+/// envelope per owner or admin device; each release key that asked to
+/// publish, and its permission slip once a holder device signed one.
+#[derive(Default)]
+struct FakeSigning {
+    ring: Option<String>,
+    envelopes: std::collections::BTreeMap<String, String>,
+    recovery: Option<String>,
+    publishers: std::collections::BTreeMap<String, FakePublisher>,
+    by_hand: bool,
+    two_person: bool,
+    /// Releases the sender released alone.
+    solo: std::collections::BTreeSet<String>,
+}
+
+#[derive(Clone)]
+struct FakePublisher {
+    principal: String,
+    name: String,
+    state: String,
+    requested_at: u64,
+    delegation: Option<serde_json::Value>,
+    approved_by: Option<String>,
+    since: Option<u64>,
+    reason: Option<String>,
+}
+
+impl FakeOrg {
+    fn may_publish(&self, who: &str) -> bool {
+        matches!(self.role_of(who), Some("owner" | "developer"))
+    }
+
+    fn holds_ring_role(&self, who: &str) -> bool {
+        matches!(self.role_of(who), Some("owner" | "admin"))
+    }
+
+    /// Active members other than `except` whose role may approve.
+    fn approvers(&self, except: &str) -> Vec<String> {
+        self.members
+            .iter()
+            .filter(|(p, (role, state))| {
+                state == "active" && (role == "owner" || role == "reviewer") && p.as_str() != except
+            })
+            .map(|(p, _)| p.clone())
+            .collect()
+    }
+
+    fn two_person(&self) -> bool {
+        self.signing.two_person || self.approvers("").len() >= 2
+    }
+
+    fn solo_open_for(&self, who: &str) -> bool {
+        !self.signing.two_person
+            && self.role_of(who) == Some("owner")
+            && self.approvers(who).is_empty()
+    }
+
+    fn ring_current(&self) -> bool {
+        self.signing.ring.is_some() && self.signing.ring == self.root
+    }
+
+    /// The owners and admins whose devices hold the ring.
+    fn ring_holders(&self) -> Vec<String> {
+        if !self.ring_current() {
+            return Vec::new();
+        }
+        let mut out: Vec<String> = Vec::new();
+        for id in self.signing.envelopes.keys() {
+            if let Some(d) = self.keys.devices.get(id) {
+                if d.state == "active"
+                    && self.holds_ring_role(&d.principal)
+                    && !out.contains(&d.principal)
+                {
+                    out.push(d.principal.clone());
+                }
+            }
+        }
+        out
+    }
+
+    fn publishing_view(&self, who: &str) -> serde_json::Value {
+        serde_json::json!({
+            "publishers_by_hand": self.signing.by_hand,
+            "two_person_from_start": self.signing.two_person,
+            "two_person": self.two_person(),
+            "solo_release": self.solo_open_for(who),
+            "approvers": self.approvers("").iter().map(|p| p.split_once(':').map_or(p.as_str(), |(_, v)| v).to_string()).collect::<Vec<_>>(),
+            "signing": self.ring_current(),
+        })
+    }
+
+    fn publisher_view(&self, key: &str, p: &FakePublisher) -> serde_json::Value {
+        let display = |p: &str| p.split_once(':').map_or(p, |(_, v)| v).to_string();
+        serde_json::json!({
+            "key": key, "principal": p.principal, "display": display(&p.principal), "name": p.name,
+            "state": p.state, "requested_at": p.requested_at, "by_hand": self.signing.by_hand,
+            "approved_by": p.approved_by,
+            "delegation": if p.state == "signed" { p.delegation.clone() } else { None },
+            "can_sign": self.ring_holders().iter().map(|h| display(h)).collect::<Vec<_>>(),
+            "closed_reason": p.reason,
+        })
+    }
+
+    /// What a removal or a lost role does to publishing, applied when next
+    /// asked (as `sweep_keys` does for the keyring).
+    fn sweep_signing(&mut self, now: u64) {
+        let ended: Vec<(String, String, String)> = self
+            .signing
+            .publishers
+            .iter()
+            .filter(|(_, p)| matches!(p.state.as_str(), "waiting" | "approved" | "signed"))
+            .filter(|(_, p)| !matches!(self.role_of(&p.principal), Some("owner" | "developer")))
+            .map(|(k, p)| (k.clone(), p.principal.clone(), p.state.clone()))
+            .collect();
+        for (key, principal, state) in ended {
+            let why = if self.was_removed(&principal) {
+                "left the organisation"
+            } else {
+                "no longer publishes"
+            };
+            let p = self.signing.publishers.get_mut(&key).unwrap();
+            p.reason = Some(why.into());
+            if state == "signed" {
+                p.state = "revoke-due".into();
+                p.since = Some(now);
+                self.record(
+                    now,
+                    "system",
+                    "publisher.revoke-due",
+                    &format!("release-key:{}", &key[..16]),
+                    "allowed",
+                    Some(why),
+                );
+            } else {
+                p.state = "closed".into();
+                self.record(
+                    now,
+                    "system",
+                    "publisher.close",
+                    &format!("release-key:{}", &key[..16]),
+                    "allowed",
+                    Some(why),
+                );
+            }
+        }
+        let gone: Vec<String> = self
+            .signing
+            .envelopes
+            .keys()
+            .filter(|id| {
+                !self
+                    .keys
+                    .devices
+                    .get(*id)
+                    .is_some_and(|d| d.state == "active" && self.holds_ring_role(&d.principal))
+            })
+            .cloned()
+            .collect();
+        for id in gone {
+            self.signing.envelopes.remove(&id);
+            self.record(
+                now,
+                "system",
+                "signing.device.remove",
+                &format!("device:{id}"),
+                "allowed",
+                None,
+            );
+        }
+    }
+
+    /// The caller's device holding the current ring, or the refusal.
+    fn holder_device(&self, who: &str, id: &str) -> Result<(), &'static str> {
+        if !self.ring_current() {
+            return Err("no-signing-key");
+        }
+        let mine = self
+            .keys
+            .devices
+            .get(id)
+            .is_some_and(|d| d.principal == who && d.state == "active");
+        if !mine || !self.signing.envelopes.contains_key(id) {
+            return Err("signing-key-not-held");
+        }
+        Ok(())
+    }
+}
+
+fn wall_clock() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+impl FakeOrgHub {
+    /// /orgs/<slug>/signing..., /publishers..., /settings/publishing, as
+    /// cloud/worker/src/org-signing.js answers them.
+    fn signing_route(
+        &mut self,
+        method: &str,
+        slug: &str,
+        rest: &[&str],
+        query: &str,
+        who: Option<String>,
+        body: &[u8],
+    ) -> FakeAnswer {
+        let now = self.now;
+        let Some(who) = who else {
+            return fake_refuse(401, "not-signed-in");
+        };
+        let Some(org) = self.orgs.get_mut(slug) else {
+            return fake_refuse(404, "no-such-org");
+        };
+        if org.was_removed(&who) && org.role_of(&who).is_none() {
+            return fake_refuse(403, "removed");
+        }
+        let Some(role) = org.role_of(&who).map(str::to_string) else {
+            return fake_refuse(403, "not-a-member");
+        };
+        org.sweep_keys(now);
+        org.sweep_signing(now);
+        let ask: serde_json::Value = serde_json::from_slice(body).unwrap_or_default();
+        let holder = role == "owner" || role == "admin";
+        let refuse = |org: &mut FakeOrg, action: &str, reason: &str, message: &str| {
+            org.record(now, &who, action, "", "denied", Some(reason));
+            let status = match reason {
+                "slip-invalid" => 422,
+                "signing-key-exists" | "needs-approval" | "no-signing-key" => 409,
+                "not-a-publisher" | "device-unknown" => 404,
+                "bad-request" => 400,
+                _ => 403,
+            };
+            fake_refuse_with(status, reason, message)
+        };
+        match (method, rest) {
+            ("GET", ["settings", "publishing"]) => fake_json(200, org.publishing_view(&who)),
+            ("GET", ["signing"]) => {
+                let id = query.strip_prefix("device=").unwrap_or("").to_string();
+                let mine = org
+                    .keys
+                    .devices
+                    .get(&id)
+                    .filter(|d| d.principal == who && d.state == "active")
+                    .is_some();
+                let envelope = if mine && holder {
+                    org.signing.envelopes.get(&id).cloned()
+                } else {
+                    None
+                };
+                let current = org.ring_current();
+                let holds = envelope.is_some() && current;
+                let mut out = serde_json::json!({
+                    "ring": org.signing.ring.as_ref().map(|k| serde_json::json!({ "version": 1, "public_key": k, "current": current })),
+                    "root_key": org.root,
+                    "may_hold": holder,
+                    "device": if mine { serde_json::json!({ "device_id": id, "state": "active" }) } else { serde_json::Value::Null },
+                    "envelope": envelope.as_ref().map(|b| serde_json::json!({ "version": 1, "blob": b })),
+                    "ring_requests": [], "publisher_requests": [], "revoke": [],
+                    "recovery": if holder { org.keys.recovery.as_ref().and_then(|r| r.get("public_key").cloned()).map(|k| serde_json::json!({ "public_key": k })).unwrap_or(serde_json::Value::Null) } else { serde_json::Value::Null },
+                    "holders": org.ring_holders().iter().map(|p| serde_json::json!({ "principal": p })).collect::<Vec<_>>(),
+                    "settings": org.publishing_view(&who),
+                });
+                if holds {
+                    out["ring_requests"] = serde_json::json!(org.keys.devices.iter()
+                        .filter(|(id, d)| d.state == "active" && org.holds_ring_role(&d.principal) && !org.signing.envelopes.contains_key(*id))
+                        .map(|(id, d)| serde_json::json!({ "device_id": id, "principal": d.principal, "public_key": d.public_key, "name": d.name }))
+                        .collect::<Vec<_>>());
+                    out["publisher_requests"] = serde_json::json!(org.signing.publishers.iter()
+                        .filter(|(_, p)| (p.state == "approved" || (p.state == "waiting" && !org.signing.by_hand)) && org.may_publish(&p.principal))
+                        .map(|(k, p)| serde_json::json!({ "key": k, "principal": p.principal, "name": p.name, "requested_at": p.requested_at }))
+                        .collect::<Vec<_>>());
+                    out["revoke"] = serde_json::json!(org.signing.publishers.iter()
+                        .filter(|(_, p)| p.state == "revoke-due")
+                        .map(|(k, p)| serde_json::json!({ "key": k, "principal": p.principal, "since": p.since, "reason": p.reason }))
+                        .collect::<Vec<_>>());
+                }
+                fake_json(200, out)
+            }
+            ("POST", ["signing", "init"]) => {
+                if role != "owner" {
+                    return refuse(
+                        org,
+                        "signing.init",
+                        "role-cannot",
+                        "only an owner makes acme's signing key",
+                    );
+                }
+                if org.signing.ring.is_some() {
+                    return refuse(
+                        org,
+                        "signing.init",
+                        "signing-key-exists",
+                        "acme already signs its apps",
+                    );
+                }
+                let id = ask["device_id"].as_str().unwrap_or("").to_string();
+                if org.keys.devices.get(&id).is_none_or(|d| d.principal != who) {
+                    return refuse(
+                        org,
+                        "signing.init",
+                        "device-unknown",
+                        "register this device first",
+                    );
+                }
+                let public = ask["public_key"].as_str().unwrap_or("").to_string();
+                if org.root.as_ref().is_some_and(|r| *r != public) {
+                    return refuse(
+                        org,
+                        "signing.init",
+                        "signing-key-exists",
+                        "acme already has a signing key, registered by hand",
+                    );
+                }
+                org.signing.ring = Some(public.clone());
+                org.signing.envelopes.insert(
+                    id.clone(),
+                    ask["envelope"].as_str().unwrap_or("").to_string(),
+                );
+                org.signing.recovery = ask["recovery_blob"].as_str().map(str::to_string);
+                if org.root.is_none() {
+                    org.root = Some(public.clone());
+                    org.record(
+                        now,
+                        &who,
+                        "root-key.register",
+                        &format!("root-key:{}", &public[..16]),
+                        "allowed",
+                        Some(&format!("made on {id}")),
+                    );
+                }
+                org.record(
+                    now,
+                    &who,
+                    "signing.init",
+                    "ring:v1",
+                    "allowed",
+                    Some(&format!("on {id}")),
+                );
+                fake_json(
+                    201,
+                    serde_json::json!({ "version": 1, "public_key": public }),
+                )
+            }
+            ("POST", ["signing", "grants"]) => {
+                if !holder {
+                    return refuse(
+                        org,
+                        "signing.grant",
+                        "role-cannot",
+                        "only owners and admins sign",
+                    );
+                }
+                let id = ask["device_id"].as_str().unwrap_or("").to_string();
+                let Some(to) = org
+                    .keys
+                    .devices
+                    .get(&id)
+                    .cloned()
+                    .filter(|d| d.state == "active" && org.holds_ring_role(&d.principal))
+                else {
+                    return refuse(
+                        org,
+                        "signing.grant",
+                        "device-unknown",
+                        "that device is not an active owner's or admin's",
+                    );
+                };
+                let by = ask["by_device"].as_str().unwrap_or("").to_string();
+                if by == "recovery" {
+                    if to.principal != who {
+                        return refuse(
+                            org,
+                            "signing.grant",
+                            "role-cannot",
+                            "the recovery code restores your own device",
+                        );
+                    }
+                } else if let Err(reason) = org.holder_device(&who, &by) {
+                    return refuse(org, "signing.grant", reason, "refused");
+                }
+                org.signing
+                    .envelopes
+                    .insert(id.clone(), ask["blob"].as_str().unwrap_or("").to_string());
+                let to_display = to
+                    .principal
+                    .split_once(':')
+                    .map_or(to.principal.as_str(), |(_, v)| v)
+                    .to_string();
+                org.record(
+                    now,
+                    &who,
+                    if by == "recovery" {
+                        "signing.recover"
+                    } else {
+                        "signing.grant"
+                    },
+                    &format!("device:{id}"),
+                    "allowed",
+                    Some(&format!("v1 to {to_display} by {by}")),
+                );
+                fake_json(200, serde_json::json!({ "device_id": id, "version": 1 }))
+            }
+            ("GET", ["signing", "recovery"]) => {
+                if !holder {
+                    return refuse(
+                        org,
+                        "signing.recover",
+                        "role-cannot",
+                        "only owners and admins",
+                    );
+                }
+                let Some(blob) = org.signing.recovery.clone() else {
+                    return refuse(
+                        org,
+                        "signing.recover",
+                        "no-signing-key",
+                        "no recovery envelope",
+                    );
+                };
+                org.record(
+                    now,
+                    &who,
+                    "signing.recovery.read",
+                    &format!("org:{slug}"),
+                    "allowed",
+                    None,
+                );
+                fake_json(200, serde_json::json!({ "version": 1, "blob": blob }))
+            }
+            ("POST", ["signing", "revocations"]) => {
+                if !holder {
+                    return refuse(
+                        org,
+                        "signing.revoke",
+                        "role-cannot",
+                        "only owners and admins sign",
+                    );
+                }
+                let by = ask["by_device"].as_str().unwrap_or("").to_string();
+                if let Err(reason) = org.holder_device(&who, &by) {
+                    return refuse(org, "signing.revoke", reason, "refused");
+                }
+                let Ok(list) = serde_json::from_value::<
+                    krate_bundle::delegation::SignedRevocationList,
+                >(ask["list"].clone()) else {
+                    return refuse(
+                        org,
+                        "signing.revoke",
+                        "slip-invalid",
+                        "not a withdrawal list",
+                    );
+                };
+                let Ok(list) = list.verify() else {
+                    return refuse(
+                        org,
+                        "signing.revoke",
+                        "slip-invalid",
+                        "the list's signature does not verify",
+                    );
+                };
+                if Some(&list.root) != org.signing.ring.as_ref() {
+                    return refuse(
+                        org,
+                        "signing.revoke",
+                        "slip-invalid",
+                        "signed by another key",
+                    );
+                }
+                let mut added = 0;
+                for r in &list.revocations {
+                    if org.revoked.insert(r.key.clone()) {
+                        added += 1;
+                        let whose = org.signing.publishers.get(&r.key).map(|p| {
+                            p.principal
+                                .split_once(':')
+                                .map_or(p.principal.clone(), |(_, v)| v.to_string())
+                        });
+                        org.record(
+                            now,
+                            &who,
+                            "release-key.revoke",
+                            &format!("release-key:{}", &r.key[..16]),
+                            "allowed",
+                            Some(&format!(
+                                "automatic, by {by}{}",
+                                whose.map(|w| format!(": {w}")).unwrap_or_default()
+                            )),
+                        );
+                    }
+                    if let Some(p) = org.signing.publishers.get_mut(&r.key) {
+                        p.state = "revoked".into();
+                    }
+                }
+                fake_json(200, serde_json::json!({ "revoked_now": added }))
+            }
+            ("POST", ["publishers"]) => {
+                if !org.may_publish(&who) {
+                    return refuse(
+                        org,
+                        "publisher.request",
+                        "role-cannot",
+                        &format!("a {role} cannot publish to {slug}"),
+                    );
+                }
+                let key = ask["public_key"]
+                    .as_str()
+                    .unwrap_or("")
+                    .to_ascii_lowercase();
+                if key.len() != 64 {
+                    return refuse(
+                        org,
+                        "publisher.request",
+                        "bad-request",
+                        "a release key is 64 hex",
+                    );
+                }
+                if let Some(p) = org.signing.publishers.get(&key).cloned() {
+                    if p.principal != who {
+                        return refuse(
+                            org,
+                            "publisher.request",
+                            "role-cannot",
+                            "that release key belongs to someone else",
+                        );
+                    }
+                    return fake_json(200, org.publisher_view(&key, &p));
+                }
+                let p = FakePublisher {
+                    principal: who.clone(),
+                    name: ask["name"].as_str().unwrap_or("").to_string(),
+                    state: "waiting".into(),
+                    requested_at: now,
+                    delegation: None,
+                    approved_by: None,
+                    since: None,
+                    reason: None,
+                };
+                org.signing.publishers.insert(key.clone(), p.clone());
+                org.record(
+                    now,
+                    &who,
+                    "publisher.request",
+                    &format!("release-key:{}", &key[..16]),
+                    "allowed",
+                    Some(&p.name),
+                );
+                fake_json(201, org.publisher_view(&key, &p))
+            }
+            ("GET", ["publishers", key]) => {
+                let Some(p) = org
+                    .signing
+                    .publishers
+                    .get(*key)
+                    .cloned()
+                    .filter(|p| p.principal == who || holder)
+                else {
+                    return fake_refuse(404, "not-a-publisher");
+                };
+                fake_json(200, org.publisher_view(key, &p))
+            }
+            ("POST", ["publishers", key, "approve"]) => {
+                if !holder {
+                    return refuse(
+                        org,
+                        "publisher.approve",
+                        "role-cannot",
+                        "only owners and admins approve publishers",
+                    );
+                }
+                let Some(p) = org.signing.publishers.get_mut(*key) else {
+                    return refuse(
+                        org,
+                        "publisher.approve",
+                        "not-a-publisher",
+                        "no such request",
+                    );
+                };
+                if p.state == "waiting" {
+                    p.state = "approved".into();
+                    p.approved_by = Some(who.clone());
+                }
+                let p = p.clone();
+                org.record(
+                    now,
+                    &who,
+                    "publisher.approve",
+                    &format!("release-key:{}", &key[..16]),
+                    "allowed",
+                    Some("by hand"),
+                );
+                fake_json(200, org.publisher_view(key, &p))
+            }
+            ("POST", ["publishers", key, "delegation"]) => {
+                if !holder {
+                    return refuse(
+                        org,
+                        "publisher.delegate",
+                        "role-cannot",
+                        "only owners and admins sign",
+                    );
+                }
+                let by = ask["by_device"].as_str().unwrap_or("").to_string();
+                if let Err(reason) = org.holder_device(&who, &by) {
+                    return refuse(org, "publisher.delegate", reason, "refused");
+                }
+                let Some(p) = org.signing.publishers.get(*key).cloned() else {
+                    return refuse(
+                        org,
+                        "publisher.delegate",
+                        "not-a-publisher",
+                        "no such request",
+                    );
+                };
+                if !org.may_publish(&p.principal) {
+                    return refuse(
+                        org,
+                        "publisher.delegate",
+                        "not-a-member",
+                        "they cannot publish now",
+                    );
+                }
+                if p.state == "waiting" && org.signing.by_hand {
+                    return refuse(
+                        org,
+                        "publisher.delegate",
+                        "needs-approval",
+                        "approve by hand first",
+                    );
+                }
+                let Ok(slip) = serde_json::from_value::<krate_bundle::delegation::SignedDelegation>(
+                    ask["delegation"].clone(),
+                ) else {
+                    return refuse(org, "publisher.delegate", "slip-invalid", "not a slip");
+                };
+                let d = &slip.delegation;
+                let key_bytes: Vec<u8> = (0..32)
+                    .filter_map(|i| u8::from_str_radix(&key[i * 2..i * 2 + 2], 16).ok())
+                    .collect();
+                let verdict = krate_bundle::delegation::verify_chain(
+                    &slip,
+                    &format!("{slug}/app"),
+                    &key_bytes,
+                    d.not_before + 1,
+                    &krate_bundle::delegation::RevocationState::Known(Vec::new()),
+                );
+                if !verdict.is_authorised()
+                    || Some(&d.root) != org.signing.ring.as_ref()
+                    || d.key != *key
+                    || d.namespace != format!("{slug}/*")
+                    || d.expires <= wall_clock()
+                {
+                    return refuse(
+                        org,
+                        "publisher.delegate",
+                        "slip-invalid",
+                        "that permission does not hold",
+                    );
+                }
+                let display = p
+                    .principal
+                    .split_once(':')
+                    .map_or(p.principal.as_str(), |(_, v)| v)
+                    .to_string();
+                let p = org.signing.publishers.get_mut(*key).unwrap();
+                p.state = "signed".into();
+                p.delegation = Some(ask["delegation"].clone());
+                let p = p.clone();
+                org.record(
+                    now,
+                    &who,
+                    "publisher.delegate",
+                    &format!("release-key:{}", &key[..16]),
+                    "allowed",
+                    Some(&format!("automatic: {display} may publish, signed by {by}")),
+                );
+                fake_json(200, org.publisher_view(key, &p))
+            }
+            _ => (404, vec![], b"not found".to_vec()),
+        }
+    }
+}
+
 /// One organisation in the fake hub. Its behaviour follows the real hub's
 /// organisation store (cloud/worker/src/org.js): the same reasons, status
 /// codes, ordering of checks, and JSON shapes.
@@ -13585,6 +14269,8 @@ struct FakeOrg {
     data_seq: u64,
     /// The keyring (F-316).
     keys: FakeKeys,
+    /// The signing ring and publishers (IC-958).
+    signing: FakeSigning,
     /// Company connections by name (IC-952).
     connections: std::collections::BTreeMap<String, FakeConnection>,
 }
@@ -14501,6 +15187,18 @@ impl FakeOrgHub {
                 let slug = parts[1].clone();
                 return self.keys_route(method, &slug, &rest, query, who, body);
             }
+            // The signing ring and publishers (IC-958).
+            if parts.len() >= 3
+                && parts[0] == "orgs"
+                && (parts[2] == "signing"
+                    || parts[2] == "publishers"
+                    || (parts[2] == "settings"
+                        && parts.get(3).map(String::as_str) == Some("publishing")))
+            {
+                let rest: Vec<&str> = parts[2..].iter().map(String::as_str).collect();
+                let slug = parts[1].clone();
+                return self.signing_route(method, &slug, &rest, query, who, body);
+            }
         }
         let mutation = method != "GET";
         if mutation && path.starts_with("/orgs") {
@@ -14817,9 +15515,24 @@ impl FakeOrgHub {
             let invite = org.invites.get_mut(code).unwrap();
             invite.state = "used";
             let role = invite.role.clone();
+            let before = org.two_person();
             org.members
                 .insert(who.clone(), (role.clone(), "active".into()));
             org.record(now, &who, "invite.accept", code, "allowed", None);
+            if !before && org.two_person() {
+                let display = who
+                    .split_once(':')
+                    .map_or(who.as_str(), |(_, v)| v)
+                    .to_string();
+                org.record(
+                    now,
+                    &who,
+                    "review.two-person.on",
+                    &format!("org:{slug}"),
+                    "allowed",
+                    Some(&format!("{display} can approve now")),
+                );
+            }
             let mut membership = fake_principal(&who);
             membership["org"] = serde_json::json!(slug);
             membership["role"] = serde_json::json!(role);
@@ -14854,7 +15567,11 @@ impl FakeOrgHub {
                 fake_json(
                     200,
                     serde_json::json!({
-                        "org": { "slug": slug, "name": org.name, "root_key": org.root },
+                        "org": {
+                            "slug": slug, "name": org.name, "root_key": org.root,
+                            "publishing": org.publishing_view(&who),
+                            "release_rule": if org.two_person() { "two-person" } else { "solo" },
+                        },
                         "me": me,
                         "members": members,
                     }),
@@ -15034,6 +15751,28 @@ impl FakeOrgHub {
                 if !is(&["owner", "developer"]) {
                     return deny(org, "role-cannot");
                 }
+                // A release key whose owner can no longer publish is refused
+                // from the moment it is due for withdrawal (IC-958).
+                org.sweep_signing(now);
+                let signer = krate_bundle::open_bytes(body)
+                    .ok()
+                    .and_then(|o| o.signature_envelope().ok().flatten())
+                    .map(|e| e.public_key);
+                if let Some(p) = signer
+                    .as_deref()
+                    .and_then(|k| org.signing.publishers.get(k))
+                    .filter(|p| p.state == "revoke-due" || p.state == "revoked")
+                {
+                    let whose = p
+                        .principal
+                        .split_once(':')
+                        .map_or(p.principal.clone(), |(_, v)| v.to_string());
+                    return deny_with(
+                        org,
+                        "not-signed-for-this-org",
+                        &format!("this app is not signed for {slug}: its release key belonged to {whose}, who can no longer publish to {slug}"),
+                    );
+                }
                 let digest = format!("{:x}", Sha256::digest(body));
                 let (name, version, signer) =
                     match fake_signed_for(body, org.root.as_deref(), &org.revoked) {
@@ -15088,23 +15827,60 @@ impl FakeOrgHub {
                     "allowed",
                     None,
                 );
+                let approvers: Vec<String> = org
+                    .approvers(&who)
+                    .iter()
+                    .map(|p| p.split_once(':').map_or(p.clone(), |(_, v)| v.to_string()))
+                    .collect();
                 fake_json(
                     201,
                     serde_json::json!({
                         "digest": digest, "state": "waiting-for-approval",
                         "name": name, "version": version,
+                        "solo_release": org.solo_open_for(&who),
+                        "approvers": approvers,
                     }),
                 )
             }
             "candidate.approve" => {
                 let digest = parts[3].to_string();
                 // Separation first, whatever the role: the uploader hears
-                // that someone else must approve it.
-                if org
+                // that someone else must approve it -- unless nobody else
+                // may approve yet and the uploader is its owner (IC-958).
+                let own = org
                     .candidates
                     .get(&digest)
-                    .is_some_and(|c| c.uploader == who)
+                    .is_some_and(|c| c.uploader == who);
+                if own
+                    && org.solo_open_for(&who)
+                    && org
+                        .candidates
+                        .get(&digest)
+                        .is_some_and(|c| c.state == "waiting-for-approval")
                 {
+                    let candidate = org.candidates.get_mut(&digest).unwrap();
+                    candidate.state = "released";
+                    candidate.approver = Some(who.clone());
+                    candidate.approved_at = Some(now);
+                    let app = candidate.app_id.clone();
+                    org.current.insert(app, digest.clone());
+                    org.signing.solo.insert(digest.clone());
+                    org.record(
+                        now,
+                        &who,
+                        "candidate.approve",
+                        &target,
+                        "allowed",
+                        Some("solo"),
+                    );
+                    return fake_json(
+                        200,
+                        serde_json::json!({ "release": {
+                            "digest": digest, "url": format!("{base}/a/{digest}"), "solo": true,
+                        } }),
+                    );
+                }
+                if own {
                     return deny(org, "self-approval");
                 }
                 if !is(&["owner", "reviewer"]) {
@@ -15158,6 +15934,7 @@ impl FakeOrgHub {
                             "app_id": c.app_id,
                             "current": org.current_of(&c.app_id).as_deref() == Some(digest.as_str()),
                             "audience": c.audience,
+                            "solo": org.signing.solo.contains(digest),
                         })
                     })
                     .collect();
@@ -16197,7 +16974,17 @@ fn org_create_makes_you_the_owner_and_refuses_taken_or_invalid_names() {
         said.contains("created acme (\"Acme\"). You are its owner."),
         "{said}"
     );
-    assert!(said.contains("krate org root-key acme"), "{said}");
+    // Its apps are signed by it from now on, and the next step is an app,
+    // not a key (IC-958).
+    assert!(
+        said.contains("Every app Acme releases is signed by Acme"),
+        "{said}"
+    );
+    assert!(
+        said.contains("krate publish app.krate --org acme"),
+        "{said}"
+    );
+    assert!(!said.contains("root-key"), "{said}");
 
     let said = world.says("bob", &["org", "create", "acme"], false);
     assert!(
@@ -16524,9 +17311,12 @@ fn publish_to_an_org_refuses_an_unsigned_bundle_before_uploading() {
         )),
         "the exact line that fixes it: {said}"
     );
-    assert_eq!(
-        world.hub.lock().unwrap().seen.len(),
-        before,
+    // Krate may ask whether the organisation signs by itself (a GET);
+    // nothing is sent.
+    assert!(
+        world.hub.lock().unwrap().seen[before..]
+            .iter()
+            .all(|(method, _, _)| method == "GET"),
         "nothing was sent"
     );
 }
@@ -17863,9 +18653,12 @@ fn only_a_marked_app_goes_to_an_organisation_and_never_to_the_public_door() {
         )),
         "{said}"
     );
-    assert_eq!(
-        world.hub.lock().unwrap().seen.len(),
-        before,
+    // Krate may ask whether the organisation signs by itself (a GET);
+    // nothing is sent.
+    assert!(
+        world.hub.lock().unwrap().seen[before..]
+            .iter()
+            .all(|(method, _, _)| method == "GET"),
         "nothing was sent"
     );
 
@@ -17917,9 +18710,12 @@ fn only_a_marked_app_goes_to_an_organisation_and_never_to_the_public_door() {
         )),
         "{said}"
     );
-    assert_eq!(
-        world.hub.lock().unwrap().seen.len(),
-        before,
+    // Krate may ask whether the organisation signs by itself (a GET);
+    // nothing is sent.
+    assert!(
+        world.hub.lock().unwrap().seen[before..]
+            .iter()
+            .all(|(method, _, _)| method == "GET"),
         "nothing was sent"
     );
 
@@ -18093,9 +18889,10 @@ fn a_release_key_from_studio_signs_what_is_sent_for_approval() {
         false,
     );
     assert!(said.contains("krate org release-key acme"), "{said}");
-    assert_eq!(
-        world.hub.lock().unwrap().seen.len(),
-        before,
+    assert!(
+        world.hub.lock().unwrap().seen[before..]
+            .iter()
+            .all(|(method, _, _)| method == "GET"),
         "nothing unsigned is uploaded"
     );
 
@@ -18192,6 +18989,215 @@ fn a_release_key_from_studio_signs_what_is_sent_for_approval() {
     let list: serde_json::Value = serde_json::from_str(said.trim()).expect("JSON");
     assert_eq!(list[0]["slug"], "acme");
     assert_eq!(list[0]["role"], "developer");
+}
+
+/// IC-958, end to end, with no key command anywhere: Alice makes acme and
+/// releases alone; Carol joins as a developer and publishes, approved as a
+/// publisher in the background by Alice's computer while she waits; Bob
+/// joins as a reviewer and from then on every release needs a second
+/// person; Carol is removed and her next upload is refused, and Alice's
+/// computer withdraws her release key; the audit names every automatic
+/// signing step. With KRATE_ORG_E2E_HUB, against the hub's own code.
+#[test]
+fn an_organisation_signs_and_releases_with_nobody_handling_a_key() {
+    let Some(world) = OrgWorld::new(&["alice", "bob", "carol"]) else {
+        eprintln!(
+            "skipping an_organisation_signs_and_releases_with_nobody_handling_a_key: no local port"
+        );
+        return;
+    };
+    let no_key_words = |said: &str| {
+        for word in [
+            "pkcs8",
+            "delegat",
+            "root key",
+            "release key",
+            "namespace",
+            "krate sign",
+            "krate delegate",
+        ] {
+            assert!(
+                !said.to_ascii_lowercase().contains(word),
+                "{word:?} on screen: {said}"
+            );
+        }
+    };
+    let said = world.says("alice", &["org", "create", "acme", "--name", "Acme"], true);
+    assert!(
+        said.contains("Every app Acme releases is signed by Acme"),
+        "{said}"
+    );
+    assert!(
+        said.contains("krate publish app.krate --org acme"),
+        "{said}"
+    );
+
+    // Alice alone: her upload is released at once, marked as released alone.
+    let first = world.bundle("notes-1.krate", "1.0.0", 64);
+    let said = world.says(
+        "alice",
+        &["publish", first.to_str().unwrap(), "--org", "acme"],
+        true,
+    );
+    no_key_words(&said);
+    assert!(said.contains("Signed for acme."), "{said}");
+    assert!(
+        said.contains("released Acme Demo 1.0.0 to acme. Everyone in acme can use it now."),
+        "{said}"
+    );
+    assert!(
+        said.contains("Released by you: acme has nobody else who can approve yet."),
+        "{said}"
+    );
+    let solo = OrgWorld::digest_in(&said);
+
+    // Carol joins as a developer and publishes. She waits; Alice's computer
+    // approves her the next time it runs a `krate org` command.
+    let code = world.invite("alice", "carol", "developer");
+    world.says("carol", &["org", "join", "acme", &code], true);
+    let second = world.bundle("notes-2.krate", "1.0.1", 65);
+    let carol = {
+        let mut command = org_command(
+            &world,
+            "carol",
+            &["publish", second.to_str().unwrap(), "--org", "acme"],
+        );
+        command.env("KRATE_PUBLISH_WAIT_SECONDS", "90");
+        command
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        command.spawn().expect("carol publishes")
+    };
+    // Until her request is on the hub.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    loop {
+        let asked = match world.real_hub() {
+            Some(_) => {
+                std::thread::sleep(std::time::Duration::from_secs(4));
+                true
+            }
+            None => world.hub.lock().unwrap().orgs["acme"]
+                .signing
+                .publishers
+                .values()
+                .any(|p| p.principal == "github:carol"),
+        };
+        if asked || std::time::Instant::now() > deadline {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    let output = world.krate_as("alice", &["org", "releases", "acme"]);
+    let alice_said = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        stderr_of(&output)
+    );
+    assert!(output.status.success(), "{alice_said}");
+    assert!(
+        alice_said.contains("This computer approved carol to publish to acme."),
+        "{alice_said}"
+    );
+    let carol = carol.wait_with_output().expect("carol");
+    let said = format!(
+        "{}{}",
+        String::from_utf8_lossy(&carol.stdout),
+        stderr_of(&carol)
+    );
+    assert!(carol.status.success(), "{said}");
+    no_key_words(&said);
+    assert!(
+        said.contains("Getting you ready to publish to Acme..."),
+        "{said}"
+    );
+    assert!(
+        said.contains(
+            "Waiting for an owner's computer to approve you as a publisher -- alice can."
+        ),
+        "{said}"
+    );
+    assert!(
+        said.contains("Approved: you can publish to Acme."),
+        "{said}"
+    );
+    assert!(said.contains("uploaded to acme as a candidate"), "{said}");
+    assert!(said.contains("Waiting for alice to approve it"), "{said}");
+    let carols = OrgWorld::digest_in(&said);
+    world.says("alice", &["org", "approve", "acme", &carols], true);
+
+    // Bob joins as a reviewer: from now on, two people every time.
+    let code = world.invite("alice", "bob", "reviewer");
+    world.says("bob", &["org", "join", "acme", &code], true);
+    let third = world.bundle("notes-3.krate", "1.0.2", 66);
+    let said = world.says(
+        "alice",
+        &["publish", third.to_str().unwrap(), "--org", "acme"],
+        true,
+    );
+    assert!(said.contains("waits for approval"), "{said}");
+    assert!(said.contains("Waiting for bob to approve it"), "{said}");
+    let alices = OrgWorld::digest_in(&said);
+    let said = world.says("alice", &["org", "approve", "acme", &alices], false);
+    assert!(said.contains("you can't approve your own upload"), "{said}");
+    let fourth = world.bundle("notes-4.krate", "1.0.3", 67);
+    let said = world.says(
+        "carol",
+        &["publish", fourth.to_str().unwrap(), "--org", "acme"],
+        true,
+    );
+    assert!(
+        said.contains("Waiting for alice or another reviewer to approve it"),
+        "{said}"
+    );
+    world.says("bob", &["org", "approve", "acme", &alices], true);
+
+    // Carol is removed: her next upload is refused, and Alice's computer
+    // withdraws her release key in the background.
+    let said = world.says("alice", &["org", "remove", "acme", "carol"], true);
+    let said_after = world.says("alice", &["org", "show", "acme"], true);
+    assert!(
+        format!("{said}{said_after}")
+            .contains("withdrew the publishing rights of someone who left acme"),
+        "{said}{said_after}"
+    );
+    let fifth = world.bundle("notes-5.krate", "1.0.4", 68);
+    let said = world.says(
+        "carol",
+        &["publish", fifth.to_str().unwrap(), "--org", "acme"],
+        false,
+    );
+    assert!(said.contains("you were removed from acme"), "{said}");
+
+    // The audit names every automatic step, in order, with the chain intact.
+    let said = world.says("alice", &["org", "audit", "acme"], true);
+    assert!(said.contains("chain intact"), "{said}");
+    let mut at = 0;
+    for step in [
+        "signing.init",
+        "candidate.approve",
+        "publisher.request",
+        "publisher.delegate",
+        "review.two-person.on",
+        "publisher.revoke-due",
+        "release-key.revoke",
+    ] {
+        let found = said[at..]
+            .find(step)
+            .unwrap_or_else(|| panic!("{step} after byte {at}: {said}"));
+        at += found + step.len();
+    }
+    assert!(
+        said.lines().any(|l| l.contains("candidate.approve")
+            && l.contains(&solo[..12])
+            && l.contains("allowed: solo")),
+        "{said}"
+    );
+    assert!(said.lines().any(|l| l.contains("publisher.delegate") && l.contains("automatic: carol may publish")), "{said}");
+    assert!(
+        said.lines()
+            .any(|l| l.contains("release-key.revoke") && l.contains("automatic")),
+        "{said}"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -20173,7 +21179,9 @@ fn org_team_data_is_sealed_shared_by_two_members_and_its_key_travels_device_to_d
     let title = "Order chairs for the hall";
     let id = "task-0001-xyz";
 
-    // Carol's computer registers and waits for the key: her write waits too.
+    // Carol's computer registered when she joined, and Bob's computer
+    // passed it the key when he approved the release (every `krate org`
+    // command does a computer's share, IC-958): her write goes straight up.
     let (out, err) = probe(
         &world,
         "carol",
@@ -20189,7 +21197,7 @@ fn org_team_data_is_sealed_shared_by_two_members_and_its_key_travels_device_to_d
         &[],
     );
     assert_eq!(out[0], format!("put {id} ok"), "{err}");
-    assert_eq!(out[1], "sync online=true changed=false pending=1", "{err}");
+    assert_eq!(out[1], "sync online=true changed=false pending=0", "{err}");
     // Alice's computer is online once (any of acme's apps would do): it
     // passes the key to Carol's.
     let shown = keys_show(&world, "alice");
@@ -20201,8 +21209,9 @@ fn org_team_data_is_sealed_shared_by_two_members_and_its_key_travels_device_to_d
     assert!(out[0].ends_with("pending=0"), "{out:?} {err}");
     assert_eq!(out[1], "who carol developer Acme");
 
-    // Dan (a recipient, by email) joins later: his computer registers,
-    // and his own field waits for the key.
+    // Dan (a recipient, by email): his computer registered when he joined,
+    // and Bob's computer -- a reviewer's, not an owner's -- passed him the
+    // key when Bob approved the release, so his own field goes straight up.
     let (out, err) = probe(
         &world,
         "dan",
@@ -20221,9 +21230,12 @@ fn org_team_data_is_sealed_shared_by_two_members_and_its_key_travels_device_to_d
         ],
         &[],
     );
-    assert_eq!(out[1], "sync online=true changed=false pending=1", "{err}");
-    assert_eq!(out[2], format!("get {id} done=true by=dan@acme.example"));
-    // Carol's computer -- not an owner's -- passes him the key.
+    // His sync brings Carol's field down with it.
+    assert_eq!(out[1], "sync online=true changed=true pending=0", "{err}");
+    assert_eq!(
+        out[2],
+        format!("get {id} done=true;title={title} by=dan@acme.example")
+    );
     let (out, _) = probe(&world, "carol", &bundle, &["sync"], &[]);
     assert!(out[0].starts_with("sync online=true"));
     let (out, err) = probe(
@@ -20252,15 +21264,15 @@ fn org_team_data_is_sealed_shared_by_two_members_and_its_key_travels_device_to_d
     );
     assert_eq!(out[2], format!("list {id}"));
 
-    // The audit names each grant: Dan's from Carol's computer.
+    // The audit names each grant: Dan's from Bob's computer.
     if fake {
         let hub = world.hub.lock().unwrap();
         let acme = &hub.orgs["acme"];
-        let carols: Vec<&String> = acme
+        let bobs: Vec<&String> = acme
             .keys
             .devices
             .iter()
-            .filter(|(_, d)| d.principal == "github:carol")
+            .filter(|(_, d)| d.principal == "github:bob")
             .map(|(id, _)| id)
             .collect();
         let dans = acme
@@ -20273,12 +21285,12 @@ fn org_team_data_is_sealed_shared_by_two_members_and_its_key_travels_device_to_d
                         .is_some_and(|r| r.contains("email:dan@acme.example"))
             })
             .expect("a grant to Dan");
-        assert_eq!(dans["actor"], "github:carol", "no owner involved: {dans}");
+        assert_eq!(dans["actor"], "github:bob", "no owner involved: {dans}");
         assert!(
             dans["reason"]
                 .as_str()
                 .unwrap()
-                .ends_with(&format!("by {}", carols[0])),
+                .ends_with(&format!("by {}", bobs[0])),
             "{dans}"
         );
         // Nothing the devices sent carries the record's id or value, as
