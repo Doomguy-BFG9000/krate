@@ -32,6 +32,14 @@ const MAX_REPORT_BYTES = 12 * 1024 * 1024;
 // is re-read on every call because it can grow.
 import * as validatorImport from "./validator.wasm";
 import { Org, SLUG, EMAIL, chainOk, messageFor } from "./org.js";
+// Organisation lifecycle, billing, mail and the refused-attempt limit
+// (IC-948), each in its own module; importing the store's half registers
+// its commands with the Org class.
+import "./org-lifecycle-store.js";
+import { orgLifecycleRoute, sweepOrgs } from "./org-lifecycle.js";
+import { orgBillingRoute, orgBillingEvent, orgBillingAlerts } from "./org-billing.js";
+import { mailInvite } from "./org-mail.js";
+import { refusalsExhausted, noteRefusal, isRefusal, rateLimitedAnswer } from "./org-limits.js";
 // The organisation store (IC-946), one SQLite-backed Durable Object per
 // organisation; wrangler.toml binds it as ORGS.
 export { Org };
@@ -233,6 +241,13 @@ function countInMemory(owner, key, limit) {
   return true;
 }
 
+/// Whether one more would be allowed, without counting it.
+function peekInMemory(owner, key, limit) {
+  const counts = memoryCounts.get(owner);
+  const window = Math.floor(Date.now() / 1000 / RATE_WINDOW_SECONDS);
+  return ((counts && counts.get(`${key}:${window}`)) || 0) < limit;
+}
+
 /// The anonymous wall's counter for one caller (K-912). Nothing is
 /// written to storage: the counts only need to outlive a minute, and a
 /// Durable Object that goes idle and is evicted forgets them, which at
@@ -243,8 +258,12 @@ export class RateGate {
   }
 
   async fetch(request) {
-    const { bucket, limit } = await request.json();
-    const allowed = countInMemory(this, String(bucket), Number(limit) || 0);
+    const { bucket, limit, peek } = await request.json();
+    // `peek` asks without counting: org/refused counts refusals only, but
+    // asks on every request (IC-948).
+    const allowed = peek
+      ? peekInMemory(this, String(bucket), Number(limit) || 0)
+      : countInMemory(this, String(bucket), Number(limit) || 0);
     return new Response(JSON.stringify({ allowed }), {
       headers: { "content-type": "application/json" },
     });
@@ -267,6 +286,8 @@ export default {
       return;
     }
     await runScrub(env, { repair: false });
+    // Closed organisations past their export window (IC-948 D).
+    await sweepOrgs(env, orgAsk);
   },
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -301,6 +322,10 @@ export default {
       }
       if (request.method === "POST" && pathname === "/admin/scrub") {
         return cors(await scrubRoute(request, env, true));
+      }
+      if (request.method === "GET" && pathname === "/admin/org-billing-alerts") {
+        if (!(await isAdmin(request, env))) return cors(text("not found", 404));
+        return cors(json(await orgBillingAlerts(env)));
       }
       if (request.method === "GET" && pathname === "/admin/scrub/last") {
         return cors(await lastScrub(request, env));
@@ -2713,6 +2738,13 @@ async function ensureUser(env, provider, stableId, profile) {
   }
   if (identHeld !== userId) await env.APPS.put(identKey, userId);
   if (emailKey && emailHeld !== userId) await env.APPS.put(emailKey, userId);
+  // Which account a GitHub login signs in to, so an organisation notice
+  // for github:<login> can reach that account's address (IC-948 D). Only a
+  // GitHub sign-in writes it, and only when it changed.
+  if (provider === "github" && profile.login) {
+    const loginKey = `ghlogin:${String(profile.login).toLowerCase()}`;
+    if ((await env.APPS.get(loginKey)) !== userId) await env.APPS.put(loginKey, userId);
+  }
   return record;
 }
 
@@ -5329,6 +5361,12 @@ async function billingWebhook(request, env) {
   // one is.
   if (await env.APPS.get(`evt:${event.id}`)) return json({ ok: true });
 
+  // An organisation's event (IC-948 E): its store decides, failing closed.
+  if (await orgBillingEvent(env, event, orgAsk)) {
+    await env.APPS.put(`evt:${event.id}`, "1", { expirationTtl: 7 * 24 * 3600 });
+    return json({ ok: true });
+  }
+
   const obj = event.data && event.data.object;
   if (event.type === "checkout.session.completed" && obj) {
     if (obj.client_reference_id && obj.customer) {
@@ -7035,7 +7073,12 @@ function orgError(status, reason, slug, detail) {
 /// reaches an organisation's store.
 async function anonymousOrgRefusal(request, env, status, slug) {
   const over = await rateLimited(request, env, "org/anonymous");
-  if (over) return over;
+  if (over) {
+    return new Response(JSON.stringify({ error: "rate-limited", message: "too many requests -- wait a minute and try again" }), {
+      status: 429,
+      headers: { "content-type": "application/json", "retry-after": over.headers.get("retry-after") || "60" },
+    });
+  }
   const res = orgError(status, "not-signed-in", slug);
   res.headers.set("cache-control", "private, no-store");
   return res;
@@ -7131,7 +7174,19 @@ async function noteOrgOf(env, principal, slug, name, role) {
   }
 }
 
+/// Every organisation route, behind the refused-attempt limit (IC-948 B):
+/// a principal with 30 refusals this minute gets 429 before any store is
+/// asked, and each refusal the store gives is counted.
 async function orgRoute(request, url, env) {
+  const identity = await verifyGitHub(request, env);
+  const principals = principalsOf(identity);
+  if (principals.length && (await refusalsExhausted(env, principals))) return rateLimitedAnswer();
+  const res = await orgRouteCore(request, url, env, identity);
+  if (principals.length && isRefusal(res.status)) await noteRefusal(env, principals);
+  return res;
+}
+
+async function orgRouteCore(request, url, env, identity) {
   if (!env.ORGS) {
     return json({ error: "orgs-off", message: "organisations are not switched on on this hub" }, 503);
   }
@@ -7145,7 +7200,6 @@ async function orgRoute(request, url, env) {
     }
   });
   const method = request.method;
-  const identity = await verifyGitHub(request, env);
   // Who is asking, as principals (IC-947). A session that proved nothing
   // an organisation can name -- an email account that has not yet signed
   // in by link or verified Google since principals arrived -- is treated
@@ -7215,7 +7269,19 @@ async function orgRoute(request, url, env) {
   if (rest.length === 0 && method === "GET") return ask("show");
   if (rest[0] === "invites") {
     if (rest.length === 1 && method === "POST") {
-      return mutate("invite", (b) => ({ github: b.github, email: b.email, role: b.role, site }));
+      const key = (request.headers.get("idempotency-key") || "").trim().slice(0, 200);
+      const answer = await mutateRaw("invite", (b) => ({ github: b.github, email: b.email, role: b.role, site }));
+      if (answer.status !== 201 || answer.replayed) return orgAnswer(answer);
+      // Mailed when it can be; a failed send never fails the invitation.
+      const show = await askRaw("show");
+      const mail = await mailInvite(env, smtpSend, answer.body, {
+        orgName: (show.body && show.body.org && show.body.org.name) || slug,
+        slug,
+        inviter: (show.body && show.body.me && show.body.me.display) || "Someone",
+        orgSlot: async () => Boolean((await askRaw("invite-mail-slot")).body.allowed),
+      });
+      if (key) await askRaw("invite-mailed", { idempotency_key: key, ...mail });
+      return json({ ...answer.body, ...mail }, 201);
     }
     if (rest.length === 2 && method === "GET") return ask("invite-info", { code: rest[1], site });
     if (rest.length === 2 && method === "DELETE") return mutate("revoke-invite", () => ({ code: rest[1] }));
@@ -7283,6 +7349,12 @@ async function orgRoute(request, url, env) {
     const events = answer.body.events;
     return json({ events, chain_ok: await chainOk(events) });
   }
+  const h = {
+    request, url, env, slug, rest, method, principals, identity, site, base,
+    askRaw, mutateRaw, orgAsk, orgAnswer, json, readBody, isAdmin, smtpSend,
+  };
+  const routed = (await orgLifecycleRoute(h)) || (await orgBillingRoute(h));
+  if (routed) return routed;
   return text("not found", 404);
 }
 
@@ -7376,6 +7448,10 @@ async function fetchPrivate(request, url, hash, object, slug, big, env) {
   // (Addendum 2, item 6): the same checks, an answer with no bytes. The CLI
   // and every download send no such Accept and get the bytes.
   const look = accept.includes("application/json");
+  if (await refusalsExhausted(env, principals)) {
+    await drop();
+    return rateLimitedAnswer();
+  }
   const answer = env.ORGS
     ? await orgAsk(env, slug, { op: look ? "view" : "download", principals, args: { digest: hash } })
     : { status: 403, body: { error: "not-a-member", message: "organisations are not switched on on this hub" } };
@@ -7394,6 +7470,7 @@ async function fetchPrivate(request, url, hash, object, slug, big, env) {
   }
   if (answer.status !== 200) {
     await drop();
+    await noteRefusal(env, principals);
     // A removed member already knows which organisation sent the app, so
     // that refusal names it; anyone else holding a copied link learns no
     // organisation at all (R8) -- the store's own words for a stranger name
