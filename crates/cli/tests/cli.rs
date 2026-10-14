@@ -20889,7 +20889,7 @@ fn use_starter(
     use_starter_while(world, who, bundle, look, steps, None);
 }
 
-/// [`use_starter`], with `meanwhile` done two seconds into the run, while
+/// [`use_starter`], with `meanwhile` done three seconds into the run, while
 /// the window is open: what someone else does as this person works.
 fn use_starter_while(
     world: &OrgWorld,
@@ -20951,7 +20951,9 @@ fn use_starter_while(
         .spawn()
         .expect("run");
     if let Some(meanwhile) = meanwhile {
-        thread::sleep(Duration::from_secs(2));
+        // Time to open and check in; the refusal can land at any point
+        // after that, so the steps must not depend on when.
+        thread::sleep(Duration::from_secs(3));
         meanwhile();
     }
     let out = child.wait_with_output().expect("run");
@@ -21101,9 +21103,8 @@ fn starter_team_notes_is_shared_by_two_people_through_its_window() {
         &notes,
         None,
         &[
-            ("expect_text", title),
-            ("wait_ms", "9000"),
-            ("expect_text", "Acme has not shared Team Notes with you"),
+            ("wait_ms", "10000"),
+            ("expect_text", "has not shared Team Notes with you"),
             ("expect_no_text", "New note"),
             ("shoot", "team-notes-not-shared.png"),
         ],

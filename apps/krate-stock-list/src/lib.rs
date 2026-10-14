@@ -1125,6 +1125,11 @@ impl App {
     fn draw_closed(&mut self, area: Rect, k: &Ink, look: &Look, said: &mut Said, why: &Access) {
         let c = self.c;
         let org = String::from(self.team.org_name());
+        // At the start of a sentence: "Acme", or "Your team".
+        let lead = match org.as_str() {
+            "your team" => String::from("Your team"),
+            _ => org.clone(),
+        };
         let (title, body): (String, String) = match why {
             Access::NotAnOrgApp => (
                 String::from("Stock List is waiting for its team"),
@@ -1139,11 +1144,11 @@ impl App {
                 let title = match reason.as_str() {
                     "removed" => format!("You are no longer in {org}"),
                     "not-a-member" => format!("You are not in {org}"),
-                    "not-in-audience" => format!("{org} has not shared Stock List with you"),
+                    "not-in-audience" => format!("{lead} has not shared Stock List with you"),
                     "release-withdrawn" => String::from("This version of Stock List was withdrawn"),
                     "not-released" => String::from("This version of Stock List is not released yet"),
                     "not-signed-in" => String::from("Sign in to Krate to see your team's stock"),
-                    "org-closed" => format!("{org} is closed"),
+                    "org-closed" => format!("{lead} is closed"),
                     _ => String::from("Stock List cannot open your team's stock list"),
                 };
                 // The organisation's own words say what to do next; a bare
