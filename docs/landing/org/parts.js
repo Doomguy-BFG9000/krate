@@ -319,7 +319,7 @@
           var key = K.key();
           D.confirmSheet({
             title: "Turn off company sign-in for " + nameOf() + "?",
-            body: "Nobody can sign in through it any more, nothing is required, and the stored client secret is deleted. Members stay members and sign in with GitHub, Google or email.",
+            body: "Nobody can sign in through it any more, nothing is required, and the stored client secret and domain proof are deleted. Members stay members and sign in with GitHub, Google or email.",
             yes: "Turn it off",
             no: "Keep it on",
             busy: "Turning off",
