@@ -183,35 +183,37 @@ fi
 
 say "  Installed to ${dir}"
 
-# ---- double-click: install Krate.app so a .krate opens from Finder ----------
+# ---- double-click: install Krate Player.app so a .krate opens from Finder ---
 #
 # The CLI alone lets you `krate run app.krate` in a terminal. But the point of a
 # shareable app is that someone double-clicks it, so on macOS we also fetch the
-# prebuilt Krate.app and register it: the app declares the .krate document type,
+# prebuilt Krate Player.app and register it: the app declares the .krate document type,
 # and Finder then routes a double-clicked bundle through it to the same consent
 # flow `krate run` uses. Quiet and skippable -- a missing app zip or a headless
 # box just means terminal-only, not a failed install.
 if [ "$os" = "Darwin" ] && [ "${KRATE_NO_DESKTOP:-}" != "1" ]; then
   app_archive="krate-app-${archive_version}-${target}.zip"
   if curl -fsSL "${base}/${app_archive}" -o "${tmp}/${app_archive}" 2>/dev/null; then
-    # Unzip into a temp spot, then move Krate.app into /Applications (or the
-    # per-user Applications folder if that is not writable), replacing any old
-    # copy so an update refreshes the handler.
+    # Unzip into a temp spot, then move Krate Player.app into /Applications
+    # (or the per-user Applications folder if that is not writable), replacing
+    # any old copy so an update refreshes the handler. The name is the one
+    # make-macos-app.sh builds and the release zips (K-1092). Never touch
+    # Krate.app: that is Krate Studio.
     app_unzip="${tmp}/app"
     mkdir -p "$app_unzip"
     if command -v unzip >/dev/null 2>&1 && unzip -oq "${tmp}/${app_archive}" -d "$app_unzip" 2>/dev/null; then
-      src_app="$(find "$app_unzip" -maxdepth 2 -type d -name 'Krate.app' | head -1)"
+      src_app="$(find "$app_unzip" -maxdepth 2 -type d -name 'Krate Player.app' | head -1)"
       if [ -n "$src_app" ]; then
         apps_dir="/Applications"
         [ -w "$apps_dir" ] 2>/dev/null || apps_dir="${HOME}/Applications"
         mkdir -p "$apps_dir"
-        rm -rf "${apps_dir}/Krate.app" 2>/dev/null || true
-        if cp -R "$src_app" "${apps_dir}/Krate.app" 2>/dev/null; then
+        rm -rf "${apps_dir}/Krate Player.app" 2>/dev/null || true
+        if cp -R "$src_app" "${apps_dir}/Krate Player.app" 2>/dev/null; then
           # The app's shim execs `krate open-app`, so point it at the CLI we
           # just installed and register the bundle with Launch Services so the
           # .krate association takes effect without a logout.
           if command -v /System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister >/dev/null 2>&1; then
-            /System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister -f "${apps_dir}/Krate.app" >/dev/null 2>&1 || true
+            /System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister -f "${apps_dir}/Krate Player.app" >/dev/null 2>&1 || true
           fi
           say "  .krate files now open on double-click."
         fi
