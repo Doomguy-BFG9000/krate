@@ -40,6 +40,23 @@ pub(crate) fn install(home: Option<&Path>) -> Result<u8> {
         Some(h) => h.to_path_buf(),
         None => crate::home_dir().context("could not find your home folder")?,
     };
+    // Replacing a Player that is already here is an update, and an
+    // organisation that set `[updates] mode` to notify or off decides those
+    // itself (IC-949). A first install is not an update.
+    let existing = [
+        home.join("Applications/Krate Player.app/Contents/MacOS/krate-cli"),
+        home.join(".local/share/krate/bin/krate"),
+    ];
+    let mode = crate::fleet::updates_mode();
+    if mode != crate::fleet::UpdateMode::Auto && existing.iter().any(|path| path.exists()) {
+        eprintln!(
+            "{} installs Krate updates itself on this computer (updates: {}), so the Krate \
+             already here was not replaced.",
+            crate::fleet::who(crate::fleet::policy()),
+            mode.as_str()
+        );
+        return Ok(1);
+    }
     let source = std::env::current_exe().context("could not find this program")?;
     let engine = install_into(&source, &home)?;
     println!("Player: {}", engine.display());

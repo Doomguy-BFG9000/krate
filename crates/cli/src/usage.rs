@@ -197,6 +197,11 @@ fn reports_from_this_build(release_version: Option<&str>, url_named: bool) -> bo
 }
 
 fn opted_out() -> bool {
+    // An organisation's `[usage] counting = false` (IC-949): nothing is
+    // counted, nothing is sent, and no first-run line asks about it.
+    if !crate::fleet::counting_allowed() {
+        return true;
+    }
     if std::env::var_os("KRATE_NO_USAGE").is_some() {
         return true;
     }
@@ -440,8 +445,19 @@ pub fn flush_spool_now() {
     let Some(path) = spool_path() else {
         return;
     };
-    let endpoint = std::env::var("KRATE_USAGE_URL")
-        .unwrap_or_else(|_| "https://hub.krate.tech/usage".to_string());
+    // Counting turned off by the organisation: what was waiting from before
+    // the policy arrived is not sent either (IC-949).
+    if !crate::fleet::counting_allowed() {
+        let _ = std::fs::remove_file(&path);
+        return;
+    }
+    // A pinned hub is the only hub this computer talks to (IC-949 [hub]).
+    let endpoint = std::env::var("KRATE_USAGE_URL").unwrap_or_else(|_| {
+        format!(
+            "{}/usage",
+            crate::fleet::pinned_hub().unwrap_or("https://hub.krate.tech")
+        )
+    });
 
     {
         let Ok(contents) = std::fs::read_to_string(&path) else {
@@ -504,6 +520,11 @@ pub fn telemetry_command(state: &str) -> anyhow::Result<u8> {
     };
     let marker = dir.join("no-usage");
 
+    if !crate::fleet::counting_allowed() {
+        println!("Usage counting is off on this computer: your organisation turned it off.");
+        println!("Nothing is counted and nothing is sent.");
+        return Ok(0);
+    }
     match state {
         "off" => {
             std::fs::create_dir_all(&dir)?;

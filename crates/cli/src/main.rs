@@ -21,7 +21,9 @@ mod access;
 mod agent_provider;
 mod api_author;
 mod api_key;
+mod audit;
 mod authoring_context;
+mod fleet;
 mod github_auth;
 mod krate_mode;
 mod lineedit;
@@ -1198,6 +1200,16 @@ enum Command {
         no_install: bool,
     },
 
+    /// Show the organisation policy in force on this computer, or check
+    /// whether an app would open here.
+    Policy {
+        /// Machine-readable, for Studio and scripts.
+        #[arg(long)]
+        json: bool,
+        #[command(subcommand)]
+        action: Option<PolicyAction>,
+    },
+
     /// Turn the anonymous usage count on or off, or see what it sends.
     Telemetry {
         /// `off` stops it, `on` resumes it, `status` shows what is sent.
@@ -1475,10 +1487,27 @@ fn self_author_agent(cmd: &str) -> Option<&str> {
 /// gets the install step. Neither should ever surface as a spawn error.
 fn resolve_agent(name: &str) -> Result<&'static dyn agent_provider::AgentProvider> {
     let provider = agent_provider::resolve(name).map_err(|message| anyhow::anyhow!(message))?;
+    // Every named provider passes the organisation's `[studio]` here too,
+    // so a path that reaches a provider without the dispatch check cannot
+    // start one (IC-949).
+    fleet::ai_build(Some(provider.name()))?;
     if !agent_provider::is_installed(provider) {
         anyhow::bail!(agent_provider::missing_cli_error(provider));
     }
     Ok(provider)
+}
+
+#[derive(Debug, Subcommand)]
+enum PolicyAction {
+    /// Would this app open on this computer? Exit 0 if it would, 1 if not,
+    /// with the exact words a person would see.
+    Check {
+        /// The .krate file.
+        app: PathBuf,
+        /// Machine-readable.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -2141,11 +2170,22 @@ fn run() -> Result<u8> {
             Ok(0)
         }
         Command::Telemetry { state } => usage::telemetry_command(&state),
+        Command::Policy { json, action } => match action {
+            None => fleet::show(json),
+            Some(PolicyAction::Check {
+                app,
+                json: check_json,
+            }) => fleet::check_command(&app, json || check_json),
+        },
         Command::Plan {
             request,
             attach,
             agent,
-        } => plan_command(&request, &attach, agent.as_deref()),
+        } => {
+            // Before any provider is resolved or contacted (IC-949 [studio]).
+            fleet::ai_build(agent.as_deref())?;
+            plan_command(&request, &attach, agent.as_deref())
+        }
         Command::SupportReport { session, output } => report_command(&session, output.as_deref()),
         Command::SupportSend {
             report,
@@ -2206,6 +2246,13 @@ fn run() -> Result<u8> {
             // the caller gave: the separate path they used ignored
             // --work-dir, --json and --transcript and turned the request
             // verdict (exit 6) into an error (K-893).
+            // An AI build is refused before anything is sent to a provider
+            // (IC-949 [studio]); the built-in templates are not AI.
+            if author_cmd.is_some() {
+                fleet::ai_build(Some("author-cmd"))?;
+            } else if agent.is_some() {
+                fleet::ai_build(agent.as_deref())?;
+            }
             if !attachments.is_empty() {
                 if agent.is_none() && author_cmd.is_none() {
                     anyhow::bail!(
@@ -2258,19 +2305,26 @@ fn run() -> Result<u8> {
             repair_attempts,
             yes,
             no_install,
-        } => port_project(PortRequest {
-            source,
-            plan_format: format,
-            plan_output: output,
-            prepare,
-            agent,
-            author_cmd,
-            to,
-            transcript,
-            repair_attempts,
-            yes,
-            no_install,
-        }),
+        } => {
+            if author_cmd.is_some() {
+                fleet::ai_build(Some("author-cmd"))?;
+            } else if agent.is_some() {
+                fleet::ai_build(agent.as_deref())?;
+            }
+            port_project(PortRequest {
+                source,
+                plan_format: format,
+                plan_output: output,
+                prepare,
+                agent,
+                author_cmd,
+                to,
+                transcript,
+                repair_attempts,
+                yes,
+                no_install,
+            })
+        }
         Command::Mcp => mcp::serve().map(|()| 0),
         Command::Launch { bundle } => launch_app(&bundle),
         Command::Install {
@@ -2284,8 +2338,14 @@ fn run() -> Result<u8> {
             agent,
             attachments,
             output,
-        } => revise_cli(&bundle, &change, &agent, &attachments, output.as_deref()),
-        Command::AuthorAgent { agent } => run_author_agent(&agent),
+        } => {
+            fleet::ai_build(Some(&agent))?;
+            revise_cli(&bundle, &change, &agent, &attachments, output.as_deref())
+        }
+        Command::AuthorAgent { agent } => {
+            fleet::ai_build(Some(&agent))?;
+            run_author_agent(&agent)
+        }
         Command::Version => {
             print_version();
             Ok(0)
@@ -5697,7 +5757,7 @@ fn blocked_entry(target: &str) -> Option<Blocked> {
 
 fn blocklist_command(update: bool) -> Result<u8> {
     if update {
-        let hub = std::env::var("KRATE_HUB_URL").unwrap_or_else(|_| DEFAULT_HUB_URL.to_string());
+        let hub = org::hub_url(None)?;
         let endpoint = format!("{}/takedowns", hub.trim_end_matches('/'));
         let response = ureq::AgentBuilder::new()
             .timeout(std::time::Duration::from_secs(30))
@@ -7919,7 +7979,7 @@ fn publish_to_org(
         org::identity_or_sign_in("Publishing to an organisation needs your GitHub sign-in.")?;
     let category = classify_app(&name, description.unwrap_or(""));
     let code = org::publish_candidate(
-        &org::hub_url(hub_override),
+        &org::hub_url(hub_override)?,
         slug,
         identity,
         &bytes,
@@ -8002,10 +8062,7 @@ fn publish_bundle(
         );
     }
 
-    let hub = hub_override
-        .map(str::to_string)
-        .or_else(|| std::env::var("KRATE_HUB_URL").ok())
-        .unwrap_or_else(|| DEFAULT_HUB_URL.to_string());
+    let hub = org::hub_url(hub_override)?;
     let endpoint = format!("{}/publish", hub.trim_end_matches('/'));
 
     // The app already knows its own name; the description is what the person
@@ -8985,10 +9042,7 @@ fn report_send_command(
     // A signed-in person is still identified, because a report we can reply
     // to is worth more. It is simply never a condition of sending.
     let identity = github_auth::current();
-    let hub = hub_override
-        .map(str::to_string)
-        .or_else(|| std::env::var("KRATE_HUB_URL").ok())
-        .unwrap_or_else(|| DEFAULT_HUB_URL.to_string());
+    let hub = org::hub_url(hub_override)?;
     let mut request = ureq::post(&format!("{}/report", hub.trim_end_matches('/')))
         .set("Content-Type", "application/zip")
         .set("X-Krate-Session", session)
@@ -9329,6 +9383,11 @@ fn plan_command(request: &str, attachments: &[PathBuf], agent: Option<&str>) -> 
             anyhow::anyhow!("no AI is installed to plan with; run `krate ai` to see the options")
         })?,
     };
+    // The organisation's `[studio]`, with the provider now known (IC-949).
+    fleet::ai_build(Some(match (api_vendor, agent) {
+        (Some(_), Some(name)) => name,
+        _ => provider.name(),
+    }))?;
 
     // An attachment that is not there must stop the plan.
     //
@@ -9547,6 +9606,11 @@ fn explain_command(question: &str, agent: Option<&str>) -> Result<u8> {
             anyhow::anyhow!("no AI is installed to ask; run `krate ai` to see the options")
         })?,
     };
+    // The organisation's `[studio]`, with the provider now known (IC-949).
+    fleet::ai_build(Some(match (api_vendor, agent) {
+        (Some(_), Some(name)) => name,
+        _ => provider.name(),
+    }))?;
     let reference =
         sdk_reference::render_reference(&sdk_reference::parse_sdk(sdk_reference::GUEST_SDK_SOURCE));
     let prompt = format!(
@@ -15416,15 +15480,28 @@ fn run_component_inner(request: RunRequest) -> Result<u8> {
         resolve_run_target(&request.target, request.insecure_http)?;
     krate_runtime::stage_mark("cli: bundle opened");
 
+    // Who is opening this, and what, for the gates and the open record
+    // (IC-949 A). The target as named, so the record's digest is of the
+    // file the person opened.
+    let door = audit::run_door(request.consent);
+    let target_file = PathBuf::from(&request.target);
+    let subject = fleet::Subject::new(
+        bundle.as_ref(),
+        Some(target_file.as_path()).filter(|_| fetched_sha256.is_none()),
+        fetched_sha256.as_deref(),
+    );
+    // The organisation's machine policy, before anything else about the app
+    // is decided (IC-949 P3): a policy that cannot be read, then `[trust]`.
+    // `--dump-caps` runs nothing, so it is the one way to look at an app
+    // this computer would refuse.
+    if !request.dump_caps {
+        fleet::admit(&subject, door)?;
+    }
+
     // An organisation's private app opens only for a current member, and
     // offline only on a lease that holds (IC-948 G). A preview picture is
     // Krate looking at the app, not a person opening it.
     if let Some(opened) = bundle.as_ref().filter(|_| !request.for_screenshot) {
-        let door = if request.consent {
-            access::Door::Window
-        } else {
-            access::Door::Terminal
-        };
         let bytes = match fetched_sha256.as_deref() {
             Some(sha256) => access::Bytes::Fetched {
                 sha256,
@@ -15432,7 +15509,7 @@ fn run_component_inner(request: RunRequest) -> Result<u8> {
             },
             None => access::Bytes::File(Path::new(&request.target)),
         };
-        access::gate(bytes, access::mark_of(opened), door)?;
+        fleet::org_gate(&subject, bytes, access::mark_of(opened), door)?;
     }
 
     if !file.exists() {
@@ -15480,6 +15557,12 @@ fn run_component_inner(request: RunRequest) -> Result<u8> {
     // notice -- and no held list means "not checked", never "clean".
     if bundle.is_some() {
         if let Some(block) = blocked_entry(&request.target) {
+            fleet::note_refused(
+                &subject,
+                door,
+                "hub-removed",
+                &format!("the hub removed this app: {}", block.reason),
+            );
             eprintln!("error: the hub removed this app: {}", block.reason);
             if block.emergency {
                 eprintln!("  - an emergency removal");
@@ -15520,6 +15603,12 @@ fn run_component_inner(request: RunRequest) -> Result<u8> {
     if let Some(krate_bundle::signing::Verdict::Tampered { problems }) =
         full_verdict.as_ref().map(|full| &full.signature)
     {
+        fleet::note_refused(
+            &subject,
+            door,
+            "tampered",
+            "this app was changed after it was signed",
+        );
         eprintln!("error: this app was changed after it was signed");
         for problem in problems {
             eprintln!("  - {problem}");
@@ -15545,6 +15634,12 @@ fn run_component_inner(request: RunRequest) -> Result<u8> {
         reason,
     }) = full_verdict.as_ref().and_then(|full| full.chain.as_ref())
     {
+        fleet::note_refused(
+            &subject,
+            door,
+            "revoked-key",
+            "this app was signed with a key its publisher had withdrawn",
+        );
         eprintln!("error: this app was signed with a key its publisher had withdrawn");
         eprintln!("  - withdrawn from {compromised_from}, signed at {signed_at}");
         if !reason.is_empty() {
@@ -15589,6 +15684,13 @@ fn run_component_inner(request: RunRequest) -> Result<u8> {
     }
 
     let manifest = loaded_manifest.as_ref().map(|loaded| &loaded.manifest);
+    // A loose component's manifest is known only now; the record names it.
+    let subject = subject.with_manifest(manifest);
+    // A capability the organisation blocks, or a network place outside its
+    // ceiling, that the app cannot run without (IC-949 P4).
+    if !request.dump_caps {
+        fleet::admit_capabilities(&subject, door)?;
+    }
     // The screenshot policy wins over auto-grant when both are asked for.
     // A caller that wants a picture is saying "I am not the recipient and
     // nobody consented to anything", and that is the narrower claim, so it
@@ -15597,6 +15699,9 @@ fn run_component_inner(request: RunRequest) -> Result<u8> {
         (Some(manifest), true) => SessionPolicy::for_screenshot(manifest)?,
         _ => resolve_session_policy(manifest, &request.grants, request.auto_grant)?,
     };
+    // Every policy this run builds carries the organisation's ceiling, so
+    // what it blocks is refused however it was granted (IC-949 P4).
+    policy = fleet::narrow(policy);
 
     // Before the wall, not after it: --dump-caps answers "what would this app
     // ask for?" without running a single instruction, and it is the safe way to
@@ -15718,8 +15823,9 @@ fn run_component_inner(request: RunRequest) -> Result<u8> {
         if let Some(principal) = remembering {
             let remembered = load_remembered_grants(&store_home, principal);
             if !remembered.is_empty() {
-                policy =
-                    SessionPolicy::from_grants(policy.grants().iter().cloned().chain(remembered));
+                policy = fleet::narrow(SessionPolicy::from_grants(
+                    policy.grants().iter().cloned().chain(remembered),
+                ));
             }
         }
         let missing = policy.missing_required_for_manifest(manifest)?;
@@ -15728,11 +15834,11 @@ fn run_component_inner(request: RunRequest) -> Result<u8> {
             // asks in the terminal. The two paths fold the same grant set into
             // the same SessionPolicy, so enforcement downstream is identical.
             let before = policy.grants().clone();
-            policy = if request.consent {
+            policy = fleet::narrow(if request.consent {
                 consent_for_session_grants(manifest, &policy)?
             } else {
                 prompt_for_session_grants(manifest, &policy)?
-            };
+            });
             // Only what the person just said yes to, and only for an app
             // whose lineage can be checked again next time.
             if let Some(principal) = remembering {
@@ -15779,6 +15885,12 @@ fn run_component_inner(request: RunRequest) -> Result<u8> {
                     run_identity.as_ref(),
                 );
             } else {
+                fleet::note_refused(
+                    &subject,
+                    door,
+                    "permission-denied",
+                    "This app needs permission it was not given, so it did not run.",
+                );
                 eprintln!("This app needs permission it was not given, so it did not run.");
                 eprintln!("It needs to:");
                 for cap in &missing {
@@ -15927,6 +16039,13 @@ fn run_component_inner(request: RunRequest) -> Result<u8> {
             .collect(),
         _ => std::collections::BTreeMap::new(),
     };
+    // The run starts now: the open record says so, with what the app was
+    // given and what it was not (IC-949 A). A picture is Krate looking, not
+    // a person opening.
+    let policy = fleet::narrow(policy);
+    if !request.for_screenshot {
+        fleet::opened(&subject, door, &policy);
+    }
     // How much memory the app may use (K-416): an explicit --mem-limit wins;
     // otherwise what the app declared with `memory.budget:<MiB>` and the
     // person granted; otherwise the default. A declaration nobody granted
@@ -16018,6 +16137,9 @@ fn run_component_inner(request: RunRequest) -> Result<u8> {
         phase3_ui_mode: request.ui_mode,
         screenshot_path: request.screenshot_path.clone(),
         screenshot_scale: request.screenshot_scale,
+        // `[runtime] interpreter = true` (IC-949): every app on the
+        // portable interpreter, from the policy rather than an environment.
+        interpreter: fleet::interpreter(),
         usability_plan: match request.usability_report.as_ref() {
             Some(path) => Some(krate_runtime::usability::UsabilityPlan {
                 report_path: path.clone(),
@@ -16618,19 +16740,30 @@ fn launch_gate(bundle_path: &Path) -> Result<()> {
     if !krate_bundle::is_bundle_path(bundle_path) {
         return Ok(());
     }
-    // An unmarked app needs nothing here, and is not unpacked to learn so.
-    if !matches!(
+    // The machine policy's gate, in this process for the same reason
+    // (IC-949 P4). With no policy on this computer nothing is unpacked here.
+    let policy_applies = !matches!(fleet::state(), fleet::State::None);
+    let marked = matches!(
         krate_bundle::read_org_mark(bundle_path),
         Ok(Some(_)) | Err(_)
-    ) {
+    );
+    // An unmarked app needs nothing here, and is not unpacked to learn so.
+    if !policy_applies && !marked {
         return Ok(());
     }
     let opened = krate_bundle::open(bundle_path)
         .with_context(|| format!("could not open bundle {}", bundle_path.display()))?;
-    access::gate(
+    let subject = fleet::Subject::new(Some(&opened), Some(bundle_path), None);
+    fleet::admit(&subject, audit::RecordDoor::Window)?;
+    fleet::admit_capabilities(&subject, audit::RecordDoor::Window)?;
+    if !marked {
+        return Ok(());
+    }
+    fleet::org_gate(
+        &subject,
         access::Bytes::File(bundle_path),
         access::mark_of(&opened),
-        access::Door::Window,
+        audit::RecordDoor::Window,
     )
 }
 
@@ -18162,6 +18295,8 @@ fn macos_launcher_bundle(dir: &Path, name: &str, engine: &Path) -> std::io::Resu
 /// builds for Windows outside a release (K-150).
 #[cfg(target_os = "macos")]
 fn open_app(direct: Option<PathBuf>) -> Result<u8> {
+    // The Player's own door, for the open record (IC-949 A).
+    audit::OPENED_BY_PLAYER.store(true, std::sync::atomic::Ordering::Relaxed);
     // A document that arrives while this instance is already running an app
     // (double-click in Finder mid-session) gets its own process, so every
     // opened .krate behaves like its own application.
@@ -18583,17 +18718,32 @@ fn tidy_resource(resource: &str) -> String {
 }
 
 fn prompt_for_session_grants(manifest: &Manifest, policy: &SessionPolicy) -> Result<SessionPolicy> {
-    let prompt_caps = manifest
+    // What the organisation blocks is shown, and is never one of the
+    // choices: nobody here can grant it (IC-949 P4).
+    let (blocked, prompt_caps): (Vec<_>, Vec<_>) = manifest
         .declared_capabilities()?
         .into_iter()
         .filter(|cap| !policy.allows(cap) && !cap.is_default_granted())
-        .collect::<Vec<_>>();
+        .partition(|cap| policy.organisation_blocks(cap).is_some());
 
-    if prompt_caps.is_empty() {
+    if blocked.is_empty() && prompt_caps.is_empty() {
         return Ok(policy.clone());
     }
 
     eprintln!("App: {} ({})", manifest.app.name, manifest.app.id);
+    if !blocked.is_empty() {
+        eprintln!(
+            "Not available on this computer ({}):",
+            fleet::blocked_label()
+        );
+        for cap in &blocked {
+            eprintln!("  - {} ({cap})", human_label(cap));
+        }
+    }
+    if prompt_caps.is_empty() {
+        return Ok(policy.clone());
+    }
+
     eprintln!("This app is asking to:");
     for (index, cap) in prompt_caps.iter().enumerate() {
         // Lead with the plain phrase; show the exact capability in parentheses
@@ -18798,6 +18948,10 @@ fn consent_for_session_grants(
                     .map(|request| request.rationale.clone())
                     .unwrap_or_default(),
                 required: request.map(|request| request.required).unwrap_or(true),
+                // Shown, and not grantable (IC-949 P4).
+                blocked: policy
+                    .organisation_blocks(cap)
+                    .map(|_| fleet::blocked_label()),
             }
         })
         .collect::<Vec<_>>();
@@ -18913,6 +19067,8 @@ struct ConsentCapability {
     display: String,
     rationale: String,
     required: bool,
+    /// "blocked by <organisation>": shown off and greyed, never granted.
+    blocked: Option<String>,
 }
 
 /// What the user decided in the consent window.
@@ -18944,6 +19100,7 @@ fn show_consent_window(
             display: item.display.clone(),
             rationale: item.rationale.clone(),
             required: item.required,
+            blocked: item.blocked.clone(),
         })
         .collect::<Vec<_>>();
 
@@ -18951,7 +19108,9 @@ fn show_consent_window(
         krate_adapter_macos::ConsentChoice::Open(allowed_indices) => {
             let selected = allowed_indices
                 .into_iter()
-                .filter_map(|index| requests.get(index).map(|item| item.cap.clone()))
+                .filter_map(|index| requests.get(index))
+                .filter(|item| item.blocked.is_none())
+                .map(|item| item.cap.clone())
                 .collect();
             Ok(ConsentOutcome::Allowed(selected))
         }
@@ -23549,8 +23708,12 @@ fn take_agent_session(files: &[PathBuf], provider: &str) -> Option<String> {
 
 /// The hub shared stores sync against. The same override the publisher and
 /// the studio honour, so a local hub serves everything at once.
+///
+/// Under a pinned hub (IC-949) that hub, whatever the environment says: a
+/// shared store never syncs anywhere else.
 fn shared_hub_url() -> String {
-    std::env::var("KRATE_HUB_URL").unwrap_or_else(|_| "https://hub.krate.tech".to_string())
+    org::hub_url(None)
+        .unwrap_or_else(|_| fleet::pinned_hub().unwrap_or(DEFAULT_HUB_URL).to_string())
 }
 
 /// This computer's key, generated once and kept private to the user.

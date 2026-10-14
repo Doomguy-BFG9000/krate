@@ -53,6 +53,8 @@ fn main() {
         .arg("run")
         .arg(&bundle)
         .arg("--consent")
+        // The open record names the Player as the door (IC-949 A).
+        .env("KRATE_OPENED_BY", "player")
         .status()
     {
         Ok(status) if status.success() => {}

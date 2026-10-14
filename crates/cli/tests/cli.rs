@@ -16954,3 +16954,947 @@ fn a_release_key_from_studio_signs_what_is_sent_for_approval() {
     assert_eq!(list[0]["slug"], "acme");
     assert_eq!(list[0]["role"], "developer");
 }
+
+// ---------------------------------------------------------------------------
+// The machine policy and the open record (IC-949, FLEET-CONTRACT P and A).
+// ---------------------------------------------------------------------------
+
+/// One machine, as an organisation sets it up: a policy file, a home of its
+/// own, and the open record in a folder the test can read.
+struct Fleet {
+    dir: tempfile::TempDir,
+    home: tempfile::TempDir,
+}
+
+impl Fleet {
+    fn new() -> Self {
+        Self {
+            dir: tempfile::tempdir().expect("fleet dir"),
+            home: tempfile::tempdir().expect("fleet home"),
+        }
+    }
+
+    fn path(&self, name: &str) -> PathBuf {
+        self.dir.path().join(name)
+    }
+
+    fn record_path(&self) -> PathBuf {
+        self.path("opens.jsonl")
+    }
+
+    /// Write the policy, with the open record pointed into this folder.
+    fn policy(&self, body: &str) -> PathBuf {
+        let path = self.path("policy.toml");
+        std::fs::write(
+            &path,
+            format!(
+                "version = 1\nname = \"Acme Labs\"\n{body}\n[audit]\npath = \"{}\"\n",
+                self.record_path()
+                    .display()
+                    .to_string()
+                    .replace('\\', "\\\\")
+            ),
+        )
+        .expect("policy");
+        path
+    }
+
+    /// `krate`, on this machine.
+    fn krate(&self) -> Command {
+        let mut command = krate();
+        command
+            .env("KRATE_TEST_POLICY", self.path("policy.toml"))
+            .env("HOME", self.home.path())
+            .env("USERPROFILE", self.home.path());
+        command
+    }
+
+    fn key(&self, name: &str) -> (PathBuf, String) {
+        let path = self.path(&format!("{name}.pkcs8"));
+        if !path.exists() {
+            std::fs::write(
+                &path,
+                krate_bundle::signing::SigningKey::generate_pkcs8().expect("key"),
+            )
+            .expect("write key");
+        }
+        let bytes = std::fs::read(&path).expect("read key");
+        let public = krate_bundle::signing::SigningKey::from_pkcs8(&bytes)
+            .expect("key")
+            .public_key();
+        (path, public.iter().map(|b| format!("{b:02x}")).collect())
+    }
+
+    /// A minimal CLI app that requires `caps`, packed.
+    fn app(&self, name: &str, caps: &[&str]) -> PathBuf {
+        let wasm = self.path("code.wasm");
+        std::fs::write(
+            &wasm,
+            include_bytes!("../../bundle/tests/fixtures/minimal-run.wasm"),
+        )
+        .expect("component");
+        let declared: String = caps
+            .iter()
+            .map(|cap| {
+                format!(
+                    "\n[[capabilities]]\ncap = \"{cap}\"\nrationale = \"its work\"\nrequired = true\n"
+                )
+            })
+            .collect();
+        let manifest = self.path(&format!("{name}.toml"));
+        std::fs::write(
+            &manifest,
+            format!(
+                "[app]\nid = \"com.acme.{name}\"\nname = \"{name}\"\nversion = \"1.0.0\"\n\
+                 entry = \"code.wasm\"\nworld = \"krate:app/cli@0.1.0\"\n{declared}"
+            ),
+        )
+        .expect("manifest");
+        let bundle = self.path(&format!("{name}.krate"));
+        let out = krate()
+            .arg("pack")
+            .arg(&wasm)
+            .arg("--manifest")
+            .arg(&manifest)
+            .arg("-o")
+            .arg(&bundle)
+            .output()
+            .expect("pack");
+        assert!(
+            out.status.success(),
+            "pack: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        bundle
+    }
+
+    /// Sign directly with `key`.
+    fn sign(&self, bundle: &std::path::Path, key: &std::path::Path) {
+        let out = krate()
+            .arg("sign")
+            .arg(bundle)
+            .arg("--key")
+            .arg(key)
+            .args(["--namespace", "acme/app"])
+            .output()
+            .expect("sign");
+        assert!(
+            out.status.success(),
+            "sign: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    /// Sign with a release key the root delegated.
+    fn sign_delegated(
+        &self,
+        bundle: &std::path::Path,
+        root: &std::path::Path,
+        release: &std::path::Path,
+    ) {
+        let delegation = self.path("delegation.json");
+        let out = krate()
+            .args(["delegate", "--namespace", "acme/*", "--days", "30"])
+            .arg("--root")
+            .arg(root)
+            .arg("--key")
+            .arg(release)
+            .arg("-o")
+            .arg(&delegation)
+            .output()
+            .expect("delegate");
+        assert!(
+            out.status.success(),
+            "delegate: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let out = krate()
+            .arg("sign")
+            .arg(bundle)
+            .arg("--key")
+            .arg(release)
+            .args(["--namespace", "acme/app"])
+            .arg("--delegation")
+            .arg(&delegation)
+            .output()
+            .expect("sign");
+        assert!(
+            out.status.success(),
+            "sign delegated: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    /// Every record written, parsed: each line must be one JSON object.
+    fn records(&self) -> Vec<serde_json::Value> {
+        records_in(&self.record_path())
+    }
+}
+
+fn records_in(path: &std::path::Path) -> Vec<serde_json::Value> {
+    std::fs::read_to_string(path)
+        .unwrap_or_default()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap_or_else(|e| panic!("{e}: {line}")))
+        .collect()
+}
+
+/// Run one app through the MCP door and return what the server answered.
+fn mcp_run(fleet: &Fleet, bundle: &std::path::Path) -> String {
+    mcp_run_granting(fleet, bundle, &[])
+}
+
+fn mcp_run_granting(fleet: &Fleet, bundle: &std::path::Path, grants: &[&str]) -> String {
+    let mut child = fleet
+        .krate()
+        .arg("mcp")
+        .env("KRATE_MCP_ROOT", fleet.path("mcp"))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("mcp");
+    let call = serde_json::json!({
+        "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+        "params": {
+            "name": "run_component",
+            "arguments": { "bundle": bundle.display().to_string(), "grants": grants }
+        }
+    });
+    let init = serde_json::json!({
+        "jsonrpc": "2.0", "id": 1, "method": "initialize",
+        "params": {
+            "protocolVersion": "2024-11-05",
+            "capabilities": {},
+            "clientInfo": { "name": "fleet-test", "version": "0" }
+        }
+    });
+    {
+        let stdin = child.stdin.as_mut().expect("stdin");
+        writeln!(stdin, "{init}").expect("init");
+        writeln!(stdin, "{call}").expect("call");
+    }
+    drop(child.stdin.take());
+    let out = child.wait_with_output().expect("mcp output");
+    String::from_utf8_lossy(&out.stdout).to_string()
+}
+
+/// Proof item 1: the policy is read from each source this OS has, the first
+/// present wins, the others are named as ignored, and `krate policy` and
+/// `--json` say so.
+#[test]
+fn the_policy_is_read_from_each_source_and_shown() {
+    let fleet = Fleet::new();
+    let root = fleet.path("machine");
+    let file_at = if cfg!(target_os = "macos") {
+        root.join("Library/Application Support/Krate/policy.toml")
+    } else if cfg!(windows) {
+        root.join("ProgramData/Krate/policy.toml")
+    } else {
+        root.join("etc/krate/policy.toml")
+    };
+    let show = |json: bool| {
+        let mut command = krate();
+        command
+            .env("KRATE_TEST_POLICY_ROOT", &root)
+            .env("HOME", fleet.home.path())
+            .arg("policy");
+        if json {
+            command.arg("--json");
+        }
+        command.output().expect("policy")
+    };
+
+    // Nothing there: no policy, and it says so plainly.
+    let none = show(false);
+    assert!(none.status.success());
+    assert!(
+        String::from_utf8_lossy(&none.stdout).contains("No organisation policy on this computer.")
+    );
+
+    // The file.
+    std::fs::create_dir_all(file_at.parent().unwrap()).unwrap();
+    std::fs::write(
+        &file_at,
+        "version = 1\nname = \"From The File\"\n[usage]\ncounting = false\n",
+    )
+    .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&show(true).stdout).expect("json");
+    assert_eq!(json["state"], "in-force");
+    assert_eq!(json["source"]["kind"], "file");
+    assert_eq!(json["source"]["location"], file_at.display().to_string());
+    assert_eq!(json["policy"]["name"], "From The File");
+    assert_eq!(json["policy"]["usage"]["counting"], false);
+    let words = String::from_utf8_lossy(&show(false).stdout).to_string();
+    assert!(
+        words.contains("Your organisation (From The File) sets how Krate works"),
+        "{words}"
+    );
+    assert!(words.contains("Usage counting: off"), "{words}");
+
+    // On a Mac the managed preferences come first, as the binary plist a
+    // configuration profile writes, and the file is then named as ignored.
+    if cfg!(target_os = "macos") {
+        let prefs = root.join("Library/Managed Preferences");
+        std::fs::create_dir_all(&prefs).unwrap();
+        let plist = prefs.join("tech.krate.policy.plist");
+        std::fs::write(
+            &plist,
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+             <!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \
+             \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n\
+             <plist version=\"1.0\"><dict><key>version</key><integer>1</integer>\
+             <key>name</key><string>From MDM</string>\
+             <key>studio</key><dict><key>ai</key><false/></dict>\
+             <key>network</key><dict><key>allow</key>\
+             <array><string>*.acme.com:443</string></array></dict>\
+             </dict></plist>\n",
+        )
+        .unwrap();
+        assert!(Command::new("/usr/bin/plutil")
+            .args(["-convert", "binary1"])
+            .arg(&plist)
+            .status()
+            .expect("plutil")
+            .success());
+        let json: serde_json::Value = serde_json::from_slice(&show(true).stdout).expect("json");
+        assert_eq!(json["source"]["kind"], "managed-preferences", "{json}");
+        assert_eq!(json["policy"]["name"], "From MDM");
+        assert_eq!(json["policy"]["studio"]["ai"], false);
+        assert_eq!(json["policy"]["network"]["allow"][0], "*.acme.com:443");
+        assert_eq!(json["ignored"][0]["kind"], "file");
+        let words = String::from_utf8_lossy(&show(false).stdout).to_string();
+        assert!(
+            words.contains("Ignored:") && words.contains("policy.toml"),
+            "{words}"
+        );
+    }
+}
+
+/// Proof item 2: at every door that can be driven without a screen -- the
+/// terminal, MCP, and `krate launch` -- an unsigned app, an app signed by
+/// another root, a changed signed app, an app needing a blocked capability
+/// and one needing a host outside the ceiling are each refused in the
+/// organisation's words, with a `refused` record; a trusted app opens and
+/// leaves an `opened` record.
+#[test]
+fn each_policy_refusal_is_made_at_every_door_and_recorded() {
+    let fleet = Fleet::new();
+    let (root, root_hex) = fleet.key("root");
+    let (release, release_hex) = fleet.key("release");
+    let (stranger, _) = fleet.key("stranger");
+    fleet.policy(&format!(
+        "[trust]\nroots = [{{ name = \"Acme Labs\", key = \"{root_hex}\" }}]\n\
+         [capabilities]\ndeny = [\"random.bytes\"]\n\
+         [network]\nallow = [\"*.acme.com:443\"]\n"
+    ));
+
+    let unsigned = fleet.app("unsigned", &[]);
+    let other = fleet.app("other", &[]);
+    fleet.sign(&other, &stranger);
+    let signed = fleet.app("tampered-source", &[]);
+    fleet.sign(&signed, &root);
+    let tampered = fleet.path("tampered.krate");
+    rewrite_bundle_entry(&signed, &tampered, "manifest.toml", |bytes| {
+        let mut text = String::from_utf8_lossy(bytes).into_owned();
+        text.push_str("\n# changed after signing\n");
+        text.into_bytes()
+    });
+    let blocked = fleet.app("blocked", &["random.bytes"]);
+    fleet.sign(&blocked, &root);
+    let outside = fleet.app("outside", &["net.connect:evil.example:443"]);
+    fleet.sign(&outside, &root);
+    let trusted = fleet.app("trusted", &["net.connect:api.acme.com:443"]);
+    fleet.sign_delegated(&trusted, &root, &release);
+
+    let cases: [(&PathBuf, &str, &str); 5] = [
+        (
+            &unsigned,
+            "policy-unsigned",
+            "allows only signed apps on this computer",
+        ),
+        (
+            &other,
+            "policy-other-signer",
+            "allows only apps signed by Acme Labs",
+        ),
+        (
+            &tampered,
+            "policy-tampered",
+            "this app's signature does not",
+        ),
+        (
+            &blocked,
+            "policy-capability",
+            "which your organisation (Acme Labs) blocks",
+        ),
+        (&outside, "policy-network", "connect to evil.example:443"),
+    ];
+    for (bundle, reason, words) in cases {
+        // The terminal.
+        let run = fleet
+            .krate()
+            .arg("run")
+            .arg(bundle)
+            .args(["--headless", "--auto-grant"])
+            .output()
+            .expect("run");
+        let stderr = String::from_utf8_lossy(&run.stderr);
+        assert!(!run.status.success(), "{reason} must not open: {stderr}");
+        assert!(
+            stderr.contains(words),
+            "{reason} in the organisation's words: {stderr}"
+        );
+        assert!(stderr.contains("your organisation (Acme Labs)"), "{stderr}");
+        assert!(
+            stderr.contains("Ask Acme Labs's IT team"),
+            "who to ask: {stderr}"
+        );
+
+        // `krate launch` refuses in its own process, before anything opens.
+        let launch = fleet
+            .krate()
+            .arg("launch")
+            .arg(bundle)
+            .output()
+            .expect("launch");
+        let launch_err = String::from_utf8_lossy(&launch.stderr);
+        assert!(!launch.status.success(), "launch {reason}: {launch_err}");
+        assert!(launch_err.contains(words), "launch {reason}: {launch_err}");
+
+        // MCP.
+        let answer = mcp_run(&fleet, bundle);
+        assert!(answer.contains(words), "mcp {reason}: {answer}");
+        assert!(
+            answer.contains("\"isError\":true"),
+            "mcp {reason}: {answer}"
+        );
+    }
+
+    let records = fleet.records();
+    for (bundle, reason, _) in cases {
+        let name = bundle.file_stem().unwrap().to_string_lossy().to_string();
+        for door in ["terminal", "window", "mcp"] {
+            assert!(
+                records.iter().any(|r| r["event"] == "refused"
+                    && r["reason"] == reason
+                    && r["door"] == door
+                    && r["words"].as_str().is_some_and(|w| w.contains("Acme Labs"))),
+                "a {reason} record from the {door} door for {name}: {records:#?}"
+            );
+        }
+    }
+
+    // The trusted app opens, at the terminal and through MCP.
+    let run = fleet
+        .krate()
+        .arg("run")
+        .arg(&trusted)
+        .args(["--headless", "--auto-grant"])
+        .output()
+        .expect("run trusted");
+    assert_eq!(
+        run.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    let answer = mcp_run_granting(&fleet, &trusted, &["net.connect:api.acme.com:443"]);
+    assert!(
+        answer.contains("\"isError\":false"),
+        "mcp trusted: {answer}"
+    );
+    assert!(answer.contains("success"), "mcp trusted ran: {answer}");
+    let records = fleet.records();
+    let opened: Vec<_> = records.iter().filter(|r| r["event"] == "opened").collect();
+    assert_eq!(opened.len(), 2, "one opened record per open: {records:#?}");
+    let digest = {
+        let bytes = std::fs::read(&trusted).unwrap();
+        format!("sha256:{}", sha256_hex(&bytes))
+    };
+    for record in &opened {
+        assert_eq!(record["v"], 1);
+        assert_eq!(record["app"], "com.acme.trusted");
+        assert_eq!(record["name"], "trusted");
+        assert_eq!(record["version"], "1.0.0");
+        assert_eq!(record["digest"], digest.as_str());
+        assert_eq!(record["root"], root_hex.as_str(), "the delegation's root");
+        assert_eq!(record["signer"], release_hex.as_str(), "the release key");
+        assert!(record["krate"].as_str().is_some_and(|v| !v.is_empty()));
+        assert!(record["at"]
+            .as_str()
+            .is_some_and(|at| at.ends_with('Z') && at.len() == 20));
+        assert!(record["user"].is_string());
+    }
+    assert!(opened.iter().any(|r| r["door"] == "terminal"
+        && r["granted"] == serde_json::json!(["net.connect:api.acme.com:443"])));
+    assert!(opened.iter().any(|r| r["door"] == "mcp"));
+}
+
+/// The ceiling also holds for what a person grants: an optional capability
+/// the organisation blocks is shown in the prompt as blocked, is not one of
+/// the choices, and stays refused when everything is allowed.
+#[test]
+fn a_blocked_optional_capability_is_shown_and_cannot_be_granted() {
+    let fleet = Fleet::new();
+    fleet.policy("[capabilities]\ndeny = [\"random.bytes\"]\n");
+    let wasm = fleet.path("code.wasm");
+    std::fs::write(
+        &wasm,
+        include_bytes!("../../bundle/tests/fixtures/minimal-run.wasm"),
+    )
+    .unwrap();
+    let manifest = fleet.path("optional.toml");
+    std::fs::write(
+        &manifest,
+        "[app]\nid = \"com.acme.optional\"\nname = \"optional\"\nversion = \"1.0.0\"\n\
+         entry = \"code.wasm\"\nworld = \"krate:app/cli@0.1.0\"\n\n\
+         [[capabilities]]\ncap = \"random.bytes\"\nrationale = \"dice\"\nrequired = false\n\n\
+         [[capabilities]]\ncap = \"store.kv\"\nrationale = \"notes\"\nrequired = true\n",
+    )
+    .unwrap();
+    let bundle = fleet.path("optional.krate");
+    assert!(krate()
+        .arg("pack")
+        .arg(&wasm)
+        .arg("--manifest")
+        .arg(&manifest)
+        .arg("-o")
+        .arg(&bundle)
+        .status()
+        .unwrap()
+        .success());
+    let mut child = fleet
+        .krate()
+        .arg("run")
+        .arg(&bundle)
+        .args(["--headless", "--prompt"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("run");
+    child.stdin.as_mut().unwrap().write_all(b"A\n").unwrap();
+    let out = child.wait_with_output().unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(0), "{stderr}");
+    assert!(
+        stderr.contains("Not available on this computer (blocked by Acme Labs)"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("[1]") && !stderr.contains("[2]"),
+        "only store.kv is a choice: {stderr}"
+    );
+    let opened = fleet
+        .records()
+        .into_iter()
+        .find(|r| r["event"] == "opened")
+        .expect("opened");
+    assert_eq!(opened["granted"], serde_json::json!(["store.kv"]));
+    assert_eq!(opened["denied"], serde_json::json!(["random.bytes"]));
+}
+
+/// Proof item 3: a policy that cannot be read, names an unknown version, or
+/// carries an unknown key refuses to open apps, in words naming the key and
+/// the file, and is recorded as `policy-unreadable`.
+#[test]
+fn an_unusable_policy_refuses_to_open_apps() {
+    let fleet = Fleet::new();
+    let app = fleet.app("any", &[]);
+    let policy = fleet.path("policy.toml");
+    for (body, names) in [
+        ("version = 2\n", "`version` is 2"),
+        (
+            "version = 1\n[trust]\nalow_unsigned = true\n",
+            "`trust.alow_unsigned` is not a setting Krate knows",
+        ),
+        (
+            "version = 1\nfavourite = \"blue\"\n",
+            "`favourite` is not a setting Krate knows",
+        ),
+        (
+            "version = 1\n[trust]\nroots = [{ key = \"nothex\" }]\n",
+            "`trust.roots[0].key`",
+        ),
+        ("this is not toml at all [[[", "not valid TOML"),
+    ] {
+        std::fs::write(&policy, body).unwrap();
+        let run = fleet
+            .krate()
+            .arg("run")
+            .arg(&app)
+            .args(["--headless"])
+            .output()
+            .expect("run");
+        let stderr = String::from_utf8_lossy(&run.stderr);
+        assert!(!run.status.success(), "{body:?} must refuse: {stderr}");
+        assert!(
+            stderr.contains("Krate opens no apps on this computer"),
+            "{stderr}"
+        );
+        assert!(stderr.contains(names), "names the key: {stderr}");
+        assert!(
+            stderr.contains(&policy.display().to_string()),
+            "names the file: {stderr}"
+        );
+        let shown = fleet.krate().arg("policy").output().expect("policy");
+        assert_eq!(shown.status.code(), Some(1), "krate policy exits 1");
+        assert!(String::from_utf8_lossy(&shown.stdout).contains("cannot be used"));
+    }
+    // A policy that cannot be read at all: a folder where the file should be.
+    std::fs::remove_file(&policy).unwrap();
+    std::fs::create_dir(&policy).unwrap();
+    let run = fleet
+        .krate()
+        .arg("run")
+        .arg(&app)
+        .args(["--headless"])
+        .output()
+        .expect("run");
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    assert!(
+        !run.status.success() && stderr.contains("it cannot be read"),
+        "{stderr}"
+    );
+    // The organisation's record path is unknown, so the record goes to the
+    // default, and from there to this person's own when that cannot be
+    // written.
+    let fallback = fleet.home.path().join(".krate/logs/opens.jsonl");
+    let records = records_in(&fallback);
+    assert!(
+        records
+            .iter()
+            .filter(|r| r["reason"] == "policy-unreadable")
+            .count()
+            >= 6,
+        "every refusal recorded: {records:#?}"
+    );
+}
+
+/// Accept connections on a local port and count the requests that arrive.
+fn counting_listener() -> (String, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let seen = count.clone();
+    thread::spawn(move || {
+        for stream in listener.incoming().flatten() {
+            seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let mut stream = stream;
+            let mut buf = [0u8; 4096];
+            let _ = stream.set_read_timeout(Some(Duration::from_millis(500)));
+            let _ = stream.read(&mut buf);
+            let _ = stream.write_all(
+                b"HTTP/1.1 200 OK\r\ncontent-length: 2\r\ncontent-type: application/json\r\n\
+                  connection: close\r\n\r\n{}",
+            );
+        }
+    });
+    (url, count)
+}
+
+fn wait_for(count: &std::sync::atomic::AtomicUsize, at_least: usize, secs: u64) -> usize {
+    let deadline = Instant::now() + Duration::from_secs(secs);
+    while Instant::now() < deadline {
+        if count.load(std::sync::atomic::Ordering::SeqCst) >= at_least {
+            break;
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+    count.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+/// Proof item 4: under `counting = false` no usage request leaves the
+/// machine. The same run without the policy does send one, so the listener
+/// is proved to be listening.
+#[test]
+fn counting_off_sends_no_usage_at_all() {
+    let fleet = Fleet::new();
+    let app = fleet.app("counted", &[]);
+    let (url, count) = counting_listener();
+    let endpoint = format!("{url}/usage");
+
+    // No policy: the open is counted and sent.
+    let baseline = Fleet::new();
+    let out = baseline
+        .krate()
+        .env("KRATE_TEST_POLICY", "none")
+        .env("KRATE_USAGE_URL", &endpoint)
+        .env_remove("KRATE_NO_USAGE")
+        .env_remove("DO_NOT_TRACK")
+        .arg("run")
+        .arg(&app)
+        .arg("--headless")
+        .output()
+        .expect("run");
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        wait_for(&count, 1, 20) >= 1,
+        "the listener hears an ordinary open"
+    );
+    // Let the baseline's helper finish whatever else it sends.
+    thread::sleep(Duration::from_secs(2));
+    let before = count.load(std::sync::atomic::Ordering::SeqCst);
+
+    fleet.policy("[usage]\ncounting = false\n");
+    let app_arg = app.display().to_string();
+    for args in [
+        vec!["run", app_arg.as_str(), "--headless"],
+        vec!["usage-flush"],
+    ] {
+        let out = fleet
+            .krate()
+            .env("KRATE_USAGE_URL", &endpoint)
+            .env_remove("KRATE_NO_USAGE")
+            .env_remove("DO_NOT_TRACK")
+            .args(&args)
+            .output()
+            .expect("run");
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    assert_eq!(wait_for(&count, before + 1, 5), before, "nothing was sent");
+    let krate_dir = fleet.home.path().join(".krate");
+    assert!(
+        !krate_dir.join("usage-spool.jsonl").exists(),
+        "nothing was even queued"
+    );
+    assert!(!krate_dir.join("install-id").exists(), "no id was made");
+    let status = fleet
+        .krate()
+        .args(["telemetry", "on"])
+        .output()
+        .expect("telemetry");
+    assert!(String::from_utf8_lossy(&status.stdout).contains("your organisation turned it off"));
+}
+
+/// Proof item 5, the hub: under `[hub] url` a different hub asked for by
+/// `KRATE_HUB_URL` or `--hub` is refused in the organisation's words with
+/// nothing sent, and with nothing else named the pinned hub is used.
+#[test]
+fn a_pinned_hub_refuses_any_other_hub() {
+    let fleet = Fleet::new();
+    let (pinned, pinned_count) = counting_listener();
+    let (other, other_count) = counting_listener();
+    fleet.policy(&format!("[hub]\nurl = \"{pinned}\"\n"));
+
+    let refused = fleet
+        .krate()
+        .env("KRATE_HUB_URL", &other)
+        .args(["blocklist", "--update"])
+        .output()
+        .expect("blocklist");
+    let stderr = String::from_utf8_lossy(&refused.stderr);
+    assert!(!refused.status.success(), "{stderr}");
+    assert!(
+        stderr.contains(&format!("lets this computer use only the hub at {pinned}")),
+        "{stderr}"
+    );
+    assert!(stderr.contains("KRATE_HUB_URL asks for"), "{stderr}");
+
+    let app = fleet.app("published", &[]);
+    let flag = fleet
+        .krate()
+        .env_remove("KRATE_HUB_URL")
+        .arg("publish")
+        .arg(&app)
+        .args(["--hub", &other])
+        .output()
+        .expect("publish");
+    let stderr = String::from_utf8_lossy(&flag.stderr);
+    assert!(
+        !flag.status.success() && stderr.contains("--hub asks for"),
+        "{stderr}"
+    );
+    assert_eq!(
+        wait_for(&other_count, 1, 2),
+        0,
+        "the other hub heard nothing"
+    );
+
+    // Nothing else named: the pinned hub is the one asked.
+    let _ = fleet
+        .krate()
+        .env_remove("KRATE_HUB_URL")
+        .args(["blocklist", "--update"])
+        .output()
+        .expect("blocklist");
+    assert!(
+        wait_for(&pinned_count, 1, 5) >= 1,
+        "the pinned hub was asked"
+    );
+    assert_eq!(other_count.load(std::sync::atomic::Ordering::SeqCst), 0);
+}
+
+/// Proof item 5, Studio: `[studio] ai = false` stops an AI build before any
+/// provider is contacted, and `providers` stops one that is not listed. The
+/// provider is a fake `claude` that leaves a mark whenever it is started;
+/// without a policy it is started, so the mark proves the test bites.
+#[cfg(unix)]
+#[test]
+fn studio_ai_off_stops_a_build_before_any_provider_is_contacted() {
+    use std::os::unix::fs::PermissionsExt;
+    let fleet = Fleet::new();
+    let bin = fleet.path("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let mark = fleet.path("provider-was-contacted");
+    let fake = bin.join("claude");
+    std::fs::write(
+        &fake,
+        format!(
+            "#!/bin/sh\necho \"$@\" >> '{}'\necho '{{}}'\n",
+            mark.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let path = format!(
+        "{}:{}",
+        bin.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let plan = |policy: Option<&str>| {
+        if let Some(body) = policy {
+            fleet.policy(body);
+        }
+        let mut command = fleet.krate();
+        if policy.is_none() {
+            command.env("KRATE_TEST_POLICY", "none");
+        }
+        let child = command
+            .env("PATH", &path)
+            .args([
+                "plan",
+                "a habit tracker that counts my morning runs",
+                "--agent",
+                "claude",
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("plan");
+        output_bounded_child(child, 60)
+    };
+
+    let (code, stderr) = plan(Some("[studio]\nai = false\n"));
+    assert_ne!(code, Some(0), "{stderr}");
+    assert!(
+        stderr.contains("has turned off building apps with AI on this computer"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("nothing was sent to any AI"), "{stderr}");
+    assert!(!mark.exists(), "no provider was started");
+
+    let (code, stderr) = plan(Some("[studio]\nproviders = [\"codex\"]\n"));
+    assert_ne!(code, Some(0), "{stderr}");
+    assert!(
+        stderr.contains("allows building with codex only"),
+        "{stderr}"
+    );
+    assert!(!mark.exists(), "an unlisted provider was not started");
+
+    let _ = plan(None);
+    assert!(
+        mark.exists(),
+        "without the policy the fake provider is started"
+    );
+}
+
+fn output_bounded_child(mut child: std::process::Child, secs: u64) -> (Option<i32>, String) {
+    let deadline = Instant::now() + Duration::from_secs(secs);
+    loop {
+        if let Ok(Some(_)) = child.try_wait() {
+            break;
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            break;
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+    let out = child.wait_with_output().expect("output");
+    (
+        out.status.code(),
+        String::from_utf8_lossy(&out.stderr).to_string(),
+    )
+}
+
+/// `[runtime] interpreter = true` runs the app on the interpreter, from the
+/// policy and not the environment.
+#[test]
+fn a_policy_can_put_every_app_on_the_interpreter() {
+    let fleet = Fleet::new();
+    let app = fleet.app("interpreted", &[]);
+    let run = |body: &str| {
+        fleet.policy(body);
+        let out = fleet
+            .krate()
+            .env("KRATE_STAGE_TIMES", "1")
+            .env_remove("KRATE_PULLEY")
+            .arg("run")
+            .arg(&app)
+            .arg("--headless")
+            .output()
+            .expect("run");
+        let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+        assert!(out.status.success(), "{stderr}");
+        stderr
+    };
+    assert!(run("[runtime]\ninterpreter = true\n").contains("engine is the interpreter (pulley64)"));
+    assert!(!run("[runtime]\ninterpreter = false\n").contains("engine is the interpreter"));
+    let shown = fleet.krate().arg("policy").output().unwrap();
+    assert!(!String::from_utf8_lossy(&shown.stdout).contains("interpreter"));
+    fleet.policy("[runtime]\ninterpreter = true\n");
+    let shown = fleet.krate().arg("policy").output().unwrap();
+    assert!(String::from_utf8_lossy(&shown.stdout).contains("they may run slower this way"));
+}
+
+/// `krate policy check` gives the verdict and the exact words, and runs
+/// and records nothing.
+#[test]
+fn policy_check_says_whether_an_app_would_open_here() {
+    let fleet = Fleet::new();
+    let (root, root_hex) = fleet.key("root");
+    fleet.policy(&format!(
+        "[trust]\nroots = [{{ name = \"Acme Labs\", key = \"{root_hex}\" }}]\n"
+    ));
+    let unsigned = fleet.app("loose", &[]);
+    let signed = fleet.app("good", &[]);
+    fleet.sign(&signed, &root);
+    let no = fleet
+        .krate()
+        .args(["policy", "check"])
+        .arg(&unsigned)
+        .output()
+        .unwrap();
+    assert_eq!(no.status.code(), Some(1));
+    let words = String::from_utf8_lossy(&no.stdout);
+    assert!(
+        words.contains("would not open here") && words.contains("allows only signed apps"),
+        "{words}"
+    );
+    let yes = fleet
+        .krate()
+        .args(["policy", "check", "--json"])
+        .arg(&signed)
+        .output()
+        .unwrap();
+    assert_eq!(
+        yes.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&yes.stderr)
+    );
+    let json: serde_json::Value = serde_json::from_slice(&yes.stdout).unwrap();
+    assert_eq!(json["opens"], true);
+    assert!(fleet.records().is_empty(), "a check records nothing");
+}

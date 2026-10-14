@@ -29,6 +29,7 @@ use krate_policy::SessionPolicy;
 use krate_runtime::{embed, Config};
 use serde_json::{json, Value};
 
+use crate::audit::RecordDoor;
 use crate::authoring_context;
 
 pub fn serve() -> Result<()> {
@@ -320,6 +321,7 @@ fn run_component_tool(arguments: &Value) -> Result<Value> {
     // identical either way, and a fetched bundle gets no authority for having
     // been fetched.
     let bundle_target = arguments.get("bundle").and_then(Value::as_str);
+    let mut fetched_sha: Option<String> = None;
     let opened = match bundle_target {
         Some(target) if krate_bundle::is_url(target) => {
             let allow_http = arguments
@@ -327,26 +329,35 @@ fn run_component_tool(arguments: &Value) -> Result<Value> {
                 .and_then(Value::as_bool)
                 .unwrap_or(false);
             let fetched = fetch_with_session(target, allow_http)?;
+            let subject =
+                crate::fleet::Subject::new(Some(&fetched.bundle), None, Some(&fetched.sha256));
+            // The machine policy first, as at every door (IC-949 P4).
+            crate::fleet::admit(&subject, RecordDoor::Mcp)?;
             // The same check every other door makes before an app runs
             // (IC-948 G): an organisation's private app runs only for a
             // current member, and offline only on a lease that holds.
-            crate::access::gate(
+            crate::fleet::org_gate(
+                &subject,
                 crate::access::Bytes::Fetched {
                     sha256: &fetched.sha256,
                     link: target,
                 },
                 crate::access::mark_of(&fetched.bundle),
-                crate::access::Door::Terminal,
+                RecordDoor::Mcp,
             )?;
+            fetched_sha = Some(fetched.sha256.clone());
             Some(fetched.bundle)
         }
         Some(target) => {
             let bundle =
                 krate_bundle::open(Path::new(target)).with_context(|| format!("open {target}"))?;
-            crate::access::gate(
+            let subject = crate::fleet::Subject::new(Some(&bundle), Some(Path::new(target)), None);
+            crate::fleet::admit(&subject, RecordDoor::Mcp)?;
+            crate::fleet::org_gate(
+                &subject,
                 crate::access::Bytes::File(Path::new(target)),
                 crate::access::mark_of(&bundle),
-                crate::access::Door::Terminal,
+                RecordDoor::Mcp,
             )?;
             Some(bundle)
         }
@@ -423,6 +434,23 @@ fn run_component_tool(arguments: &Value) -> Result<Value> {
         }
         None => SessionPolicy::from_cli_grants(&grants).context("parse grants")?,
     };
+    // The organisation's ceiling on whatever was granted (IC-949 P4).
+    let policy = crate::fleet::narrow(policy);
+
+    // Who this is, for the policy and the open record. A loose component
+    // is unsigned, so a computer that allows only signed apps refuses it
+    // here, as it would a bundle.
+    let subject = crate::fleet::Subject::new(
+        opened.as_ref(),
+        Some(Path::new(bundle_target.unwrap_or(component_path)))
+            .filter(|_| !bundle_target.is_some_and(krate_bundle::is_url)),
+        fetched_sha.as_deref(),
+    )
+    .with_manifest(manifest.as_ref());
+    if opened.is_none() {
+        crate::fleet::admit(&subject, RecordDoor::Mcp)?;
+    }
+    crate::fleet::admit_capabilities(&subject, RecordDoor::Mcp)?;
 
     let app = manifest.as_ref().map(|manifest| {
         json!({
@@ -441,6 +469,12 @@ fn run_component_tool(arguments: &Value) -> Result<Value> {
             .missing_required_with_reasons(manifest)
             .context("check required capabilities")?;
         if !missing.is_empty() {
+            crate::fleet::note_refused(
+                &subject,
+                RecordDoor::Mcp,
+                "permission-denied",
+                "missing required capabilities",
+            );
             let denied: Vec<String> = missing.iter().map(|(cap, _)| cap.to_string()).collect();
             // Why each one is missing, beside what is missing (CP2). Every
             // refusal here is a plain denial today -- this list is built from
@@ -514,8 +548,10 @@ fn run_component_tool(arguments: &Value) -> Result<Value> {
     let component = std::fs::read(component_path)
         .with_context(|| format!("read component {component_path}"))?;
 
+    crate::fleet::opened(&subject, RecordDoor::Mcp, &policy);
     let config = Config {
         session_policy: policy,
+        interpreter: crate::fleet::interpreter(),
         app_args,
         sandbox_root,
         ..Config::default()
