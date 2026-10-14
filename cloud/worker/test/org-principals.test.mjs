@@ -202,7 +202,11 @@ test("a private release asked for in JSON answers what it is, with no bytes; wit
   const look = await call(env, "dan", "GET", `/a/${digest}`, { headers: { accept: "application/json" } });
   assert.strictEqual(look.status, 200);
   assert.strictEqual(look.headers.get("content-type"), "application/json");
-  assert.deepStrictEqual(look.body, { name: "Bounce", version: "1.0.0", size: fixture("candidate-v1.krate").length, org: { slug: "acme", name: "Acme" } });
+  // Addendum 4, G2: the offline terms a lease issued now would carry.
+  const { offline, ...shown } = look.body;
+  assert.deepStrictEqual(shown, { name: "Bounce", version: "1.0.0", size: fixture("candidate-v1.krate").length, org: { slug: "acme", name: "Acme" } });
+  assert.strictEqual(offline.class, "days-7");
+  assert.ok(Math.abs(offline.until - (Math.floor(Date.now() / 1000) + 7 * 86400)) < 60, JSON.stringify(offline));
   assert.strictEqual(auditCount(env), before, "a look is not a download");
   // The CLI and the dashboards' downloads send no such Accept: bytes.
   for (const accept of [undefined, "*/*", "application/octet-stream"]) {
