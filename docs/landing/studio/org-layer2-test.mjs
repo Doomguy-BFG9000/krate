@@ -142,12 +142,12 @@ const two = [member(ALICE, "owner"), member("github:olga", "owner"), member("git
 {
   const susp = await page("https://krate.tech/org/?o=acme", DASH, { token: "t", routes: { ...orgRoutes(ALICE), ...withOrg(ALICE, { suspended: true, billing_state: "suspended" }) } });
   check(/paused for billing/.test(susp.el("banner").shown) && /already released still open/.test(susp.el("banner").shown), "a suspended organisation says its released apps still open");
-  const rec = { id: "r1", for: "github:carol", by: "github:krate-admin", reason: "the only owner lost access to their account", requested_at: 1760000000, effective_at: 1760259200, state: "waiting" };
+  const rec = { id: "r1", for: "github:carol", by: "github:krate-admin", reason: "the only owner lost access to their account", requested_at: 1760000000, effective_at: 1760259200, state: "waiting", not_mailed: ["github:olga"] };
   const ownerView = await page("https://krate.tech/org/?o=acme", DASH, {
     token: "t", routes: { ...orgRoutes(ALICE), ...withOrg(ALICE, { recovery: rec }), "POST /orgs/acme/recover/r1/object": () => [200, { recovery: { ...rec, state: "cancelled" } }] },
   });
   const b = ownerView.el("banner").shown;
-  check(/restoring ownership/.test(b) && /@krate-admin/.test(b) && /@carol/.test(b) && /lost access/.test(b) && /takes effect on/.test(b), "the recovery banner says who asked, for whom, why and when");
+  check(/Not mailed: @olga/.test(b) && /restoring ownership/.test(b) && /@krate-admin/.test(b) && /@carol/.test(b) && /lost access/.test(b) && /takes effect on/.test(b), "the recovery banner says who asked, for whom, why and when");
   button(ownerView.el("banner"), "Object").click();
   ownerView.el("sheetYes").onclick();
   await settle();

@@ -78,7 +78,7 @@
           });
         });
         add("warn", "Krate support is restoring ownership of " + name,
-          K.who(r.by).label + " asked on " + K.day(r.requested_at) + " to make " + K.who(r.for).label + " an owner, because: “" + (r.reason || "no reason given") + "”. It takes effect on " + K.moment(r.effective_at) + " unless an owner or admin objects.",
+          K.who(r.by).label + " asked on " + K.day(r.requested_at) + " to make " + K.who(r.for).label + " an owner, because: “" + (r.reason || "no reason given") + "”. It takes effect on " + K.moment(r.effective_at) + " unless an owner or admin objects." + (Array.isArray(r.not_mailed) && r.not_mailed.length ? " Not mailed: " + r.not_mailed.map(function (p) { return K.who(p).label; }).join(", ") + "." : ""),
           [object]);
       }
       box.hidden = !box.children.length;
