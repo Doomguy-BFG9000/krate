@@ -891,6 +891,8 @@ function shelfOf(raw) {
 /// `store` puts the bytes where /a/<hash> serves them and answers
 /// `{ size, sha256 }` or `{ problem }`; `extra` adds fields to the listing.
 async function admitJudged(env, { identity, judgement, hash, size, fields, store, extra }) {
+  const marked = privateAppRefusal(judgement);
+  if (marked) return marked;
   if (judgement.signature.state !== "absent" && judgement.signature.state !== "valid") {
     // A file that carries a signature that does not verify is not
     // published: to a recipient it would read as somebody's release that
@@ -4243,6 +4245,8 @@ async function bigVerdict(request, env, id) {
     });
     const answer = await response.clone().json().catch(() => null);
     if (!response.ok || !answer) {
+      // A refusal in the contract's shape is said in its own words.
+      if (answer && answer.error && answer.message) return refuse(answer.message);
       return refuse((await response.text().catch(() => "")) || "the listing could not be made");
     }
     if (answer.note && /already published/.test(answer.note)) {
@@ -7166,8 +7170,21 @@ function candidateArgs(judgement, digest, size, base) {
     version: (judgement.release && judgement.release.version) || app.version || "",
     namespace: (judgement.release && judgement.release.namespace) || "",
     signature: judgement.signature || { state: "absent" },
+    // The organisation the bundle's mark names, or null (Addendum 5).
+    mark: judgement.org_mark || null,
     base,
   };
+}
+
+/// The public door's refusal of an organisation's private app (Addendum 5):
+/// a marked bundle is published only with `krate publish --org`.
+function privateAppRefusal(judgement) {
+  const org = judgement && judgement.org_mark;
+  if (!org) return null;
+  return json(
+    { error: "private-app", message: `this app is private to ${org}: publish it with krate publish --org ${org}` },
+    422,
+  );
 }
 
 /// The site whose pages the hub links to: join links, the private-release

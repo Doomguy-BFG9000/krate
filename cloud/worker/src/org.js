@@ -101,6 +101,9 @@ const MESSAGES = {
   "digest-mismatch": (o, d) => d || `no candidate with that digest in ${o} -- check the digest with \`krate org releases\``,
   "not-signed-for-this-org": (o, d) =>
     `this app is not signed for ${o}: ${d || "it needs the organisation's root key or a release key that root delegated"}`,
+  "not-marked-for-this-org": (o, d) =>
+    d ||
+    `this app is not marked as ${o}'s private app -- mark and sign it with \`krate sign app.krate --org ${o}\`, then publish again`,
   "invite-expired": () => "this invitation has expired -- ask for a new one",
   "invite-used": () => "this invitation has already been used",
   "invite-for-someone-else": () =>
@@ -138,6 +141,7 @@ const STATUS = {
   "self-approval": 403,
   "digest-mismatch": 404,
   "not-signed-for-this-org": 422,
+  "not-marked-for-this-org": 422,
   "invite-expired": 410,
   "invite-used": 410,
   "invite-for-someone-else": 403,
@@ -974,6 +978,15 @@ export class Org {
     if (ctx.args.signature !== undefined) {
       const why = notSignedForOrg(ctx.args.signature, this.rootKey(), this.revokedKeys(), ctx.now);
       if (why) return this.deny(ctx, "candidate.publish", target, "not-signed-for-this-org", why);
+      // Addendum 5: a candidate carries its organisation's mark, and the
+      // signature just found valid covers it (the signed statement covers
+      // every entry). Asked only once the bundle has been judged.
+      if (ctx.args.mark !== ctx.slug) {
+        const detail = ctx.args.mark
+          ? `this app is marked as ${ctx.args.mark}'s private app, not ${ctx.slug}'s`
+          : undefined;
+        return this.deny(ctx, "candidate.publish", target, "not-marked-for-this-org", detail);
+      }
     }
     return null;
   }

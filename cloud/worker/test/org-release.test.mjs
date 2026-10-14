@@ -294,7 +294,12 @@ test("the public door refuses an organisation's bytes, and an organisation refus
     }),
     env,
   );
-  assert.strictEqual(pub.status, 409, "a copy of the bytes cannot be made public");
+  // Addendum 5: the bytes carry acme's mark, so the public door turns
+  // them back before it asks who holds them.
+  assert.strictEqual(pub.status, 422, "a copy of the bytes cannot be made public");
+  const said = await pub.json();
+  assert.strictEqual(said.error, "private-app");
+  assert.strictEqual(said.message, "this app is private to acme: publish it with krate publish --org acme");
   assert.strictEqual(env._kv.get(`app:${x}`), undefined);
   assert.strictEqual((await call(env, "stranger", "GET", `/a/${x}`)).status, 403, "and is still private");
 
@@ -311,17 +316,42 @@ test("the public door refuses an organisation's bytes, and an organisation refus
   const inv = await call(env, "alice", "POST", "/orgs/acme/invites", { json: { github: "frank", role: "developer" } });
   await call(env, "frank", "POST", `/orgs/acme/invites/${inv.body.code}/accept`);
   // A public listing of a signed bundle, then the same bytes to the org.
+  // A public app is unmarked (Addendum 5), so the organisation refuses it
+  // as not marked for it, before it asks who holds the bytes.
   const signedPublic = await worker.fetch(
     new Request("https://hub.example/publish", {
       method: "POST",
       headers: { authorization: "Bearer krs_frank", "x-krate-name": "Frank" },
-      body: fixture("root-signed.krate"),
+      body: fixture("unmarked.krate"),
     }),
     env,
   );
   assert.strictEqual(signedPublic.status, 200);
-  const held = await call(env, "frank", "POST", "/orgs/acme/candidates", { bytes: fixture("root-signed.krate") });
-  assert.deepStrictEqual([held.status, held.body.error], [409, "bytes-held-elsewhere"]);
+  const held = await call(env, "frank", "POST", "/orgs/acme/candidates", { bytes: fixture("unmarked.krate") });
+  assert.deepStrictEqual([held.status, held.body.error], [422, "not-marked-for-this-org"]);
+});
+
+/* ---- the mark (Addendum 5) ------------------------------------------- */
+
+test("a candidate must carry its organisation's mark under a valid signature", async () => {
+  const env = orgEnv();
+  await acme(env);
+  const unmarked = await call(env, "carol", "POST", "/orgs/acme/candidates", { bytes: fixture("unmarked.krate") });
+  assert.deepStrictEqual([unmarked.status, unmarked.body.error], [422, "not-marked-for-this-org"]);
+  assert.match(unmarked.body.message, /krate sign app\.krate --org acme/);
+  const other = await call(env, "carol", "POST", "/orgs/acme/candidates", { bytes: fixture("marked-globex.krate") });
+  assert.deepStrictEqual([other.status, other.body.error], [422, "not-marked-for-this-org"]);
+  assert.match(other.body.message, /marked as globex's private app, not acme's/);
+  // Neither is stored, and the refusals are in the audit.
+  for (const name of ["unmarked.krate", "marked-globex.krate"]) {
+    assert.strictEqual(await env.BUNDLES.head(await sha256Hex(fixture(name))), null, `${name} not stored`);
+  }
+  const audit = await call(env, "alice", "GET", "/orgs/acme/audit");
+  const denied = audit.body.events.filter((e) => e.reason === "not-marked-for-this-org");
+  assert.strictEqual(denied.length, 2);
+  // The marked one is taken.
+  const marked = await call(env, "carol", "POST", "/orgs/acme/candidates", { bytes: fixture("candidate-v1.krate") });
+  assert.strictEqual(marked.status, 201);
 });
 
 /* ---- the big-file path ------------------------------------------------ */
@@ -438,4 +468,64 @@ test("a big upload signed for another root is refused at the verdict and leaves 
   assert.match(status.problem, /not-signed-for-this-org/);
   assert.strictEqual(env._kv.get(`bigkey:${sha}`), undefined);
   assert.strictEqual(await env.BUNDLES.head(`big/${up.id}`), null);
+});
+
+/// One big upload, start to verdict, answering the verdict's status.
+async function bigVerdict(env, who, bytes, org) {
+  const sha = await sha256Hex(bytes);
+  const ask = { kind: "bundle", size: bytes.byteLength, sha256: sha, name: "Bounce" };
+  if (org) ask.org = org;
+  const started = await worker.fetch(
+    bigReq("/publish/big/start", {
+      method: "POST",
+      headers: { authorization: `Bearer gho_${who}`, "content-type": "application/json" },
+      body: JSON.stringify(ask),
+    }),
+    env,
+  );
+  const up = await started.json();
+  const part = await worker.fetch(
+    bigReq(`/publish/big/${up.id}/part/1`, {
+      method: "PUT",
+      headers: { "x-krate-upload": up.token, "content-length": String(bytes.byteLength) },
+      body: bytes,
+    }),
+    env,
+  );
+  const { etag } = await part.json();
+  await worker.fetch(
+    bigReq(`/publish/big/${up.id}/finish`, {
+      method: "POST",
+      headers: { "x-krate-upload": up.token, "content-type": "application/json" },
+      body: JSON.stringify({ parts: [{ part: 1, etag }] }),
+    }),
+    env,
+  );
+  const { judgeBundle } = await import("../src/index.js");
+  const verdict = await worker.fetch(
+    bigReq(`/internal/big/${up.id}/verdict`, {
+      method: "POST",
+      headers: { "x-krate-builder": SECRET, "content-type": "application/json" },
+      body: JSON.stringify({ ok: true, sha256: sha, judgement: judgeBundle(bytes).judgement }),
+    }),
+    env,
+  );
+  return { status: await verdict.json(), sha, id: up.id };
+}
+
+test("the big-file path holds the mark too: no unmarked candidate, no marked public app", async () => {
+  const env = orgEnv({ KRATE_BUILDER_SECRET: SECRET, BIG_PUBLISHERS: "carol", BIG_PART_BYTES: String(5 * 1024 * 1024) });
+  await acme(env);
+  const unmarked = await bigVerdict(env, "carol", fixture("unmarked.krate"), "acme");
+  assert.strictEqual(unmarked.status.status, "refused");
+  assert.match(unmarked.status.problem, /^not-marked-for-this-org: /);
+  assert.strictEqual(await env.BUNDLES.head(`big/${unmarked.id}`), null, "nothing kept");
+
+  const marked = await bigVerdict(env, "carol", fixture("candidate-v2.krate"), null);
+  assert.strictEqual(marked.status.status, "refused");
+  assert.strictEqual(
+    marked.status.problem,
+    "this app is private to acme: publish it with krate publish --org acme",
+  );
+  assert.strictEqual(env._kv.get(`app:${marked.sha}`), undefined, "never listed");
 });

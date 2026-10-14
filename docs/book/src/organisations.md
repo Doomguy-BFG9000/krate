@@ -93,7 +93,8 @@ the file that line writes, and the developer installs it:
 krate org release-key acme --delegation acme-release.json
 ```
 
-From then on `krate publish app.krate --org acme` signs the app itself, and
+From then on `krate publish app.krate --org acme` marks and signs the app
+itself, and
 Krate Studio's Send menu offers "Send to Acme for approval", which does the
 same and then shows "Waiting for approval in Acme" with a link to the
 Waiting tab.
@@ -105,16 +106,23 @@ krate delegate --root acme-root.pkcs8 --key carol-release.pkcs8 \
   --namespace 'acme/*' -o carol-acme.json
 ```
 
-The developer signs the app with it and uploads it:
+The developer marks the app as Acme's private app and signs it, in one
+command, and uploads it:
 
 ```sh
-krate sign app.krate --key carol-release.pkcs8 --namespace acme/app \
+krate sign app.krate --org acme --key carol-release.pkcs8 \
   --delegation carol-acme.json
 krate publish app.krate --org acme
 ```
 
-An unsigned app is turned back before anything is uploaded, with the exact
-commands to sign it. The hub also refuses an app signed under a delegation
+The mark is a small file inside the app, `ext/krate/org/private.json`, and
+the signature covers it, so it cannot be removed or changed without breaking
+the signature. Only a marked app is an organisation's private app: an app
+without the mark, signed or not, never contacts the hub when it opens, and a
+marked app cannot be published publicly.
+
+An unsigned or unmarked app is turned back before anything is uploaded, with
+the exact `krate sign --org` line to fix it. The hub also refuses an app signed under a delegation
 that had already expired, and anything signed by a release key the root has
 withdrawn. A signed one becomes a candidate: it waits for
 approval and opens for nobody yet. The upload prints its digest, the
@@ -163,11 +171,12 @@ app does not open. The person's own data in it is kept.
 This works for every way an app is opened: `krate run`, `krate launch`, a
 double-click, Krate Studio's Open, and an AI tool through `krate mcp`. Each
 says in words why a private app did not open, and how to sign in; on a
-double-click on a Mac or Windows, in a window.
+double-click on a Mac or Windows, in a window. A marked app whose signature
+does not hold is refused too.
 
 The limit to know: this is enforced by Krate on the device. Someone who
-copies the file and rebuilds it is no longer opening the organisation's
-signed app, but Krate cannot stop a file from being copied.
+strips the mark and the signature has an unsigned copy of the code, not the
+organisation's app, and Krate cannot stop a file from being copied.
 
 ## Withdrawing a release key
 
