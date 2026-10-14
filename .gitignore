@@ -136,3 +136,4 @@ evidence/e3/replay-*.tsv
 # Built by scripts/build-hub-validator.sh; not committed (ring's C parts
 # compile differently per clang).
 cloud/worker/src/validator.wasm
+cloud/worker/public/validator.wasm

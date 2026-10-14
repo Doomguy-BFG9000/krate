@@ -16,6 +16,11 @@
 
 use std::alloc::{alloc as raw_alloc, dealloc, Layout};
 
+/// What a browser tab that is an owner's device asks of the module
+/// (IC-958): signing, and the organisation's keyring and signing ring.
+mod browser;
+pub use browser::{delegation_to_json, keys_to_json, sign_frame};
+
 /// Verification never needs randomness; a request for it is a bug, and it
 /// is answered as one rather than with bytes that are not random.
 fn no_randomness_here(_dest: &mut [u8]) -> Result<(), getrandom::Error> {
@@ -121,9 +126,48 @@ pub unsafe extern "C" fn krate_revocations(ptr: *const u8, len: u32) -> *mut u8 
     answer(revocations_to_json(bytes))
 }
 
+/// [`keys_to_json`] over the JSON at `ptr`: one keyring or signing-ring
+/// operation for a browser that is an owner's device, answered the way
+/// [`krate_judge`] answers.
+///
+/// # Safety
+/// As [`krate_judge`].
+#[no_mangle]
+pub unsafe extern "C" fn krate_keys(ptr: *const u8, len: u32) -> *mut u8 {
+    let bytes = std::slice::from_raw_parts(ptr, len as usize);
+    answer(keys_to_json(bytes))
+}
+
+/// [`sign_frame`] over the frame at `ptr`: mark and sign a bundle. The
+/// answer is length-prefixed like [`krate_judge`]'s, and is itself a frame
+/// (a u32 JSON length, the JSON, the signed bundle).
+///
+/// # Safety
+/// As [`krate_judge`].
+#[no_mangle]
+pub unsafe extern "C" fn krate_sign(ptr: *const u8, len: u32) -> *mut u8 {
+    let bytes = std::slice::from_raw_parts(ptr, len as usize);
+    answer_bytes(sign_frame(bytes))
+}
+
+/// [`delegation_to_json`] over the JSON at `ptr`: the hub's reading of a
+/// permission slip a device signed.
+///
+/// # Safety
+/// As [`krate_judge`].
+#[no_mangle]
+pub unsafe extern "C" fn krate_delegation(ptr: *const u8, len: u32) -> *mut u8 {
+    let bytes = std::slice::from_raw_parts(ptr, len as usize);
+    answer(delegation_to_json(bytes))
+}
+
 /// A length-prefixed copy of `json` in the module's memory.
 unsafe fn answer(json: String) -> *mut u8 {
-    let json = json.into_bytes();
+    answer_bytes(json.into_bytes())
+}
+
+/// A length-prefixed copy of `json` (any bytes) in the module's memory.
+unsafe fn answer_bytes(json: Vec<u8>) -> *mut u8 {
     let total = 4 + json.len();
     let layout = Layout::from_size_align(total, 1).expect("layout");
     let out = raw_alloc(layout);

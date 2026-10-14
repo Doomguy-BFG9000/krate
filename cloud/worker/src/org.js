@@ -1119,7 +1119,7 @@ export class Org {
         ctx.now,
         digest,
       );
-      this.audit(ctx.actor, "candidate.approve", target, "allowed");
+      this.audit(ctx.actor, "candidate.approve", target, "allowed", ctx.approveReason || null);
     }
     return this.ok({ release: { digest, url: `${ctx.args.base || ""}/a/${digest}` } });
   }

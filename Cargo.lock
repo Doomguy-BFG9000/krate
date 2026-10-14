@@ -2617,6 +2617,7 @@ dependencies = [
  "hkdf",
  "hmac",
  "hpke",
+ "krate-bundle",
  "krate-http",
  "rand_core 0.9.5",
  "serde_json",
@@ -2781,8 +2782,11 @@ name = "krate-validator-wasm"
 version = "0.1.0"
 dependencies = [
  "getrandom 0.2.17",
+ "getrandom 0.3.4",
  "krate-bundle",
+ "krate-orgkeys",
  "serde_json",
+ "zeroize",
 ]
 
 [[package]]

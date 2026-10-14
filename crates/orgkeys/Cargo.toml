@@ -25,7 +25,10 @@ serde_json.workspace = true
 # with a network stack.
 ureq = { workspace = true, optional = true }
 krate-http = { path = "../http", optional = true }
+# The signing ring's duties (IC-958): permission slips and withdrawals
+# signed with the organisation's key, crates/bundle's Ed25519 (ring).
+krate-bundle = { path = "../bundle", default-features = false, optional = true }
 
 [features]
 default = []
-agent = ["dep:ureq", "dep:krate-http"]
+agent = ["dep:ureq", "dep:krate-http", "dep:krate-bundle"]

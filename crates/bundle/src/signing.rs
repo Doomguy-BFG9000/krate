@@ -85,6 +85,14 @@ pub struct Release {
     pub authority: String,
 }
 
+/// The bytes of an Ed25519 PKCS#8 version 2 document before the seed and
+/// between the seed and the public key: what ring's `generate_pkcs8`
+/// writes (checked by a test against ring itself).
+const PKCS8_V2_PREFIX: &[u8] = &[
+    0x30, 0x51, 0x02, 0x01, 0x01, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x04, 0x22, 0x04, 0x20,
+];
+const PKCS8_V2_MIDDLE: &[u8] = &[0x81, 0x21, 0x00];
+
 /// A publisher's signing key.
 ///
 /// Held by the developer, never by Krate. The private half is deliberately
@@ -115,6 +123,22 @@ impl SigningKey {
         Ed25519KeyPair::generate_pkcs8(&rng)
             .map(|doc| doc.as_ref().to_vec())
             .map_err(|_| SigningError::BadKey)
+    }
+
+    /// The PKCS#8 document for a key made elsewhere -- by WebCrypto in a
+    /// browser, which hands out the 32-byte seed (`d`) and public key (`x`)
+    /// of an Ed25519 key but exports PKCS#8 only as version 1, which ring
+    /// refuses. The document is the version 2 layout ring's own
+    /// [`Self::generate_pkcs8`] writes (RFC 5958 OneAsymmetricKey with the
+    /// public key, RFC 8410's Ed25519 identifier); it is then read back with
+    /// ring, which refuses a public key that is not the seed's.
+    pub fn pkcs8_from_seed(seed: &[u8; 32], public: &[u8; 32]) -> Result<Vec<u8>, SigningError> {
+        let mut document = PKCS8_V2_PREFIX.to_vec();
+        document.extend_from_slice(seed);
+        document.extend_from_slice(PKCS8_V2_MIDDLE);
+        document.extend_from_slice(public);
+        Ed25519KeyPair::from_pkcs8(&document).map_err(|_| SigningError::BadKey)?;
+        Ok(document)
     }
 
     /// The public half, as raw Ed25519 bytes.
@@ -817,6 +841,25 @@ mod tests {
         let rng = SystemRandom::new();
         let doc = Ed25519KeyPair::generate_pkcs8(&rng).expect("generate");
         SigningKey::from_pkcs8(doc.as_ref()).expect("load")
+    }
+
+    /// A key a browser made (its seed and public key, as WebCrypto's JWK
+    /// gives them) becomes the very document ring writes for a key, and a
+    /// public key that is not the seed's is refused.
+    #[test]
+    fn a_seed_and_its_public_key_make_the_document_ring_writes() {
+        for _ in 0..8 {
+            let doc = SigningKey::generate_pkcs8().unwrap();
+            assert_eq!(doc.len(), 83);
+            let seed: [u8; 32] = doc[16..48].try_into().unwrap();
+            let public: [u8; 32] = doc[51..83].try_into().unwrap();
+            assert_eq!(SigningKey::pkcs8_from_seed(&seed, &public).unwrap(), doc);
+            let key = SigningKey::from_pkcs8(&doc).unwrap();
+            assert_eq!(key.public_key(), public.to_vec());
+            let mut wrong = public;
+            wrong[0] ^= 1;
+            assert!(SigningKey::pkcs8_from_seed(&seed, &wrong).is_err());
+        }
     }
 
     fn bundle() -> BTreeMap<String, Vec<u8>> {

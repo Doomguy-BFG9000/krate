@@ -1797,7 +1797,11 @@ fn main() -> ExitCode {
     // The organisation's proxy, before any connection is made (IC-949 N).
     fleet::install_proxy();
 
-    match run() {
+    let result = run();
+    // What an organisation's app started beside it (IC-958) gets a moment
+    // to finish: each step is idempotent, so cutting it is safe.
+    org::finish_background(std::time::Duration::from_secs(3));
+    match result {
         Ok(code) => ExitCode::from(code),
         Err(err) => {
             let message = friendly_error(&err);
@@ -7988,7 +7992,24 @@ fn publish_to_org(
     // on (IC-948 I). Without one, nothing unsigned is ever uploaded.
     let unsigned = !matches!(opened.signature_verdict(), Ok(Some(_)));
     if unsigned && !is_card {
-        if let Some((key, delegation)) = org::installed_release_key(slug) {
+        // This computer's permission to publish for the organisation: one
+        // installed earlier, or -- the default path (IC-958) -- asked for
+        // now, approved by an owner's or admin's computer in the
+        // background, with no key handled by anyone.
+        let found = match org::installed_release_key(slug) {
+            Some(found) => Some(found),
+            None => {
+                let identity = org::identity_or_sign_in(
+                    "Publishing to an organisation needs your GitHub sign-in.",
+                )?;
+                match org::publish_permission(&org::hub_url(hub_override)?, &identity, slug)? {
+                    org::Permission::Ready { key, delegation } => Some((key, delegation)),
+                    org::Permission::Waiting => return Ok(org::EXIT_WAITING),
+                    org::Permission::ByHand => None,
+                }
+            }
+        };
+        if let Some((key, delegation)) = found {
             let app = opened
                 .manifest()
                 .app
@@ -8002,7 +8023,12 @@ fn publish_to_org(
             krate_bundle::add_org_mark(bundle, slug).map_err(|err| {
                 anyhow::anyhow!("could not mark {} for {slug}: {err}", bundle.display())
             })?;
-            sign_bundle_command(bundle, &key, false, &namespace, Some(&delegation))?;
+            if org::automatic_permission(slug) {
+                sign_for_org_quietly(bundle, &key, &namespace, &delegation)?;
+                println!("Signed for {slug}.");
+            } else {
+                sign_bundle_command(bundle, &key, false, &namespace, Some(&delegation))?;
+            }
             bytes = fs::read(bundle)
                 .with_context(|| format!("could not read bundle {}", bundle.display()))?;
             opened = open(&bytes)?;
@@ -8027,6 +8053,38 @@ fn publish_to_org(
     )?;
     usage::record(usage::Action::Publish);
     Ok(code)
+}
+
+/// Sign with the permission Krate set up itself (IC-958): what
+/// `krate sign --org` does, saying nothing about keys.
+fn sign_for_org_quietly(
+    file: &Path,
+    key_path: &Path,
+    namespace: &str,
+    delegation: &Path,
+) -> Result<()> {
+    let key = krate_bundle::signing::SigningKey::from_pkcs8(
+        &fs::read(key_path).with_context(|| format!("could not read {}", key_path.display()))?,
+    )
+    .map_err(|err| anyhow::anyhow!("this computer's permission to publish: {err}"))?;
+    let slip: krate_bundle::delegation::SignedDelegation = serde_json::from_str(
+        &fs::read_to_string(delegation)
+            .with_context(|| format!("could not read {}", delegation.display()))?,
+    )
+    .map_err(|_| anyhow::anyhow!("this computer's permission to publish could not be read"))?;
+    let version = krate_bundle::open(file)
+        .map_err(|err| anyhow::anyhow!("{err}"))?
+        .manifest()
+        .app
+        .version
+        .clone();
+    let signed_at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    krate_bundle::sign_bundle_delegated(file, &key, namespace, &version, signed_at, slip)
+        .map_err(|err| anyhow::anyhow!("{err}"))?;
+    Ok(())
 }
 
 /// Files offered beside a listing through the big-file path (IC-945).
@@ -15675,6 +15733,17 @@ fn run_component_inner(request: RunRequest) -> Result<u8> {
             None => access::Bytes::File(Path::new(&request.target)),
         };
         org_opened = fleet::org_gate_opened(&subject, bytes, access::mark_of(opened), door)?;
+        // While an organisation's app runs, this computer does its share
+        // for the organisation beside it (IC-958): quiet, never in the
+        // app's way.
+        if let Some(opened) = org_opened.as_ref() {
+            org::in_background(
+                opened.hub.clone(),
+                opened.slug.clone(),
+                opened.authorization.clone(),
+                opened.principal.clone(),
+            );
+        }
     }
 
     if !file.exists() {

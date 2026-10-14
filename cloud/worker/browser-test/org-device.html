@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Org device test</title>
+</head>
+<body>
+<p id="state">loading</p>
+<script src="/kit/org-device.js"></script>
+<script>
+/* What a dashboard page does with window.KrateOrgDevice (IC-958), driven
+ * by run.mjs: the hub and the sign-in come from the query string, the
+ * device lives in this browser's IndexedDB. */
+(function () {
+  var q = new URLSearchParams(location.search);
+  window.KrateOrgDevice.configure({ hub: q.get("hub"), token: q.get("token") });
+  document.getElementById("state").textContent = "ready";
+})();
+</script>
+</body>
+</html>

@@ -145,7 +145,7 @@ const ops = {
       recovery: null,
       devices: this.rows("SELECT d.*, e.version AS holds FROM key_devices d LEFT JOIN key_envelopes e ON e.device_id = d.device_id ORDER BY d.added_at")
         .filter((d) => all || d.principal === me.principal)
-        .map((d) => ({ device_id: d.device_id, principal: d.principal, display: displayOf(d.principal), name: d.name, added_at: d.added_at, state: d.state, holds: d.holds ?? null })),
+        .map((d) => ({ device_id: d.device_id, principal: d.principal, display: displayOf(d.principal), name: d.name, kind: d.kind === "browser" ? "browser" : "computer", added_at: d.added_at, state: d.state, holds: d.holds ?? null })),
     };
     if (holds) {
       // Who is waiting for the key: devices of active members without the
@@ -178,14 +178,17 @@ const ops = {
       return { status: 400, body: { error: "bad-request", message: "a device is a 64-hex X25519 public key and its id, the first 16 hex of the SHA-256 of that hex" } };
     }
     const name = String(ctx.args.name || "").slice(0, NAME_MAX);
+    // A browser that is an owner's device (IC-958) says so; anything else
+    // is a computer running Krate.
+    const kind = ctx.args.kind === "browser" ? "browser" : "computer";
     const was = this.deviceRow(id);
     if (was && (was.principal !== me.principal || was.public_key !== pub)) {
       return this.deny(ctx, "keys.device", target, "role-cannot", "that device is registered to someone else");
     }
     if (!was) {
       this.sql.exec(
-        "INSERT INTO key_devices (device_id, principal, public_key, name, added_at, state) VALUES (?, ?, ?, ?, ?, 'active')",
-        id, me.principal, pub, name, ctx.now,
+        "INSERT INTO key_devices (device_id, principal, public_key, name, added_at, state, kind) VALUES (?, ?, ?, ?, ?, 'active', ?)",
+        id, me.principal, pub, name, ctx.now, kind,
       );
       this.audit(me.principal, "key.device.add", target, "allowed", name || null);
     } else if (was.state !== "active") {
@@ -339,30 +342,41 @@ function exportKeys(store) {
 
 function install(OrgClass) {
   Object.assign(OrgClass.prototype, ops);
-  extendOrg({ schema: SCHEMA, mutations: ["keys-device-add", "keys-init", "keys-grant", "keys-rotate"] });
+  extendOrg({
+    schema: SCHEMA,
+    // Which kind of device (IC-958): a browser, or a computer running Krate.
+    columns: [["key_devices", "kind", "TEXT"]],
+    mutations: ["keys-device-add", "keys-init", "keys-grant", "keys-rotate"],
+  });
   const P = OrgClass.prototype;
   for (const name of ["op_remove", "op_export_begin", "op_swept"]) {
     if (typeof P[name] !== "function") throw new Error(`org-keys: ${name} is not installed`);
   }
 
   // Removing a member ends their devices' hold: their envelopes go, and the
-  // key is stale until a remaining device makes the next version.
+  // key is stale until a remaining device makes the next version. The same
+  // for a SCIM deactivation (org-signing.js calls this from scimRemove,
+  // which is installed after this module).
+  P.keysEndMember = function (actor, who, now) {
+    let ended = 0;
+    for (const d of this.rows("SELECT device_id FROM key_devices WHERE principal = ? AND state = 'active'", who)) {
+      this.sql.exec("UPDATE key_devices SET state = 'removed', removed_at = ? WHERE device_id = ?", now, d.device_id);
+      this.sql.exec("DELETE FROM key_envelopes WHERE device_id = ?", d.device_id);
+      this.audit(actor, "key.device.remove", `device:${d.device_id}`, "allowed", "member removed");
+      ended += 1;
+    }
+    const cur = this.currentKey();
+    if (cur && cur.state === "current") {
+      this.sql.exec("UPDATE key_versions SET state = 'stale', stale_since = ? WHERE version = ?", now, cur.version);
+      this.audit(actor, "key.stale", `key:v${cur.version}`, "allowed", `member removed: ${displayOf(who)}`);
+    }
+    return ended;
+  };
   const remove = P.op_remove;
   P.op_remove = function (ctx) {
     const who = this.targetOf(ctx);
     const answer = remove.call(this, ctx);
-    if (answer.status === 204 && who) {
-      for (const d of this.rows("SELECT device_id FROM key_devices WHERE principal = ? AND state = 'active'", who)) {
-        this.sql.exec("UPDATE key_devices SET state = 'removed', removed_at = ? WHERE device_id = ?", ctx.now, d.device_id);
-        this.sql.exec("DELETE FROM key_envelopes WHERE device_id = ?", d.device_id);
-        this.audit(ctx.actor, "key.device.remove", `device:${d.device_id}`, "allowed", "member removed");
-      }
-      const cur = this.currentKey();
-      if (cur && cur.state === "current") {
-        this.sql.exec("UPDATE key_versions SET state = 'stale', stale_since = ? WHERE version = ?", ctx.now, cur.version);
-        this.audit(ctx.actor, "key.stale", `key:v${cur.version}`, "allowed", `member removed: ${displayOf(who)}`);
-      }
-    }
+    if (answer.status === 204 && who) this.keysEndMember(ctx.actor, who, ctx.now);
     return answer;
   };
 
@@ -398,7 +412,7 @@ export async function orgKeysRoute(h) {
   if (rest.length === 3 && rest[1] === "devices" && method === "PUT") {
     const id = String(rest[2]).toLowerCase();
     return orgAnswer(
-      await mutateRaw("keys-device-add", (b) => ({ device_id: id, public_key: String(b.public_key || "").toLowerCase(), name: b.name })),
+      await mutateRaw("keys-device-add", (b) => ({ device_id: id, public_key: String(b.public_key || "").toLowerCase(), name: b.name, kind: b.kind })),
     );
   }
   if (rest.length === 2 && rest[1] === "init" && method === "POST") return orgAnswer(await mutateRaw("keys-init", (b) => b));

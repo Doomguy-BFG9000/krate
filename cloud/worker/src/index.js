@@ -60,6 +60,9 @@ import { orgSamlRoute, samlStart, samlAcs, samlMetadata } from "./org-saml.js";
 // The organisation keyring (F-316) and the apps' team data sealed with it
 // (IC-951, store.org).
 import { orgKeysRoute } from "./org-keys.js";
+// Signing nobody has to think about (IC-958): the signing ring, publishers
+// approved in the background, solo release.
+import { orgSigningRoute } from "./org-signing.js";
 import { orgDataRoute } from "./org-data.js";
 // Inventory, provenance and ownership (IC-954), after release control and review.
 import { inventoryRoute, provenanceArg } from "./org-inventory.js";
@@ -7465,11 +7468,13 @@ async function orgRouteCore(request, url, env, identity) {
   const h = {
     request, url, env, slug, rest, method, principals, identity, site, base,
     askRaw, mutateRaw, orgAsk, orgAnswer, json, readBody, readBounded, isAdmin, smtpSend, fetchBundle, idempotencyOf,
+    validate: callValidator,
   };
   const routed =
     (await orgLifecycleRoute(h)) || (await orgBillingRoute(h)) || (await inventoryRoute(h)) || (await orgReleaseRoute(h)) || (await connectionRoute(h)) ||
     (await orgScimRoute(h)) || (await auditExportRoute(h)) || (await orgSamlRoute(h)) ||
     (await orgKeysRoute(h)) ||
+    (await orgSigningRoute(h)) ||
     (await orgDataRoute(h));
   if (routed) return routed;
   return text("not found", 404);
