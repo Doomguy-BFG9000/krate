@@ -121,7 +121,10 @@ const ops = {
     if (audience.some((g) => mine.has(g))) return null;
     const name = this.org().name || ctx.slug;
     const groups = audience.length ? `the ${spoken(audience)} group${audience.length === 1 ? "" : "s"}` : "some groups";
-    return this.deny(ctx, action, target, "not-in-audience", `this app is only for ${groups} in ${name} -- ask an admin of ${name} to add you`);
+    const refusal = this.deny(ctx, action, target, "not-in-audience", `this app is only for ${groups} in ${name} -- ask an admin of ${name} to add you`);
+    // Which groups, for the pages to say; the person is a member already.
+    refusal.body.groups = audience;
+    return refusal;
   },
 
   withdrawnRefusal(ctx, c, action, target) {

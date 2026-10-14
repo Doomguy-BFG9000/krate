@@ -238,6 +238,7 @@ test("groups are owners' and admins'; a release for finance refuses others, and 
   const refused = await call(env, "carol", "GET", `/a/${d2}`);
   assert.deepStrictEqual(pair(refused), [403, "not-in-audience"]);
   assert.strictEqual(refused.body.message, "this app is only for the finance and ops groups in Acme -- ask an admin of Acme to add you");
+  assert.deepStrictEqual(refused.body.groups, ["finance", "ops"]);
   assert.deepStrictEqual(pair(await look(env, "carol", d2)), [403, "not-in-audience"]);
   assert.deepStrictEqual(pair(await call(env, "carol", "GET", `/orgs/acme/leases/${d2}`)), [403, "not-in-audience"]);
   assert.deepStrictEqual(pair(await call(env, "carol", "GET", `/orgs/acme/apps/${enc(APP)}/current`)), [403, "not-in-audience"]);
