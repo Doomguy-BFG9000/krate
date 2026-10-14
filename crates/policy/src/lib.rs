@@ -44,6 +44,11 @@ pub enum Refusal {
     /// Declared optional, not yet decided, and the app asked before anyone
     /// was available to answer. The app may ask again later.
     Deferred,
+    /// The organisation that manages this computer does not allow it
+    /// (IC-949 P4): a capability its policy denies, or a network place
+    /// outside its ceiling. Nobody in this run can change it, so it is
+    /// neither the recipient's decision nor worth asking again.
+    Organisation,
 }
 
 impl Refusal {
@@ -57,6 +62,7 @@ impl Refusal {
             Self::Expired => "expired",
             Self::Unavailable => "unavailable",
             Self::Deferred => "deferred",
+            Self::Organisation => "organisation",
         }
     }
 
@@ -170,6 +176,10 @@ pub struct SessionPolicy {
     /// the reason is an attribute of it, so a new reason cannot be added
     /// without deciding what `decide` reports for it.
     withdrawn: std::collections::BTreeMap<Capability, Refusal>,
+    /// What the organisation that manages this computer allows at most
+    /// (IC-949). Empty unless a machine policy says otherwise. It only ever
+    /// narrows: a grant it blocks is not allowed whoever granted it.
+    organisation: OrgCeiling,
 }
 
 impl SessionPolicy {
@@ -190,6 +200,7 @@ impl SessionPolicy {
             grants: resolved,
             provenance,
             withdrawn: std::collections::BTreeMap::new(),
+            organisation: OrgCeiling::default(),
         }
     }
 
@@ -214,7 +225,30 @@ impl SessionPolicy {
             grants: resolved,
             provenance,
             withdrawn: std::collections::BTreeMap::new(),
+            organisation: OrgCeiling::default(),
         }
+    }
+
+    /// The same policy under an organisation's ceiling (IC-949 P4).
+    ///
+    /// Every policy this run builds passes through here, so a capability
+    /// the organisation blocks is refused with [`Refusal::Organisation`]
+    /// whatever was granted -- by a person, `--grant`, `--auto-grant` or a
+    /// remembered answer. It replaces any ceiling already set, and an empty
+    /// ceiling changes nothing.
+    pub fn with_organisation(mut self, ceiling: OrgCeiling) -> Self {
+        self.organisation = ceiling;
+        self
+    }
+
+    /// The organisation's ceiling this policy carries.
+    pub fn organisation(&self) -> &OrgCeiling {
+        &self.organisation
+    }
+
+    /// Does the organisation block this capability, and how?
+    pub fn organisation_blocks(&self, cap: &Capability) -> Option<OrgBlock> {
+        self.organisation.blocks(cap)
     }
 
     /// Withdraw a grant mid-run.
@@ -290,6 +324,12 @@ impl SessionPolicy {
                     reason: Refusal::Undeclared,
                 };
             }
+        }
+        if self.organisation.blocks(required).is_some() {
+            // Above any grant: the organisation's ceiling only narrows.
+            return Decision::Refused {
+                reason: Refusal::Organisation,
+            };
         }
         if let Some(reason) = self.withdrawal_reason(required) {
             // Revoked or expired: report which, so an app can tell a person
@@ -478,6 +518,11 @@ impl SessionPolicy {
         if self.is_revoked(required) {
             return false;
         }
+        // And the organisation's ceiling, for the same reason: this is the
+        // gate the runtime actually asks.
+        if self.organisation.blocks(required).is_some() {
+            return false;
+        }
         self.grants
             .iter()
             .any(|grant| capability_allows(grant, required))
@@ -566,6 +611,113 @@ pub fn reaches_outside_the_run(cap: &Capability) -> bool {
     REACHES_OUTSIDE
         .iter()
         .any(|entry| *entry == name || *entry == with_resource)
+}
+
+/// How an organisation blocks a capability (IC-949 P4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OrgBlock {
+    /// `[capabilities] deny` names it.
+    Denied,
+    /// A network place outside `[network] allow`.
+    OutsideNetwork,
+}
+
+/// One `[capabilities] deny` entry: a capability name exactly as the
+/// manifest spells it (`camera.capture`, `audio.capture`, `ui.clipboard`).
+/// A pattern capability (`net.connect:<host>:<port>`) is matched on its name
+/// before the first `:`, so `fs.write` blocks every `fs.write` grant.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct DenyRule(String);
+
+impl DenyRule {
+    /// Parse one deny entry, refusing a name Krate does not know: a typo in
+    /// a security setting must not read as "allowed".
+    pub fn parse(entry: &str) -> std::result::Result<Self, String> {
+        let entry = entry.trim();
+        if entry.contains(':') {
+            return Err(format!(
+                "`{entry}` is not a capability name: name it without the part after `:` \
+                 (for example `{}`)",
+                entry.split(':').next().unwrap_or_default()
+            ));
+        }
+        if krate_manifest::supported_capability_specs()
+            .iter()
+            .any(|spec| spec.name() == entry)
+        {
+            return Ok(Self(entry.to_string()));
+        }
+        Err(format!(
+            "`{entry}` is not a capability Krate knows (names are spelled as an app's \
+             manifest spells them, like camera.capture or audio.capture)"
+        ))
+    }
+
+    /// The capability name this rule blocks.
+    pub fn name(&self) -> &str {
+        &self.0
+    }
+
+    fn covers(&self, cap: &Capability) -> bool {
+        format!("{}.{}", cap.module(), cap.action()) == self.0
+    }
+}
+
+impl std::fmt::Display for DenyRule {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/// What an organisation allows at most on this computer (IC-949 P4).
+///
+/// Built by the CLI from the machine policy and carried by every
+/// [`SessionPolicy`] of the run. The default blocks nothing.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct OrgCeiling {
+    /// `[capabilities] deny`.
+    pub deny: Vec<DenyRule>,
+    /// `[network] allow`, each pattern normalised. `None` is no ceiling.
+    pub network: Option<Vec<String>>,
+}
+
+impl OrgCeiling {
+    /// Parse one `[network] allow` entry in the manifest's own grammar
+    /// (host or `*.host`, `:port` or `:*`).
+    pub fn parse_network(entry: &str) -> std::result::Result<String, String> {
+        Capability::new("net", "connect", Some(entry.trim()))
+            .map_err(|err| format!("`{entry}` is not a network place ({err})"))?;
+        normalize_net_resource(entry.trim())
+            .ok_or_else(|| format!("`{entry}` is not a network place"))
+    }
+
+    /// Is this the ceiling that blocks nothing?
+    pub fn is_empty(&self) -> bool {
+        self.deny.is_empty() && self.network.is_none()
+    }
+
+    /// Does this ceiling block `cap`, and how?
+    ///
+    /// A `net.connect` pattern passes the network ceiling only when one
+    /// allowed pattern covers ALL of it, so a declared `*:443` is outside
+    /// `*.acme.com:443` even though some hosts it names are inside.
+    pub fn blocks(&self, cap: &Capability) -> Option<OrgBlock> {
+        if self.deny.iter().any(|rule| rule.covers(cap)) {
+            return Some(OrgBlock::Denied);
+        }
+        if let (Some(allowed), "net", "connect") = (&self.network, cap.module(), cap.action()) {
+            let Some(place) = cap.resource().and_then(normalize_net_resource) else {
+                return Some(OrgBlock::OutsideNetwork);
+            };
+            if !allowed
+                .iter()
+                .any(|pattern| net_resource_pattern_matches(pattern, &place))
+            {
+                return Some(OrgBlock::OutsideNetwork);
+            }
+        }
+        None
+    }
 }
 
 pub fn resolve_session_policy(
@@ -864,6 +1016,7 @@ mod tests {
             Refusal::Revoked,
             Refusal::Expired,
             Refusal::Unavailable,
+            Refusal::Organisation,
         ] {
             assert!(
                 !reason.may_retry(),
@@ -1779,5 +1932,107 @@ rationale = "listens"
             .expect("parse required");
 
         assert!(policy.allows(&required));
+    }
+
+    /// An organisation's ceiling refuses what it blocks whoever granted it,
+    /// with its own reason, and leaves everything else alone (IC-949 P4).
+    #[test]
+    fn an_organisation_ceiling_only_narrows() {
+        let ceiling = OrgCeiling {
+            deny: vec![
+                DenyRule::parse("camera.capture").expect("camera"),
+                DenyRule::parse("audio.capture").expect("microphone"),
+            ],
+            network: Some(vec![
+                OrgCeiling::parse_network("*.acme.com:443").expect("pattern"),
+                OrgCeiling::parse_network("api.github.com:443").expect("pattern"),
+            ]),
+        };
+        let granted = SessionPolicy::from_grants([
+            cap("camera.capture"),
+            cap("audio.capture"),
+            cap("net.connect:*:443"),
+            cap("store.kv"),
+        ])
+        .with_organisation(ceiling);
+        let declared: BTreeSet<Capability> = granted.grants().clone();
+
+        for blocked in [
+            "camera.capture",
+            "audio.capture",
+            "net.connect:evil.example:443",
+        ] {
+            assert!(!granted.allows(&cap(blocked)), "{blocked} is blocked");
+            assert_eq!(
+                granted.decide(&cap(blocked), Some(&declared)).refusal(),
+                Some(&Refusal::Organisation),
+                "{blocked} says the organisation refused it"
+            );
+        }
+        // Inside the ceiling and granted: allowed.
+        assert!(granted.allows(&cap("net.connect:api.acme.com:443")));
+        assert!(granted.allows(&cap("net.connect:api.github.com:443")));
+        assert!(granted.allows(&cap("store.kv")));
+        // The ceiling grants nothing by itself.
+        let nothing = SessionPolicy::default().with_organisation(OrgCeiling {
+            deny: Vec::new(),
+            network: Some(vec!["*:*".to_string()]),
+        });
+        assert!(!nothing.allows(&cap("net.connect:api.acme.com:443")));
+        // A declared pattern wider than the ceiling is outside it.
+        assert_eq!(
+            granted.organisation_blocks(&cap("net.connect:*:443")),
+            Some(OrgBlock::OutsideNetwork)
+        );
+        assert_eq!(
+            granted.organisation_blocks(&cap("net.connect:api.acme.com:*")),
+            Some(OrgBlock::OutsideNetwork)
+        );
+        assert_eq!(
+            granted.organisation_blocks(&cap("net.connect:*.acme.com:443")),
+            None
+        );
+        assert!(!Refusal::Organisation.is_recipient_decision());
+        assert!(!Refusal::Organisation.may_retry());
+    }
+
+    /// A deny entry Krate does not know is refused rather than ignored: a
+    /// typo in a security setting must not read as "allowed".
+    #[test]
+    fn a_deny_entry_krate_does_not_know_is_refused() {
+        for bad in [
+            "camera",
+            "microphone",
+            "screen.capture",
+            "camra.capture",
+            "ui.clipboard:read",
+            "",
+        ] {
+            assert!(DenyRule::parse(bad).is_err(), "{bad:?} must be refused");
+        }
+        for good in [
+            "camera.capture",
+            "audio.capture",
+            "ui.clipboard",
+            "net.connect",
+        ] {
+            assert!(DenyRule::parse(good).is_ok(), "{good:?} is a real name");
+        }
+        // A pattern capability is matched on its name before the first ':'.
+        let net = SessionPolicy::from_grants([cap("net.connect:api.acme.com:443")])
+            .with_organisation(OrgCeiling {
+                deny: vec![DenyRule::parse("net.connect").expect("name")],
+                network: None,
+            });
+        assert!(!net.allows(&cap("net.connect:api.acme.com:443")));
+        assert!(OrgCeiling::parse_network("acme.com").is_err());
+        assert!(OrgCeiling::parse_network("acme.com:99999").is_err());
+        let rule = DenyRule::parse("ui.clipboard").expect("name");
+        let policy =
+            SessionPolicy::from_grants([cap("ui.clipboard:read")]).with_organisation(OrgCeiling {
+                deny: vec![rule],
+                network: None,
+            });
+        assert!(!policy.allows(&cap("ui.clipboard:read")));
     }
 }

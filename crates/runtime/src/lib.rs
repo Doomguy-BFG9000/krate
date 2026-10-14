@@ -221,6 +221,12 @@ pub struct Config {
     /// press it, and watch that it stays open -- and write what was observed to
     /// the plan's report path. Only ever set by `check-app`'s usability stage.
     pub usability_plan: Option<usability::UsabilityPlan>,
+    /// Run every app on wasmtime's portable interpreter (pulley) instead of
+    /// compiling it to this machine's code. Set by the CLI from an
+    /// organisation's `[runtime] interpreter = true` (IC-949): the same
+    /// switch `KRATE_PULLEY=1` makes for measurement, carried as
+    /// configuration so a policy does not depend on an environment.
+    pub interpreter: bool,
 }
 
 impl Default for Config {
@@ -249,6 +255,7 @@ impl Default for Config {
             screenshot_path: None,
             screenshot_scale: 2.0,
             usability_plan: None,
+            interpreter: false,
         }
     }
 }
@@ -543,13 +550,18 @@ impl Runtime {
         // The same interpreter, anywhere, on request: KRATE_PULLEY=1 is the
         // dev knob that answers "how slow would this app be on an iPhone"
         // without owning one. Not documented for users; measurement only.
+        // An organisation's `[runtime] interpreter = true` takes the same
+        // road, from configuration rather than the environment (IC-949).
         #[cfg(not(any(target_os = "ios", target_arch = "wasm32")))]
-        if std::env::var("KRATE_PULLEY").as_deref() == Ok("1") {
+        let interpreted = config.interpreter || std::env::var("KRATE_PULLEY").as_deref() == Ok("1");
+        #[cfg(not(any(target_os = "ios", target_arch = "wasm32")))]
+        if interpreted {
             if let Err(err) = wt_config.target("pulley64") {
                 return Err(RuntimeError::EngineInit(format!(
                     "pulley backend unavailable: {err}"
                 )));
             }
+            stage_mark("runtime: engine is the interpreter (pulley64)");
         }
 
         if config.fuel.is_some() {
@@ -602,8 +614,14 @@ impl Runtime {
 
         // Threaded apps (IC-929): a core module may import a shared memory
         // and use atomics. Nothing changes for a component.
+        //
+        // Not on the interpreter: pulley has no threads, and asking for them
+        // there made engine creation fail for every app, threaded or not
+        // ("the wasm_threads feature is not supported on this compiler
+        // configuration"). A threaded app on the interpreter is refused at
+        // load instead, which is the honest limit.
         #[cfg(not(any(target_os = "ios", target_arch = "wasm32")))]
-        {
+        if !interpreted {
             wt_config.wasm_threads(true);
             wt_config.shared_memory(true);
         }
