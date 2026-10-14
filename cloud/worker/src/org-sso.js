@@ -18,12 +18,13 @@
 // So a sign-in at an unproved domain is refused (`domain-not-verified`),
 // before any account is found, merged or made.
 //
-// Two halves live here: the commands the Org Durable Object runs (installed
-// onto it by installSso, so org.js changes by a few lines), and the Worker's
-// routes, which do everything asynchronous -- encryption, DNS, the issuer's
-// endpoints, signature checks -- before the store is asked anything.
+// Two halves live here: the commands the Org Durable Object runs
+// (installed when this module is imported, through the store's extendOrg),
+// and the Worker's routes, which do everything asynchronous -- encryption,
+// DNS, the issuer's endpoints, signature checks -- before the store is
+// asked anything.
 
-import { parsePrincipal, MUTATIONS, ROLES } from "./org.js";
+import { Org, extendOrg, parsePrincipal, ROLES } from "./org.js";
 
 // ------------------------------------------------------------ the store
 
@@ -64,9 +65,6 @@ function refuse(org, ctx, action, target, reason, message, status) {
   return answer;
 }
 
-// A function, not a constant: org.js installs these while the modules
-// that import each other are still being evaluated, and a function
-// declaration is ready before any of them runs.
 function ssoOps() {
   return {
     sso() {
@@ -289,9 +287,12 @@ function ssoOps() {
 /// Teach the Org class company sign-in: its commands (an owner's alone;
 /// the contract's role table stays as it is), and the `sso-required` check on every route that starts
 /// from a member's standing.
-export function installSso(OrgClass) {
+function installSso(OrgClass) {
+  // The commands go on as methods (they call each other and the store's
+  // own helpers); the tables and which commands take an Idempotency-Key go
+  // through the store's extension point.
   Object.assign(OrgClass.prototype, ssoOps());
-  for (const op of ["sso-set", "sso-clear", "sso-domain-checked"]) MUTATIONS.add(op);
+  extendOrg({ schema: SSO_SCHEMA, mutations: ["sso-set", "sso-clear", "sso-domain-checked"] });
 
   // Whether this request's session was signed in through THIS
   // organisation's SSO: the Worker passes `sso:<slug>` beside the person's
@@ -325,6 +326,9 @@ export function installSso(OrgClass) {
     return answer;
   };
 }
+
+// Importing this module teaches the store company sign-in.
+installSso(Org);
 
 // --------------------------------------------------- sessions signed by SSO
 
