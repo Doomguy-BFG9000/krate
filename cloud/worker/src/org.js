@@ -320,18 +320,24 @@ const SCHEMA = [
 /// sign-in, offline access), each in its own `org-*.js`, so two people
 /// building different areas do not edit the same lines. Order is the
 /// order they were added.
-const EXTENSIONS = { schema: [], gates: [], ticks: [], views: [] };
+const EXTENSIONS = { schema: [], columns: [], gates: [], ticks: [], views: [] };
 
 /// Add to the store:
 /// - `schema`: CREATE statements, run with the store's own;
+/// - `columns`: `[table, column, type]` added to a table that already
+///   exists. CREATE TABLE IF NOT EXISTS never changes a table an older
+///   build made, and live organisations keep their tables, so a column a
+///   later build adds must be added to those too, or every command that
+///   names it fails ("no such column");
 /// - `ops`: `{ "op-name": function(ctx) }`, methods on the store;
 /// - `mutations`: which of those ops take an Idempotency-Key;
 /// - `tick(ctx)`: applies what is due before any command (a window that
 ///   ended, a wait that passed), inside the command's transaction;
 /// - `gate(ctx)`: answers a refusal before the command runs, or null;
 /// - `view(org, me)`: adds fields to `org` in GET /orgs/<slug>.
-export function extendOrg({ schema = [], ops = {}, mutations = [], tick, gate, view }) {
+export function extendOrg({ schema = [], columns = [], ops = {}, mutations = [], tick, gate, view }) {
   EXTENSIONS.schema.push(...schema);
+  EXTENSIONS.columns.push(...columns);
   for (const [name, fn] of Object.entries(ops)) Org.prototype[`op_${name.replace(/-/g, "_")}`] = fn;
   for (const m of mutations) MUTATIONS.add(m);
   if (tick) EXTENSIONS.ticks.push(tick);
@@ -370,6 +376,11 @@ export class Org {
     this.env = env;
     this.sql = ctx.storage.sql;
     for (const statement of [...SCHEMA, ...EXTENSIONS.schema]) this.sql.exec(statement);
+    // Names below are code constants, never input, so they are spliced.
+    for (const [table, column, type] of EXTENSIONS.columns) {
+      const has = this.sql.exec(`PRAGMA table_info(${table})`).toArray().some((c) => c.name === column);
+      if (!has) this.sql.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
+    }
   }
 
   /// Seconds since the epoch. A method so a test can move the clock.
