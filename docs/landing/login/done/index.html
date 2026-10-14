@@ -201,6 +201,16 @@
       }).catch(function () {});
       return;
     }
+    // A page on this site that sent the person to sign in: an
+    // organisation, an invitation, a private app (IC-947). Only a path on
+    // this site, checked by signin.js; another site's address is ignored
+    // and the person stays here, signed in.
+    var path = window.KrateSignIn && window.KrateSignIn.safeNext ? window.KrateSignIn.safeNext(next, location.origin) : "";
+    if (path) {
+      doneWithNext();
+      location.replace(path);
+      return;
+    }
   }
   doneWithNext();
   if (tok && fromApp) {
