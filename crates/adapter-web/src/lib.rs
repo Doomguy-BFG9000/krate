@@ -181,11 +181,8 @@ mod web {
         frame.paint(&placements, 1.0);
 
         let rgba = frame.to_rgba();
-        let data = web_sys::ImageData::new_with_u8_clamped_array_and_sh(
-            Clamped(&rgba),
-            width,
-            height,
-        )?;
+        let data =
+            web_sys::ImageData::new_with_u8_clamped_array_and_sh(Clamped(&rgba), width, height)?;
         ctx.put_image_data(&data, 0.0, 0.0)?;
         Ok(())
     }
