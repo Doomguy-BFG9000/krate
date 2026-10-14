@@ -26,6 +26,10 @@
 // transaction, audited, and in the role matrix (org.js MATRIX).
 
 import { Org, extendOrg, addReasons, allows, parsePrincipal, displayOf } from "./org.js";
+// The lease command must exist before it is wrapped below: a withdrawn or
+// out-of-audience release must never renew offline access. Importing it
+// here makes the order this module's own, not the order of index.js.
+import "./org-lease.js";
 
 /// Who passes every audience: they must be able to review (section R).
 const SEES_ALL = new Set(["owner", "admin", "reviewer"]);
@@ -492,7 +496,10 @@ function install(OrgClass) {
 
   P.op_download = guarded(P.op_download, "release.download");
   P.op_view = guarded(P.op_view, "release.download");
-  if (typeof P.op_lease === "function") P.op_lease = guarded(P.op_lease, "lease.issue");
+  // Loud, not skipped: an unwrapped lease would keep renewing offline access
+  // to a withdrawn release.
+  if (typeof P.op_lease !== "function") throw new Error("org-releases: the lease command is not installed");
+  P.op_lease = guarded(P.op_lease, "lease.issue");
 
   // A candidate keeps the app id its manifest names.
   const addCandidate = P.op_add_candidate;
