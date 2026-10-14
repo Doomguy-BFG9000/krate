@@ -121,13 +121,47 @@ pub fn request(method: &str, url: &str) -> ureq::Request {
     agent(url).request(method, url)
 }
 
-/// The proxy for `url`, from this process's environment, or `None` to
-/// connect directly.
+/// The proxy an organisation's machine policy names (`[network] proxy` and
+/// `no_proxy`), set once at start by whoever read the policy. It takes the
+/// place of the environment: on a managed computer the organisation decides
+/// how its traffic leaves, and a person's shell cannot route around it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PolicyProxy {
+    /// `http://host:port`, used for http and https alike. `None` with the
+    /// policy set means "connect directly", whatever the environment says.
+    pub proxy: Option<String>,
+    /// The `NO_PROXY` list, in the same form.
+    pub no_proxy: Option<String>,
+}
+
+static POLICY_PROXY: OnceLock<PolicyProxy> = OnceLock::new();
+
+/// Install the policy's proxy for this process. The first call wins; a
+/// second call is ignored and returns `false`, so nothing later in a run can
+/// swap the route the policy chose.
+pub fn set_policy_proxy(proxy: PolicyProxy) -> bool {
+    POLICY_PROXY.set(proxy).is_ok()
+}
+
+/// The proxy for `url`: the machine policy's when one was installed, the
+/// environment's otherwise, or `None` to connect directly.
 pub fn proxy_for(url: &str) -> Option<String> {
+    if let Some(policy) = POLICY_PROXY.get() {
+        return proxy_for_policy(url, policy);
+    }
     proxy_for_with(url, |name| {
         std::env::var(name)
             .ok()
             .filter(|value| !value.trim().is_empty())
+    })
+}
+
+/// [`proxy_for`] under a policy, which names one proxy for every scheme.
+fn proxy_for_policy(url: &str, policy: &PolicyProxy) -> Option<String> {
+    proxy_for_with(url, |name| match name {
+        "ALL_PROXY" => policy.proxy.clone(),
+        "NO_PROXY" => policy.no_proxy.clone(),
+        _ => None,
     })
 }
 
@@ -434,6 +468,32 @@ mod tests {
         }
         let star = env(&[("HTTPS_PROXY", "http://p:3128"), ("no_proxy", "*")]);
         assert_eq!(proxy_for_with("https://anything.example/", &star), None);
+    }
+
+    #[test]
+    fn a_policy_proxy_replaces_the_environment() {
+        let policy = PolicyProxy {
+            proxy: Some("http://proxy.acme.com:3128".into()),
+            no_proxy: Some("internal.acme.com".into()),
+        };
+        assert_eq!(
+            proxy_for_policy("https://hub.krate.tech/", &policy).as_deref(),
+            Some("http://proxy.acme.com:3128")
+        );
+        assert_eq!(
+            proxy_for_policy("http://example.com/", &policy).as_deref(),
+            Some("http://proxy.acme.com:3128")
+        );
+        assert_eq!(
+            proxy_for_policy("https://git.internal.acme.com/", &policy),
+            None
+        );
+        assert_eq!(proxy_for_policy("http://127.0.0.1:9/", &policy), None);
+        // A policy with no proxy means direct, not "fall back to the shell".
+        assert_eq!(
+            proxy_for_policy("https://hub.krate.tech/", &PolicyProxy::default()),
+            None
+        );
     }
 
     #[test]

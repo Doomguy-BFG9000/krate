@@ -273,11 +273,24 @@ Every connection Krate makes, for itself and for apps, trusts the
 your MDM installed is trusted with no Krate setting, and a network that
 inspects TLS works as it does for a browser.
 
-Every connection also honours the usual proxy variables: `HTTPS_PROXY`,
-`HTTP_PROXY`, `ALL_PROXY` and `NO_PROXY`, in capitals or lower case. Set
-them where your other command-line tools get them: `/etc/environment` on
-Linux, the shell profile or launchd environment on macOS, and machine
-environment variables on Windows.
+Krate does not read the system proxy settings or a PAC file. Name the
+proxy in the policy instead, so it reaches every computer with the rest of
+your settings:
+
+```toml
+[network]
+proxy = "http://proxy.acme.com:3128"     # or "direct"
+no_proxy = "internal.acme.com,git.acme.com"
+```
+
+With `proxy` set, the environment's proxy variables are ignored, so a
+person's shell cannot route around it. Without it, every connection honours
+the usual variables: `HTTPS_PROXY` for https, `HTTP_PROXY` for http,
+`ALL_PROXY` for either, and `NO_PROXY`, in capitals or lower case. A
+`NO_PROXY` entry covers the host and every name under it; address ranges
+such as `10.0.0.0/8` are not read. This computer's own services
+(`localhost`, `127.0.0.1`) are always reached directly. Websockets go
+through the proxy too, as an HTTP `CONNECT` tunnel.
 
 When a network intercepts connections and its root is not in the store,
 Krate says that the network is intercepting connections and to ask IT,

@@ -52,6 +52,21 @@ deny = ["camera.capture", "audio.capture", "location.read"]
 # ceiling.
 allow = ["*.acme.com:443", "api.github.com:443"]
 
+# The proxy every connection Krate makes goes through, for http and https
+# alike, as http://host:port (user:password@ allowed), or "direct" to use
+# none. When set, it replaces HTTPS_PROXY, HTTP_PROXY, ALL_PROXY and
+# NO_PROXY from the environment, so a person's shell cannot route around it;
+# absent, the environment's settings apply. This computer's own services
+# (localhost) are always reached directly. Krate does not read the system
+# proxy settings or a PAC file; set the proxy here.
+# proxy = "http://proxy.acme.com:3128"
+
+# Used with proxy: hosts reached directly, separated by commas, as NO_PROXY
+# is written: an entry covers the host and every name under it (acme.com
+# covers git.acme.com), * covers every host. Address ranges such as
+# 10.0.0.0/8 are not read; name the hosts.
+# no_proxy = "internal.acme.com,git.acme.com"
+
 [usage]
 # Whether Krate sends its anonymous usage counts (install, make, open,
 # publish) to Krate's hub. false: none are sent and the first-run question

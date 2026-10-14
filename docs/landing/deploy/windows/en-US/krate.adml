@@ -23,6 +23,10 @@
       <string id="CapabilitiesDeny_Help">Capabilities no app may be given on this computer, spelled as an app's manifest spells them (camera.capture, audio.capture, location.read, ui.clipboard, fs.write ...). Matched on the name before ':', so fs.write blocks every fs.write grant. A blocked capability is shown as blocked by your organisation and cannot be granted. One capability per line. Registry: the value deny in HKLM\SOFTWARE\Policies\Krate\capabilities.</string>
       <string id="NetworkAllow">Network ceiling</string>
       <string id="NetworkAllow_Help">The only hosts any app may connect to, whatever its manifest asks for. Same patterns as a manifest: host or *.host, then :port or :*. Absent: no ceiling. One host pattern per line. Registry: the value allow in HKLM\SOFTWARE\Policies\Krate\network.</string>
+      <string id="NetworkProxy">Proxy</string>
+      <string id="NetworkProxy_Help">The proxy every connection Krate makes goes through, for http and https alike, as http://host:port (user:password@ allowed), or &quot;direct&quot; to use none. When set, it replaces HTTPS_PROXY, HTTP_PROXY, ALL_PROXY and NO_PROXY from the environment, so a person's shell cannot route around it; absent, the environment's settings apply. This computer's own services (localhost) are always reached directly. Krate does not read the system proxy settings or a PAC file; set the proxy here. Registry: the value proxy in HKLM\SOFTWARE\Policies\Krate\network.</string>
+      <string id="NetworkNoProxy">Hosts reached without the proxy</string>
+      <string id="NetworkNoProxy_Help">Used with proxy: hosts reached directly, separated by commas, as NO_PROXY is written: an entry covers the host and every name under it (acme.com covers git.acme.com), * covers every host. Address ranges such as 10.0.0.0/8 are not read; name the hosts. Registry: the value no_proxy in HKLM\SOFTWARE\Policies\Krate\network.</string>
       <string id="UsageCounting">Send usage counts</string>
       <string id="UsageCounting_Help">Whether Krate sends its anonymous usage counts (install, make, open, publish) to Krate's hub. false: none are sent and the first-run question about them is not asked. Enabled sets it to true, Disabled to false, Not configured leaves Krate's default. Registry: the value counting in HKLM\SOFTWARE\Policies\Krate\usage.</string>
       <string id="HubUrl">Hub</string>
@@ -46,6 +50,8 @@
       <presentation id="TrustRoots"><listBox refId="roots">Trusted signing roots</listBox></presentation>
       <presentation id="CapabilitiesDeny"><text>Blocked capabilities, one per line:</text><multiTextBox refId="deny" defaultHeight="6" /></presentation>
       <presentation id="NetworkAllow"><text>Network ceiling, one per line:</text><multiTextBox refId="allow" defaultHeight="6" /></presentation>
+      <presentation id="NetworkProxy"><textBox refId="proxy"><label>Proxy</label></textBox></presentation>
+      <presentation id="NetworkNoProxy"><textBox refId="no_proxy"><label>Hosts reached without the proxy</label></textBox></presentation>
       <presentation id="HubUrl"><textBox refId="url"><label>Hub</label></textBox></presentation>
       <presentation id="StudioProviders"><text>Allowed AI providers, one per line:</text><multiTextBox refId="providers" defaultHeight="6" /></presentation>
       <presentation id="UpdatesMode"><dropdownList refId="mode" noSort="true" defaultItem="0">Updates</dropdownList></presentation>

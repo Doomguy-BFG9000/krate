@@ -66,6 +66,22 @@
         <multiText id="allow" valueName="allow" required="true" maxLength="1023" />
       </elements>
     </policy>
+    <policy name="NetworkProxy" class="Machine" displayName="$(string.NetworkProxy)" explainText="$(string.NetworkProxy_Help)" key="Software\Policies\Krate\network" presentation="$(presentation.NetworkProxy)">
+      <parentCategory ref="Krate_Apps" />
+      <supportedOn ref="SUPPORTED_KratePolicy1" />
+      <enabledList><item key="Software\Policies\Krate" valueName="version"><value><decimal value="1" /></value></item></enabledList>
+      <elements>
+        <text id="proxy" valueName="proxy" required="true" maxLength="1023" />
+      </elements>
+    </policy>
+    <policy name="NetworkNoProxy" class="Machine" displayName="$(string.NetworkNoProxy)" explainText="$(string.NetworkNoProxy_Help)" key="Software\Policies\Krate\network" presentation="$(presentation.NetworkNoProxy)">
+      <parentCategory ref="Krate_Apps" />
+      <supportedOn ref="SUPPORTED_KratePolicy1" />
+      <enabledList><item key="Software\Policies\Krate" valueName="version"><value><decimal value="1" /></value></item></enabledList>
+      <elements>
+        <text id="no_proxy" valueName="no_proxy" required="true" maxLength="1023" />
+      </elements>
+    </policy>
     <policy name="UsageCounting" class="Machine" displayName="$(string.UsageCounting)" explainText="$(string.UsageCounting_Help)" key="Software\Policies\Krate\usage" valueName="counting">
       <parentCategory ref="Krate_Krate" />
       <supportedOn ref="SUPPORTED_KratePolicy1" />
