@@ -1874,6 +1874,11 @@ jobs:
       # clang targets wasm32, which ring's C parts need.
       - name: Build the hub validator
         run: TARGET_CC=clang scripts/build-hub-validator.sh
+      # The hub signs people in with SAML through @node-saml/node-saml
+      # (IC-955), so the worker has npm dependencies now; exactly the
+      # locked ones.
+      - name: Install the hub's dependencies
+        run: cd cloud/worker && npm ci --no-audit --no-fund
       - name: Hub worker tests
         run: |
           for test in cloud/worker/test/*.test.mjs; do
