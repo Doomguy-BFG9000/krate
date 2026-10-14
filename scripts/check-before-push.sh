@@ -99,6 +99,11 @@ done
 # four minutes here is the cheap side of that trade.
 run "workspace tests (CI quick lane)" cargo test --workspace --all-features
 
+# A release build must ignore the lease key override (IC-948 G). The test
+# that proves it exists only without debug assertions, so the debug run
+# above never sees it; this is its lane.
+run "lease key override ignored in release" cargo test --release -p krate-lease
+
 # The studio crate is OUTSIDE the workspace, so `cargo test --workspace`
 # never compiles it and CI has no lane for it either. Nothing anywhere ran
 # these tests, and one of them sat red in main long enough that the fix it

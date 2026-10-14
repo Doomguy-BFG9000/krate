@@ -17,6 +17,7 @@ use krate_runtime::{
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
+mod access;
 mod agent_provider;
 mod api_author;
 mod api_key;
@@ -706,8 +707,8 @@ enum Command {
         #[arg(long)]
         root: PathBuf,
 
-        /// PKCS#8 Ed25519 release key being authorised. Only its public half
-        /// is read.
+        /// The release key being authorised: its PKCS#8 file, of which only
+        /// the public half is read, or that public key as 64 hex characters.
         #[arg(long)]
         key: PathBuf,
 
@@ -5395,7 +5396,18 @@ fn delegate_command(
 ) -> Result<u8> {
     use krate_bundle::delegation::{Delegation, Purpose, SignedDelegation, DELEGATION_SCHEMA};
     let root = load_pkcs8_key(root_path, "publisher root key")?;
-    let release = load_pkcs8_key(key_path, "release key")?;
+    // The release key's public half is all a delegation names, so it can
+    // also be given as its 64 hex characters: a developer sends their owner
+    // that, never their private key file (IC-948 I).
+    let spelled = key_path.to_string_lossy().trim().to_ascii_lowercase();
+    let release_hex = if !key_path.exists()
+        && spelled.len() == 64
+        && spelled.bytes().all(|b| b.is_ascii_hexdigit())
+    {
+        spelled
+    } else {
+        hex_of(&load_pkcs8_key(key_path, "release key")?.public_key())
+    };
     let now = unix_now();
     let slip = SignedDelegation::create(
         &root,
@@ -5403,7 +5415,7 @@ fn delegate_command(
             schema: DELEGATION_SCHEMA.to_string(),
             root: hex_of(&root.public_key()),
             namespace: namespace.to_string(),
-            key: hex_of(&release.public_key()),
+            key: release_hex,
             purpose: Purpose::Release,
             // A minute of slack backwards, so a signature made on a machine
             // whose clock is a little behind this one is not "not yet valid".
@@ -7830,14 +7842,41 @@ fn publish_to_org(
     }
     let bytes =
         fs::read(bundle).with_context(|| format!("could not read bundle {}", bundle.display()))?;
+    let is_card = card_bundle_bytes(&bytes).is_some();
     let bytes = match card_bundle_bytes(&bytes) {
         Some(inner) => inner.to_vec(),
         None => bytes,
     };
-    let opened = krate_bundle::open_bytes(&bytes).map_err(|err| {
-        let detail = err.user_message().unwrap_or_else(|| err.to_string());
-        anyhow::anyhow!("this bundle cannot be opened, so it will not be published: {detail}")
-    })?;
+    let open = |bytes: &[u8]| {
+        krate_bundle::open_bytes(bytes).map_err(|err| {
+            let detail = err.user_message().unwrap_or_else(|| err.to_string());
+            anyhow::anyhow!("this bundle cannot be opened, so it will not be published: {detail}")
+        })
+    };
+    let mut opened = open(&bytes)?;
+    let mut bytes = bytes;
+    // Unsigned, with this machine's delegated release key for the
+    // organisation installed (`krate org release-key`): sign it with that
+    // key first, which is what Studio's "Send to <org> for approval" relies
+    // on (IC-948 I). Without one, nothing unsigned is ever uploaded.
+    let unsigned = !matches!(opened.signature_verdict(), Ok(Some(_)));
+    if unsigned && !is_card {
+        if let Some((key, delegation)) = org::installed_release_key(slug) {
+            let app = opened
+                .manifest()
+                .app
+                .id
+                .rsplit('.')
+                .next()
+                .unwrap_or("app")
+                .to_ascii_lowercase();
+            let namespace = org::namespace_for(&delegation, slug, &app);
+            sign_bundle_command(bundle, &key, false, &namespace, Some(&delegation))?;
+            bytes = fs::read(bundle)
+                .with_context(|| format!("could not read bundle {}", bundle.display()))?;
+            opened = open(&bytes)?;
+        }
+    }
     org::require_signed(&opened, bundle, slug)?;
     let name = name_override
         .map(str::to_string)
@@ -14931,6 +14970,16 @@ fn write_manifest_with_entry(src: &Path, dest: &Path, entry: &str) -> Result<()>
     Ok(())
 }
 
+/// What a run target resolved to: the component, the bundle's manifest, the
+/// open bundle (held for the run), and -- for a download -- the sha256 of
+/// the bytes that arrived, which an organisation's check-in names them by.
+type RunTarget = (
+    PathBuf,
+    Option<PathBuf>,
+    Option<krate_bundle::OpenBundle>,
+    Option<String>,
+);
+
 /// Resolve what the user asked to run into a component on disk.
 ///
 /// A bare `.wasm` path is returned as-is. A `.krate` bundle, whether local or
@@ -14941,10 +14990,7 @@ fn write_manifest_with_entry(src: &Path, dest: &Path, entry: &str) -> Result<()>
 /// Nothing here grants authority. A fetched bundle reaches the same policy
 /// resolution as a component sitting on disk, so downloading something does not
 /// make it trusted.
-fn resolve_run_target(
-    target: &str,
-    insecure_http: bool,
-) -> Result<(PathBuf, Option<PathBuf>, Option<krate_bundle::OpenBundle>)> {
+fn resolve_run_target(target: &str, insecure_http: bool) -> Result<RunTarget> {
     if krate_bundle::is_url(target) {
         return run_target_from_link(target, target, insecure_http);
     }
@@ -14983,10 +15029,11 @@ fn resolve_run_target(
             bundle.component_path().to_path_buf(),
             Some(bundle.manifest_path().to_path_buf()),
             Some(bundle),
+            None,
         ));
     }
 
-    Ok((path, None, None))
+    Ok((path, None, None, None))
 }
 
 /// `krate judge`: the hub's own answer for a file, by a door's limits
@@ -15048,11 +15095,7 @@ fn opened_cache_root() -> Option<PathBuf> {
 /// progress shown, held to its address, and opened as a file on this
 /// desktop -- where a 370 MB game opens, and where it is kept for next time.
 #[allow(clippy::type_complexity)]
-fn run_target_from_link(
-    url: &str,
-    asked: &str,
-    insecure_http: bool,
-) -> Result<(PathBuf, Option<PathBuf>, Option<krate_bundle::OpenBundle>)> {
+fn run_target_from_link(url: &str, asked: &str, insecure_http: bool) -> Result<RunTarget> {
     let context = || {
         if url == asked {
             format!("could not open bundle from {url}")
@@ -15102,17 +15145,23 @@ fn run_target_from_link(
         ..
     }) = &fetched
     {
+        access::refused_link(url, reason);
         anyhow::bail!(
             "{}",
             org::download_refusal(url, reason, message, org.as_deref())
         );
     }
-    let bundle = match fetched.with_context(context)? {
+    let (bundle, sha256) = match fetched.with_context(context)? {
         krate_bundle::FetchedForRun::Small(fetched) => {
             report_resolution(url, &fetched);
-            fetched.bundle
+            (fetched.bundle, fetched.sha256)
         }
         krate_bundle::FetchedForRun::Big { path, address, .. } => {
+            // Saved as `<sha256>.krate`, checked as it streamed.
+            let sha256 = path
+                .file_stem()
+                .map(|stem| stem.to_string_lossy().to_string())
+                .unwrap_or_default();
             if let Some(address) = address {
                 eprintln!(
                     "fixed address: the bytes match {}...",
@@ -15120,17 +15169,19 @@ fn run_target_from_link(
                 );
             }
             eprintln!("saved to {}", path.display());
-            opened_cache_root()
+            let bundle = opened_cache_root()
                 .and_then(|root| krate_bundle::open_cached(&path, &root).ok())
                 .map(Ok)
                 .unwrap_or_else(|| krate_bundle::open(&path))
-                .with_context(context)?
+                .with_context(context)?;
+            (bundle, sha256)
         }
     };
     Ok((
         bundle.component_path().to_path_buf(),
         Some(bundle.manifest_path().to_path_buf()),
         Some(bundle),
+        Some(sha256),
     ))
 }
 
@@ -15311,9 +15362,29 @@ fn run_component_inner(request: RunRequest) -> Result<u8> {
     validate_app_args(&request.app_args)?;
 
     // Held for the whole run: dropping it removes the extracted bundle.
-    let (file, bundle_manifest, bundle) =
+    let (file, bundle_manifest, bundle, fetched_sha256) =
         resolve_run_target(&request.target, request.insecure_http)?;
     krate_runtime::stage_mark("cli: bundle opened");
+
+    // An organisation's private app opens only for a current member, and
+    // offline only on a lease that holds (IC-948 G). A preview picture is
+    // Krate looking at the app, not a person opening it.
+    if let Some(opened) = bundle.as_ref().filter(|_| !request.for_screenshot) {
+        let authority = opened.signing_authority().ok().flatten();
+        let door = if request.consent {
+            access::Door::Window
+        } else {
+            access::Door::Terminal
+        };
+        let bytes = match fetched_sha256.as_deref() {
+            Some(sha256) => access::Bytes::Fetched {
+                sha256,
+                link: &request.target,
+            },
+            None => access::Bytes::File(Path::new(&request.target)),
+        };
+        access::gate(bytes, authority.as_deref(), door)?;
+    }
 
     if !file.exists() {
         anyhow::bail!("input file does not exist: {}", file.display());
@@ -16316,10 +16387,35 @@ fn launch_target(bundle: &Path) -> Result<PathBuf> {
         .context("no home directory")?;
     fs::create_dir_all(&dir)?;
 
-    let response = ureq::get(&raw)
-        .timeout(std::time::Duration::from_secs(60))
-        .call()
-        .with_context(|| format!("could not download {raw}"))?;
+    // A private organisation link needs the person's session, sent only to
+    // a Krate hub, exactly as `krate run` sends it (IC-948 H); a refusal is
+    // said in words with the sign-in to try, and nothing is saved or run.
+    let mut request = ureq::get(&raw).timeout(std::time::Duration::from_secs(60));
+    if let Some(authorization) = org::link_authorization(&raw) {
+        request = request.set("Authorization", &authorization);
+    }
+    let response = match request.call() {
+        Err(ureq::Error::Status(403, refused)) => {
+            let body = refused.into_string().unwrap_or_default();
+            let answer: serde_json::Value = serde_json::from_str(&body).unwrap_or_default();
+            if let Some(reason) = answer["error"].as_str() {
+                access::refused_link(&raw, reason);
+            }
+            match answer["error"].as_str() {
+                Some(reason) => anyhow::bail!(
+                    "{}",
+                    org::download_refusal(
+                        &raw,
+                        reason,
+                        answer["message"].as_str().unwrap_or(""),
+                        answer["org"].as_str(),
+                    )
+                ),
+                None => anyhow::bail!("could not download {raw}: the server refused (403)"),
+            }
+        }
+        other => other.with_context(|| format!("could not download {raw}"))?,
+    };
 
     // Only a whole file (IC-393, test 481).
     //
@@ -16464,9 +16560,29 @@ fn launch_target(bundle: &Path) -> Result<PathBuf> {
     Ok(dest)
 }
 
+/// The organisation check, in the `launch` process itself, before a wrapper
+/// is built or a run is spawned (IC-948 H): a refusal then reaches whoever
+/// called `launch` -- a terminal, Studio's Open -- as this process's own
+/// words and exit, rather than dying unseen in a detached child. The run
+/// checks again; the terms are shown once either way.
+fn launch_gate(bundle_path: &Path) -> Result<()> {
+    if !krate_bundle::is_bundle_path(bundle_path) {
+        return Ok(());
+    }
+    let authority = krate_bundle::read_signing_authority(bundle_path)
+        .ok()
+        .flatten();
+    access::gate(
+        access::Bytes::File(bundle_path),
+        authority.as_deref(),
+        access::Door::Window,
+    )
+}
+
 #[cfg(target_os = "macos")]
 fn launch_app(bundle_path: &Path) -> Result<u8> {
     let bundle_path = &launch_target(bundle_path)?;
+    launch_gate(bundle_path)?;
     let launchers = home_dir()
         .map(|home| home.join(".krate/launchers"))
         .context("no home directory")?;
@@ -16529,6 +16645,7 @@ fn launch_app(bundle_path: &Path) -> Result<u8> {
 #[cfg(not(target_os = "macos"))]
 fn launch_app(bundle_path: &Path) -> Result<u8> {
     let bundle_path = &launch_target(bundle_path)?;
+    launch_gate(bundle_path)?;
     // Elsewhere a plain windowed run activates fine; the wrapper is a macOS
     // need. Same binary, ordinary run -- but detached, with no console:
     // the engine is a console-subsystem binary on Windows, and spawning it

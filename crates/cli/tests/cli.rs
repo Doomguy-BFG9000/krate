@@ -35,6 +35,12 @@ fn krate() -> Command {
     command.env("KRATE_QUIET_WINDOW", "1");
     // And no voice out loud from a speaking app (K-1077).
     command.env("KRATE_SILENT_SPEECH", "1");
+    // Never the live hub. A signed app is checked with the hub when it opens
+    // (IC-948 G), and a test that names no hub must not reach
+    // hub.krate.tech with whatever sign-in this machine holds: a closed
+    // local port answers "unreachable" at once. A test that needs a hub
+    // sets its own, which replaces this.
+    command.env("KRATE_HUB_URL", "http://127.0.0.1:9");
     command
 }
 
@@ -13580,6 +13586,16 @@ struct FakeOrgHub {
     next_invite: u32,
     /// The next request is answered with this reason, whatever it was.
     force_next: Option<(u16, String)>,
+    /// The request's Accept header: `application/json` asks /a/ what an app
+    /// is instead of for its bytes (Addendum 2, item 6).
+    accept: String,
+    /// The hub's lease key (PKCS#8), the class every lease is issued in,
+    /// how far the lease clock is moved from now, and how many were issued
+    /// (Addendum 3 G).
+    lease_pkcs8: Vec<u8>,
+    lease_class: String,
+    lease_shift: i64,
+    leases_issued: usize,
 }
 
 type FakeAnswer = (u16, Vec<(String, String)>, Vec<u8>);
@@ -13770,6 +13786,7 @@ impl FakeOrgHub {
                 .map(|(_, v)| v.clone())
         };
         let auth = header("authorization");
+        self.accept = header("accept").unwrap_or_default();
         self.seen
             .push((method.to_string(), path.to_string(), auth.clone()));
         self.bodies.push(body.to_vec());
@@ -13824,15 +13841,17 @@ impl FakeOrgHub {
 
         // A private release: the organisation is read on every fetch, and
         // every refusal is a 403.
-        if method == "GET" && parts.len() == 2 && parts[0] == "a" {
+        if (method == "GET" || method == "HEAD") && parts.len() == 2 && parts[0] == "a" {
             let digest = parts[1];
-            let Some(org) = self
+            let look = self.accept.contains("application/json");
+            let Some((slug, org)) = self
                 .orgs
-                .values_mut()
-                .find(|org| org.candidates.contains_key(digest))
+                .iter_mut()
+                .find(|(_, org)| org.candidates.contains_key(digest))
             else {
                 return (404, vec![], b"not found".to_vec());
             };
+            let slug = slug.clone();
             let target = format!("release:{digest}");
             let Some(who) = who else {
                 // Refused before the store is asked: not audited.
@@ -13856,11 +13875,28 @@ impl FakeOrgHub {
                     "denied",
                     Some(reason),
                 );
-                return fake_refuse(403, reason);
+                // A removed member already knows which organisation sent it.
+                let mut refusal = serde_json::json!({ "error": reason, "message": "refused" });
+                if reason == "removed" {
+                    refusal["org"] = serde_json::json!(slug);
+                }
+                return (403, vec![], refusal.to_string().into_bytes());
             }
+            let candidate = &org.candidates[digest];
+            if look {
+                return fake_json(
+                    200,
+                    serde_json::json!({
+                        "name": candidate.name, "version": candidate.version,
+                        "size": candidate.bytes.len(),
+                        "org": { "slug": slug, "name": org.name },
+                    }),
+                );
+            }
+            let bytes = candidate.bytes.clone();
             org.record(now, &who, "release.download", &target, "allowed", None);
             self.served += 1;
-            return (200, vec![], org.candidates[digest].bytes.clone());
+            return (200, vec![], bytes);
         }
 
         // The big-file path, carrying the organisation (IC-945 + IC-946).
@@ -13956,6 +13992,7 @@ impl FakeOrgHub {
             ("POST", Some("candidates"), 5) => "candidate.approve",
             ("GET", Some("releases"), 3) => "release.list",
             ("GET", Some("audit"), 3) => "audit.read",
+            ("GET", Some("leases"), 4) => "lease.issue",
             _ => return (404, vec![], b"not found".to_vec()),
         };
         let target = match action {
@@ -14347,6 +14384,33 @@ impl FakeOrgHub {
                     .collect();
                 fake_json(200, serde_json::json!(list))
             }
+            "lease.issue" => {
+                let digest = parts[3].to_string();
+                if org.candidates.get(&digest).map(|c| c.state) != Some("released") {
+                    return deny(org, "digest-mismatch");
+                }
+                if self.lease_class == "online" {
+                    return fake_json(200, serde_json::json!({ "class": "online" }));
+                }
+                let issued = (std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs() as i64
+                    + self.lease_shift) as u64;
+                let days = if self.lease_class == "days-30" { 30 } else { 7 };
+                self.leases_issued += 1;
+                let body = serde_json::json!({
+                    "v": 1, "org": slug, "digest": digest, "principal": who,
+                    "class": self.lease_class, "issued_at": issued,
+                    "expires_at": issued + days * 86_400,
+                    "lease_id": format!("lease{}", self.leases_issued),
+                });
+                org.record(now, &who, "lease.issue", &digest, "allowed", None);
+                fake_json(
+                    200,
+                    krate_lease::sign(&body, &self.lease_pkcs8).expect("signed"),
+                )
+            }
             "audit.read" => {
                 if !is(&["owner", "admin"]) {
                     return deny(org, "role-cannot");
@@ -14510,6 +14574,8 @@ impl OrgWorld {
     fn new(people: &[&str]) -> Option<OrgWorld> {
         let hub = std::sync::Arc::new(std::sync::Mutex::new(FakeOrgHub {
             now: 1_760_400_000,
+            lease_pkcs8: krate_lease::generate_pkcs8().expect("lease key"),
+            lease_class: "days-7".to_string(),
             ..Default::default()
         }));
         let state = hub.clone();
@@ -14545,6 +14611,37 @@ impl OrgWorld {
         })
     }
 
+    /// The fake hub's lease public key, as hex.
+    fn lease_key_hex(&self) -> String {
+        krate_lease::public_key_hex(&self.hub.lock().unwrap().lease_pkcs8).expect("public key")
+    }
+
+    /// The lease this person's machine holds for `digest`, if any.
+    fn lease_record(&self, who: &str, digest: &str) -> Option<serde_json::Value> {
+        let path = self.homes[who]
+            .path()
+            .join(".krate/leases")
+            .join(format!("{digest}.json"));
+        std::fs::read_to_string(path)
+            .ok()
+            .and_then(|text| serde_json::from_str(&text).ok())
+    }
+
+    /// Carol's app, signed with her delegated key, published to acme and
+    /// approved by Bob: its link and its digest.
+    fn released_app(&self, root: &std::path::Path, version: &str) -> (PathBuf, String, String) {
+        let bundle = self.bundle(&format!("app-{version}.krate"), version, 64);
+        self.sign_delegated(root, "carol", &bundle);
+        let digest = OrgWorld::digest_in(&self.says(
+            "carol",
+            &["publish", bundle.to_str().unwrap(), "--org", "acme"],
+            true,
+        ));
+        self.says("bob", &["org", "approve", "acme", &digest], true);
+        let link = format!("{}/a/{digest}", self.url());
+        (bundle, digest, link)
+    }
+
     fn url(&self) -> String {
         self.real_hub()
             .unwrap_or_else(|| format!("http://{}", self.addr))
@@ -14570,6 +14667,10 @@ impl OrgWorld {
             .env("KRATE_HUB_URL", self.url())
             .env("KRATE_CACHE_DIR", home.join("cache"))
             .env("KRATE_NO_OPEN_CACHE", "1")
+            // The fake hub's lease key stands in for the pinned one; this
+            // debug build honours the override, a release build never does
+            // (krate-lease's a_release_build_ignores_the_override).
+            .env(krate_lease::LEASE_KEY_OVERRIDE_ENV, self.lease_key_hex())
             .output()
             .expect("krate")
     }
@@ -15612,7 +15713,7 @@ fn a_private_link_runs_only_with_a_current_members_session() {
     let said = String::from_utf8_lossy(&removed.stderr);
     assert!(!removed.status.success());
     assert!(
-        said.contains("you were removed from the organisation that sent it, so this app no longer opens for you"),
+        said.contains("you were removed from acme, so this app no longer opens for you"),
         "{said}"
     );
     assert_eq!(
@@ -15882,4 +15983,612 @@ fn the_org_pilot_proof_runs_end_to_end_through_the_cli() {
         .audit[3]["target"] = serde_json::json!("someone-else");
     let said = world.says(owner, &["org", "audit", "acme"], false);
     assert!(said.contains("THE CHAIN IS BROKEN"), "{said}");
+}
+
+// ---------------------------------------------------------------------------
+// Offline access and the desktop doors (IC-948, Addendum 3 G and H).
+// ---------------------------------------------------------------------------
+
+/// The same command as `OrgWorld::krate_as`, before it runs, so a test can
+/// change one thing about it (the lease key override, the hub).
+fn org_command(world: &OrgWorld, who: &str, args: &[&str]) -> Command {
+    let home = world.homes[who].path();
+    let mut command = krate();
+    command
+        .args(args)
+        .env("HOME", home)
+        .env("USERPROFILE", home)
+        .env("KRATE_HUB_URL", world.url())
+        .env("KRATE_CACHE_DIR", home.join("cache"))
+        .env("KRATE_NO_OPEN_CACHE", "1")
+        .env(krate_lease::LEASE_KEY_OVERRIDE_ENV, world.lease_key_hex());
+    command
+}
+
+fn stderr_of(output: &std::process::Output) -> String {
+    String::from_utf8_lossy(&output.stderr).to_string()
+}
+
+/// Dan's own copy of the app, as the dashboard's Open in Krate hands it to
+/// him: a file on his machine, never fetched by Krate.
+fn dans_copy(world: &OrgWorld, bundle: &std::path::Path) -> PathBuf {
+    let copy = world.homes["dan"].path().join("Acme Demo.krate");
+    std::fs::copy(bundle, &copy).expect("copy");
+    copy
+}
+
+/// G: a private app opens offline only on a stored lease for its digest and
+/// its person that verifies under the pinned key and has not run out. The
+/// first open shows the terms with the exact date; a lease past half its
+/// life is refreshed on the next online open.
+#[test]
+fn a_private_app_opens_offline_only_on_a_lease_that_holds() {
+    let Some(world) = OrgWorld::new(&["alice", "bob", "carol", "dan"]) else {
+        eprintln!("skipping a_private_app_opens_offline_only_on_a_lease_that_holds: no local port");
+        return;
+    };
+    let root = world.acme();
+    let (bundle, digest, link) = world.released_app(&root, "1.0.0");
+    let copy = dans_copy(&world, &bundle);
+    let run_copy = |who: &str| {
+        org_command(
+            &world,
+            who,
+            &["run", copy.to_str().unwrap(), "--headless", "--auto-grant"],
+        )
+        .output()
+        .expect("run")
+    };
+
+    // First open, online, through the link. The lease clock is four days
+    // back, so this first 7-day lease is already past half its life.
+    world.hub.lock().unwrap().lease_shift = -4 * 86_400;
+    let first = world.run_link("dan", &link);
+    let said = stderr_of(&first);
+    assert!(first.status.success(), "{said}");
+    let record = world.lease_record("dan", &digest).expect("a lease is kept");
+    let expires = record["answer"]["lease"]["expires_at"]
+        .as_u64()
+        .expect("expiry");
+    let day = |secs: u64| {
+        let days = (secs / 86_400) as i64;
+        // The same civil date the CLI prints.
+        let z = days + 719_468;
+        let era = z.div_euclid(146_097);
+        let doe = z - era * 146_097;
+        let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+        let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+        let mp = (5 * doy + 2) / 153;
+        let d = doy - (153 * mp + 2) / 5 + 1;
+        let m = if mp < 10 { mp + 3 } else { mp - 9 };
+        let y = yoe + era * 400 + i64::from(m <= 2);
+        format!("{y:04}-{m:02}-{d:02}")
+    };
+    assert!(
+        said.contains(&format!("Works offline until {}", day(expires)))
+            && said.contains("If you are removed, it stops when it next connects."),
+        "the terms, with the exact date, before the first open: {said}"
+    );
+    assert_eq!(record["class"], "days-7");
+    assert_eq!(record["principal"], "email:dan@acme.example");
+    assert_eq!(world.hub.lock().unwrap().leases_issued, 1);
+
+    // Online again, from his own copy: past half its life, so refreshed;
+    // the terms are not shown twice.
+    world.hub.lock().unwrap().lease_shift = 0;
+    let second = run_copy("dan");
+    assert!(second.status.success(), "{}", stderr_of(&second));
+    assert!(!stderr_of(&second).contains("Works offline until"));
+    assert_eq!(world.hub.lock().unwrap().leases_issued, 2, "refreshed");
+    let third = run_copy("dan");
+    assert!(third.status.success());
+    assert_eq!(world.hub.lock().unwrap().leases_issued, 2, "fresh: kept");
+
+    // Offline: the hub is gone. The lease holds, so it opens.
+    world.stop.store(true, std::sync::atomic::Ordering::SeqCst);
+    std::thread::sleep(Duration::from_millis(100));
+    let offline = run_copy("dan");
+    let said = stderr_of(&offline);
+    assert!(offline.status.success(), "{said}");
+    assert!(
+        said.contains("offline: opening Acme's app on its offline access"),
+        "{said}"
+    );
+
+    // Without the override, this Krate checks against the pinned production
+    // key, which never signed this test hub's lease: nothing opens offline.
+    let unkeyed = org_command(
+        &world,
+        "dan",
+        &["run", copy.to_str().unwrap(), "--headless"],
+    )
+    .env_remove(krate_lease::LEASE_KEY_OVERRIDE_ENV)
+    .output()
+    .expect("run");
+    assert!(!unkeyed.status.success());
+    assert!(
+        stderr_of(&unkeyed).contains("could not be checked")
+            && stderr_of(&unkeyed).contains("its signature does not hold"),
+        "{}",
+        stderr_of(&unkeyed)
+    );
+
+    // A lease that ran out, signed by the real key: refused, with its date.
+    let lease_file = world.homes["dan"]
+        .path()
+        .join(".krate/leases")
+        .join(format!("{digest}.json"));
+    let mut record: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&lease_file).unwrap()).unwrap();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let mut body = record["answer"]["lease"].clone();
+    body["issued_at"] = serde_json::json!(now - 8 * 86_400);
+    body["expires_at"] = serde_json::json!(now - 86_400);
+    let pkcs8 = world.hub.lock().unwrap().lease_pkcs8.clone();
+    record["answer"] = krate_lease::sign(&body, &pkcs8).unwrap();
+    std::fs::write(&lease_file, record.to_string()).unwrap();
+    let expired = run_copy("dan");
+    assert!(!expired.status.success());
+    assert!(
+        stderr_of(&expired).contains(&format!(
+            "its offline access ran out on {}",
+            day(now - 86_400)
+        )),
+        "{}",
+        stderr_of(&expired)
+    );
+
+    // A lease with a later date that the hub never signed.
+    body["expires_at"] = serde_json::json!(now + 86_400);
+    let forged_key = krate_lease::generate_pkcs8().unwrap();
+    record["answer"] = krate_lease::sign(&body, &forged_key).unwrap();
+    std::fs::write(&lease_file, record.to_string()).unwrap();
+    let forged = run_copy("dan");
+    assert!(!forged.status.success());
+    assert!(
+        stderr_of(&forged).contains("its signature does not hold"),
+        "{}",
+        stderr_of(&forged)
+    );
+
+    // Signed out, offline: it does not open either.
+    record["answer"] = krate_lease::sign(&body, &pkcs8).unwrap();
+    std::fs::write(&lease_file, record.to_string()).unwrap();
+    std::fs::remove_file(world.homes["dan"].path().join(".krate/github.json")).unwrap();
+    let signed_out = run_copy("dan");
+    assert!(!signed_out.status.success());
+    assert!(
+        stderr_of(&signed_out).contains("you are not signed in"),
+        "{}",
+        stderr_of(&signed_out)
+    );
+}
+
+/// G: on reconnect, a refused check-in deletes the lease and nothing runs,
+/// while the person's app data stays. The bytes are still known to be
+/// private afterwards, so going offline does not open them again.
+#[test]
+fn a_refused_check_in_deletes_the_lease_and_keeps_the_data() {
+    let Some(world) = OrgWorld::new(&["alice", "bob", "carol", "dan"]) else {
+        eprintln!(
+            "skipping a_refused_check_in_deletes_the_lease_and_keeps_the_data: no local port"
+        );
+        return;
+    };
+    let root = world.acme();
+    let (bundle, digest, link) = world.released_app(&root, "1.0.0");
+    let copy = dans_copy(&world, &bundle);
+    assert!(world.run_link("dan", &link).status.success());
+    assert!(world.lease_record("dan", &digest).unwrap()["answer"].is_object());
+    let data = world.homes["dan"].path().join(".krate/store/dev.acme.demo");
+    std::fs::create_dir_all(&data).unwrap();
+    std::fs::write(data.join("notes.txt"), "Dan's own notes").unwrap();
+
+    world.says(
+        "alice",
+        &["org", "remove", "acme", "dan@acme.example"],
+        true,
+    );
+    let run_copy = || {
+        org_command(
+            &world,
+            "dan",
+            &["run", copy.to_str().unwrap(), "--headless"],
+        )
+        .output()
+        .expect("run")
+    };
+    let refused = run_copy();
+    assert!(!refused.status.success());
+    assert!(
+        stderr_of(&refused)
+            .contains("you were removed from acme, so this app no longer opens for you"),
+        "{}",
+        stderr_of(&refused)
+    );
+    let record = world
+        .lease_record("dan", &digest)
+        .expect("still known as private");
+    assert!(record["answer"].is_null(), "the lease is gone: {record}");
+    assert_eq!(
+        std::fs::read_to_string(data.join("notes.txt")).unwrap(),
+        "Dan's own notes",
+        "the app's data is the person's and stays (R10)"
+    );
+
+    world.stop.store(true, std::sync::atomic::Ordering::SeqCst);
+    std::thread::sleep(Duration::from_millis(100));
+    let offline = run_copy();
+    assert!(!offline.status.success());
+    assert!(
+        stderr_of(&offline).contains("it opens only with a connection"),
+        "{}",
+        stderr_of(&offline)
+    );
+}
+
+/// G: an `online` class has no lease: the terms say so, and offline it
+/// does not open. And a member who never opened the app through Krate --
+/// the file came from the dashboard -- is still checked in on first open.
+#[test]
+fn an_online_only_app_never_opens_offline() {
+    let Some(world) = OrgWorld::new(&["alice", "bob", "carol", "dan"]) else {
+        eprintln!("skipping an_online_only_app_never_opens_offline: no local port");
+        return;
+    };
+    let root = world.acme();
+    let (bundle, digest, _link) = world.released_app(&root, "1.0.0");
+    let copy = dans_copy(&world, &bundle);
+    world.hub.lock().unwrap().lease_class = "online".into();
+    let run_copy = || {
+        org_command(
+            &world,
+            "dan",
+            &["run", copy.to_str().unwrap(), "--headless"],
+        )
+        .output()
+        .expect("run")
+    };
+    let first = run_copy();
+    assert!(first.status.success(), "{}", stderr_of(&first));
+    assert!(
+        stderr_of(&first).contains("It needs a connection every time it opens."),
+        "{}",
+        stderr_of(&first)
+    );
+    assert_eq!(
+        world.lease_record("dan", &digest).unwrap()["class"],
+        "online"
+    );
+
+    world.stop.store(true, std::sync::atomic::Ordering::SeqCst);
+    std::thread::sleep(Duration::from_millis(100));
+    let offline = run_copy();
+    assert!(!offline.status.success());
+    assert!(
+        stderr_of(&offline).contains("it opens only with a connection"),
+        "{}",
+        stderr_of(&offline)
+    );
+}
+
+/// G: a stranger who is signed in and holds a copy of the file is refused,
+/// and an ordinary signed app is asked about once and then never again.
+#[test]
+fn a_copied_private_file_does_not_open_for_a_stranger() {
+    let Some(world) = OrgWorld::new(&["alice", "bob", "carol", "erin"]) else {
+        eprintln!("skipping a_copied_private_file_does_not_open_for_a_stranger: no local port");
+        return;
+    };
+    let root = world.acme();
+    let (bundle, digest, _link) = world.released_app(&root, "1.0.0");
+    let copy = world.homes["erin"].path().join("found.krate");
+    std::fs::copy(&bundle, &copy).unwrap();
+    let refused = org_command(
+        &world,
+        "erin",
+        &["run", copy.to_str().unwrap(), "--headless"],
+    )
+    .output()
+    .expect("run");
+    assert!(!refused.status.success());
+    assert!(
+        stderr_of(&refused).contains("erin is not one of its members"),
+        "{}",
+        stderr_of(&refused)
+    );
+
+    // Carol's own signed app, never published: asked once, then remembered.
+    let own = world.bundle("own.krate", "9.9.9", 64);
+    world.sign_delegated(&root, "carol", &own);
+    let heads = |world: &OrgWorld| {
+        world
+            .hub
+            .lock()
+            .unwrap()
+            .seen
+            .iter()
+            .filter(|(m, p, _)| m == "HEAD" && p.starts_with("/a/"))
+            .count()
+    };
+    let before = heads(&world);
+    for _ in 0..2 {
+        let ran = org_command(
+            &world,
+            "carol",
+            &["run", own.to_str().unwrap(), "--headless"],
+        )
+        .output()
+        .expect("run");
+        assert!(ran.status.success(), "{}", stderr_of(&ran));
+    }
+    assert_eq!(heads(&world), before + 1, "asked once, then remembered");
+    let _ = digest;
+}
+
+/// H: `krate launch`, the door behind double-click and Studio's Open,
+/// fetches a private link with the person's session and refuses in words
+/// with the sign-in to try.
+#[test]
+fn krate_launch_fetches_a_private_link_with_the_session_and_refuses_in_words() {
+    let Some(world) = OrgWorld::new(&["alice", "bob", "carol", "dan", "erin"]) else {
+        eprintln!("skipping krate_launch_fetches_a_private_link_with_the_session_and_refuses_in_words: no local port");
+        return;
+    };
+    let root = world.acme();
+    let (_bundle, _digest, link) = world.released_app(&root, "1.0.0");
+    let launch = |who: &str| world.krate_as(who, &["launch", &link]);
+
+    let signed_out = launch("nobody");
+    assert!(!signed_out.status.success());
+    assert!(
+        stderr_of(&signed_out).contains("you are not signed in")
+            && stderr_of(&signed_out).contains("krate account login"),
+        "{}",
+        stderr_of(&signed_out)
+    );
+    let stranger = launch("erin");
+    assert!(!stranger.status.success());
+    assert!(
+        stderr_of(&stranger).contains("erin is not one of its members"),
+        "{}",
+        stderr_of(&stranger)
+    );
+    world.says(
+        "alice",
+        &["org", "remove", "acme", "dan@acme.example"],
+        true,
+    );
+    let removed = launch("dan");
+    assert!(!removed.status.success());
+    assert!(
+        stderr_of(&removed).contains("you were removed from acme"),
+        "the session went with the fetch, so the hub knew who asked: {}",
+        stderr_of(&removed)
+    );
+    let hub = world.hub.lock().unwrap();
+    let sessions: Vec<_> = hub
+        .seen
+        .iter()
+        .filter(|(m, p, _)| m == "GET" && p.starts_with("/a/"))
+        .map(|(_, _, auth)| auth.clone())
+        .collect();
+    assert!(
+        sessions.contains(&None),
+        "the signed-out fetch carried nothing"
+    );
+    assert!(
+        sessions.contains(&Some("Bearer tok-dan@acme.example".to_string())),
+        "{sessions:?}"
+    );
+}
+
+/// H: the Player's door on macOS -- `krate open-app <file>`, which a
+/// double-click reaches -- checks a private app in before it runs.
+#[cfg(target_os = "macos")]
+#[test]
+fn the_players_door_checks_a_private_app_in_before_it_runs() {
+    let Some(world) = OrgWorld::new(&["alice", "bob", "carol", "dan"]) else {
+        eprintln!(
+            "skipping the_players_door_checks_a_private_app_in_before_it_runs: no local port"
+        );
+        return;
+    };
+    let root = world.acme();
+    let (bundle, _digest, link) = world.released_app(&root, "1.0.0");
+    let copy = dans_copy(&world, &bundle);
+    assert!(world.run_link("dan", &link).status.success());
+    world.says(
+        "alice",
+        &["org", "remove", "acme", "dan@acme.example"],
+        true,
+    );
+    // stderr is a pipe here, so no alert is shown: someone is reading.
+    let opened = world.krate_as("dan", &["open-app", copy.to_str().unwrap()]);
+    assert!(!opened.status.success());
+    assert!(
+        stderr_of(&opened).contains("you were removed from acme"),
+        "{}",
+        stderr_of(&opened)
+    );
+}
+
+/// H: the MCP door. `run_component` with a private link runs it for a
+/// member, and for someone signed out says why in words, not "403".
+#[test]
+fn the_mcp_door_fetches_a_private_link_with_the_session() {
+    let Some(world) = OrgWorld::new(&["alice", "bob", "carol", "dan"]) else {
+        eprintln!("skipping the_mcp_door_fetches_a_private_link_with_the_session: no local port");
+        return;
+    };
+    let root = world.acme();
+    let (_bundle, _digest, link) = world.released_app(&root, "1.0.0");
+    let mcp = |who: &str| -> serde_json::Value {
+        let root_dir = world.homes[who].path().join("mcp");
+        std::fs::create_dir_all(&root_dir).unwrap();
+        let mut child = org_command(&world, who, &["mcp"])
+            .env("KRATE_MCP_ROOT", &root_dir)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("krate mcp");
+        {
+            let mut stdin = child.stdin.take().unwrap();
+            for message in [
+                serde_json::json!({ "jsonrpc": "2.0", "id": 1, "method": "initialize",
+                    "params": { "protocolVersion": "2024-11-05", "capabilities": {},
+                                "clientInfo": { "name": "test", "version": "0" } } }),
+                serde_json::json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }),
+                serde_json::json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+                    "params": { "name": "run_component",
+                                "arguments": { "bundle": link, "insecure_http": true } } }),
+            ] {
+                writeln!(stdin, "{message}").unwrap();
+            }
+        }
+        let output = child.wait_with_output().expect("mcp output");
+        String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+            .find(|answer| answer["id"] == 2)
+            .expect("an answer to the tool call")
+    };
+    let member = mcp("dan");
+    assert_eq!(member["result"]["isError"], false, "{member}");
+    let signed_out = mcp("nobody");
+    assert_eq!(signed_out["result"]["isError"], true, "{signed_out}");
+    let text = signed_out["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap_or("");
+    assert!(
+        text.contains("you are not signed in") && text.contains("krate account login"),
+        "{text}"
+    );
+}
+
+/// I (the CLI half Studio drives): `krate org release-key` makes a release
+/// key and prints the exact `krate delegate` line for an owner, with the
+/// key's public half -- never the private file. Once the delegation is
+/// installed, `krate publish --org` signs the app itself; without one,
+/// nothing unsigned is uploaded.
+#[test]
+fn a_release_key_from_studio_signs_what_is_sent_for_approval() {
+    let Some(world) = OrgWorld::new(&["alice", "bob", "carol"]) else {
+        eprintln!(
+            "skipping a_release_key_from_studio_signs_what_is_sent_for_approval: no local port"
+        );
+        return;
+    };
+    let root = world.acme();
+    let app = world.bundle("studio.krate", "1.0.0", 64);
+    let before = world.hub.lock().unwrap().seen.len();
+    let said = world.says(
+        "carol",
+        &["publish", app.to_str().unwrap(), "--org", "acme"],
+        false,
+    );
+    assert!(said.contains("krate org release-key acme"), "{said}");
+    assert_eq!(
+        world.hub.lock().unwrap().seen.len(),
+        before,
+        "nothing unsigned is uploaded"
+    );
+
+    let said = world.says("carol", &["org", "release-key", "acme"], true);
+    let public = said
+        .lines()
+        .find_map(|l| l.strip_prefix("your release key for acme: "))
+        .expect("the public key")
+        .trim()
+        .to_string();
+    assert_eq!(public.len(), 64);
+    let delegate_line = format!(
+        "krate delegate --root <acme-root.pkcs8> --key {public} --namespace 'acme/*' -o acme-release.json"
+    );
+    assert!(said.contains(&delegate_line), "{said}");
+    assert!(world.homes["carol"]
+        .path()
+        .join(".krate/orgs/acme/release.pkcs8")
+        .is_file());
+
+    // The owner runs exactly that line, with the public key as given.
+    let slip = world.dir.path().join("acme-release.json");
+    world.says(
+        "alice",
+        &[
+            "delegate",
+            "--root",
+            root.to_str().unwrap(),
+            "--key",
+            &public,
+            "--namespace",
+            "acme/*",
+            "-o",
+            slip.to_str().unwrap(),
+        ],
+        true,
+    );
+    let said = world.says(
+        "carol",
+        &[
+            "org",
+            "release-key",
+            "acme",
+            "--delegation",
+            slip.to_str().unwrap(),
+        ],
+        true,
+    );
+    assert!(said.contains("installed."), "{said}");
+    let said = world.says(
+        "carol",
+        &["publish", app.to_str().unwrap(), "--org", "acme"],
+        true,
+    );
+    assert!(said.contains("signed "), "it signed the app first: {said}");
+    let digest = OrgWorld::digest_in(&said);
+    assert_eq!(
+        world.hub.lock().unwrap().orgs["acme"].candidates[&digest].state,
+        "waiting-for-approval"
+    );
+    // A delegation for somebody else's key is refused, plainly.
+    let other = world.dir.path().join("other.pkcs8");
+    std::fs::write(&other, krate_lease::generate_pkcs8().unwrap()).unwrap();
+    let wrong = world.dir.path().join("wrong.json");
+    world.says(
+        "alice",
+        &[
+            "delegate",
+            "--root",
+            root.to_str().unwrap(),
+            "--key",
+            other.to_str().unwrap(),
+            "--namespace",
+            "acme/*",
+            "-o",
+            wrong.to_str().unwrap(),
+        ],
+        true,
+    );
+    let said = world.says(
+        "carol",
+        &[
+            "org",
+            "release-key",
+            "acme",
+            "--delegation",
+            wrong.to_str().unwrap(),
+        ],
+        false,
+    );
+    assert!(said.contains("delegates a different key"), "{said}");
+    // `krate org list --json` is what Studio reads to offer the menu.
+    let said = world.says("carol", &["org", "list", "--json"], true);
+    let list: serde_json::Value = serde_json::from_str(said.trim()).expect("JSON");
+    assert_eq!(list[0]["slug"], "acme");
+    assert_eq!(list[0]["role"], "developer");
 }

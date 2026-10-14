@@ -2504,6 +2504,39 @@ pub fn open_with_limits(bundle_path: &Path, limits: Limits) -> Result<OpenBundle
 /// signature or the assets, and a caller that runs the app opens it with
 /// [`open`], which does. Opening a whole game to read its name cost three
 /// seconds an unpack, and a double-click unpacked it three times (K-1075).
+/// The root a bundle's signature chains to -- the delegation's root, or the
+/// signing key itself -- read from the archive without unpacking it, or
+/// `None` when it carries no signature that parses. Like
+/// [`OpenBundle::signing_authority`], it selects; it does not verify. Used
+/// to decide whether an organisation's check-in applies before a desktop
+/// door wraps or spawns anything (IC-948 H).
+pub fn read_signing_authority(bundle_path: &Path) -> Result<Option<String>> {
+    with_limits(LOCAL_LIMITS, || {
+        let file = File::open(bundle_path).map_err(|err| io_err(bundle_path, err))?;
+        let mut archive = ZipArchive::new(file)?;
+        let mut entry = match archive.by_name(SIGNATURE_ENTRY) {
+            Ok(entry) => entry,
+            Err(zip::result::ZipError::FileNotFound) => return Ok(None),
+            Err(err) => return Err(err.into()),
+        };
+        let mut text = Vec::new();
+        entry
+            .by_ref()
+            .take(lim().entry_bytes + 1)
+            .read_to_end(&mut text)
+            .map_err(|err| io_err(bundle_path, err))?;
+        Ok(serde_json::from_slice::<signing::SignatureEnvelope>(&text)
+            .ok()
+            .map(|envelope| {
+                envelope
+                    .delegation
+                    .as_ref()
+                    .map(|d| d.delegation.root.clone())
+                    .unwrap_or(envelope.public_key)
+            }))
+    })
+}
+
 pub fn read_manifest(bundle_path: &Path) -> Result<Manifest> {
     with_limits(LOCAL_LIMITS, || {
         let size = fs::metadata(bundle_path)
@@ -4420,6 +4453,9 @@ pub struct Fetched {
     /// The hex content address in that URL's last path segment, checked
     /// against the bytes. `None` when the URL named no address.
     pub address: Option<String>,
+    /// The plain sha256 of the bytes that arrived: what an organisation's
+    /// lease and the hub's check-in name them by (IC-948 G).
+    pub sha256: String,
 }
 
 /// The bytes served at a content address must BE that content (IC-389,
@@ -4481,12 +4517,31 @@ fn check_address_digest(final_url: &str, actual: &str) -> Result<Option<String>>
 
 #[cfg(feature = "fetch")]
 pub fn fetch_resolved(url: &str, allow_insecure_http: bool) -> Result<Fetched> {
+    fetch_resolved_authorized(url, allow_insecure_http, None)
+}
+
+/// [`fetch_resolved`] carrying the person's session (IC-948 H): the MCP
+/// door fetches a private release the way `krate run` does, and a refusal
+/// comes back as [`BundleError::HubRefused`]. The caller decides which
+/// hosts see the session.
+#[cfg(feature = "fetch")]
+pub fn fetch_resolved_authorized(
+    url: &str,
+    allow_insecure_http: bool,
+    authorization: Option<&str>,
+) -> Result<Fetched> {
     // A URL is a stranger's: the hub's limits (IC-942).
-    with_limits(HUB_LIMITS, || fetch_resolved_here(url, allow_insecure_http))
+    with_limits(HUB_LIMITS, || {
+        fetch_resolved_here(url, allow_insecure_http, authorization)
+    })
 }
 
 #[cfg(feature = "fetch")]
-fn fetch_resolved_here(url: &str, allow_insecure_http: bool) -> Result<Fetched> {
+fn fetch_resolved_here(
+    url: &str,
+    allow_insecure_http: bool,
+    authorization: Option<&str>,
+) -> Result<Fetched> {
     if url.starts_with("http://") && !allow_insecure_http {
         return Err(BundleError::InsecureUrl {
             url: url.to_string(),
@@ -4504,7 +4559,7 @@ fn fetch_resolved_here(url: &str, allow_insecure_http: bool) -> Result<Fetched> 
     // a number this small is safe: a slow 256 MB download over a poor link
     // keeps resetting it and is never cut off, while a silent server trips
     // it once.
-    let response = fetch_get(url, None)?;
+    let response = fetch_get(url, authorization)?;
     fetch_small(url, response)
 }
 
@@ -4725,6 +4780,7 @@ fn fetch_small(url: &str, response: ureq::Response) -> Result<Fetched> {
             message: err.to_string(),
         })?;
     let address = check_address(&final_url, &bytes)?;
+    let sha256 = sha256_hex(&bytes);
 
     // A download that did not finish is not a damaged app (K-274).
     //
@@ -4756,6 +4812,7 @@ fn fetch_small(url: &str, response: ureq::Response) -> Result<Fetched> {
         bundle,
         url: final_url,
         address,
+        sha256,
     })
 }
 

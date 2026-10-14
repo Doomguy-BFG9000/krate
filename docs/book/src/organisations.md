@@ -77,8 +77,28 @@ an owner's or admin's role, is for an owner.
 ## Sending an app
 
 Apps sent through an organisation are signed, so everyone can tell the app
-came from the organisation and was not changed on the way. The owner
-delegates a release key to the developer once:
+came from the organisation and was not changed on the way.
+
+The shortest way is a release key made on the developer's own machine:
+
+```sh
+krate org release-key acme
+```
+
+It prints the key's public half and the exact line an owner runs to
+delegate it. The private key never leaves the machine. The owner sends back
+the file that line writes, and the developer installs it:
+
+```sh
+krate org release-key acme --delegation acme-release.json
+```
+
+From then on `krate publish app.krate --org acme` signs the app itself, and
+Krate Studio's Send menu offers "Send to Acme for approval", which does the
+same and then shows "Waiting for approval in Acme" with a link to the
+Waiting tab.
+
+Or by hand: the owner delegates a release key to the developer once:
 
 ```sh
 krate delegate --root acme-root.pkcs8 --key carol-release.pkcs8 \
@@ -125,6 +145,29 @@ sign-in only to a Krate hub, never to whatever site a link points at.
 `krate org releases acme` lists every release, with who uploaded it and who
 approved it. `krate org candidates acme` lists every upload, waiting or
 released, for the people who publish, approve or run the organisation.
+
+## Opening it offline
+
+The first time a member opens a private app, Krate shows the terms with the
+exact date: "Works offline until <date>, then needs a connection. If you are
+removed, it stops when it next connects." Each open while online checks in
+with the hub and renews that offline access when it is half used. Owners
+choose how long an app works offline: 7 days unless they say otherwise, 30
+at most, or not at all, in which case it opens only with a connection.
+
+Offline, the app opens only on that stored access, for that app and that
+sign-in, until it runs out. When the device connects again and the check-in
+is refused, because the person was removed, the access is deleted and the
+app does not open. The person's own data in it is kept.
+
+This works for every way an app is opened: `krate run`, `krate launch`, a
+double-click, Krate Studio's Open, and an AI tool through `krate mcp`. Each
+says in words why a private app did not open, and how to sign in; on a
+double-click on a Mac or Windows, in a window.
+
+The limit to know: this is enforced by Krate on the device. Someone who
+copies the file and rebuilds it is no longer opening the organisation's
+signed app, but Krate cannot stop a file from being copied.
 
 ## Withdrawing a release key
 
@@ -182,8 +225,6 @@ The pilot is the smallest organisation path that works. These are not in
 it:
 
 - **Single sign-on.** No SAML, OIDC or SCIM. People sign in with GitHub.
-- **Offline access.** Opening a private app needs the hub at that moment;
-  there are no offline leases.
 - **Billing in the product.** The pilot is invoiced by hand.
 - Moving an organisation's apps to another organisation, choosing where
   its data is stored, exporting it, and closing an organisation.
