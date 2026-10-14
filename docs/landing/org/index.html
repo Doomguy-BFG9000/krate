@@ -37,6 +37,7 @@
 .card h3 { font-size: 16.5px; letter-spacing: -.02em; }
 .card h3 + p, .card .sub { margin-top: 4px; font-size: 14px; color: var(--mute); text-wrap: pretty; }
 .rows { padding: 4px 18px; }
+.card .rows.exports { padding: 0; margin-top: 8px; }
 .rw { display: flex; align-items: center; align-content: flex-start; gap: 14px; padding: 14px 0; }
 .rw + .rw { border-top: 1px solid var(--line); }
 .rw .t { flex: 1; min-width: 0; }
@@ -105,6 +106,44 @@ dialog.sheet .dgbox span { display: block; margin-bottom: 4px; font: 500 12px Ge
 dialog.sheet .acts2 { display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px; flex-wrap: wrap; }
 dialog.sheet #sheetWhy { margin-top: 14px; }
 .toast { margin-bottom: 14px; }
+/* Addendum 3: banners, settings forms, exports, billing */
+.banners { display: grid; gap: 10px; margin-top: 22px; }
+.banners + .tabs { margin-top: 16px; }
+.banner .bacts { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.banner .bacts .btn { margin-top: 0; }
+.row2 { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin-top: 14px; }
+.row2 h3 { flex: 1; min-width: 0; }
+.card > .row2:first-child { margin-top: 0; }
+.row2 .lbl { font-size: 14px; color: var(--ink-2); }
+.keyform { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--line); }
+.keyform .inp { margin-top: 10px; font: 500 13px ui-monospace, "SF Mono", Menlo, monospace; }
+.vh { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.chip { height: 34px; padding: 0 12px; border-radius: 99px; font-size: 13.5px; color: var(--ink); background: var(--soft); box-shadow: inset 0 0 0 1px var(--line-2); }
+.chip:hover { box-shadow: inset 0 0 0 1px var(--ink-4); }
+.form.sso { margin-top: 16px; }
+.form.sso select.sel { height: 46px; padding-right: 36px; border-radius: 12px; font-size: 15px; background: var(--s1) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' fill='none' stroke='%238a8a92' stroke-width='1.5'%3E%3Cpath d='M1 1l4 4 4-4'/%3E%3C/svg%3E") no-repeat right 14px center; }
+.form.sso small, .fld small { overflow-wrap: anywhere; }
+.proof { margin-top: 18px; padding: 16px; border-radius: 16px; background: var(--soft); }
+.proof b { display: block; font-weight: 500; font-size: 15px; }
+.proof .kv { grid-template-columns: 70px minmax(0, 1fr); align-items: center; }
+.recs { margin-top: 10px; }
+.rec { display: grid; grid-template-columns: 52px minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 8px 0; border-top: 1px solid var(--line); }
+.rec span { font-size: 13px; color: var(--ink-3); }
+.rec code.k { overflow-wrap: anywhere; font-size: 12.5px; background: none; padding: 0; }
+.rec .btn { height: 34px; }
+.proof code.k, .linkbox code.k { overflow-wrap: anywhere; font-size: 12.5px; }
+.proof .linkbox { display: flex; align-items: center; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
+.card.danger { box-shadow: 0 0 0 1px color-mix(in srgb, var(--danger) 26%, var(--hair)), var(--sh-1); }
+.stmt { margin-top: 12px; padding: 12px 14px; border-radius: 12px; background: var(--soft); }
+.stmt span { display: block; font-size: 12.5px; color: var(--ink-3); }
+.stmt p { margin-top: 4px; font-size: 14px; color: var(--ink); white-space: pre-wrap; overflow-wrap: anywhere; }
+.invres .invfor { margin: 0 0 4px; font-size: 13px; color: var(--ink-3); }
+.invline { margin-top: 14px; font-size: 14.5px; color: var(--ink-2); }
+.invline a { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
+.fpline { margin-top: 10px; font-size: 14.5px; color: var(--ink); }
+.ra .sel { height: 34px; }
+dialog.sheet .sheetin { margin-top: 14px; text-align: left; }
 .signedout { width: min(440px, 100%); margin-top: 8px; }
 @media (max-width: 680px) {
   .orgp { padding-top: 28px; }
@@ -117,6 +156,8 @@ dialog.sheet #sheetWhy { margin-top: 14px; }
   .rw.flat .ra { padding-left: 0; }
   .rw .ra .btn.quiet { margin-left: auto; }
   .rw.flat .ra .btn { flex: 1; }
+  .rw .ra { flex-wrap: wrap; }
+  .rw.flat .ra .sel { flex: 1 1 100%; height: 44px; }
   .invrow { grid-template-columns: minmax(0, 1fr); }
   .invrow .rsays { order: 0; margin: -2px 0 4px; }
   .kv { grid-template-columns: minmax(0, 1fr); gap: 2px; }
@@ -124,7 +165,7 @@ dialog.sheet #sheetWhy { margin-top: 14px; }
   .fp { font-size: 19px; }
   dialog.sheet .acts2 .btn { flex: 1; }
   /* a thumb's 44px on a narrow screen, whatever the pointer reports */
-  .tab, .sel, .seg button, .rw .btn.sm, .btn.sm { min-height: 44px; }
+  .tab, .sel, .seg button, .rw .btn.sm, .btn.sm, .chip { min-height: 44px; }
   .panel.signedout { padding: 30px 20px 26px; }
 }
 @media (pointer: coarse) { .sel, .seg button, .tab { min-height: 44px; } .invres .btn.link { min-height: 44px; } }
@@ -175,6 +216,7 @@ dialog.sheet #sheetWhy { margin-top: 14px; }
       <div class="otile" id="oTile" aria-hidden="true"></div>
       <div class="t"><h1 class="page" id="oName">Loading</h1><p id="oMeta"></p></div>
     </div>
+    <div id="banner" class="banners" hidden></div>
     <div class="tabs" role="tablist" id="tabs" aria-label="Organisation"></div>
     <div id="toast" class="toast" hidden></div>
     <div class="pane" role="tabpanel" id="pane"></div>
@@ -186,6 +228,7 @@ dialog.sheet #sheetWhy { margin-top: 14px; }
 <dialog class="sheet" id="sheet" aria-labelledby="sheetH">
   <h2 id="sheetH"></h2>
   <p id="sheetP"></p>
+  <label class="fld sheetin" id="sheetIn" hidden><span id="sheetInLabel"></span><input class="inp" id="sheetInput" autocomplete="off" autocapitalize="none" spellcheck="false"></label>
   <div class="dgbox" id="sheetDigest" hidden></div>
   <div id="sheetWhy" hidden></div>
   <div class="acts2">
@@ -205,6 +248,7 @@ dialog.sheet #sheetWhy { margin-top: 14px; }
 </footer>
 <script src="/kit/site.js"></script>
 <script src="/kit/org.js"></script>
+<script src="/org/parts.js"></script>
 <script src="/org/dashboard.js"></script>
 </body>
 </html>
