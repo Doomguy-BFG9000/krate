@@ -391,25 +391,27 @@ const unb64 = (text) => Uint8Array.from(atob(text), (c) => c.charCodeAt(0));
 
 /// Encrypt one organisation's client secret. The organisation's slug is
 /// the additional data, so a ciphertext copied into another organisation's
-/// store does not open there.
-export async function sealSecret(env, slug, plaintext) {
+/// store does not open there. `purpose` names what else it is bound to (a
+/// company connection's credential is bound to its connection's name too,
+/// org-connections.js); the default is the client secret's.
+export async function sealSecret(env, slug, plaintext, purpose = `krate-org-sso:${slug}`) {
   const key = await secretKey(env);
   if (!key) return null;
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const body = await crypto.subtle.encrypt(
-    { name: "AES-GCM", iv, additionalData: new TextEncoder().encode(`krate-org-sso:${slug}`) },
+    { name: "AES-GCM", iv, additionalData: new TextEncoder().encode(purpose) },
     key,
     new TextEncoder().encode(plaintext),
   );
   return { v: 1, iv: b64(iv), body: b64(body) };
 }
 
-export async function openSecret(env, slug, sealed) {
+export async function openSecret(env, slug, sealed, purpose = `krate-org-sso:${slug}`) {
   const key = await secretKey(env);
   if (!key || !sealed || !sealed.iv || !sealed.body) return null;
   try {
     const out = await crypto.subtle.decrypt(
-      { name: "AES-GCM", iv: unb64(sealed.iv), additionalData: new TextEncoder().encode(`krate-org-sso:${slug}`) },
+      { name: "AES-GCM", iv: unb64(sealed.iv), additionalData: new TextEncoder().encode(purpose) },
       key,
       unb64(sealed.body),
     );
@@ -537,7 +539,10 @@ export async function ssoRoute({ request, env, slug, rest, method, askRaw, readB
   return null;
 }
 
-async function keyedDigest(env, text) {
+/// A digest of a secret keyed with ORG_SECRET_KEY, for binding an
+/// Idempotency-Key to a request that carries the secret, so the store
+/// never holds anything a public function derives from it.
+export async function keyedDigest(env, text) {
   const key = await crypto.subtle.importKey(
     "raw",
     new TextEncoder().encode(`krate-org-idem:${env.ORG_SECRET_KEY || ""}`),

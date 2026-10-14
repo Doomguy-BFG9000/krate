@@ -49,6 +49,14 @@ export const MATRIX = {
   "release.set-current": { owner: "yes", admin: "yes" },
   "group.manage": { owner: "yes", admin: "yes" },
   "release.audience": { owner: "yes", admin: "yes" },
+  // Company connections (IC-952); the commands are in org-connections.js.
+  // Who sets one up and holds its credential; who sees what exists (the
+  // people who build and approve the apps that use one); who an app may
+  // use one for -- anyone who may open the organisation's apps, narrowed
+  // by the connection's own audience and app list.
+  "connection.manage": { owner: "yes", admin: "yes" },
+  "connection.view": { owner: "yes", admin: "yes", developer: "yes", reviewer: "yes" },
+  "connection.use": { owner: "yes", admin: "yes", developer: "yes", reviewer: "yes", recipient: "yes" },
 };
 
 /// What `role` may do for `action`: "yes", a narrower rule, or null.

@@ -47,6 +47,10 @@ test("the executable matrix is the contract's table", () => {
     "release.set-current": "y y - - -",
     "group.manage": "y y - - -",
     "release.audience": "y y - - -",
+    // Company connections (IC-952).
+    "connection.manage": "y y - - -",
+    "connection.view": "y y y y -",
+    "connection.use": "y y y y y",
   };
   assert.deepStrictEqual(Object.keys(MATRIX).sort(), Object.keys(table).sort());
   for (const [action, row] of Object.entries(table)) {
