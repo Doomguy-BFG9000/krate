@@ -2175,7 +2175,7 @@ interpreter = true
         );
         assert_eq!(policy.updates, UpdateMode::Notify);
         assert!(!policy.interpreter);
-        assert_eq!(policy.org.as_deref(), Some("acme"));
+        assert_eq!(policy.org.as_deref(), Some("acme-labs"));
     }
 
     /// `[org] slug` (IC-953) names the organisation whose apps come first:
