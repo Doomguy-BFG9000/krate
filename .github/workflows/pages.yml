@@ -284,6 +284,14 @@ jobs:
           # is revoked or stopped without asking, and the directory never
           # offers owner or admin.
           node docs/landing/studio/org-doors-test.mjs
+          # Setting an organisation up from the site (IC-958): the name, a
+          # first app released, the team invited, Getting started ticking
+          # itself, joining from the email, and the signing ring's places
+          # hidden where the hub has not got them.
+          node docs/landing/studio/org-setup-test.mjs
+          # And the IT pack the dashboard makes in the browser is
+          # scripts/build-policy-templates.py's, byte for byte.
+          node docs/landing/studio/org-policy-test.mjs
           # And that the homepage's prompt bar starts a build only from its
           # own fresh handoff, once, and never from a link (K-885).
           node docs/landing/studio/frontpage-test.mjs

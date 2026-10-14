@@ -88,13 +88,15 @@
       var t = TAB[id];
       var b = el("button", {
         class: "tab", type: "button", role: "tab", id: "tab-" + id,
-        "aria-label": t.long + (id === "waiting" && S.waiting ? ", " + S.waiting + " waiting" : ""),
+        "aria-label": t.long + (id === "waiting" && S.waiting ? ", " + S.waiting + " waiting" : "") + (id === "people" && S.pubWaiting ? ", " + S.pubWaiting + " waiting to publish" : ""),
         "aria-selected": S.tab === id ? "true" : "false",
         onclick: function () { show(id); },
       }, [
         el("span", { class: t.short ? "long" : "", text: t.long }),
         t.short ? el("span", { class: "short", text: t.short }) : null,
         id === "waiting" && S.waiting ? el("span", { class: "n", text: String(S.waiting) }) : null,
+        // Publishers an owner's computer has not approved yet (IC-958 A).
+        id === "people" && S.pubWaiting ? el("span", { class: "n", text: String(S.pubWaiting) }) : null,
       ]);
       bar.appendChild(b);
     });
@@ -107,6 +109,11 @@
     try { history.replaceState(null, "", HERE + "&tab=" + id); } catch (e) {}
     drawTabs();
     if (P) P.banner($("banner"));
+    // Getting started (IC-958), above Releases, for those who run it.
+    var start = $("start");
+    if (Setup && id === "releases" && S.org && S.org.state !== "closed") Setup.checklist(start, { S: S, show: show, refresh: refresh });
+    else { start.hidden = true; start.textContent = ""; }
+    if (Pub) Pub.notice($("pubNote"), id);
     var pane = $("pane");
     pane.textContent = "";
     pane.setAttribute("aria-labelledby", "tab-" + id);
@@ -202,10 +209,7 @@
       var card = el("div", { class: "card rows" });
       pane.appendChild(card);
       if (!list.length) {
-        var how = K.can(roleOf(), "candidate.publish")
-          ? "Send one with krate publish app.krate --org " + slug + ". It shows in Waiting for approval until someone else approves it."
-          : "When a developer sends an app and a reviewer approves it, it appears here.";
-        card.appendChild(el("div", { class: "empty" }, [el("b", { text: "Nothing released yet" }), el("p", { text: how })]));
+        emptyReleases(card);
         return;
       }
       list.forEach(function (r) {
@@ -237,13 +241,35 @@
         card.appendChild(el("div", { class: "rw flat" }, [
           el("div", { class: "t" }, [
             el("b", { text: K.appName(r) }),
-            el("small", { text: "Sent by " + K.who(r.uploaded_by).label + " · approved by " + K.who(r.approved_by).label + " · " + K.day(r.at) }),
+            el("small", { text: r.solo
+              ? "Released by its sender, " + K.who(r.uploaded_by).label + " (no second approver yet) · " + K.day(r.at)
+              : "Sent by " + K.who(r.uploaded_by).label + " · approved by " + K.who(r.approved_by).label + " · " + K.day(r.at) }),
             note,
           ]),
           el("div", { class: "ra" }, [open, copyBtn, offline]),
         ]));
       });
     });
+  }
+
+  /// Nothing released yet: for whoever may send one, the first app right
+  /// here (a ready app or their own .krate); for everyone else, who does.
+  function emptyReleases(card) {
+    var mayPublish = K.can(roleOf(), "candidate.publish") === "yes";
+    // The owners and admins have it in Getting started just above.
+    var inList = Boolean(Setup) && (roleOf() === "owner" || roleOf() === "admin") && !Setup.mem().hidden;
+    if (mayPublish && Setup && !inList) {
+      var box = el("div", { class: "empty-app" });
+      card.appendChild(box);
+      Setup.firstApp(box, { h: "h3", onDone: function () { refresh(); }, onWaiting: function () { show("waiting"); } });
+      return;
+    }
+    card.appendChild(el("div", { class: "empty" }, [
+      el("b", { text: "Nothing released yet" }),
+      el("p", { text: mayPublish
+        ? (inList ? "Release one from Getting started above, or send it" : "Send one") + " from Krate Studio with Publish to " + (S.org.name || slug) + "."
+        : "When someone in " + (S.org.name || slug) + " releases an app, it appears here, ready to open." }),
+    ]));
   }
 
   // ----------------------------------------------------------- waiting
@@ -271,7 +297,7 @@
       if (!list.length) {
         card.appendChild(el("div", { class: "empty" }, [
           el("b", { text: "Nothing is waiting" }),
-          el("p", { text: "A developer sends an app with krate publish app.krate --org " + slug + "." }),
+          el("p", { text: "When someone sends an app from Releases or from Krate Studio, it waits here until a second person approves it." }),
         ]));
         return;
       }
@@ -408,6 +434,18 @@
         ? "You receive " + (S.org.name || slug) + "'s apps. Recipients see only themselves here."
         : "Who is in " + (S.org.name || slug) + ", and what each person may do.");
       var roles = K.invitable(role);
+      if (Pub) Pub.peopleCard(pane);
+      if (roles.length && Setup) {
+        // Many at once, by email, with what they can do in plain words.
+        var bulk = el("div", { class: "card", id: "bulkCard" }, [
+          el("h3", { text: "Invite your team" }),
+          el("p", { text: "Paste their work emails. Each gets an email with one button to join " + (S.org.name || slug) + "." }),
+        ]);
+        var bulkBox = el("div");
+        bulk.appendChild(bulkBox);
+        Setup.invite(bulkBox, {});
+        pane.appendChild(bulk);
+      }
       if (roles.length) pane.appendChild(inviteCard(roles));
       var groupsAt = el("div", { hidden: true });
 
@@ -594,7 +632,7 @@
       out.appendChild(K.refusalBlock({ title: t, body: b, action: null }, "warn"));
       input.focus();
     }
-    card.appendChild(el("h3", { text: "Invite someone" }));
+    card.appendChild(el("h3", { text: Setup ? "Invite one person, by GitHub or with any role" : "Invite someone" }));
     card.appendChild(el("p", { text: "By GitHub username, or by the work email they sign in with. You get a link to send them; it works once, only for them." }));
     card.appendChild(el("div", { style: "margin-top:14px" }, [seg]));
     card.appendChild(form);
@@ -677,7 +715,7 @@
   // ---------------------------------------------------------- settings
   function settings(pane) {
     K.api("GET", "/orgs/" + slug).then(function (res) {
-      head(pane, "Settings", "The organisation's root key, and how an app is sent to " + (S.org.name || slug) + ".");
+      head(pane, "Settings", (S.org.name || slug) + "'s signature, how apps are sent to it, and how your people sign in.");
       if (!res.ok) return failed(pane, res, {});
       take(res.body);
       var o = S.org, owner = roleOf() === "owner";
@@ -686,33 +724,52 @@
         P.settings(pane, null);
         return;
       }
-      var key = el("div", { class: "card" }, [el("h3", { text: "Root key" })]);
+      var name = o.name || slug;
+      // The click path first; the commands stay, for the terminal, folded
+      // under one line (IC-958: nobody is told to run a key command).
+      var terminal = function (lines) {
+        return el("details", { class: "term" }, [
+          el("summary", { text: "For developers who use the terminal" }),
+          el("div", { class: "tb" }, lines.map(function (s) {
+            return el("div", {}, [el("p", { class: "sub", text: s[0] }), el("pre", { class: "k", text: s[1] })]);
+          })),
+        ]);
+      };
+      var key = el("div", { class: "card", id: "sigCard" }, [el("h3", { text: name + "'s signature" })]);
       if (o.root_key) {
-        key.appendChild(el("p", { text: "Every app sent here is signed by this key, or by a release key it delegated. Compare the fingerprint with the owner's copy." }));
+        key.appendChild(el("p", { text: "Every app " + name + " releases is signed by " + name + ", and every computer checks it before the app opens. Compare this fingerprint with an owner's copy." }));
         key.appendChild(el("p", { class: "fp", text: K.fingerprint(o.root_key) }));
         key.appendChild(el("dl", { class: "kv" }, [
-          el("dt", { text: "Set" }), el("dd", { text: (K.moment(o.root_key_set_at) || "Unknown") + (o.root_key_set_by ? " by " + K.who(o.root_key_set_by).label : "") }),
-          el("dt", { text: "Full key" }), el("dd", { class: "dg", text: o.root_key }),
+          el("dt", { text: "Made" }), el("dd", { text: (K.moment(o.root_key_set_at) || "Unknown") + (o.root_key_set_by ? " by " + K.who(o.root_key_set_by).label : "") }),
+          el("dt", { text: "Full public key" }), el("dd", { class: "dg", text: o.root_key }),
         ]));
-        if (owner) key.appendChild(el("p", { class: "sub", text: "Replace it here, or run the command below with the new key. Activity records the change." }));
       } else {
-        key.appendChild(el("p", { text: "No root key yet. Until an owner registers one, nothing can be sent to " + (o.name || slug) + "." }));
+        key.appendChild(el("p", { text: name + " gets its signature when its first app is released, from Releases in this browser or from Krate Studio. Until then nothing can be sent to " + name + "." }));
+        key.appendChild(el("div", { class: "row2" }, [el("button", { class: "btn dark sm", type: "button", text: "Release an app", onclick: function () { show("releases"); } })]));
       }
-      if (owner) key.appendChild(el("pre", { class: "k", text: "krate org root-key " + slug + " " + slug + "-root.pkcs8" }));
+      if (owner) {
+        key.appendChild(terminal([[o.root_key
+          ? "Replace it from a terminal with the new key's file (Activity records the change):"
+          : "Or make it from a terminal, on the computer that keeps it:", "krate org root-key " + slug + " " + slug + "-root.pkcs8" + (o.root_key ? "" : " --new")]]));
+      }
       pane.appendChild(key);
 
-      var steps = [
-        ["Once, an owner gives each developer a release key", "krate delegate \\\n  --root " + slug + "-root.pkcs8 \\\n  --key release.pkcs8 \\\n  --namespace '" + slug + "/*' \\\n  -o release-" + slug + ".json"],
-        ["The developer marks the app as yours and signs it", "krate sign app.krate --org " + slug + " \\\n  --key release.pkcs8 \\\n  --delegation release-" + slug + ".json"],
-        ["And sends it here", "krate publish app.krate --org " + slug],
-      ];
       pane.appendChild(el("div", { class: "card" }, [
-        el("h3", { text: "Send an app to " + (o.name || slug) }),
-        el("p", { text: "Three commands. The app then waits in Waiting for approval until someone other than the sender approves it." }),
-        el("ol", { class: "cmds" }, steps.map(function (s) {
-          return el("li", {}, [el("span", { text: s[0] }), el("pre", { class: "k", text: s[1] })]);
-        })),
+        el("h3", { text: "Send an app to " + name }),
+        el("p", { text: "From this browser: Release an app in Releases, a ready app or a .krate you have. From Krate Studio: Publish to " + name + " in the app's menu. Either way the app is signed for " + name + " on the way." }),
+        el("div", { class: "row2" }, [
+          el("button", { class: "btn ghost sm", type: "button", text: "Release an app", onclick: function () { show("releases"); } }),
+          el("a", { class: "btn ghost sm", href: "/download/", text: "Get Krate Studio" }),
+        ]),
+        terminal([
+          ["Once, an owner gives each developer a release key:", "krate delegate \\\n  --root " + slug + "-root.pkcs8 \\\n  --key release.pkcs8 \\\n  --namespace '" + slug + "/*' \\\n  -o release-" + slug + ".json"],
+          ["The developer marks the app as " + name + "'s and signs it:", "krate sign app.krate --org " + slug + " \\\n  --key release.pkcs8 \\\n  --delegation release-" + slug + ".json"],
+          ["And sends it here, where it waits for a second person:", "krate publish app.krate --org " + slug],
+        ]),
       ]));
+      // Solo release and new publishers (IC-958): drawn only when the hub
+      // has them.
+      if (Pub) Pub.settings(pane);
 
       // Company connections (connections.js, IC-952).
       if (C) C.settings(pane);
@@ -747,6 +804,16 @@
     });
   }
 
+  // Setting the organisation up from here (kit/org-setup.js, IC-958) and
+  // the publishers waiting to be approved (publishers.js); absent, the
+  // page is as it was.
+  var Setup = window.KrateOrgSetup
+    ? window.KrateOrgSetup({ slug: slug, here: HERE, org: function () { return S.org; }, role: roleOf, members: function () { return S.members; } })
+    : null;
+  var Pub = window.KrateOrgPublishers
+    ? window.KrateOrgPublishers({ S: S, slug: slug, words: words, toast: toast, roleOf: roleOf, drawTabs: function () { drawTabs(); }, show: function (id) { show(id); } })
+    : null;
+
   // Release control and groups (releases.js); absent, the flat list.
   var R = null;
   P = window.KrateOrgParts({
@@ -756,7 +823,7 @@
   if (window.KrateOrgReleases) {
     R = window.KrateOrgReleases({
       S: S, slug: slug, words: words, confirmSheet: confirmSheet, head: head, failed: failed,
-      toast: toast, show: function (id) { show(id); }, roleOf: roleOf, P: P, flat: flatReleases,
+      toast: toast, show: function (id) { show(id); }, roleOf: roleOf, P: P, flat: flatReleases, empty: emptyReleases,
     });
   }
   // Company connections (connections.js); absent, Settings has no card.
@@ -778,10 +845,13 @@
     var r = K.ROLE_NAME[roleOf()] || roleOf();
     $("oMeta").textContent = slug + " · you are " + (/^[AEIOU]/.test(r) ? "an " : "a ") + r.toLowerCase();
     $("in").hidden = false;
-    if (q.get("new") === "1") toast(name + " is ready, and you are its owner. Invite your team below.");
+    if (q.get("new") === "1") toast(name + " is ready, and you are its owner. Getting started has what is left to do.");
+    // Sent while the two-person rule holds: who approves it now.
+    if (q.get("sent")) toast(q.get("sent").slice(0, 80) + " was sent to " + name + ". It waits here until a second person approves it.");
     // Back from a company sign-in: what it did, in words.
     var signedVia = K.takeSsoNotice(undefined, name);
     if (signedVia) toast(signedVia);
+    if (Pub) Pub.load();
     show(S.tab);
     countWaiting();
   });

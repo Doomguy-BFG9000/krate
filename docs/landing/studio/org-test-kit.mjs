@@ -6,10 +6,12 @@ import vm from "node:vm";
 import { webcrypto } from "node:crypto";
 
 const KIT = readFileSync("docs/landing/kit/org.js", "utf8");
-const ORGS = readFileSync("docs/landing/orgs/orgs.js", "utf8");
+// The setting-up parts both /orgs/ and /org/ load (IC-958), in the pages' order.
+const SETUP = readFileSync("docs/landing/kit/policy.js", "utf8") + "\n;\n" + readFileSync("docs/landing/kit/org-setup.js", "utf8");
+const ORGS = SETUP + "\n;\n" + readFileSync("docs/landing/orgs/orgs.js", "utf8");
 // The page loads parts.js (Addendum 3) before dashboard.js; so does this.
-// And doors.js (IC-955), releases.js (IC-949 R) and connections.js (IC-952) between them, in the page's order.
-const DASH = readFileSync("docs/landing/org/doors.js", "utf8") + "\n;\n" + readFileSync("docs/landing/org/parts.js", "utf8") + "\n;\n" + readFileSync("docs/landing/org/releases.js", "utf8") + "\n;\n" + readFileSync("docs/landing/org/connections.js", "utf8") + "\n;\n" + readFileSync("docs/landing/org/dashboard.js", "utf8");
+// And doors.js (IC-955), releases.js (IC-949 R), connections.js (IC-952) and publishers.js (IC-958) between them, in the page's order.
+const DASH = SETUP + "\n;\n" + readFileSync("docs/landing/org/doors.js", "utf8") + "\n;\n" + readFileSync("docs/landing/org/parts.js", "utf8") + "\n;\n" + readFileSync("docs/landing/org/releases.js", "utf8") + "\n;\n" + readFileSync("docs/landing/org/connections.js", "utf8") + "\n;\n" + readFileSync("docs/landing/org/publishers.js", "utf8") + "\n;\n" + readFileSync("docs/landing/org/dashboard.js", "utf8");
 const JOIN = readFileSync("docs/landing/join/join.js", "utf8");
 const OPEN = readFileSync("docs/open/index.html", "utf8");
 
@@ -121,14 +123,18 @@ function hubFetch(routes, sent) {
     const u = new URL(url);
     const key = `${(init.method || "GET").toUpperCase()} ${u.pathname}`;
     const headers = init.headers || {};
-    sent.push({ key, url, headers, body: init.body ? JSON.parse(init.body) : null });
+    // A JSON body is read as JSON; bytes (an uploaded .krate) stay bytes.
+    const parsed = typeof init.body === "string" ? JSON.parse(init.body) : init.body || null;
+    sent.push({ key, url, headers, body: parsed });
     const route = routes[key];
-    const [status, json] = route ? route(headers, init.body ? JSON.parse(init.body) : null) : [404, { error: "no-such-route", message: "" }];
+    const [status, json] = route ? route(headers, parsed) : [404, { error: "no-such-route", message: "" }];
     return {
       ok: status >= 200 && status < 300,
       status,
       text: async () => (json === null ? "" : JSON.stringify(json)),
+      json: async () => json,
       blob: async () => ({ size: 10 }),
+      arrayBuffer: async () => (json && json.bytes ? new Uint8Array(json.bytes).buffer : new Uint8Array([80, 75, 3, 4]).buffer),
     };
   };
 }
@@ -136,7 +142,7 @@ function hubFetch(routes, sent) {
 const settle = async () => { for (let i = 0; i < 12; i++) await new Promise((r) => setTimeout(r, 0)); };
 
 /// One page: the kit, then the page's script, in a fresh window.
-async function page(url, script, { token = "", routes = {}, ua = "Mozilla/5.0 (Macintosh) Chrome/120" } = {}) {
+async function page(url, script, { token = "", routes = {}, ua = "Mozilla/5.0 (Macintosh) Chrome/120", extra = {} } = {}) {
   const { document, byId } = makeDom();
   const u = new URL(url);
   const sent = [];
@@ -149,7 +155,15 @@ async function page(url, script, { token = "", routes = {}, ua = "Mozilla/5.0 (M
     document, localStorage, location, URLSearchParams, URL, JSON, Date, Math, Promise, setTimeout, clearTimeout,
     Uint8Array, crypto: webcrypto, navigator: { userAgent: ua, clipboard: { writeText: async () => {} } },
     history: { replaceState(_s, _t, to) { location.href = new URL(to, u.origin).href; } },
-    fetch: hubFetch(routes, sent), console,
+    fetch: hubFetch(routes, sent), console, TextEncoder,
+    // A page's "save this file": what a download would have handed over.
+    saved: [],
+    Blob: class { constructor(parts, opts) { this.parts = parts; this.type = opts && opts.type; } },
+    ...extra,
+  };
+  win.URL = class extends URL {
+    static createObjectURL(b) { win.saved.push(b); return "blob:" + win.saved.length; }
+    static revokeObjectURL() {}
   };
   win.window = win;
   win.globalThis = win;

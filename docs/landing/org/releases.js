@@ -55,10 +55,10 @@
         var apps = (res.body && res.body.apps) || [];
         apps.forEach(function (a) { a.releases.forEach(function (r) { D.S.names[r.digest] = K.appName(r); }); });
         if (!apps.length) {
-          var how = K.can(D.roleOf(), "candidate.publish")
-            ? "Send one with krate publish app.krate --org " + slug + ". It shows in Waiting for approval until someone else approves it."
-            : "When a developer sends an app and a reviewer approves it, it appears here.";
-          p.appendChild(el("div", { class: "card rows" }, [el("div", { class: "empty" }, [el("b", { text: "Nothing released yet" }), el("p", { text: how })])]));
+          var empty = el("div", { class: "card rows" });
+          p.appendChild(empty);
+          if (D.empty) { D.empty(empty); return; }
+          empty.appendChild(el("div", { class: "empty" }, [el("b", { text: "Nothing released yet" }), el("p", { text: "When someone in " + nameOf() + " releases an app, it appears here, ready to open." })]));
           return;
         }
         apps.forEach(function (a) { p.appendChild(appCard(a, p)); });
@@ -109,7 +109,10 @@
         : isCurrent ? el("span", { class: "tag ok", text: "Opens now" }) : null;
       var facts = [
         el("b", {}, [K.appName(r), tag ? " " : null, tag]),
-        el("small", { text: "Sent by " + K.who(r.uploaded_by).label + " · approved by " + K.who(r.approved_by).label + " · " + K.day(r.at) }),
+        // Solo release (IC-958 addendum): said every time it is shown.
+        el("small", { text: r.solo
+          ? "Released by its sender, " + K.who(r.uploaded_by).label + " (no second approver yet) · " + K.day(r.at)
+          : "Sent by " + K.who(r.uploaded_by).label + " · approved by " + K.who(r.approved_by).label + " · " + K.day(r.at) }),
       ];
       if (gone) {
         facts.push(el("small", { class: "why", text: "Withdrawn by " + K.who(r.withdrawn_by).label + " on " + K.day(r.withdrawn_at) + ": “" + (r.withdraw_reason || "no reason given") + "”" }));

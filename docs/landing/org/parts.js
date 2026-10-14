@@ -318,6 +318,19 @@
       ]));
       card.appendChild(out);
       card.appendChild(el("div", { class: "row2" }, [save]));
+      // From Getting started (IC-958 B2): the provider the owner picked and
+      // their company's domain, already in; the person only pastes what
+      // their provider shows.
+      var pre = D.S.ssoPrefill;
+      if (pre && !cur.issuer) {
+        D.S.ssoPrefill = null;
+        if (!domain.value && pre.domain) domain.value = pre.domain;
+        var at = { google: 0, okta: 1, microsoft: 2 }[pre.provider];
+        if (at !== undefined && chips.children[at]) chips.children[at].click();
+        var target = pre.provider === "saml" ? root.document.getElementById("samlCard") || card : card;
+        if (target.scrollIntoView) { try { target.scrollIntoView({ behavior: "smooth", block: "start" }); } catch (e) {} }
+        if (pre.provider !== "saml") { try { (at === 0 ? client : issuer).focus(); } catch (e) {} }
+      }
       if (cur.domain) card.appendChild(domainProof(cur));
       if (cur.issuer) {
         // Turning it off (DELETE /orgs/<slug>/sso), with a confirmation.

@@ -214,6 +214,112 @@ h3 { font-size: 19px; line-height: 1.3; font-weight: 500; letter-spacing: -.02em
 
 @media (max-width: 960px) { .g3, .g4, .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); } .doc { grid-template-columns: minmax(0, 1fr); } .toc { display: none; } .foot { grid-template-columns: 1fr 1fr; } .foot .fm { grid-column: 1 / -1; } }
 @media (max-width: 680px) { .g2, .g3, .g4 { grid-template-columns: 1fr; } .band { flex-direction: column; align-items: flex-start; padding: 40px 28px; } .ph { padding-top: 56px; } .sec { padding-top: 72px; } .card { padding: 22px; } }
+/* organisation setup (IC-958): kit/org-setup.js on /orgs/ and /org/ */
+.wsteps { display: flex; gap: 6px; margin: 0 0 18px; padding: 0; list-style: none; font-size: 12.5px; font-weight: 500; color: var(--ink-4); }
+.wsteps li { display: inline-flex; align-items: center; gap: 6px; }
+.wsteps li + li::before { content: ""; width: 18px; height: 1px; background: var(--line-2); }
+.wsteps li.on { color: var(--ink); } .wsteps li.done { color: var(--ink-3); }
+.wfoot { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--line); display: flex; justify-content: center; }
+.fa-h h2, .rel h2, .cl-h h2 { font-size: 21px; letter-spacing: -.03em; }
+.fa-h p { margin-top: 4px; font-size: 14.5px; color: var(--mute); text-wrap: pretty; }
+.starters { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; margin-top: 18px; }
+@media (min-width: 760px) { .starters { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+.starter { display: flex; align-items: flex-start; gap: 12px; min-height: 44px; padding: 14px; border-radius: 16px; text-align: left; background: var(--s1); box-shadow: inset 0 0 0 1px var(--line-2); transition: box-shadow .2s, background .2s; }
+.starter:hover { box-shadow: inset 0 0 0 1px var(--ink-4); }
+.starter[aria-checked="true"] { background: var(--accent-soft); box-shadow: inset 0 0 0 1.5px var(--accent); }
+.starter:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.st-tile { flex: none; width: 34px; height: 34px; border-radius: 10px; display: grid; place-items: center; font-weight: 600; font-size: 15px; color: var(--accent); background: var(--accent-soft); }
+.starter[aria-checked="true"] .st-tile { color: var(--btn-ink); background: var(--accent); }
+.st-t { min-width: 0; display: grid; gap: 2px; }
+.st-t b { font-weight: 500; font-size: 15px; color: var(--ink); overflow-wrap: anywhere; }
+.st-t b .tag { margin-left: 6px; height: 20px; padding: 0 7px; font-size: 11.5px; vertical-align: 1px; }
+.st-t small { font-size: 13px; line-height: 1.45; color: var(--ink-2); }
+.st-t .st-can { color: var(--ink-3); }
+.fa-why { margin-top: 14px; font-size: 13.5px; color: var(--ink-2); }
+.fa-why::before { content: ""; display: inline-block; width: 7px; height: 7px; margin-right: 8px; border-radius: 50%; background: var(--green); vertical-align: 1px; }
+.fa-acts { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 18px; }
+.fa-step { margin-top: 12px; font-size: 14px; color: var(--ink-2); }
+.fa-step::after { content: ""; display: inline-block; width: 12px; height: 12px; margin-left: 8px; border-radius: 50%; border: 2px solid var(--line-2); border-top-color: var(--accent); vertical-align: -2px; animation: spin .8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.fa-out:not(:empty) { margin-top: 14px; }
+.fa-out .org-why b { display: block; font-weight: 500; color: var(--ink); }
+.studio-path { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 12px; }
+.studio-path small { flex-basis: 100%; font-size: 12.5px; color: var(--ink-3); }
+.vh { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.rel .done-mark { width: 40px; height: 40px; border-radius: 50%; display: grid; place-items: center; margin-bottom: 14px; font-size: 19px; font-weight: 600; color: var(--green); background: var(--green-soft); }
+.rel h2:focus { outline: 0; }
+.rel > p { margin-top: 6px; font-size: 14.5px; color: var(--mute); text-wrap: pretty; }
+.rel .linkbox { display: flex; gap: 8px; margin-top: 14px; }
+.rel .linkbox .inp { flex: 1; min-width: 0; font-size: 13.5px; color: var(--ink-2); }
+.rel .linkbox .btn { flex: none; height: 46px; }
+.rel .sub { font-size: 13.5px; color: var(--ink-3); }
+.rel-inv-h { margin-top: 26px; padding-top: 20px; border-top: 1px solid var(--line); font-size: 16.5px; letter-spacing: -.02em; }
+.rel-next { margin-top: 14px; }
+.inv { display: grid; gap: 12px; margin-top: 12px; }
+.inv .inv-ta { height: auto; min-height: 88px; padding: 12px 14px; line-height: 1.55; resize: vertical; font: inherit; font-size: 15px; }
+.inv-row { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px; }
+.inv-role { flex: 1 1 200px; }
+.inv-role .sel, .inv .sel { width: 100%; height: 46px; padding: 0 34px 0 14px; border-radius: 12px; border: 0; outline: 0; font-size: 15px; color: var(--ink); background: var(--s1) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' fill='none' stroke='%238a8a92' stroke-width='1.5'%3E%3Cpath d='M1 1l4 4 4-4'/%3E%3C/svg%3E") no-repeat right 14px center; box-shadow: inset 0 0 0 1px var(--line-2); appearance: none; -webkit-appearance: none; }
+.inv-row .btn { height: 46px; }
+.inv-out:empty { display: none; }
+.inv-sum { font-size: 14px; color: var(--ink); }
+.inv-rows { margin: 8px 0 0; padding: 0; list-style: none; display: grid; gap: 6px; }
+.inv-rows li { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 13.5px; color: var(--ink-2); }
+.inv-rows .who-e { min-width: 0; overflow-wrap: anywhere; }
+.pack { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; margin-top: 4px; }
+.pack-c { padding: 18px; border-radius: 16px; }
+.pack-c > b { display: block; font-weight: 500; font-size: 15px; color: var(--ink); }
+.pack-c > p { margin-top: 4px; font-size: 13.5px; line-height: 1.5; }
+.pack-c .row2 { display: flex; margin-top: 12px; }
+.pack-files { display: grid; gap: 12px; margin-top: 12px; }
+.pack-f { padding-top: 12px; border-top: 1px solid var(--line-2); }
+@media (min-width: 760px) { .pack-files { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; } .pack-fh { flex-direction: column; align-items: flex-start; } }
+.pack-fh { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.pack-fh b { font-weight: 500; font-size: 14px; }
+.pack-f ol { margin: 8px 0 0; padding-left: 18px; display: grid; gap: 3px; font-size: 12.5px; line-height: 1.5; color: var(--ink-2); }
+.pack-f ol li { list-style: decimal; overflow-wrap: anywhere; }
+.pack .note { margin-top: 10px; font-size: 13px; color: var(--ink-2); }
+.start { margin-bottom: 26px; }
+.cl-card { padding: 22px 22px 10px; }
+.cl-h { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.cl-h p { margin-top: 2px; font-size: 13.5px; color: var(--ink-3); }
+.cl-bar { height: 4px; margin: 14px 0 6px; border-radius: 99px; background: var(--s2); overflow: hidden; }
+.cl-bar span { display: block; height: 100%; border-radius: 99px; background: var(--green); transition: width .6s var(--ease); }
+.cl { margin: 0; padding: 0; list-style: none; }
+.cl > li + li { border-top: 1px solid var(--line); }
+.cl-row { width: 100%; display: flex; align-items: center; gap: 14px; min-height: 56px; padding: 10px 0; text-align: left; }
+.cl-row:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 10px; }
+.cl-tick { flex: none; width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center; font-size: 13px; font-weight: 700; color: var(--btn-ink); box-shadow: inset 0 0 0 1.5px var(--line-2); }
+.cl-tick.on { background: var(--green); box-shadow: none; }
+.cl-t { flex: 1; min-width: 0; display: grid; gap: 1px; }
+.cl-t b { font-weight: 500; font-size: 15px; color: var(--ink); }
+.cl li.done .cl-t b { color: var(--ink-2); }
+.cl-t small { font-size: 13px; line-height: 1.45; color: var(--ink-3); text-wrap: pretty; }
+.cl-b { padding: 0 0 18px 38px; }
+.cl-b > .sub { font-size: 13.5px; color: var(--mute); }
+.cl-b .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.cl-b .chip { min-height: 40px; padding: 0 14px; border-radius: 99px; font-size: 14px; color: var(--ink); background: var(--soft); box-shadow: inset 0 0 0 1px var(--line-2); }
+.cl-b .chip:hover { box-shadow: inset 0 0 0 1px var(--ink-4); }
+.cl-off { display: flex; justify-content: flex-end; }
+.addr { margin-top: -6px; font-size: 13.5px; color: var(--ink-3); overflow-wrap: anywhere; }
+.addr .btn.link { height: 28px; padding: 0 2px; font-size: 13.5px; color: var(--accent); }
+.slugin { display: flex; align-items: center; gap: 0; border-radius: 12px; box-shadow: inset 0 0 0 1px var(--line-2); background: var(--s1); }
+.slugin .pre { padding-left: 14px; font-size: 15px; color: var(--ink-3); white-space: nowrap; }
+.slugin .inp { box-shadow: none; padding-left: 2px; min-width: 0; }
+.slugin:focus-within { box-shadow: inset 0 0 0 1.5px var(--accent), 0 0 0 4px color-mix(in srgb, var(--accent) 14%, transparent); }
+.term { margin-top: 14px; border-radius: 14px; background: var(--soft); }
+.term > summary { min-height: 44px; display: flex; align-items: center; padding: 0 14px; font-size: 13.5px; font-weight: 500; color: var(--ink-2); cursor: pointer; }
+.term > summary::marker, .term > summary::-webkit-details-marker { color: var(--ink-4); }
+.term[open] > summary { color: var(--ink); }
+.term > .tb { padding: 0 14px 14px; }
+.term pre.k { margin-top: 6px; white-space: pre; overflow-x: auto; font-size: 12.5px; }
+@media (max-width: 680px) {
+  .pack { grid-template-columns: minmax(0, 1fr); }
+  .cl-b { padding-left: 0; }
+  .fa-acts .btn, .inv-row .btn { flex: 1 1 100%; }
+  .rel .linkbox { flex-wrap: wrap; } .rel .linkbox .btn { flex: 1 1 100%; }
+  .slugin .pre { font-size: 14px; padding-left: 12px; }
+}
 /* phones: a thumb needs 44px. Pages on this kit skip the generic block that
    scripts/ensure-touch-targets.py adds at deploy, so the kit carries its own,
    sized to its own parts: stacked footer links stay stacked. */

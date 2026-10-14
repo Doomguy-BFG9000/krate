@@ -120,6 +120,16 @@
     reviewer: "Approves apps before they go out.",
     recipient: "Opens the organisation's apps, nothing else.",
   };
+  /// The roles as a person picks one when inviting (IC-958 B3): what the
+  /// person will be able to do. The invitation mail says the same
+  /// (cloud/worker/src/org-mail.js ROLE_WORDS).
+  var ROLE_PLAIN = {
+    recipient: "Can use apps",
+    developer: "Can build apps",
+    reviewer: "Can approve apps",
+    admin: "Can manage people",
+    owner: "Can do everything",
+  };
 
   /// The contract's role matrix (CONTRACT.md "Roles"), the same table the
   /// hub enforces. Used only to decide which controls to show.
@@ -330,6 +340,15 @@
         return { title: "There is already a group by that name", body: "Pick another name, or add people to the one there is.", action: null };
       case "audit-export-off":
         return { title: "The audit export is not switched on on this hub yet", body: "Nothing changed. The activity is still recorded here, and its chain is checked every time you read it.", action: null };
+      // An app sent from the page (IC-958): the file, not the person.
+      case "invalid-bundle":
+        return { title: "That file is not a Krate app", body: "Choose a .krate file: what Krate Studio saves, or krate pack makes. Nothing was sent.", action: null };
+      case "too-large":
+        return { title: "That app is over 5 MB", body: "Send it from Krate Studio, which sends big apps in parts. Nothing was sent.", action: { label: "Get Krate Studio", href: "/download/" } };
+      case "not-marked-for-this-org":
+        return { title: "This app was made for another organisation", body: "It is marked as another organisation's private app, so it cannot be released in " + org + ". Choose a ready app, or send yours from Krate Studio, which marks it for " + org + ". Nothing was released.", action: null };
+      case "bytes-held-elsewhere":
+        return { title: "That exact file is already public", body: "It was published for everyone, so it cannot be " + org + "'s private app. Make a new version and send that.", action: null };
       case "bad-request":
         return { title: "That is not quite right", body: (ctx.message ? String(ctx.message).replace(/ -- /g, ". ").replace(/\.?$/, ".") + " " : "") + "Nothing changed.", action: null };
       case "group-invalid":
@@ -387,6 +406,7 @@
     "self-approval": "they sent it themselves",
     "digest-mismatch": "no such version waiting",
     "not-signed-for-this-org": "not signed for the organisation",
+    "not-marked-for-this-org": "it was made for another organisation",
     "invite-expired": "the invitation had expired",
     "invite-used": "the invitation was already used",
     "invite-for-someone-else": "the invitation names someone else",
@@ -522,7 +542,12 @@
       case "root-key.rotate": return a + " replaced the root key with " + fingerprint(t.value) + ".";
       case "release-key.revoke": return a + " withdrew the release key " + fingerprint(t.value) + ".";
       case "candidate.publish": return a + " sent " + app() + " for approval.";
-      case "candidate.approve": return a + " approved " + app() + ". It is released.";
+      // Solo release (IC-958 addendum): the hub marks a release its sender
+      // made while nobody else could approve with the reason "solo".
+      case "candidate.approve":
+        return ev.reason === "solo"
+          ? a + " released " + app() + " themselves, with no second approver yet."
+          : a + " approved " + app() + ". It is released.";
       case "release.download": return a + " opened " + app() + ".";
       // Addendum 3: closing, export, recovery, billing, SSO, offline.
       case "org.close":
@@ -770,7 +795,7 @@
 
   root.KrateOrg = {
     LIVE_HUB: LIVE_HUB, hub: hub, token: token, forget: forget, key: key, api: api,
-    who: who, ROLES: ROLES, ROLE_NAME: ROLE_NAME, ROLE_SAYS: ROLE_SAYS, MATRIX: MATRIX,
+    who: who, ROLES: ROLES, ROLE_NAME: ROLE_NAME, ROLE_SAYS: ROLE_SAYS, ROLE_PLAIN: ROLE_PLAIN, MATRIX: MATRIX,
     can: can, tabsFor: tabsFor, invitable: invitable, memberActions: memberActions,
     refusal: refusal, signInHref: signInHref, eventWords: eventWords, fingerprint: fingerprint,
     day: day, moment: moment, appName: appName, joinUrl: joinUrl, fileName: fileName,
