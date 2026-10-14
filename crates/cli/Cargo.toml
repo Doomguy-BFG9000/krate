@@ -57,6 +57,8 @@ krate-policy = { path = "../policy" }
 krate-bundle = { path = "../bundle" }
 # Offline access to an organisation's private app: the lease and its check (IC-948 G).
 krate-lease = { path = "../lease" }
+# The machine key from the OS generator on every system, Windows included.
+getrandom = "0.3"
 krate-orgkeys = { path = "../orgkeys", features = ["agent"] }
 krate-http = { path = "../http" }
 # A threaded app's build folds std's leftover WASI imports into the app (IC-938).

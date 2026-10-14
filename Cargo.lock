@@ -2509,6 +2509,7 @@ dependencies = [
  "anyhow",
  "calamine",
  "clap",
+ "getrandom 0.3.4",
  "krate-adapter-common",
  "krate-adapter-macos",
  "krate-author",

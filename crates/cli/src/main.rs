@@ -23721,10 +23721,15 @@ fn org_clock_skew_ms() -> i64 {
 /// never reaches an app: the runtime uses it to derive a per-app key and the
 /// app only ever sees plaintext it already stored.
 ///
-/// A machine that cannot keep the file falls back to a value derived from the
-/// user's home directory. That is weaker, and deliberately not silent about
-/// being a fallback -- it keeps an app working rather than failing to start,
-/// which is the right trade for storage that is already local.
+/// The key is 32 bytes from the operating system's own secure generator
+/// (getrandom: the kernel on Linux and macOS, BCryptGenRandom on Windows).
+/// It also protects this computer's organisation device key at rest (F-316),
+/// so it must never be guessable. Windows used to have no source here and
+/// fell back to a hash of the home path, the time and the process id.
+///
+/// Only a system whose generator fails outright falls back to that derived
+/// value, and it says so on stderr: an app keeps working, and the person is
+/// told the protection is weaker on this computer.
 pub(crate) fn machine_key() -> Vec<u8> {
     let path = krate_home().join("machine.key");
     if let Ok(existing) = fs::read(&path) {
@@ -23733,15 +23738,13 @@ pub(crate) fn machine_key() -> Vec<u8> {
         }
     }
     let mut key = vec![0u8; 32];
-    let sourced = std::fs::File::open("/dev/urandom")
-        .and_then(|mut f| {
-            use std::io::Read;
-            f.read_exact(&mut key)
-        })
-        .is_ok();
+    let sourced = getrandom::fill(&mut key).is_ok();
     if !sourced {
-        // No /dev/urandom (Windows): derive from values that differ per machine
-        // and per install rather than shipping a constant.
+        eprintln!(
+            "warning: this computer's random number generator did not answer, so Krate's \
+             machine key is derived from this install instead; secrets kept by apps are \
+             less protected here"
+        );
         let mut hasher = Sha256::new();
         hasher.update(krate_home().to_string_lossy().as_bytes());
         hasher.update(
