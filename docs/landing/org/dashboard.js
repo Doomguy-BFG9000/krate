@@ -19,6 +19,7 @@
   var TAB = {
     releases: { long: "Releases" },
     apps: { long: "Apps" },
+    insights: { long: "Insights" },
     waiting: { long: "Waiting for approval", short: "Waiting" },
     people: { long: "People" },
     activity: { long: "Activity" },
@@ -119,7 +120,7 @@
     pane.textContent = "";
     pane.setAttribute("aria-labelledby", "tab-" + id);
     pane.appendChild(el("p", { class: "loading", text: "Loading" }));
-    ({ releases: releases, apps: apps, waiting: waiting, people: people, activity: activity, settings: settings, billing: P && P.panes.billing })[id](pane);
+    ({ releases: releases, apps: apps, insights: insights, waiting: waiting, people: people, activity: activity, settings: settings, billing: P && P.panes.billing })[id](pane);
   }
 
   function head(pane, title, sub) {
@@ -834,6 +835,15 @@
   function apps(pane) {
     if (I) { I.pane(pane); return; }
     head(pane, "Apps", "");
+    pane.appendChild(el("div", { class: "card" }, [el("p", { text: "This page did not load completely. Reload it." })]));
+  }
+  // The Insights tab (insights.js, IC-959).
+  var N = window.KrateOrgInsights
+    ? window.KrateOrgInsights({ S: S, slug: slug, words: words, head: head, failed: failed, toast: toast, confirmSheet: confirmSheet, show: function (id) { show(id); }, roleOf: roleOf })
+    : null;
+  function insights(pane) {
+    if (N) { N.pane(pane); return; }
+    head(pane, "Insights", "");
     pane.appendChild(el("div", { class: "card" }, [el("p", { text: "This page did not load completely. Reload it." })]));
   }
   // Company connections (connections.js); absent, Settings has no card.

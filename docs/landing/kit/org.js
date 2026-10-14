@@ -175,6 +175,13 @@
     "inventory.people": { owner: "yes", admin: "yes" },
     "app.owner": { owner: "yes", admin: "yes" },
     "usage.view": { owner: "yes", admin: "yes" },
+    // IC-959: Insights, a section per role; names of people, and counts of
+    // 1 or 2 people, only for owners and admins.
+    "insights.view": { owner: "yes", admin: "yes", developer: "yes", reviewer: "yes", recipient: "yes" },
+    "insights.org": { owner: "yes", admin: "yes" },
+    "insights.developer": { owner: "yes", developer: "yes" },
+    "insights.reviewer": { owner: "yes", reviewer: "yes" },
+    "insights.people": { owner: "yes", admin: "yes" },
   };
 
   function can(role, action) {
@@ -187,6 +194,8 @@
     var out = ["releases"];
     // Every app the organisation has, with its record (IC-954).
     if (can(role, "inventory.view")) out.push("apps");
+    // The numbers each role's decisions need (IC-959).
+    if (can(role, "insights.view")) out.push("insights");
     // The candidates list is for the people who send, approve or run the
     // organisation; a recipient only ever opens what was released.
     if (can(role, "candidate.publish") || can(role, "candidate.approve") || can(role, "audit.read")) out.push("waiting");
@@ -832,5 +841,6 @@
     OFFLINE: OFFLINE, offlineName: offlineName, offlineNotice: offlineNotice, PROVIDERS: PROVIDERS, money: money,
     el: el, refusalBlock: refusalBlock, signInChoices: signInChoices, copy: copy, download: download,
     groupsSaid: groupsSaid,
+    whyShort: function (reason) { return SHORT_WHY[reason] || ""; },
   };
 })(typeof window !== "undefined" ? window : globalThis);
