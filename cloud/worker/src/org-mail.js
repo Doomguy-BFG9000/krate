@@ -1,0 +1,121 @@
+// Organisation mail (IC-948, Addendum 3 A and D): invitations by email,
+// and the notice to owners and admins when Krate support is asked to
+// restore an owner.
+//
+// Sent through the hub's existing Gmail path -- From incyashraj@gmail.com,
+// Cc yashraj@krate.tech -- because krate.tech mail lands in spam. Needs
+// GMAIL_APP_PASSWORD; without it nothing is mailed and the answer says so.
+// A failed send never fails what it is about: the invitation stands, with
+// `emailed: false` and the reason in plain words.
+//
+// At most 20 invitation mails a day per organisation (counted in its store)
+// and 100 a day for the whole hub (counted in KV, one write per mail).
+
+export const MAIL_FROM_ADDRESS = "incyashraj@gmail.com";
+export const MAIL_CC = "yashraj@krate.tech";
+export const ORG_DAILY_LIMIT = 20;
+export const HUB_DAILY_LIMIT = 100;
+
+/// Send one plain-text mail through Gmail; null when it went, else why.
+async function gmail(env, smtpSend, { to, subject, text }) {
+  if (!env.GMAIL_APP_PASSWORD) return "invitation mail is not set up on this hub";
+  const connect = env.SMTP_CONNECT || (await import("cloudflare:sockets")).connect;
+  const problem = await smtpSend(connect, {
+    user: MAIL_FROM_ADDRESS,
+    password: env.GMAIL_APP_PASSWORD,
+    from: `Yashraj Pardeshi <${MAIL_FROM_ADDRESS}>`,
+    to,
+    cc: MAIL_CC,
+    subject,
+    text,
+  });
+  return problem ? "the mail could not be sent -- copy the link and send it yourself" : null;
+}
+
+const when = (seconds) =>
+  new Date(seconds * 1000).toLocaleString("en-GB", { timeZone: "UTC", dateStyle: "long", timeStyle: "short" }) + " UTC";
+
+/// The invitation mail: who invited them, to which organisation, the role,
+/// the join link, the expiry, and that it works only for this inbox.
+export function inviteMailText({ inviter, orgName, slug, role, joinUrl, expiresAt, email }) {
+  return [
+    `${inviter} invited you to join ${orgName} (${slug}) on Krate as a ${role}.`,
+    "",
+    `Join here: ${joinUrl}`,
+    "",
+    `The invitation expires on ${when(expiresAt)}.`,
+    `It works only for ${email}: sign in to Krate with this address to accept it.`,
+    "",
+    "If you were not expecting this, you can ignore it.",
+  ].join("\n");
+}
+
+/// Count one mail against the hub's day; false once 100 have gone.
+async function hubSlot(env) {
+  const key = `org-invite-mail:${new Date().toISOString().slice(0, 10)}`;
+  try {
+    const used = Number((await env.APPS.get(key)) || 0);
+    if (used >= HUB_DAILY_LIMIT) return false;
+    await env.APPS.put(key, String(used + 1), { expirationTtl: 2 * 24 * 60 * 60 });
+    return true;
+  } catch (_) {
+    // A counter must not break what it counts; the store's own per-org
+    // limit still holds.
+    return true;
+  }
+}
+
+/// Mail an invitation when it can be mailed. Answers `{emailed, email_problem?}`.
+/// `orgSlot()` asks the organisation's store for one of its 20 a day.
+export async function mailInvite(env, smtpSend, invite, { orgName, slug, inviter, orgSlot }) {
+  if (invite.kind !== "email") return { emailed: false, email_problem: "GitHub invitations are not mailed -- copy the link and send it" };
+  if (!env.GMAIL_APP_PASSWORD) return { emailed: false, email_problem: "Invitation mail is not set up on this hub -- copy the link and send it" };
+  if (!(await orgSlot())) {
+    return { emailed: false, email_problem: `This organisation has sent its ${ORG_DAILY_LIMIT} invitation mails for today -- copy the link and send it` };
+  }
+  if (!(await hubSlot(env))) {
+    return { emailed: false, email_problem: "Krate has sent all its invitation mails for today -- copy the link and send it" };
+  }
+  const problem = await gmail(env, smtpSend, {
+    to: invite.display,
+    subject: `${inviter} invited you to ${orgName} on Krate`,
+    text: inviteMailText({
+      inviter,
+      orgName,
+      slug,
+      role: invite.role,
+      joinUrl: invite.join_url,
+      expiresAt: invite.expires_at,
+      email: invite.display,
+    }),
+  });
+  return problem ? { emailed: false, email_problem: problem } : { emailed: true };
+}
+
+/// Tell every current owner and admin with an address that Krate support
+/// has been asked to make someone an owner, and how to object. GitHub
+/// principals have no address the hub has proved; they are listed back.
+export async function mailRecovery(env, smtpSend, { slug, orgName, recovery, notify, site }) {
+  const mailed = [];
+  const notMailed = [];
+  for (const principal of notify) {
+    if (!principal.startsWith("email:") || !env.GMAIL_APP_PASSWORD) {
+      notMailed.push(principal);
+      continue;
+    }
+    const problem = await gmail(env, smtpSend, {
+      to: principal.slice("email:".length),
+      subject: `Krate support was asked to add an owner to ${orgName}`,
+      text: [
+        `Krate support has been asked to make ${recovery.for} an owner of ${orgName} (${slug}).`,
+        "",
+        `Reason given: ${recovery.reason}`,
+        "",
+        `It takes effect on ${when(recovery.effective_at)} unless an owner or admin objects before then.`,
+        `To object, open ${site}/org/?o=${encodeURIComponent(slug)} and choose Object, or reply to this mail.`,
+      ].join("\n"),
+    });
+    (problem ? notMailed : mailed).push(principal);
+  }
+  return { mailed, not_mailed: notMailed };
+}
