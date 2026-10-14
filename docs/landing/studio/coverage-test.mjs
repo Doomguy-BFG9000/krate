@@ -62,6 +62,14 @@ const DESKTOP_ONLY = {
   // no organisation rows.
   org_targets: "lists organisations for signing with a release key kept on this machine",
   send_to_org: "signs with a release key kept on this machine",
+  // The signing ring's background share and an organisation's setup on this
+  // computer (IC-958): in a tab the browser is its own device, and the
+  // organisation dashboard does both through kit/org-device.js, so web
+  // Studio has nothing of its own to run. A krate:// link is handed only to
+  // the installed app; a tab is opened by its https address instead.
+  org_sync: "the computer's own key share; a tab's runs in the org dashboard (kit/org-device.js)",
+  org_setup: "makes the organisation's keys on this computer; a tab does it in the org dashboard",
+  take_org_link: "a krate:// link reaches only the installed app",
   // agent_session_tag and sessions_pull are bridged now, as quiet no-ops:
   // every load and build printed "no browser answer" for them.
 };
