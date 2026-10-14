@@ -93,9 +93,10 @@
 .kv dt { color: var(--ink-3); }
 .kv dd { color: var(--ink); overflow-wrap: anywhere; }
 .cmds { margin-top: 12px; display: grid; gap: 14px; }
-.cmds li { list-style: none; }
+.cmds li { list-style: none; min-width: 0; }
 .cmds li > span { display: block; font-size: 14px; color: var(--ink-2); }
-.cmds pre.k { margin-top: 6px; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12.5px; }
+.cmds pre.k { margin-top: 6px; white-space: pre; overflow-x: auto; font-size: 12.5px; }
+@media (max-width: 480px) { .cmds pre.k { padding: 12px; font-size: 11px; } }
 /* the confirm sheet */
 dialog.sheet { width: min(460px, 100% - 32px); margin: auto; padding: 26px 24px 22px; border: 0; border-radius: 22px; color: var(--ink); background: var(--s1); box-shadow: var(--sh-2); }
 dialog.sheet::backdrop { background: rgba(8,8,10,.42); }
