@@ -234,6 +234,7 @@ const CLOSED_OPEN = new Set([
   "swept",
   "billing-stripe",
   "invite-info",
+  "exists",
 ]);
 
 /// Refuse what the lifecycle or billing state does not allow, before the

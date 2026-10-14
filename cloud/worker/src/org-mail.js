@@ -35,18 +35,35 @@ async function gmail(env, smtpSend, { to, subject, text }) {
 const when = (seconds) =>
   new Date(seconds * 1000).toLocaleString("en-GB", { timeZone: "UTC", dateStyle: "long", timeStyle: "short" }) + " UTC";
 
-/// The invitation mail: who invited them, to which organisation, the role,
-/// the join link, the expiry, and that it works only for this inbox.
+/// What each role can do, in the words the dashboard's invite uses ("can
+/// use apps", "can build apps", "can approve apps"), so the mail and the
+/// page name a role the same way.
+export const ROLE_WORDS = {
+  recipient: "use its apps",
+  developer: "build apps and send them",
+  reviewer: "approve apps before they go out",
+  admin: "invite people and look after the team",
+  owner: "run everything, with the other owners",
+};
+
+/// The invitation mail: who invited them, to which organisation, what they
+/// can do there, the one link to press, the expiry, and that it works only
+/// for this inbox. No code to copy: the link carries it.
 export function inviteMailText({ inviter, orgName, slug, role, joinUrl, expiresAt, email }) {
+  // The site the join link is on carries the download too.
+  let site = "https://krate.tech";
+  try {
+    site = new URL(joinUrl).origin;
+  } catch (_) {}
   return [
-    `${inviter} invited you to join ${orgName} (${slug}) on Krate as a ${role}.`,
+    `${inviter} invited you to ${orgName} on Krate. There you can ${ROLE_WORDS[role] || ROLE_WORDS.recipient}.`,
     "",
-    `Join here: ${joinUrl}`,
+    `Join ${orgName}: ${joinUrl}`,
     "",
-    `The invitation expires on ${when(expiresAt)}.`,
-    `It works only for ${email}: sign in to Krate with this address to accept it.`,
+    `It takes one click: sign in with this address and press Join. Then get Krate to open ${orgName}'s apps (${site}/download/). Every one is signed by ${orgName} and checked before it opens.`,
     "",
-    "If you were not expecting this, you can ignore it.",
+    `The invitation works once, only for ${email}, until ${when(expiresAt)}.`,
+    `If you were not expecting it, ignore this mail. (${orgName} is "${slug}" on Krate.)`,
   ].join("\n");
 }
 
