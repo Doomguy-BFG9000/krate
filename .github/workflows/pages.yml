@@ -275,6 +275,9 @@ jobs:
           # shown only the controls the matrix gives it (IC-949 R).
           node docs/landing/studio/org-releases-test.mjs
           node docs/landing/studio/org-review-test.mjs
+          # Company connections in Settings: only owners and admins manage
+          # them, the credential is sent once and never shown again (IC-952).
+          node docs/landing/studio/org-connections-test.mjs
           # And that the homepage's prompt bar starts a build only from its
           # own fresh handoff, once, and never from a link (K-885).
           node docs/landing/studio/frontpage-test.mjs
