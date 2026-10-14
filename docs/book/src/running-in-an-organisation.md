@@ -158,6 +158,14 @@ What makes a policy refuse to open any app, until it is fixed:
 
 ### Which apps may open
 
+A root is the public half of an Ed25519 key, 64 hex characters. Two ways
+to get one: for your own organisation, Settings on its page on krate.tech
+shows the full root key; for any app, `krate policy check app.krate` on a
+computer whose policy does not yet trust its publisher prints that app's
+root and the exact line to add. The sample `policy.toml` carries a
+placeholder key, and a policy with a placeholder refuses to open any app
+until you put a real key in its place.
+
 An app passes `[trust]` when one of these holds:
 
 1. Its signature verifies over its current contents (and any delegation in it
@@ -251,12 +259,14 @@ Each line:
 {"v":1,"at":"2026-10-14T09:12:03Z","event":"opened","app":"com.acme.expenses","name":"Expenses","version":"1.3.0","digest":"sha256:...","signer":"<hex or null>","root":"<hex or null>","org":"acme","door":"window","granted":["net.connect:api.acme.com:443"],"denied":["camera.capture"],"user":"dana","krate":"0.5.6"}
 ```
 
-- `event` is `opened`, `refused`, `granted` or `revoked` (a permission that
-  changed while the app ran).
+- `event` is `opened` or `refused`. (`granted` and `revoked` are kept for a
+  permission that changes while an app runs; Krate does not change one
+  mid-run today, so they do not appear yet.)
 - A `refused` line adds `reason`, a stable code (`policy-unsigned`,
-  `policy-other-signer`, `policy-tampered`, `policy-unreadable`,
-  `policy-hub`, and the codes for an organisation's private apps), and
-  `words`, what the person saw.
+  `policy-other-signer`, `policy-tampered`, `policy-capability`,
+  `policy-network`, `policy-unreadable`, `policy-hub`, and the codes for an
+  organisation's private apps, such as `offline-expired`), and `words`,
+  what the person saw.
 - `door` is how it was opened: `window`, `terminal`, `mcp` or `player`.
 - It never holds the paths of a person's documents, app data or prompts.
 - Past 10 MiB the file is renamed `opens.1.jsonl` and a new one started. One

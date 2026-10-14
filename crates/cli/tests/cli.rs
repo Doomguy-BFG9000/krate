@@ -17896,6 +17896,28 @@ fn policy_check_says_whether_an_app_would_open_here() {
     );
     let json: serde_json::Value = serde_json::from_slice(&yes.stdout).unwrap();
     assert_eq!(json["opens"], true);
+    assert_eq!(json["root"], root_hex.to_ascii_lowercase());
+
+    // Signed by a publisher the policy does not list: the refusal carries a
+    // short key for a person, and the check prints the whole root and the
+    // line an IT team pastes into the policy to let that publisher in.
+    let (other, other_hex) = fleet.key("other");
+    let theirs = fleet.app("theirs", &[]);
+    fleet.sign(&theirs, &other);
+    let out = fleet
+        .krate()
+        .args(["policy", "check"])
+        .arg(&theirs)
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    let words = String::from_utf8_lossy(&out.stdout);
+    let other_hex = other_hex.to_ascii_lowercase();
+    assert!(
+        words.contains("signed by someone else")
+            && words.contains(&format!("key = \"{other_hex}\" }}")),
+        "{words}"
+    );
     assert!(fleet.records().is_empty(), "a check records nothing");
 }
 

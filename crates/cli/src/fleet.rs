@@ -1446,6 +1446,12 @@ pub fn check_command(target: &Path, json_out: bool) -> Result<u8> {
         (None, None)
     };
     let verdict = check(bundle.as_ref(), manifest);
+    // The root an IT team would add to let this publisher's apps in: the
+    // short key in the refusal is for a person, a policy needs all of it.
+    let root = match SigFacts::of(bundle.as_ref()) {
+        SigFacts::Holds { root, .. } => Some(root),
+        _ => None,
+    };
     let name = bundle
         .as_ref()
         .map(|b| b.manifest().app.name.clone())
@@ -1459,6 +1465,7 @@ pub fn check_command(target: &Path, json_out: bool) -> Result<u8> {
                 "opens": verdict.is_none(),
                 "reason": verdict.as_ref().map(|r| r.reason.clone()),
                 "words": verdict.as_ref().map(|r| r.words.clone()),
+                "root": root,
             }))?
         );
     } else {
@@ -1473,6 +1480,12 @@ pub fn check_command(target: &Path, json_out: bool) -> Result<u8> {
                 println!("{name} would not open here. A person would see:");
                 println!();
                 println!("  {}", refused.words);
+                if let (Some(root), "policy-other-signer") = (&root, refused.reason.as_str()) {
+                    println!();
+                    println!("To allow apps from this publisher, add its root to [trust] roots:");
+                    println!();
+                    println!("  {{ name = \"<publisher>\", key = \"{root}\" }}");
+                }
             }
         }
     }
