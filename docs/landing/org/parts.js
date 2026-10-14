@@ -35,15 +35,16 @@
       var o = D.S.org || {};
       var name = nameOf();
       var add = function (cls, title, body, actions) {
+        actions = (actions || []).filter(Boolean);
         box.appendChild(el("div", { class: "call " + cls + " org-why banner", role: "status" }, [
           el("div", {}, [el("b", { text: title }), el("p", { text: body }), actions && actions.length ? el("div", { class: "bacts" }, actions) : null]),
         ]));
       };
-      var toSettings = el("button", { class: "btn ghost sm", type: "button", text: "Open Settings", onclick: function () { D.show("settings"); } });
+      var toSettings = D.S.tab === "settings" ? null : el("button", { class: "btn ghost sm", type: "button", text: "Open Settings", onclick: function () { D.show("settings"); } });
       if (o.state === "closed") {
         add("bad", name + " closed" + (o.closed_at ? " on " + K.day(o.closed_at) : ""),
           "Its apps no longer open. Its export stays downloadable to former owners for a while: build or download it in Settings.", [toSettings]);
-      } else if (o.state === "closing" && o.close) {
+      } else if (o.close) {
         var c = o.close;
         if (c.state === "waiting-for-second-owner") {
           add("warn", "Closing " + name + " waits for a second owner",
@@ -69,6 +70,7 @@
             title: "Object to this recovery?",
             body: "Krate support will not make " + K.who(r.for).label + " an owner, and the request is cancelled. The activity records your objection.",
             yes: "Object and cancel it",
+            no: "Go back",
             busy: "Objecting",
             ctx: { what: "object to a recovery", whoCan: "owners and admins" },
             act: function () { return K.api("POST", path("/recover/" + encodeURIComponent(r.id) + "/object"), {}, { key: key }); },
@@ -98,7 +100,9 @@
       }
       return {
         title: "Copy this link and send it",
-        body: (ans.email_problem ? String(ans.email_problem).replace(/\.?$/, ". ") : "") + "It works once, only for " + (sent.github ? "@" + sent.github + " signed in with GitHub" : sent.email + " signed in with that inbox") + ", until " + K.day(ans.expires_at) + ".",
+        // The hub's sentence, without a trailing "-- copy the link" the
+        // title already says.
+        body: (ans.email_problem ? String(ans.email_problem).split(" -- ")[0].replace(/\.?$/, ". ") : "") + "It works once, only for " + (sent.github ? "@" + sent.github + " signed in with GitHub" : sent.email + " signed in with that inbox") + ", until " + K.day(ans.expires_at) + ".",
       };
     }
 
@@ -417,18 +421,29 @@
       return card;
     }
 
+    /// The closing statement in words: the hub's `effect` sentence, or
+    /// the statement itself when it is already text.
+    function statementText(st) {
+      if (!st) return "";
+      if (typeof st === "string") return st;
+      return st.effect || "";
+    }
+
     function closeCard() {
       var o = D.S.org || {};
       var name = nameOf();
       var card = el("div", { class: "card danger", id: "closeCard" }, [el("h3", { text: "Close " + name })]);
       var out = el("div");
-      if (o.state === "closing" && o.close) {
+      // A close in progress: waiting for a second owner (the organisation
+      // is still active), or scheduled (closing).
+      if (o.close) {
         var c = o.close;
         var waiting = c.state === "waiting-for-second-owner";
         card.appendChild(el("p", { text: waiting
           ? K.who(c.requested_by).label + " asked to close " + name + " on " + K.day(c.requested_at) + ". It needs a second owner's approval before the closing starts."
           : name + " closes on " + K.moment(c.ends_at) + (c.approved_by ? ", approved by " + K.who(c.approved_by).label : "") + ". Until then its apps open, and nothing new can be sent or approved." }));
-        if (c.statement) card.appendChild(el("div", { class: "stmt" }, [el("span", { text: "What closing does" }), el("p", { text: c.statement })]));
+        var said = statementText(c.statement);
+        if (said) card.appendChild(el("div", { class: "stmt" }, [el("span", { text: "What closing does" }), el("p", { text: said })]));
         var acts = [];
         if (waiting && !D.isMe(c.requested_by)) {
           var ap = el("button", { class: "btn dark sm", type: "button", text: "Approve the closing" });
@@ -457,6 +472,7 @@
             title: "Cancel closing " + name + "?",
             body: "Nothing closes. Everything goes on as before, and Activity records the cancellation.",
             yes: "Cancel the closing",
+            no: "Keep it closing",
             busy: "Cancelling",
             ctx: { what: "cancel the closing", whoCan: "an owner" },
             act: function () { return K.api("DELETE", path("/close/" + encodeURIComponent(c.id)), null, { key: key }); },
@@ -507,7 +523,7 @@
 
     // ------------------------------------------------------------ billing
 
-    var PLAN = { pilot: "Pilot", seats: "Per seat", paid: "Paid", invoiced: "Invoiced" };
+    var PLAN = { pilot: "Pilot", seats: "Per seat", paid: "Paid by card", stripe: "Paid by card", invoiced: "Invoiced by Krate", manual: "Invoiced by Krate" };
     var STATE = {
       pilot: ["Pilot: everything is on", "ok"], paid: ["Paid", "ok"], active: ["Paid", "ok"], invoiced: ["Invoiced", "ok"],
       "past-due": ["Payment overdue", "warn"], suspended: ["Paused for billing", "warn"], canceled: ["Cancelled", ""],
@@ -524,10 +540,10 @@
           el("dt", { text: "Plan" }), el("dd", { text: PLAN[b.plan] || b.plan || "Pilot" }),
           el("dt", { text: "Seats" }), el("dd", { text: seats || "None yet" }),
         ];
-        if (b.period_end) { dl.push(el("dt", { text: "Paid until" })); dl.push(el("dd", { text: K.day(b.period_end) })); }
+        if (b.period_end && !b.manual && b.state !== "pilot") { dl.push(el("dt", { text: "Paid until" })); dl.push(el("dd", { text: K.day(b.period_end) })); }
         if (b.manual) {
-          dl.push(el("dt", { text: "Invoiced by Krate" }));
-          dl.push(el("dd", { text: "Reference " + b.manual.reference + (b.manual.paid_until ? ", paid until " + K.day(b.manual.paid_until) : "") }));
+          dl.push(el("dt", { text: "Invoice" }));
+          dl.push(el("dd", { text: b.manual.reference + (b.manual.paid_until ? ", paid until " + K.day(b.manual.paid_until) : "") }));
         }
         var plan = el("div", { class: "card" }, [
           el("div", { class: "row2" }, [el("h3", { text: nameOf() + "'s plan" }), el("span", { class: "tag " + st[1], text: st[0] })]),
@@ -563,7 +579,7 @@
           var amount = K.money(i.amount, i.currency);
           inv.appendChild(el("div", { class: "rw flat" }, [
             el("div", { class: "t" }, [
-              el("b", { text: (i.number || "Invoice") + (amount ? " · " + amount : "") }),
+              el("b", { text: (i.number || (b.manual && i.id === b.manual.reference ? "Invoice " + i.id : "Invoice")) + (amount ? " · " + amount : "") }),
               el("small", { text: K.day(i.at) + (i.status ? " · " + i.status : "") }),
             ]),
             i.url && /^https:\/\//.test(i.url) ? el("div", { class: "ra" }, [el("a", { class: "btn ghost sm", href: i.url, target: "_blank", rel: "noopener", text: "View" })]) : null,

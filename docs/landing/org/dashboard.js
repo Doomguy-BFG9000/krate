@@ -103,6 +103,7 @@
     S.tab = id;
     try { history.replaceState(null, "", HERE + "&tab=" + id); } catch (e) {}
     drawTabs();
+    if (P) P.banner($("banner"));
     var pane = $("pane");
     pane.textContent = "";
     pane.setAttribute("aria-labelledby", "tab-" + id);
@@ -158,6 +159,7 @@
       });
     };
     yes.hidden = false;
+    $("sheetNo").textContent = opts.no || "Cancel";
     $("sheetNo").onclick = function () { d.close(); };
     if (typeof d.showModal === "function") d.showModal(); else d.setAttribute("open", "");
     if (opts.input) inp.focus();
@@ -246,10 +248,15 @@
         return;
       }
       var approver = K.can(roleOf(), "candidate.approve") === "yes";
+      // While the organisation is closing nothing new is released
+      // (Addendum 3 D), so Approve is not offered then.
+      var closing = S.org && S.org.state === "closing";
       list.forEach(function (c) {
         var mine = isMe(c.uploaded_by);
         var acts = null, note = null;
-        if (approver && !mine) {
+        if (closing) {
+          note = el("p", { class: "note", text: "Approvals stop while " + (S.org.name || slug) + " is closing. If an owner cancels the closing, this can be approved again." });
+        } else if (approver && !mine) {
           acts = el("div", { class: "ra" }, [el("button", {
             class: "btn dark sm", type: "button", text: "Approve",
             onclick: function () { approve(c); },
