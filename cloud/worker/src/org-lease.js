@@ -18,7 +18,7 @@
 // offline (R9). It stops at its expiry, or when the device next connects
 // and its check-in is refused.
 
-import { MUTATIONS, allows, canonicalJson } from "./org.js";
+import { Org, extendOrg, allows, canonicalJson } from "./org.js";
 
 const DAY = 24 * 60 * 60;
 
@@ -57,9 +57,6 @@ const appKey = (name) => String(name || "").trim().toLowerCase();
 
 const isoOf = (seconds) => new Date(seconds * 1000).toISOString().replace(/\.\d{3}Z$/, "Z");
 
-// A function, not a constant: org.js installs these while the modules
-// that import each other are still being evaluated, and a function
-// declaration is ready before any of them runs.
 function leaseOps() {
   return {
     offlineDefault() {
@@ -200,14 +197,16 @@ function leaseOps() {
 /// Teach the Org class offline access: its commands (only an owner sets a
 /// class, R25; the contract's role table stays as it is), the default on the organisation's view, the class on
 /// each release and on the private-release answer.
-export function installLeases(OrgClass) {
+function installLeases(OrgClass) {
   Object.assign(OrgClass.prototype, leaseOps());
-  for (const op of ["offline-set", "offline-default-set"]) MUTATIONS.add(op);
-
-  const orgView = OrgClass.prototype.orgView;
-  OrgClass.prototype.orgView = function (...args) {
-    return { ...orgView.apply(this, args), offline_default: this.offlineDefault() };
-  };
+  extendOrg({
+    schema: LEASE_SCHEMA,
+    mutations: ["offline-set", "offline-default-set"],
+    // G1: GET /orgs/<slug> carries the organisation's default class.
+    view(org) {
+      org.offline_default = this.offlineDefault();
+    },
+  });
 
   const releases = OrgClass.prototype.op_releases;
   OrgClass.prototype.op_releases = function (ctx) {
@@ -228,6 +227,9 @@ export function installLeases(OrgClass) {
     return answer;
   };
 }
+
+// Importing this module teaches the store offline access.
+installLeases(Org);
 
 // ------------------------------------------------------------- signing
 
