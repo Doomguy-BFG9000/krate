@@ -185,6 +185,18 @@ const ops = {
 
   // ------------------------------------------------------------- helpers
 
+  /// How many versions were released by their own sender because nobody
+  /// else could approve (IC-958). A store from before solo release has no
+  /// such column, and none.
+  soloReleases() {
+    try {
+      const r = this.row("SELECT COUNT(*) AS n FROM candidates WHERE solo = 1");
+      return r ? Number(r.n) : 0;
+    } catch {
+      return 0;
+    }
+  },
+
   /// Every app id the organisation has, with its current release (or null)
   /// and its name, in one pass.
   insightsApps() {
@@ -279,8 +291,10 @@ const ops = {
       .map((a) => ({ app_id: a.app_id, name: a.name, people: opened.get(a.app_id) }))
       .sort((a, b) => b.people - a.people || a.name.localeCompare(b.name))
       .slice(0, 5);
+    // An app counts as unused only once it has been out for the whole
+    // window: one released this morning has not had its 30 days.
     const unused = live
-      .filter((a) => !opened.get(a.app_id))
+      .filter((a) => !opened.get(a.app_id) && a.current.approved_at <= now - 30 * DAY)
       .map((a) => ({
         app_id: a.app_id,
         name: a.name,
@@ -387,6 +401,14 @@ const ops = {
         members: members.length,
         active_week: activeIn(ago(6)),
         active_month: activeIn(ago(29)),
+        // Of those who opened nothing in 30 days, how many joined inside
+        // that window: they have not had a month to.
+        joined_not_opened: this.row(
+          `SELECT COUNT(*) AS n FROM members m WHERE m.state = 'active' AND m.added_at > ?
+           AND NOT EXISTS (SELECT 1 FROM people_daily p WHERE p.principal = m.principal AND p.day >= ?)`,
+          now - 30 * DAY,
+          ago(29),
+        ).n,
         daily: this.insightsDays(now, 30).map((day) => ({ day, people: perDay.get(day) || 0 })),
         trend,
         apps: live.length,
@@ -407,7 +429,10 @@ const ops = {
         devices,
         publishers,
         approvers,
-        two_person: true,
+        // Solo release (IC-958): until a second person can approve, an
+        // owner releases their own apps, and this says so.
+        two_person: typeof this.twoPersonInForce === "function" ? this.twoPersonInForce() : true,
+        solo_releases: this.soloReleases(),
         refusals: {
           week: [...week.entries()].map(([reason, n]) => ({ reason, n })).sort((a, b) => b.n - a.n || a.reason.localeCompare(b.reason)),
           week_total: weekTotal,

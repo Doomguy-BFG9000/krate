@@ -250,6 +250,33 @@ const linkTo = (root, tab) => root.all((n) => n.tagName === "A" && n.className =
   const o = await open("owner", one);
   check(/Apps in use 1 of 1/.test(shown(o)) && !/Nobody opened these/.test(shown(o)), "one app: no unused list");
 
+  // Solo release (IC-958): nobody else can approve yet, so the card does
+  // not claim a second approval it cannot have.
+  const solo = body("owner");
+  solo.org = orgPart();
+  solo.org.security.approvers = 1;
+  solo.org.security.two_person = false;
+  solo.org.security.solo_releases = 2;
+  const so = await open("owner", solo);
+  check(/Second approval Not yet nobody else can approve, so 2 versions were released by the person who sent it; it turns on when a reviewer joins Invite a reviewer/.test(shown(so)), "solo: the card says Not yet, and how many went out alone");
+  check(/Until a second person can approve, you release your own apps yourself\./.test(shown(so)) && !/a second person approves it before anyone can open it/.test(shown(so)), "solo: the security sentence does not promise a second person");
+  check(/Second approval On 2 people can approve a release/.test(shown(o)), "two-person: the card says On");
+
+  // A new organisation: its people joined this month, nobody has been
+  // away for 30 days, so nobody is "a month" away and there is no list to
+  // send anyone to.
+  const young = body("owner");
+  young.org = orgPart({ inactive: [] });
+  young.org.adoption.members = 3;
+  young.org.adoption.active_month = 1;
+  young.org.adoption.joined_not_opened = 2;
+  const yo = await open("owner", young);
+  check(/Active in the last 30 days 1 of 3 2 people joined in the last 30 days and have not opened one yet/.test(shown(yo)) && !/See who has not/.test(shown(yo)), "a new organisation: joined recently, not a month away, and no empty list to open");
+  young.org.adoption.joined_not_opened = 1;
+  young.org.people.inactive = [{ principal: "email:hal@acme.test", display: "hal@acme.test", role: "recipient", last_active: iso(38), since: NOW - 80 * DAY }];
+  const yo2 = await open("owner", young);
+  check(/1 person has not opened one in a month; 1 more joined recently See who has not/.test(shown(yo2)), "a mix: the settled one is counted, the new one named apart");
+
   const fresh = body("owner", { since: NOW - 5 * DAY });
   const f = await open("owner", fresh);
   check(/Counting since .*\. Days before that were not counted, so they show as 0\./.test(shown(f)), "partial: counting began after the organisation did, and it says so");

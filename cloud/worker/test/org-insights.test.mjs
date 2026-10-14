@@ -176,7 +176,13 @@ test("every number matches a hand count of a known history", async () => {
   // Two apps with a release; Expenses opened by 5 members in 30 days; Rota by nobody.
   assert.deepStrictEqual([a.apps, a.apps_used], [2, 1]);
   assert.deepStrictEqual(a.top, [{ app_id: "com.acme.expenses", name: "Expenses", people: 5 }]);
-  assert.deepStrictEqual(a.unused.map((u) => [u.app_id, u.version, u.owner.principal, u.released_at]), [["com.acme.rota", "1.0.0", "github:frank", ago(3, 3600)]]);
+  // Rota was released three days ago: it has not had its 30 days, so it is
+  // not "unused" yet. Four weeks on, still unopened, it is.
+  assert.deepStrictEqual(a.unused, []);
+  const later = (await insights(env, "alice", ago(-28))).org.adoption;
+  assert.deepStrictEqual(later.unused.map((u) => [u.app_id, u.version, u.owner.principal, u.released_at]), [["com.acme.rota", "1.0.0", "github:frank", ago(3, 3600)]]);
+  // Everyone joined on day 80: nobody is new enough to be excused.
+  assert.strictEqual(a.joined_not_opened, 0);
 
   const p = o.org.people;
   assert.deepStrictEqual(p.by_role, { owner: 1, admin: 1, developer: 2, reviewer: 1, recipient: 4 });
@@ -303,6 +309,27 @@ function namesIn(body) {
   const text = JSON.stringify(body);
   return OTHERS.filter((p) => text.includes(p) || text.includes(`"${p.split(":")[1]}"`));
 }
+
+test("an owner releasing alone is told so, and a reviewer joining turns the second approval on", async () => {
+  const env = orgEnv({ ORG_SECRET_KEY: "org-secret-key-for-tests", ORG_LEASE_KEY: LEASE_SEED });
+  await at(ago(3), async () => {
+    must(await call(env, "alice", "POST", "/orgs", { json: { slug: "acme", name: "Acme" } }), "create");
+    must(await call(env, "alice", "PUT", "/orgs/acme/root-key", { json: { public_key: KEYS.root } }), "root");
+  });
+  const d = await at(ago(2), () => send(env, "alice", "expenses-1.krate"));
+  const out = await at(ago(2, 60), () => call(env, "alice", "POST", `/orgs/acme/candidates/${d}/approve`));
+  must(out, "alice releases her own");
+  assert.strictEqual(out.body.release.solo, true, JSON.stringify(out.body));
+  const first = await insights(env, "alice");
+  let s = first.org.security;
+  assert.deepStrictEqual([s.two_person, s.solo_releases, s.approvers], [false, 1, 1]);
+  // A day-old organisation: its owner joined inside the month and nothing
+  // released this week is called unused.
+  assert.deepStrictEqual([first.org.adoption.joined_not_opened, first.org.adoption.unused.length], [1, 0]);
+  await at(ago(1), () => join(env, "bob", "reviewer"));
+  s = (await insights(env, "alice")).org.security;
+  assert.deepStrictEqual([s.two_person, s.solo_releases, s.approvers], [true, 1, 2]);
+});
 
 test("each role sees exactly its sections, and only owners and admins see names", async () => {
   const { env, rota } = await waitingWorld();

@@ -34,6 +34,18 @@
     // ------------------------------------------------------------ words
 
     function plural(n, one, many) { return n + " " + (n === 1 ? one : many); }
+    /// "Active in the last 30 days": who has not opened an app, without
+    /// counting a person who joined this week as a month away.
+    function monthTile(a, inactive) {
+      var missing = a.members - a.active_month;
+      var fresh = Math.min(missing, a.joined_not_opened || 0);
+      var settled = missing - fresh;
+      var means;
+      if (!missing) means = "everyone opened one this month";
+      else if (!settled) means = plural(fresh, "person", "people") + " joined in the last 30 days and " + (fresh === 1 ? "has" : "have") + " not opened one yet";
+      else means = plural(settled, "person has", "people have") + " not opened one in a month" + (fresh ? "; " + fresh + " more joined recently" : "");
+      return { label: "Active in the last 30 days", value: String(a.active_month), of: "of " + a.members, means: means, act: settled && inactive.length ? jump("ins-inactive", "See who has not") : null };
+    }
     function peopleSaid(v) {
       if (v === FEWER) return "fewer than 3 people";
       return plural(Number(v) || 0, "person", "people");
@@ -208,7 +220,7 @@
       } else {
         adopt.push(tiles([
           tile({ label: "Active in the last 7 days", value: String(a.active_week), of: "of " + a.members, means: "people in " + name + " who opened one of its apps", act: go("people", "Invite your team") }),
-          tile({ label: "Active in the last 30 days", value: String(a.active_month), of: "of " + a.members, means: a.members - a.active_month ? plural(a.members - a.active_month, "person has", "people have") + " not opened one in a month" : "everyone opened one this month", act: a.members > a.active_month ? jump("ins-inactive", "See who has not") : null }),
+          tile(monthTile(a, o.people.inactive || [])),
           tile({ label: "Apps in use", value: String(a.apps_used), of: "of " + a.apps, means: "apps someone opened in the last 30 days", act: go("apps", "See every app") }),
         ]));
         adopt.push(chart({ title: "People who opened an app, each day", span: "last 30 days", what: "People who opened an app each day", unit: "day", lastWord: "Today", items: dailyItems(a.daily) }));
@@ -273,11 +285,15 @@
       var s = o.security;
       var holding = s.devices.filter(function (d) { return d.holds_current; }).length;
       var silent = s.devices.filter(function (d) { return d.silent; }).length;
-      var sec = [el("p", { class: "why", text: "Every release of " + name + " is signed by " + name + ", and a second person approves it before anyone can open it." })];
+      var sec = [el("p", { class: "why", text: s.two_person
+        ? "Every release of " + name + " is signed by " + name + ", and a second person approves it before anyone can open it."
+        : "Every release of " + name + " is signed by " + name + ". Until a second person can approve, you release your own apps yourself." })];
       sec.push(tiles([
         tile({ label: "Computers with access", value: String(holding), means: "computers that can open " + name + "'s encrypted team data" + (silent ? "; " + plural(silent, "has", "have") + " been silent for 60 days" : ""), act: jump("ins-devices", "See them"), warn: silent > 0 }),
         tile({ label: "People who can send apps", value: String(s.publishers.length), means: "owners and developers", act: go("people", "Change roles") }),
-        tile({ label: "Second approval", value: "On", means: s.approvers < 2 ? "only " + plural(s.approvers, "person", "people") + " can approve, so a sender cannot always get one" : plural(s.approvers, "person", "people") + " can approve a release", act: go("people", s.approvers < 2 ? "Invite a reviewer" : "See who"), warn: s.approvers < 2 }),
+        s.two_person
+          ? tile({ label: "Second approval", value: "On", means: s.approvers < 2 ? "only " + plural(s.approvers, "person", "people") + " can approve, so a sender cannot always get one" : plural(s.approvers, "person", "people") + " can approve a release", act: go("people", s.approvers < 2 ? "Invite a reviewer" : "See who"), warn: s.approvers < 2 })
+          : tile({ label: "Second approval", value: "Not yet", means: "nobody else can approve, so " + (s.solo_releases ? plural(s.solo_releases, "version was", "versions were") + " released by the person who sent it" : "you release your own apps") + "; it turns on when a reviewer joins", act: go("people", "Invite a reviewer"), warn: true }),
         tile({ label: "Refused in the last 7 days", value: String(s.refusals.week_total), means: s.refusals.spike ? "more than twice the usual " + Math.round(s.refusals.weekly_average_before) + " a week; the reasons are below" : "attempts the hub said no to; about " + Math.round(s.refusals.weekly_average_before) + " a week before", act: go("activity", "See the activity"), warn: s.refusals.spike }),
       ]));
       sec.push(sub("Computers with access", s.devices.length
