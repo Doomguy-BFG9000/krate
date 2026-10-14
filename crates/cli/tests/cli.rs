@@ -13524,7 +13524,7 @@ fn setup_installs_a_verified_wasi_sdk_into_krates_folder_and_refuses_a_bad_one()
 #[derive(Default)]
 struct FakeOrg {
     name: String,
-    /// login -> (role, state), state "active" or "removed". A removed
+    /// principal -> (role, state), state "active" or "removed". A removed
     /// member's row stays, so history keeps naming them.
     members: std::collections::BTreeMap<String, (String, String)>,
     invites: std::collections::BTreeMap<String, FakeInvite>,
@@ -13536,7 +13536,8 @@ struct FakeOrg {
 }
 
 struct FakeInvite {
-    login: String,
+    /// `github:<login>` or `email:<address>` (Addendum 1).
+    principal: String,
     role: String,
     expires: u64,
     state: &'static str,
@@ -13616,6 +13617,32 @@ fn fake_json(status: u16, value: serde_json::Value) -> FakeAnswer {
         vec![("content-type".into(), "application/json".into())],
         value.to_string().into_bytes(),
     )
+}
+
+/// A principal as the hub's JSON carries it (Addendum 1).
+fn fake_principal(principal: &str) -> serde_json::Value {
+    let (kind, display) = principal.split_once(':').unwrap_or(("github", principal));
+    serde_json::json!({ "principal": principal, "display": display, "kind": kind })
+}
+
+/// `%3A` and `%40` back to `:` and `@`: a member is addressed by principal,
+/// URL-encoded.
+fn fake_decode(segment: &str) -> String {
+    let bytes = segment.as_bytes();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let Ok(b) = u8::from_str_radix(&segment[i + 1..i + 3], 16) {
+                out.push(b);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8(out).unwrap_or_default()
 }
 
 fn fake_event_hash(event: &serde_json::Value, prev: &str) -> String {
@@ -13746,10 +13773,19 @@ impl FakeOrgHub {
         self.seen
             .push((method.to_string(), path.to_string(), auth.clone()));
         self.bodies.push(body.to_vec());
+        // tok-<login> is a GitHub login the hub vouched for; tok-<address>
+        // an inbox proven by an email or Google sign-in (Addendum 1).
         let who = auth
             .as_deref()
             .and_then(|a| a.strip_prefix("Bearer tok-"))
-            .map(|login| login.to_ascii_lowercase());
+            .map(|name| {
+                let name = name.to_ascii_lowercase();
+                if name.contains('@') {
+                    format!("email:{name}")
+                } else {
+                    format!("github:{name}")
+                }
+            });
         if let Some((status, reason)) = self.force_next.take() {
             return fake_refuse(status, &reason);
         }
@@ -13779,7 +13815,12 @@ impl FakeOrgHub {
     fn route(&mut self, method: &str, path: &str, who: Option<String>, body: &[u8]) -> FakeAnswer {
         let now = self.now;
         let base = self.base.clone();
-        let parts: Vec<&str> = path.trim_start_matches('/').split('/').collect();
+        let decoded: Vec<String> = path
+            .trim_start_matches('/')
+            .split('/')
+            .map(fake_decode)
+            .collect();
+        let parts: Vec<&str> = decoded.iter().map(String::as_str).collect();
 
         // A private release: the organisation is read on every fetch, and
         // every refusal is a 403.
@@ -13906,7 +13947,11 @@ impl FakeOrgHub {
             "candidate.approve" => format!("candidate:{}", parts[3]),
             "invite.create" => format!(
                 "invite:{}/{}",
-                json["login"].as_str().unwrap_or(""),
+                json["github"]
+                    .as_str()
+                    .map(|g| format!("github:{g}"))
+                    .or_else(|| json["email"].as_str().map(|e| format!("email:{e}")))
+                    .unwrap_or_default(),
                 json["role"].as_str().unwrap_or("")
             ),
             _ => format!("org:{slug}"),
@@ -13924,7 +13969,7 @@ impl FakeOrgHub {
             let Some(invite) = org.invites.get(code) else {
                 return deny(org, "invite-revoked");
             };
-            let refusal = if invite.login != who {
+            let refusal = if invite.principal != who {
                 Some("invite-for-someone-else")
             } else if invite.state == "revoked" {
                 Some("invite-revoked")
@@ -13944,12 +13989,11 @@ impl FakeOrgHub {
             org.members
                 .insert(who.clone(), (role.clone(), "active".into()));
             org.record(now, &who, "invite.accept", code, "allowed", None);
-            return fake_json(
-                200,
-                serde_json::json!({ "membership": {
-                    "org": slug, "login": who, "role": role, "state": "active",
-                } }),
-            );
+            let mut membership = fake_principal(&who);
+            membership["org"] = serde_json::json!(slug);
+            membership["role"] = serde_json::json!(role);
+            membership["since"] = serde_json::json!(now);
+            return fake_json(200, serde_json::json!({ "membership": membership }));
         }
 
         let Some(role) = org.role_of(&who).map(str::to_string) else {
@@ -13966,21 +14010,32 @@ impl FakeOrgHub {
                     .members
                     .iter()
                     .filter(|(login, _)| role != "recipient" || **login == who)
-                    .map(|(login, (role, state))| {
-                        serde_json::json!({ "org": slug, "login": login, "role": role, "state": state })
+                    .map(|(principal, (role, state))| {
+                        let mut member = fake_principal(principal);
+                        member["role"] = serde_json::json!(role);
+                        member["state"] = serde_json::json!(state);
+                        member["since"] = serde_json::json!(now);
+                        member
                     })
                     .collect();
+                let mut me = fake_principal(&who);
+                me["role"] = serde_json::json!(role);
                 fake_json(
                     200,
                     serde_json::json!({
                         "org": { "slug": slug, "name": org.name, "root_key": org.root },
-                        "me": { "org": slug, "login": who, "role": role, "state": "active" },
+                        "me": me,
                         "members": members,
                     }),
                 )
             }
             "invite.create" => {
-                let login = json["login"].as_str().unwrap_or("").to_ascii_lowercase();
+                // Exactly one of {github} and {email}.
+                let principal = match (json["github"].as_str(), json["email"].as_str()) {
+                    (Some(login), None) => format!("github:{}", login.to_ascii_lowercase()),
+                    (None, Some(email)) => format!("email:{}", email.to_ascii_lowercase()),
+                    _ => return fake_refuse(400, "bad-request"),
+                };
                 let invited = json["role"].as_str().unwrap_or("").to_string();
                 let allowed = role == "owner" || (role == "admin" && !high(&invited));
                 if !allowed {
@@ -13992,7 +14047,7 @@ impl FakeOrgHub {
                 org.invites.insert(
                     code.clone(),
                     FakeInvite {
-                        login: login.clone(),
+                        principal: principal.clone(),
                         role: invited.clone(),
                         expires,
                         state: "open",
@@ -14001,7 +14056,11 @@ impl FakeOrgHub {
                 org.record(now, &who, "invite.create", &target, "allowed", None);
                 fake_json(
                     201,
-                    serde_json::json!({ "code": code, "expires_at": expires, "login": login, "role": invited }),
+                    serde_json::json!({
+                        "code": code, "expires_at": expires, "principal": principal,
+                        "role": invited,
+                        "join_url": format!("https://krate.tech/join/?o={slug}&c={code}"),
+                    }),
                 )
             }
             "invite.revoke" => {
@@ -14043,12 +14102,10 @@ impl FakeOrgHub {
                     "allowed",
                     Some(&format!("{old}->{new}")),
                 );
-                fake_json(
-                    200,
-                    serde_json::json!({ "membership": {
-                        "org": slug, "login": login, "role": new, "state": "active",
-                    } }),
-                )
+                let mut membership = fake_principal(&login);
+                membership["org"] = serde_json::json!(slug);
+                membership["role"] = serde_json::json!(new);
+                fake_json(200, serde_json::json!({ "membership": membership }))
             }
             "member.remove" => {
                 let login = parts[3].to_string();
@@ -14247,7 +14304,8 @@ impl FakeOrgHub {
                         serde_json::json!({
                             "name": c.name, "version": c.version, "digest": digest,
                             "url": format!("{base}/a/{digest}"),
-                            "uploaded_by": c.uploader, "approved_by": c.approver,
+                            "uploaded_by": fake_principal(&c.uploader),
+                            "approved_by": c.approver.as_deref().map(fake_principal),
                             "at": c.approved_at,
                         })
                     })
@@ -14264,8 +14322,9 @@ impl FakeOrgHub {
                     .map(|(digest, c)| {
                         serde_json::json!({
                             "digest": digest, "name": c.name, "version": c.version,
-                            "state": c.state, "uploaded_by": c.uploader,
-                            "uploaded_at": c.uploaded_at, "approved_by": c.approver,
+                            "state": c.state, "uploaded_by": fake_principal(&c.uploader),
+                            "uploaded_at": c.uploaded_at,
+                            "approved_by": c.approver.as_deref().map(fake_principal),
                             "approved_at": c.approved_at,
                         })
                     })
@@ -14444,10 +14503,11 @@ impl OrgWorld {
             }))?;
         hub.lock().unwrap().base = format!("http://{addr}");
         let mut homes = std::collections::BTreeMap::new();
-        for login in people.iter().chain(["nobody"].iter()) {
+        for name in people.iter().chain(["nobody"].iter()) {
+            let login = OrgWorld::login_of(name);
             let home = tempfile::tempdir().expect("home");
             std::fs::create_dir_all(home.path().join(".krate")).expect("krate home");
-            if *login != "nobody" {
+            if *name != "nobody" {
                 std::fs::write(
                     home.path().join(".krate/github.json"),
                     serde_json::json!({
@@ -14458,7 +14518,7 @@ impl OrgWorld {
                 )
                 .expect("sign-in");
             }
-            homes.insert(login.to_string(), home);
+            homes.insert(name.to_string(), home);
         }
         Some(OrgWorld {
             hub,
@@ -14521,14 +14581,42 @@ impl OrgWorld {
         said
     }
 
-    /// The code in a `krate org join <slug> <code>` line.
-    fn invite(&self, by: &str, login: &str, role: &str) -> String {
-        let said = self.says(by, &["org", "invite", "acme", login, "--role", role], true);
-        said.lines()
+    /// Who each person signs in as. Dan signs in by email (tok-<address>
+    /// is an inbox the hub saw proven); `alice-mail` is an email account
+    /// whose address starts with Alice's GitHub login, and is not Alice.
+    /// Everyone else is a GitHub login.
+    fn login_of(name: &str) -> String {
+        match name {
+            "dan" => "dan@acme.example".to_string(),
+            "alice-mail" => "alice@corp.example".to_string(),
+            other => other.to_string(),
+        }
+    }
+
+    /// The code in a `krate org join <slug> <code>` line. A person who
+    /// signs in by email is invited by email.
+    fn invite(&self, by: &str, person: &str, role: &str) -> String {
+        let login = OrgWorld::login_of(person);
+        let said = if login.contains('@') {
+            self.says(
+                by,
+                &["org", "invite", "acme", "--email", &login, "--role", role],
+                true,
+            )
+        } else {
+            self.says(by, &["org", "invite", "acme", &login, "--role", role], true)
+        };
+        let code = said
+            .lines()
             .find_map(|line| line.trim().strip_prefix("krate org join acme "))
             .unwrap_or_else(|| panic!("no join line: {said}"))
             .trim()
-            .to_string()
+            .to_string();
+        assert!(
+            said.contains(&format!("or open https://krate.tech/join/?o=acme&c={code}")),
+            "the join link is printed beside the command: {said}"
+        );
+        code
     }
 
     /// Alice's acme: its root key registered, Bob reviewer, Carol
@@ -14703,7 +14791,7 @@ fn org_create_makes_you_the_owner_and_refuses_taken_or_invalid_names() {
         "{:?}",
         hub.keyless_mutations
     );
-    assert_eq!(hub.orgs["acme"].role_of("alice"), Some("owner"));
+    assert_eq!(hub.orgs["acme"].role_of("github:alice"), Some("owner"));
 }
 
 /// `krate org show`: members and roles; a recipient sees only their own
@@ -14717,7 +14805,7 @@ fn org_show_lists_members_and_refuses_strangers_in_words() {
     world.acme();
     let said = world.says("alice", &["org", "show", "acme"], true);
     assert!(said.contains("acme -- Acme"), "{said}");
-    assert!(said.contains("you are alice, owner"), "{said}");
+    assert!(said.contains("you are alice (GitHub), owner"), "{said}");
     for (login, role) in [
         ("bob", "reviewer"),
         ("carol", "developer"),
@@ -14728,6 +14816,16 @@ fn org_show_lists_members_and_refuses_strangers_in_words() {
             "{login} {role}: {said}"
         );
     }
+    assert!(
+        said.lines()
+            .any(|l| l.contains("alice (GitHub)") && l.contains("owner")),
+        "{said}"
+    );
+    assert!(
+        said.lines()
+            .any(|l| l.contains("dan@acme.example (email)") && l.contains("recipient")),
+        "{said}"
+    );
     let said = world.says("dan", &["org", "show", "acme"], true);
     assert!(
         said.contains("1 person:") && !said.contains("carol"),
@@ -14761,8 +14859,14 @@ fn org_invite_prints_the_join_command_and_an_admin_cannot_invite_an_owner() {
         &["org", "invite", "acme", "Bob", "--role", "admin"],
         true,
     );
-    assert!(said.contains("invited bob to acme as admin."), "{said}");
-    assert!(said.contains("only for bob, until 2025-10-21"), "{said}");
+    assert!(
+        said.contains("invited bob (GitHub) to acme as admin."),
+        "{said}"
+    );
+    assert!(
+        said.contains("only for bob (GitHub), until 2025-10-21"),
+        "{said}"
+    );
     let code = said
         .lines()
         .find_map(|l| l.trim().strip_prefix("krate org join acme "))
@@ -14786,7 +14890,7 @@ fn org_invite_prints_the_join_command_and_an_admin_cannot_invite_an_owner() {
         true,
     );
     assert!(
-        said.contains("invited erin to acme as developer."),
+        said.contains("invited erin (GitHub) to acme as developer."),
         "{said}"
     );
 }
@@ -14812,7 +14916,10 @@ fn org_join_takes_an_invitation_once_and_only_for_its_login() {
         "{said}"
     );
     let said = world.says("bob", &["org", "join", "acme", &code], true);
-    assert!(said.contains("you joined acme as reviewer."), "{said}");
+    assert!(
+        said.contains("you joined acme as reviewer, signed in as bob (GitHub)"),
+        "{said}"
+    );
     let said = world.says("bob", &["org", "join", "acme", &code], false);
     assert!(said.contains("that invitation was already used"), "{said}");
 
@@ -14840,10 +14947,13 @@ fn org_role_changes_a_role_and_never_leaves_no_owner() {
     };
     world.acme();
     let said = world.says("alice", &["org", "role", "acme", "bob", "admin"], true);
-    assert!(said.contains("bob is now admin in acme."), "{said}");
+    assert!(
+        said.contains("bob (GitHub) is now admin in acme."),
+        "{said}"
+    );
     let said = world.says("bob", &["org", "role", "acme", "bob", "owner"], false);
     assert!(
-        said.contains("your role in acme cannot make bob an owner: ask an owner of acme"),
+        said.contains("your role in acme cannot make bob (GitHub) an owner: ask an owner of acme"),
         "{said}"
     );
     let said = world.says("alice", &["org", "role", "acme", "alice", "admin"], false);
@@ -14865,12 +14975,14 @@ fn org_remove_ends_membership_and_keeps_an_owner() {
     world.acme();
     let said = world.says("bob", &["org", "remove", "acme", "carol"], false);
     assert!(
-        said.contains("your role in acme cannot remove carol: ask an owner or admin of acme"),
+        said.contains(
+            "your role in acme cannot remove carol (GitHub): ask an owner or admin of acme"
+        ),
         "{said}"
     );
     let said = world.says("alice", &["org", "remove", "acme", "carol"], true);
     assert!(
-        said.contains("removed carol from acme.") && said.contains("untouched"),
+        said.contains("removed carol (GitHub) from acme.") && said.contains("untouched"),
         "{said}"
     );
     let said = world.says("carol", &["org", "show", "acme"], false);
@@ -15233,7 +15345,7 @@ fn org_approve_releases_the_exact_digest_and_never_your_own() {
     assert_eq!(hub.orgs["acme"].candidates[&digest].state, "released");
     assert_eq!(
         hub.orgs["acme"].candidates[&digest].approver.as_deref(),
-        Some("bob")
+        Some("github:bob")
     );
 }
 
@@ -15262,7 +15374,7 @@ fn org_releases_lists_who_uploaded_and_who_approved() {
         "{said}"
     );
     assert!(
-        said.contains("uploaded by carol, approved by bob, 2025-10-14"),
+        said.contains("uploaded by carol (GitHub), approved by bob (GitHub), 2025-10-14"),
         "{said}"
     );
 
@@ -15274,7 +15386,7 @@ fn org_releases_lists_who_uploaded_and_who_approved() {
         "{said}"
     );
     assert!(
-        said.contains("uploaded by carol 2025-10-14 00:00 UTC, approved by bob"),
+        said.contains("uploaded by carol (GitHub) 2025-10-14 00:00 UTC, approved by bob (GitHub)"),
         "{said}"
     );
     let said = world.says("dan", &["org", "candidates", "acme"], false);
@@ -15428,7 +15540,11 @@ fn a_private_link_runs_only_with_a_current_members_session() {
         "{said}"
     );
 
-    world.says("alice", &["org", "remove", "acme", "dan"], true);
+    world.says(
+        "alice",
+        &["org", "remove", "acme", "dan@acme.example"],
+        true,
+    );
     let removed = world.run_link("dan", &link);
     let said = String::from_utf8_lossy(&removed.stderr);
     assert!(!removed.status.success());
@@ -15468,6 +15584,69 @@ fn a_private_link_runs_only_with_a_current_members_session() {
     );
 }
 
+/// Addendum 1: an email account whose address starts with a member's
+/// GitHub login is not that member. `alice@corp.example` signed in by email
+/// cannot see acme, act for Alice, accept an invitation made out to
+/// `github:` someone, or open acme's apps.
+#[test]
+fn an_email_named_after_a_github_member_is_not_that_member() {
+    let Some(world) = OrgWorld::new(&["alice", "bob", "carol", "alice-mail"]) else {
+        eprintln!(
+            "skipping an_email_named_after_a_github_member_is_not_that_member: no local port"
+        );
+        return;
+    };
+    let root = world.acme();
+    let said = world.says("alice-mail", &["org", "show", "acme"], false);
+    assert!(
+        said.contains("alice@corp.example is not a member of acme")
+            && said.contains("--email alice@corp.example"),
+        "{said}"
+    );
+    let said = world.says("alice-mail", &["org", "remove", "acme", "bob"], false);
+    assert!(said.contains("is not a member of acme"), "{said}");
+    // An invitation for github:erin is not accepted by erin@... either.
+    let code = world.invite("alice", "erin", "developer");
+    let said = world.says("alice-mail", &["org", "join", "acme", &code], false);
+    assert!(
+        said.contains("that invitation is for a different GitHub account"),
+        "{said}"
+    );
+
+    let bundle = world.bundle("app.krate", "1.0.0", 64);
+    world.sign_delegated(&root, "carol", &bundle);
+    let digest = OrgWorld::digest_in(&world.says(
+        "carol",
+        &["publish", bundle.to_str().unwrap(), "--org", "acme"],
+        true,
+    ));
+    world.says("bob", &["org", "approve", "acme", &digest], true);
+    let link = format!("{}/a/{digest}", world.url());
+    let opened = world.run_link("alice-mail", &link);
+    assert!(!opened.status.success());
+    assert!(
+        String::from_utf8_lossy(&opened.stderr)
+            .contains("alice@corp.example is not one of its members"),
+        "{}",
+        String::from_utf8_lossy(&opened.stderr)
+    );
+    // Alice herself, by GitHub, still opens it.
+    assert!(world.run_link("alice", &link).status.success());
+    // Members are addressed by principal: the email one is not Alice's.
+    if world.real_hub().is_none() {
+        let hub = world.hub.lock().unwrap();
+        let acme = &hub.orgs["acme"];
+        assert_eq!(acme.role_of("github:alice"), Some("owner"));
+        assert_eq!(acme.role_of("email:alice@corp.example"), None);
+        assert!(
+            hub.seen
+                .iter()
+                .any(|(m, p, _)| m == "DELETE" && p == "/orgs/acme/members/github%3Abob"),
+            "a member is addressed by principal, URL-encoded"
+        );
+    }
+}
+
 /// IC-946's proof, end to end through the CLI against the fake hub: Alice
 /// creates acme and registers its root key; Bob (reviewer), Carol
 /// (developer) and Dan (recipient) join; Carol publishes a delegated-key
@@ -15483,8 +15662,12 @@ fn the_org_pilot_proof_runs_end_to_end_through_the_cli() {
         eprintln!("skipping the_org_pilot_proof_runs_end_to_end_through_the_cli: no local port");
         return;
     };
-    // 1. Create, register the root key, invite, join.
+    // 1. Create, register the root key, invite, join. Dan is invited by his
+    //    work email and joins with an email sign-in.
     let root = world.acme();
+    let said = world.says("alice", &["org", "show", "acme"], true);
+    assert!(said.contains("dan@acme.example (email)"), "{said}");
+    assert!(said.contains("bob (GitHub)"), "{said}");
 
     // 2. Carol's candidate, signed by a release key acme's root delegated.
     let bundle = world.bundle("app.krate", "1.0.0", 64);
@@ -15541,7 +15724,11 @@ fn the_org_pilot_proof_runs_end_to_end_through_the_cli() {
 
     // 5. Alice removes Dan: his next run is refused; the release and
     //    Carol's history remain.
-    world.says("alice", &["org", "remove", "acme", "dan"], true);
+    world.says(
+        "alice",
+        &["org", "remove", "acme", "dan@acme.example"],
+        true,
+    );
     let refused = world.run_link("dan", &link);
     assert!(!refused.status.success());
     assert!(
@@ -15551,7 +15738,7 @@ fn the_org_pilot_proof_runs_end_to_end_through_the_cli() {
     );
     let said = world.says("alice", &["org", "releases", "acme"], true);
     assert!(
-        said.contains("uploaded by carol, approved by bob"),
+        said.contains("uploaded by carol (GitHub), approved by bob (GitHub)"),
         "{said}"
     );
 
@@ -15619,6 +15806,7 @@ fn the_org_pilot_proof_runs_end_to_end_through_the_cli() {
     if world.real_hub().is_some() {
         // Tampering with the real hub's stored events is the hub's own
         // proof (cloud/worker/test, and the wrangler run's tamper step).
+        eprintln!("skipping the tamper step: KRATE_ORG_E2E_HUB is a real hub");
         return;
     }
     world

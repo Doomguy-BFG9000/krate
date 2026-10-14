@@ -10,9 +10,12 @@ Everything below is driven from the `krate` command line.
 
 ## Who can do what
 
-Everyone is known by their GitHub sign-in, the same one `krate publish`
-uses. There is nothing new to set up: if you have published an app, you are
-already signed in. If not, `krate account login` signs you in.
+People are known by a GitHub account or a work email. A GitHub account is
+the sign-in `krate publish` already uses: if you have published an app, you
+are already signed in. A work email is proven by signing in with an email
+link or with Google. `krate account login` signs you in. An email account
+is never mistaken for a GitHub account with a similar name: `alice` on
+GitHub and `alice@corp.example` are two different people to an organisation.
 
 Each person has one role:
 
@@ -45,23 +48,28 @@ Register the organisation's root key. This is the publisher root key that
 krate org root-key acme acme-root.pkcs8
 ```
 
-Invite people, one GitHub account and one role at a time:
+Invite people, one person and one role at a time, by GitHub username or by
+work email:
 
 ```sh
 krate org invite acme bob --role reviewer
 krate org invite acme carol --role developer
-krate org invite acme dan --role recipient
+krate org invite acme --email dan@acme.example --role recipient
 ```
 
-Each invitation prints the one command that person runs. It works once,
-only for the account it names, for 7 days:
+Each invitation prints the one command that person runs, and a link that
+does the same in a browser. It works once, only for the person it names,
+for 7 days:
 
 ```sh
 krate org join acme <code>
 ```
 
-`krate org show acme` lists who is in it. `krate org role acme bob developer`
-changes a role, and `krate org cancel-invite acme <code>` takes back an
+or open `https://krate.tech/join/?o=acme&c=<code>`.
+
+`krate org show acme` lists who is in it, each as `bob (GitHub)` or
+`dan@acme.example (email)`. `krate org role acme bob developer` changes a role
+(name an email member by their address), and `krate org cancel-invite acme <code>` takes back an
 invitation nobody has used. Making someone an owner or an admin, or changing
 an owner's or admin's role, is for an owner.
 
@@ -135,7 +143,7 @@ again with a current key and uploaded again.
 ## Removing someone
 
 ```sh
-krate org remove acme dan
+krate org remove acme dan@acme.example
 ```
 
 Dan's access ends at once: the next time he opens the app, he is told he

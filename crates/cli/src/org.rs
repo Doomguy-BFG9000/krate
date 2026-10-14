@@ -60,17 +60,22 @@ pub enum OrgCommand {
     /// only for that account, for 7 days.
     Invite {
         slug: String,
-        /// The GitHub login being invited.
-        login: String,
+        /// The GitHub login being invited. Give this or --email, not both.
+        #[arg(required_unless_present = "email", conflicts_with = "email")]
+        login: Option<String>,
+        /// Invite a work email instead: whoever proves that inbox (an email
+        /// link, or a Google sign-in) accepts it.
+        #[arg(long, value_name = "ADDRESS")]
+        email: Option<String>,
         #[arg(long, value_enum)]
         role: Role,
     },
     /// Cancel an invitation that has not been used yet.
     #[command(name = "cancel-invite")]
     CancelInvite { slug: String, code: String },
-    /// Accept an invitation sent to your GitHub account.
+    /// Accept an invitation sent to you.
     Join { slug: String, code: String },
-    /// Change someone's role.
+    /// Change someone's role. Name them by GitHub login or by email.
     Role {
         slug: String,
         login: String,
@@ -79,7 +84,11 @@ pub enum OrgCommand {
     },
     /// Remove someone, or yourself. Their access to the organisation's apps
     /// ends at once; their own apps and account are untouched.
-    Remove { slug: String, login: String },
+    Remove {
+        slug: String,
+        /// A GitHub login, or an email address.
+        login: String,
+    },
     /// Register (or rotate) the organisation's root public key: the
     /// publisher root that `krate delegate` uses. Give the public key (64 hex
     /// characters in a file) or the root's key file, of which only the public
@@ -235,6 +244,11 @@ impl Client {
         self.identity.login.to_ascii_lowercase()
     }
 
+    /// The principal this sign-in stands for, as the hub would name it.
+    fn my_principal(&self) -> String {
+        principal_of(&self.identity.login)
+    }
+
     /// Send one request; a dropped connection is retried with the SAME key,
     /// which is what makes the retry safe.
     fn send(&self, method: &str, path: &str, body: &Body) -> Result<serde_json::Value> {
@@ -337,10 +351,17 @@ pub fn words(refusal: &HubRefusal, org: &str, me: &str, action: Action) -> Strin
         "not-signed-in" => {
             "you are not signed in: run `krate account login`, then run this again".to_string()
         }
-        "not-a-member" => format!(
-            "{me} is not a member of {org}: ask {owner_or_admin} to invite {me} \
-             (krate org invite {org} {me} --role <role>)"
-        ),
+        "not-a-member" => {
+            let invite = if me.contains('@') {
+                format!("--email {me}")
+            } else {
+                me.to_string()
+            };
+            format!(
+                "{me} is not a member of {org}: ask {owner_or_admin} to invite {me} \
+                 (krate org invite {org} {invite} --role <role>)"
+            )
+        }
         "removed" => format!(
             "you were removed from {org}, so you can no longer act in it: ask {an_owner} \
              to invite you again if that is a mistake"
@@ -508,6 +529,73 @@ fn spoken_target(target: &str) -> String {
         .join(":")
 }
 
+/// The principal a person is named by on the command line: an address
+/// with `@` is `email:<address>`, anything else a GitHub login,
+/// `github:<login>`. Both lower-case. An explicit `github:` or `email:`
+/// prefix is kept.
+pub fn principal_of(name: &str) -> String {
+    let name = name.trim().to_ascii_lowercase();
+    if name.starts_with("github:") || name.starts_with("email:") {
+        name
+    } else if name.contains('@') {
+        format!("email:{name}")
+    } else {
+        format!("github:{name}")
+    }
+}
+
+/// A principal as a person reads it: `alice (GitHub)`, `bob@corp.com
+/// (email)`. Takes the hub's `{principal, display, kind}` object, a bare
+/// principal string, or (from an older hub) a plain login.
+pub fn spoken_principal(value: &serde_json::Value) -> String {
+    let label = |kind: &str| match kind {
+        "github" => "GitHub".to_string(),
+        other => other.to_string(),
+    };
+    if let Some(principal) = value.as_str() {
+        return match principal.split_once(':') {
+            Some((kind @ ("github" | "email"), who)) => format!("{who} ({})", label(kind)),
+            _ => principal.to_string(),
+        };
+    }
+    let principal = text(value, "principal");
+    let (kind_of, who_of) = principal.split_once(':').unwrap_or(("", principal));
+    let kind = Some(text(value, "kind"))
+        .filter(|k| !k.is_empty())
+        .unwrap_or(kind_of);
+    let display = Some(text(value, "display"))
+        .filter(|d| !d.is_empty())
+        .or(Some(who_of).filter(|w| !w.is_empty()))
+        .unwrap_or_else(|| text(value, "login"));
+    if kind.is_empty() {
+        display.to_string()
+    } else {
+        format!("{display} ({})", label(kind))
+    }
+}
+
+/// The join page for an invitation, as the hub's answer gives it or as
+/// the addendum spells it.
+fn join_url(answer: &serde_json::Value, slug: &str, code: &str) -> String {
+    for key in ["join_url", "url"] {
+        if let Some(url) = answer[key].as_str().filter(|u| u.starts_with("https://")) {
+            return url.to_string();
+        }
+    }
+    let q = |text: &str| {
+        text.bytes()
+            .map(|b| {
+                if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'~') {
+                    (b as char).to_string()
+                } else {
+                    format!("%{b:02X}")
+                }
+            })
+            .collect::<String>()
+    };
+    format!("https://krate.tech/join/?o={}&c={}", q(slug), q(code))
+}
+
 /// The first twelve characters of a digest, which is how one is spoken.
 fn short(digest: &str) -> &str {
     &digest[..digest.len().min(12)]
@@ -560,7 +648,7 @@ fn text<'a>(value: &'a serde_json::Value, key: &str) -> &'a str {
 /// `krate org ...`.
 pub fn run(command: OrgCommand, hub_override: Option<&str>) -> Result<u8> {
     let hub = hub_url(hub_override);
-    let identity = identity_or_sign_in("Organisations know people by their GitHub sign-in.")?;
+    let identity = identity_or_sign_in("Organisations know people by their sign-in.")?;
     let client = Client::new(hub, identity);
     let me = client.me();
     match command {
@@ -605,7 +693,9 @@ pub fn run(command: OrgCommand, hub_override: Option<&str>) -> Result<u8> {
             println!("{slug} -- {name}");
             let my_role = text(&answer["me"], "role");
             if !my_role.is_empty() {
-                println!("  you are {me}, {my_role}");
+                let mine = spoken_principal(&answer["me"]);
+                let mine = if mine.is_empty() { me.clone() } else { mine };
+                println!("  you are {mine}, {my_role}");
             }
             let members = answer["members"].as_array().cloned().unwrap_or_default();
             let active = members
@@ -623,35 +713,77 @@ pub fn run(command: OrgCommand, hub_override: Option<&str>) -> Result<u8> {
                 } else {
                     format!("  ({state})")
                 };
+                let since = when(&member["since"]);
+                let since = if since.is_empty() {
+                    String::new()
+                } else {
+                    format!("  since {since}")
+                };
                 println!(
-                    "    {:<20} {}{state}",
-                    text(member, "login"),
+                    "    {:<28} {:<10}{since}{state}",
+                    spoken_principal(member),
                     text(member, "role")
                 );
             }
             Ok(0)
         }
-        OrgCommand::Invite { slug, login, role } => {
-            let login = login.to_ascii_lowercase();
+        OrgCommand::Invite {
+            slug,
+            login,
+            email,
+            role,
+        } => {
+            // Exactly one of the two: a GitHub login or a work email.
+            let (body, principal) = match (login, email) {
+                (Some(login), None) => {
+                    let login = login.trim().to_ascii_lowercase();
+                    if login.contains('@') {
+                        anyhow::bail!(
+                            "{login} looks like an email address: invite it with --email {login}"
+                        );
+                    }
+                    let login = login.trim_start_matches("github:").to_string();
+                    (
+                        serde_json::json!({ "github": login, "role": role.as_str() }),
+                        format!("github:{login}"),
+                    )
+                }
+                (None, Some(email)) => {
+                    let email = email.trim().to_ascii_lowercase();
+                    let email = email.trim_start_matches("email:").to_string();
+                    if !email.contains('@') {
+                        anyhow::bail!(
+                            "{email} is not an email address: a GitHub login goes without --email"
+                        );
+                    }
+                    (
+                        serde_json::json!({ "email": email, "role": role.as_str() }),
+                        format!("email:{email}"),
+                    )
+                }
+                _ => anyhow::bail!("name one person: a GitHub login, or --email <address>"),
+            };
             let answer = worded(
                 client.send(
                     "POST",
                     &format!("/orgs/{}/invites", seg(&slug)?),
-                    &Body::Json(serde_json::json!({ "login": login, "role": role.as_str() })),
+                    &Body::Json(body),
                 ),
                 &slug,
                 &me,
                 Action::Invite(role),
             )?;
             let code = text(&answer, "code");
-            println!("invited {login} to {slug} as {}.", role.as_str());
+            let who = spoken_principal(&serde_json::json!(principal));
+            println!("invited {who} to {slug} as {}.", role.as_str());
             let expires = when(&answer["expires_at"]);
             if expires.is_empty() {
-                println!("Send {login} this. It works once, and only for {login}:");
+                println!("Send them this. It works once, and only for {who}:");
             } else {
-                println!("Send {login} this. It works once, only for {login}, until {expires}:");
+                println!("Send them this. It works once, only for {who}, until {expires}:");
             }
             println!("  krate org join {slug} {code}");
+            println!("  or open {}", join_url(&answer, &slug, code));
             Ok(0)
         }
         OrgCommand::CancelInvite { slug, code } => {
@@ -680,10 +812,16 @@ pub fn run(command: OrgCommand, hub_override: Option<&str>) -> Result<u8> {
                 Action::Join,
             )?;
             let role = text(&answer["membership"], "role");
-            if role.is_empty() {
-                println!("you joined {slug}.");
+            let as_who = spoken_principal(&answer["membership"]);
+            let as_who = if as_who.is_empty() {
+                String::new()
             } else {
-                println!("you joined {slug} as {role}.");
+                format!(", signed in as {as_who}")
+            };
+            if role.is_empty() {
+                println!("you joined {slug}{as_who}.");
+            } else {
+                println!("you joined {slug} as {role}{as_who}.");
             }
             if role == "recipient" {
                 println!("{slug}'s releases now open for you with `krate run <link>`.");
@@ -691,11 +829,12 @@ pub fn run(command: OrgCommand, hub_override: Option<&str>) -> Result<u8> {
             Ok(0)
         }
         OrgCommand::Role { slug, login, role } => {
-            let login = login.to_ascii_lowercase();
+            let principal = principal_of(&login);
+            let login = spoken_principal(&serde_json::json!(principal));
             let answer = worded(
                 client.send(
                     "PUT",
-                    &format!("/orgs/{}/members/{}", seg(&slug)?, seg(&login)?),
+                    &format!("/orgs/{}/members/{}", seg(&slug)?, seg(&principal)?),
                     &Body::Json(serde_json::json!({ "role": role.as_str() })),
                 ),
                 &slug,
@@ -709,18 +848,19 @@ pub fn run(command: OrgCommand, hub_override: Option<&str>) -> Result<u8> {
             Ok(0)
         }
         OrgCommand::Remove { slug, login } => {
-            let login = login.to_ascii_lowercase();
+            let principal = principal_of(&login);
+            let login = spoken_principal(&serde_json::json!(principal));
             worded(
                 client.send(
                     "DELETE",
-                    &format!("/orgs/{}/members/{}", seg(&slug)?, seg(&login)?),
+                    &format!("/orgs/{}/members/{}", seg(&slug)?, seg(&principal)?),
                     &Body::Empty,
                 ),
                 &slug,
                 &me,
                 Action::Remove(&login),
             )?;
-            if login == me {
+            if principal == client.my_principal() {
                 println!("you left {slug}. Its apps no longer open for you; your own apps are untouched.");
             } else {
                 println!("removed {login} from {slug}.");
@@ -841,8 +981,8 @@ pub fn run(command: OrgCommand, hub_override: Option<&str>) -> Result<u8> {
                 let at = when(&release["at"]);
                 println!(
                     "    uploaded by {}, approved by {}{}",
-                    text(release, "uploaded_by"),
-                    text(release, "approved_by"),
+                    spoken_principal(&release["uploaded_by"]),
+                    spoken_principal(&release["approved_by"]),
                     if at.is_empty() {
                         String::new()
                     } else {
@@ -896,11 +1036,14 @@ pub fn run(command: OrgCommand, hub_override: Option<&str>) -> Result<u8> {
                     text(candidate, "digest"),
                 );
                 let uploaded = when(&candidate["uploaded_at"]);
-                let mut line = format!("    uploaded by {}", text(candidate, "uploaded_by"));
+                let mut line = format!(
+                    "    uploaded by {}",
+                    spoken_principal(&candidate["uploaded_by"])
+                );
                 if !uploaded.is_empty() {
                     line.push_str(&format!(" {uploaded}"));
                 }
-                let approver = text(candidate, "approved_by");
+                let approver = spoken_principal(&candidate["approved_by"]);
                 if !approver.is_empty() {
                     line.push_str(&format!(", approved by {approver}"));
                     let approved = when(&candidate["approved_at"]);
@@ -935,13 +1078,13 @@ pub fn run(command: OrgCommand, hub_override: Option<&str>) -> Result<u8> {
                 };
                 let target = spoken_target(text(event, "target"));
                 println!(
-                    "  {:>4}  {}  {:<10} {:<16} {:<14} {outcome}",
+                    "  {:>4}  {}  {:<24} {:<18} {:<24} {outcome}",
                     event["seq"]
                         .as_u64()
                         .map(|n| n.to_string())
                         .unwrap_or_default(),
                     when(&event["at"]),
-                    text(event, "actor"),
+                    spoken_principal(&event["actor"]),
                     text(event, "action"),
                     target,
                 );
@@ -1274,6 +1417,35 @@ mod tests {
         assert!(is_hub_link("https://hub.krate.tech/a/abc"));
         assert!(!is_hub_link("https://hub.krate.tech.evil.example/a/abc"));
         assert!(!is_hub_link("https://evil.example/a/abc"));
+    }
+
+    #[test]
+    fn people_are_named_by_principal_and_read_plainly() {
+        assert_eq!(principal_of("Alice"), "github:alice");
+        assert_eq!(principal_of("Bob@Corp.com"), "email:bob@corp.com");
+        assert_eq!(principal_of("github:carol"), "github:carol");
+        assert_eq!(
+            spoken_principal(&serde_json::json!("github:alice")),
+            "alice (GitHub)"
+        );
+        assert_eq!(
+            spoken_principal(&serde_json::json!({
+                "principal": "email:bob@corp.com", "display": "bob@corp.com", "kind": "email"
+            })),
+            "bob@corp.com (email)"
+        );
+        assert_eq!(
+            spoken_principal(&serde_json::json!({ "login": "dan" })),
+            "dan"
+        );
+        assert_eq!(
+            seg(&principal_of("bob@corp.com")).unwrap(),
+            "email%3Abob%40corp.com"
+        );
+        assert_eq!(
+            join_url(&serde_json::json!({}), "acme", "abc+/="),
+            "https://krate.tech/join/?o=acme&c=abc%2B%2F%3D"
+        );
     }
 
     #[test]
