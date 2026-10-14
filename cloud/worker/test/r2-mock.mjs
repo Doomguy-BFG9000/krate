@@ -19,6 +19,7 @@ export function r2Mock(blobs = new Map()) {
       key: k,
       size: v.byteLength,
       checksums: { sha256: meta.sha256 === false ? undefined : await crypto.subtle.digest("SHA-256", v) },
+      customMetadata: meta.customMetadata || {},
       body: v,
       arrayBuffer: async () => v,
     };
@@ -33,7 +34,8 @@ export function r2Mock(blobs = new Map()) {
         throw new Error("R2: the sha256 checksum did not match");
       }
       blobs.set(k, bytes);
-      blobs.delete(`${k}\u0000meta`);
+      if (opts.customMetadata) blobs.set(`${k}\u0000meta`, { customMetadata: { ...opts.customMetadata } });
+      else blobs.delete(`${k}\u0000meta`);
       return object(k);
     },
     delete: async (k) => {
@@ -48,9 +50,9 @@ export function r2Mock(blobs = new Map()) {
     // Multipart, held to R2's own rules (IC-945): every part but the last
     // the same size and at least 5 MiB, completed only with the etags
     // uploadPart returned.
-    createMultipartUpload: async (key) => {
+    createMultipartUpload: async (key, opts = {}) => {
       const uploadId = `u${uploads.size + 1}`;
-      uploads.set(uploadId, { key, parts: new Map() });
+      uploads.set(uploadId, { key, parts: new Map(), customMetadata: opts.customMetadata });
       return multipart(key, uploadId);
     },
     resumeMultipartUpload: (key, uploadId) => multipart(key, uploadId),
@@ -96,7 +98,7 @@ export function r2Mock(blobs = new Map()) {
         }
         blobs.set(key, whole);
         // A multipart object carries no whole-object sha256 in R2.
-        blobs.set(`${key}\u0000meta`, { sha256: false });
+        blobs.set(`${key}\u0000meta`, { sha256: false, customMetadata: up.customMetadata ? { ...up.customMetadata } : undefined });
         uploads.delete(uploadId);
         return object(key);
       },

@@ -117,3 +117,15 @@ class_name = "RateGate"
 [[migrations]]
 tag = "v2-rate-gate"
 new_sqlite_classes = ["RateGate"]
+
+# Organisations (IC-946): one SQLite-backed object per organisation, named
+# "org:<slug>", and the only authority for its members, roles, invitations,
+# root key, candidates, releases and audit. Every command is one
+# transaction in it; nothing in KV answers who may do what.
+[[durable_objects.bindings]]
+name = "ORGS"
+class_name = "Org"
+
+[[migrations]]
+tag = "v3-orgs"
+new_sqlite_classes = ["Org"]
