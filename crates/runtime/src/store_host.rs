@@ -17,17 +17,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-/// Longest key an app may use. Long enough for a namespaced name like
-/// `window.main.size`, short enough that a key cannot become a payload.
-const MAX_KEY_BYTES: usize = 256;
-
-/// Largest single value. Bounded because the store is for state, not for bulk
-/// data: an app with megabytes to write wants a file capability and the user's
-/// explicit consent to a folder, not a settings store.
-const MAX_VALUE_BYTES: usize = 1024 * 1024;
-
-/// Largest the whole store may grow, so a loop cannot fill the user's disk.
-const MAX_TOTAL_BYTES: usize = 16 * 1024 * 1024;
+// The key rule and the bounds are shared with the browser Player's store
+// (IC-956), so a key one host accepts is never refused by the other.
+use krate_adapter_common::kv::{MAX_TOTAL_BYTES, MAX_VALUE_BYTES};
 
 /// Why a store operation could not be completed.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -272,25 +264,12 @@ impl AppStore {
     }
 }
 
-/// A key must be a short, printable, path-free name.
-///
-/// Path separators and `..` are rejected even though keys never become paths on
-/// their own, because the store file format and any future per-key layout should
-/// not have to care whether a key could be read as a path.
 fn validate_key(key: &str) -> Result<(), StoreError> {
-    if key.is_empty() || key.len() > MAX_KEY_BYTES {
-        return Err(StoreError::InvalidKey);
+    if krate_adapter_common::kv::valid_key(key) {
+        Ok(())
+    } else {
+        Err(StoreError::InvalidKey)
     }
-    if key.contains('/') || key.contains('\\') || key.contains("..") {
-        return Err(StoreError::InvalidKey);
-    }
-    if key
-        .chars()
-        .any(|c| c.is_control() || c == '\n' || c == '\t')
-    {
-        return Err(StoreError::InvalidKey);
-    }
-    Ok(())
 }
 
 /// Line-oriented: `<key>\t<base64 value>`.

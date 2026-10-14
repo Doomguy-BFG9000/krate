@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Opening an app - Krate</title>
+<meta name="description" content="A Krate app, open in this tab. Nothing to install.">
+<meta name="robots" content="noindex">
+<link rel="icon" href="/player/krate-favicon.png">
+<meta name="theme-color" content="#fbfbfd" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#08080a" media="(prefers-color-scheme: dark)">
+<link rel="preload" href="/player/geist-var-latin.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="/player/player.css">
+</head>
+<body>
+<header class="bar">
+  <a class="brand" href="https://krate.tech/" rel="noopener"><img src="/player/krate-mark-3d-96.png" alt="" width="24" height="24">Krate</a>
+  <div class="who" id="who" hidden><span class="dot" aria-hidden="true"></span><span id="whoName"></span><span class="sig" id="whoSig"></span></div>
+  <div class="acts">
+    <a class="btn ghost small" id="inKrate" href="https://krate.tech/open/" rel="noopener">Open in Krate</a>
+    <button class="btn ghost small" id="closeApp" type="button" hidden>Close</button>
+  </div>
+</header>
+
+<main id="stage" aria-live="polite">
+  <section class="card state" id="loading">
+    <div class="spin" aria-hidden="true"></div>
+    <p class="say" id="loadingWords">Opening the app...</p>
+  </section>
+
+  <section class="card state" id="consent" hidden aria-labelledby="consentTitle">
+    <div class="perm">
+      <div class="ph2"><img src="/player/krate-mark-3d-96.png" alt=""><h1 id="consentTitle">"App" wants to:</h1></div>
+      <ul class="rows" id="consentRows"></ul>
+      <p class="note" id="consentNote"></p>
+      <div class="row-acts">
+        <button class="btn ghost" id="consentCancel" type="button">Cancel</button>
+        <button class="btn dark" id="consentAllow" type="button">Allow and open</button>
+      </div>
+    </div>
+    <p class="fine" id="consentFine">It gets nothing else. It runs in this tab, on your computer, and stops when you close it.</p>
+  </section>
+
+  <section class="card state" id="signin" hidden aria-labelledby="signinTitle">
+    <h1 id="signinTitle">Sign in to open this app</h1>
+    <p class="say" id="signinWords">It was shared with your team. Sign in with the account your team invited.</p>
+    <div class="stack">
+      <a class="btn dark" id="signinGithub" href="#">Continue with GitHub</a>
+      <a class="btn ghost" id="signinGoogle" href="#">Continue with Google</a>
+    </div>
+  </section>
+
+  <section class="card state" id="refused" hidden aria-labelledby="refusedTitle">
+    <h1 id="refusedTitle">This app did not open</h1>
+    <p class="say" id="refusedWords"></p>
+    <details id="refusedDetails" hidden><summary>Details</summary><pre id="refusedDetail"></pre></details>
+    <div class="stack"><a class="btn dark" id="refusedAct" href="https://krate.tech/open/">Open in Krate</a></div>
+  </section>
+
+  <section class="app" id="app" hidden>
+    <div class="frame" id="frame">
+      <canvas id="screen" tabindex="0" aria-label="The app"></canvas>
+      <textarea id="ime" class="ime" aria-hidden="true" tabindex="-1" autocapitalize="off" autocomplete="off" spellcheck="false"></textarea>
+    </div>
+    <pre class="term" id="term" hidden tabindex="0" aria-label="What the app printed"></pre>
+    <p class="ended" id="ended" hidden></p>
+  </section>
+
+  <div class="notice" id="notice" hidden role="status">
+    <span id="noticeWords"></span>
+    <a class="btn dark small" id="noticeAct" href="https://krate.tech/open/" rel="noopener">Open in Krate</a>
+    <button class="x" id="noticeClose" type="button" aria-label="Hide this">&times;</button>
+  </div>
+</main>
+<script type="module" src="/player/player.js"></script>
+</body>
+</html>

@@ -136,4 +136,9 @@ evidence/e3/replay-*.tsv
 # Built by scripts/build-hub-validator.sh; not committed (ring's C parts
 # compile differently per clang).
 cloud/worker/src/validator.wasm
-cloud/worker/public/validator.wasm
+# Built by scripts/build-web-player.sh (and the validator copy by
+# scripts/build-hub-validator.sh); not committed: the Player module, the
+# transpiler the publish door runs, and the files the hub serves (IC-956).
+cloud/worker/src/transpiler.wasm
+cloud/worker/player-dist/
+crates/adapter-web/player/build/

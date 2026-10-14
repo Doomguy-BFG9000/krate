@@ -6,22 +6,26 @@ rust-version.workspace = true
 license.workspace = true
 publish = false
 
-# The browser adapter: a Krate app painting into a canvas in a tab.
-#
-# This crate starts as the spike proving the pixel path -- the shared
-# painter's framebuffer reaching a canvas through putImageData with no
-# GPU and no runtime changes. The adapter contract and the event loop
-# land on top of it once that is proven.
+# The browser Player's own module (IC-956 Phase 1): the `krate:ui` host a
+# Krate app in a tab draws through, and the consent words and grants the
+# tab decides with -- the desktop's own lowering, painter, manifest and
+# policy crates, compiled to wasm32. CI builds it for wasm32 on every push
+# (quick lane) so it cannot silently stop compiling again.
 
 [lib]
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-krate-adapter-common = { path = "../adapter-common" }
+krate-adapter-common = { path = "../adapter-common", features = ["vector-text"] }
 krate-layout = { path = "../layout" }
+krate-lowering = { path = "../lowering" }
+krate-manifest = { path = "../manifest" }
+krate-policy = { path = "../policy" }
+serde.workspace = true
+serde_json.workspace = true
 # Only the pulley-in-a-tab probe needs the engine. IC-956 Phase 0 measured
 # it against the browser's own engine (evidence/web-player), so it is
-# opt-in: the painter module the web Player loads builds without wasmtime.
+# opt-in: the Player module builds without wasmtime.
 krate-runtime = { path = "../runtime", optional = true }
 
 [features]
@@ -33,7 +37,4 @@ js-sys = "0.3"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies.web-sys]
 version = "0.3"
-features = [
-  "Document", "Element", "HtmlCanvasElement", "Window",
-  "CanvasRenderingContext2d", "ImageData", "console",
-]
+features = ["console"]

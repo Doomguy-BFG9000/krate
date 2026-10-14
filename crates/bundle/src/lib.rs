@@ -3341,7 +3341,7 @@ pub fn judge_bytes_with_limits(
 }
 
 fn judge_bytes_here(bytes: &[u8], max_expanded: u64) -> Result<Judgement> {
-    judge_parts(bytes, max_expanded).map(|(judgement, _)| judgement)
+    judge_all(bytes, max_expanded).map(|(judgement, _, _)| judgement)
 }
 
 /// [`judge_bytes_here`], and the entries a signature covers, exactly as
@@ -3350,6 +3350,32 @@ fn judge_parts(
     bytes: &[u8],
     max_expanded: u64,
 ) -> Result<(Judgement, std::collections::BTreeMap<String, Vec<u8>>)> {
+    judge_all(bytes, max_expanded).map(|(judgement, _, project)| (judgement, project))
+}
+
+/// [`judge_bytes`], keeping the entries it judged: for the browser Player
+/// (IC-956), which runs the component it judged and needs the bytes the
+/// judgement was about, not a second read of the archive.
+pub fn judge_bytes_and_entries(
+    bytes: &[u8],
+    max_expanded: u64,
+) -> Result<(Judgement, std::collections::BTreeMap<String, Vec<u8>>)> {
+    with_limits(HUB_LIMITS, || {
+        judge_all(bytes, max_expanded).map(|(judgement, raw, _)| (judgement, raw))
+    })
+}
+
+/// The judgement, every entry of the archive, and the entries a signature
+/// covers.
+#[allow(clippy::type_complexity)]
+fn judge_all(
+    bytes: &[u8],
+    max_expanded: u64,
+) -> Result<(
+    Judgement,
+    std::collections::BTreeMap<String, Vec<u8>>,
+    std::collections::BTreeMap<String, Vec<u8>>,
+)> {
     use std::collections::BTreeMap;
 
     if bytes.len() as u64 > lim().bundle_bytes {
@@ -3671,7 +3697,7 @@ fn judge_parts(
         capabilities,
         provenance,
     };
-    Ok((judgement, project_entries))
+    Ok((judgement, raw, project_entries))
 }
 
 pub fn open_reader<R: Read + io::Seek>(reader: R) -> Result<OpenBundle> {

@@ -14,7 +14,7 @@
 //
 // The hub: `npx wrangler dev --local ... --var
 // KRATE_TEST_IDENTITIES:tok-alice=alice,...` in cloud/worker, after
-// scripts/build-hub-validator.sh (which also writes public/validator.wasm).
+// scripts/build-hub-validator.sh (which also writes player-dist/validator.wasm).
 import { createServer } from "node:http";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";

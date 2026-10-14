@@ -66,6 +66,9 @@ import { orgSigningRoute } from "./org-signing.js";
 import { orgDataRoute } from "./org-data.js";
 // Inventory, provenance and ownership (IC-954), after release control and review.
 import { inventoryRoute, provenanceArg } from "./org-inventory.js";
+// The browser Player (IC-956): the web pack made at publish, the route that
+// serves it behind /a/'s own checks, and the cross-origin-isolated page.
+import { playerPage, playerAsset, validatorFile, webPackRoute, ensureWebPack } from "./web-player.js";
 // The organisation store (IC-946), one SQLite-backed Durable Object per
 // organisation; wrangler.toml binds it as ORGS.
 export { Org };
@@ -92,6 +95,22 @@ function judgeBundle(bytes) {
 /// (IC-946).
 function readRevocations(bytes) {
   return callValidator("krate_revocations", bytes);
+}
+
+/// The component of a bundle exactly as the validator judged it, for the
+/// web pack (IC-956): `{ ok: true, bytes }` or `{ ok: false, problem }`.
+function judgedComponent(bytes) {
+  const v = validator();
+  const input = v.krate_alloc(bytes.length);
+  new Uint8Array(v.memory.buffer, input, bytes.length).set(bytes);
+  const out = v.krate_judged_component(input, bytes.length);
+  const length = new DataView(v.memory.buffer).getUint32(out, true);
+  const body = new Uint8Array(v.memory.buffer, out + 4, length).slice();
+  v.krate_free(out, 4 + length);
+  v.krate_free(input, bytes.length);
+  return body[0] === 1
+    ? { ok: true, bytes: body.subarray(1) }
+    : { ok: false, problem: new TextDecoder().decode(body.subarray(1)) };
 }
 
 function callValidator(name, bytes) {
@@ -693,6 +712,30 @@ export default {
       if (request.method === "DELETE" && pathname.startsWith("/blob/")) {
         return cors(await purgeBundle(request, pathname.slice(6), env));
       }
+      // The validator module as a file, for a browser tab that signs as an
+      // organisation's device (IC-958). It is the copy in the Player's
+      // assets, byte for byte the module the publish door imports.
+      if ((request.method === "GET" || request.method === "HEAD") && pathname === "/validator.wasm") {
+        return await validatorFile(request, url, env);
+      }
+      // The browser Player (IC-956): its page, cross-origin isolated, and
+      // the files it is made of. Not wrapped in CORS: nothing but this
+      // origin loads them.
+      if (request.method === "GET" && pathname.startsWith("/run/")) {
+        const page = await playerPage(request, url, env);
+        if (page) return page;
+      }
+      if (request.method === "GET" && pathname.startsWith("/player/")) {
+        return await playerAsset(request, url, env);
+      }
+      if (request.method === "GET" && /^\/a\/[0-9a-f]{64}\/web$/.test(pathname)) {
+        const hash = pathname.slice(3, 67);
+        return cors(await webPackRoute(env, hash, {
+          lookup: (h) => bundleObject(h, env),
+          access: (object, slug) => privateRefusal(request, hash, object, slug, env),
+          judgedComponent,
+        }));
+      }
       // HEAD answers exactly like GET, minus the body (K-798). Link
       // checkers and chat unfurlers ask with HEAD first, and a 404 there
       // made every shared app link read as dead.
@@ -896,7 +939,7 @@ async function publish(request, env) {
     return text(`not a valid .krate bundle: ${judged.problem}`, 422);
   }
   const hash = await sha256Hex(body);
-  return admitJudged(env, {
+  const admitted = await admitJudged(env, {
     identity,
     judgement: judged.judgement,
     hash,
@@ -904,6 +947,11 @@ async function publish(request, env) {
     fields: listingFields(request),
     store: () => storeBundle(env, hash, body),
   });
+  // What a browser tab runs for this release, made once, now (IC-956).
+  // Best effort: a component the transpiler refuses still publishes, and
+  // opens in Krate; the Player says so.
+  if (admitted.status === 200) await ensureWebPack(env, hash, body, judgedComponent);
+  return admitted;
 }
 
 /// What a publisher says about a listing, from the publish door's headers.
@@ -3096,7 +3144,11 @@ async function newSession(env, userId) {
 /// and an old page mid-deploy must still get a person signed in.
 function signInStart(from, nonce, appNonce) {
   const ok = (v) => (/^[A-Za-z0-9_-]{16,64}$/.test(v || "") ? v : "");
-  return { from: from === "app" ? "app" : "web", nonce: ok(nonce), app_nonce: ok(appNonce) };
+  // `player:<hash>`: the browser Player asking for an organisation's app it
+  // is about to open in this tab (IC-956). It comes back to that app's page
+  // on this hub, never anywhere a caller names.
+  const player = /^player:[0-9a-f]{64}$/.test(from || "") ? from : null;
+  return { from: from === "app" ? "app" : player || "web", nonce: ok(nonce), app_nonce: ok(appNonce) };
 }
 
 /// What the company sign-in routes (org-sso.js) borrow from here: the same
@@ -3126,6 +3178,15 @@ function deliver(start, user, token) {
   });
   if (start.nonce) hand.set("nonce", start.nonce);
   if (start.app_nonce) hand.set("app_nonce", start.app_nonce);
+  // The Player's own page on this hub (IC-956): a path, so it can only ever
+  // be this hub's page for that app. The page takes the session only when
+  // its own nonce comes back, as krate.tech/login/done does (K-909).
+  if (typeof start.from === "string" && start.from.startsWith("player:")) {
+    return new Response(null, {
+      status: 302,
+      headers: { location: `/run/${start.from.slice("player:".length)}#${hand.toString()}`, "cache-control": "no-store" },
+    });
+  }
   const suffix = start.from === "app" ? "?app=1" : "";
   return Response.redirect(`https://krate.tech/login/done/${suffix}#${hand.toString()}`, 302);
 }
@@ -7522,6 +7583,10 @@ async function orgCandidate(request, env, slug, principals, path, base) {
   }
   const stored = await storeBundle(env, digest, body, { org: slug });
   if (stored.problem) return json({ error: "store-failed", message: stored.problem }, 500);
+  // The web pack for this candidate (IC-956), so an approved release opens
+  // in a member's tab at once. Stored beside the bytes; served only behind
+  // the same organisation checks as the bytes.
+  await ensureWebPack(env, digest, body, judgedComponent);
   return orgAnswer(await orgAsk(env, slug, { op: "add-candidate", principals, args, idempotency }));
 }
 
@@ -7558,27 +7623,18 @@ async function fetchPrivate(request, url, hash, object, slug, big, env) {
       },
     });
   }
-  const identity = await verifyGitHub(request, env);
-  const principals = principalsOf(identity);
-  if (!principals.length) {
-    // A copied URL with no session: refused without asking the store, so
-    // it is neither audited nor able to flood the audit.
-    await drop();
-    return anonymousOrgRefusal(request, env, 403, slug);
-  }
   // Accept: application/json is the site's open page asking what this is
   // (Addendum 2, item 6): the same checks, an answer with no bytes. The CLI
   // and every download send no such Accept and get the bytes.
   const look = accept.includes("application/json");
-  if (await refusalsExhausted(env, principals)) {
-    await drop();
-    return rateLimitedAnswer();
-  }
-  const answer = env.ORGS
-    ? await orgAsk(env, slug, { op: look ? "view" : "download", principals, args: { digest: hash } })
-    : { status: 403, body: { error: "not-a-member", message: "organisations are not switched on on this hub" } };
+  const checked = await privateAnswer(request, hash, slug, env, look);
   const noStore = { "cache-control": "private, no-store", vary: "accept, authorization" };
-  if (look && answer.status === 200) {
+  if (checked.refused) {
+    await drop();
+    return checked.refused;
+  }
+  const answer = checked.answer;
+  if (look) {
     await drop();
     return new Response(
       JSON.stringify({
@@ -7591,28 +7647,6 @@ async function fetchPrivate(request, url, hash, object, slug, big, env) {
       { headers: { "content-type": "application/json", ...noStore } },
     );
   }
-  if (answer.status !== 200) {
-    await drop();
-    await noteRefusal(env, principals);
-    // A removed member already knows which organisation sent the app, so
-    // that refusal names it; anyone else holding a copied link learns no
-    // organisation at all (R8) -- the store's own words for a stranger name
-    // the slug, so they are replaced here.
-    const reason = answer.body && answer.body.error;
-    const body =
-      reason === "removed"
-        ? { ...answer.body, org: slug }
-        : reason === "not-a-member"
-          ? { error: reason, message: "this app was not shared with you -- ask whoever sent the link to invite you" }
-          : reason === "digest-mismatch"
-            ? { error: reason, message: "this app is not released yet" }
-            : answer.body;
-    // A withdrawn release is gone, not forbidden (IC-949, R): 410.
-    return new Response(JSON.stringify(body), {
-      status: reason === "release-withdrawn" ? 410 : 403,
-      headers: { "content-type": "application/json", ...noStore },
-    });
-  }
   const name = slugOf(answer.body.name || "") || hash.slice(0, 12);
   return new Response(request.method === "HEAD" ? null : object.body, {
     headers: {
@@ -7623,6 +7657,82 @@ async function fetchPrivate(request, url, hash, object, slug, big, env) {
       ...noStore,
     },
   });
+}
+
+/// The organisation's answer for one person and one private release: who
+/// is asking (their own session), the refused-attempt limit, and the
+/// store's decision. `{ answer }` when the store said yes, `{ refused }`
+/// with the Response to send otherwise. One function for /a/<hash> and the
+/// Player's /a/<hash>/web (IC-956), so a tab gets exactly the checks a
+/// download gets -- and an open in a tab is audited as the download it is.
+async function privateAnswer(request, hash, slug, env, look) {
+  const identity = await verifyGitHub(request, env);
+  const principals = principalsOf(identity);
+  if (!principals.length) {
+    // A copied URL with no session: refused without asking the store, so
+    // it is neither audited nor able to flood the audit.
+    return { refused: await anonymousOrgRefusal(request, env, 403, slug) };
+  }
+  if (await refusalsExhausted(env, principals)) {
+    return { refused: rateLimitedAnswer() };
+  }
+  const answer = env.ORGS
+    ? await orgAsk(env, slug, { op: look ? "view" : "download", principals, args: { digest: hash } })
+    : { status: 403, body: { error: "not-a-member", message: "organisations are not switched on on this hub" } };
+  if (answer.status === 200) return { answer };
+  await noteRefusal(env, principals);
+  // A removed member already knows which organisation sent the app, so
+  // that refusal names it; anyone else holding a copied link learns no
+  // organisation at all (R8) -- the store's own words for a stranger name
+  // the slug, so they are replaced here.
+  const reason = answer.body && answer.body.error;
+  const body =
+    reason === "removed"
+      ? { ...answer.body, org: slug }
+      : reason === "not-a-member"
+        ? { error: reason, message: "this app was not shared with you -- ask whoever sent the link to invite you" }
+        : reason === "digest-mismatch"
+          ? { error: reason, message: "this app is not released yet" }
+          : answer.body;
+  // A withdrawn release is gone, not forbidden (IC-949, R): 410.
+  return {
+    refused: new Response(JSON.stringify(body), {
+      status: reason === "release-withdrawn" ? 410 : 403,
+      headers: { "content-type": "application/json", "cache-control": "private, no-store", vary: "accept, authorization" },
+    }),
+  };
+}
+
+/// The Player's private-release check: the refusal Response, or null.
+async function privateRefusal(request, hash, object, slug, env) {
+  const checked = await privateAnswer(request, hash, slug, env, false);
+  if (!checked.refused) return null;
+  try {
+    if (object.body && typeof object.body.cancel === "function") await object.body.cancel();
+  } catch (_) {}
+  return checked.refused;
+}
+
+/// The stored bundle a content address names, as /a/<hash> finds it: a
+/// takedown answers for it, the big tier's bytes are found by their record,
+/// and an organisation's private release says whose it is.
+/// `{ response }` when there is nothing to serve, else
+/// `{ object, privateOrg, big }`.
+async function bundleObject(hash, env) {
+  if (!/^[0-9a-f]{64}$/.test(hash)) return { response: json({ error: "not-found" }, 404) };
+  const takedown = await env.APPS.get(`takedown:${hash}`);
+  if (takedown) return { response: takedownResponse(takedown, env) };
+  let object = await env.BUNDLES.get(hash);
+  let big = false;
+  if (!object) {
+    const blob = await env.APPS.get(`bigkey:${hash}`);
+    if (blob) {
+      object = await env.BUNDLES.get(blob);
+      big = Boolean(object);
+    }
+  }
+  if (!object) return { response: json({ error: "not-found" }, 404) };
+  return { object, privateOrg: (object.customMetadata && object.customMetadata.org) || null, big };
 }
 
 // The door's pieces, exported so a test can watch them work rather than

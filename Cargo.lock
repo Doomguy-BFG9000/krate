@@ -2457,7 +2457,12 @@ dependencies = [
  "js-sys",
  "krate-adapter-common",
  "krate-layout",
+ "krate-lowering",
+ "krate-manifest",
+ "krate-policy",
  "krate-runtime",
+ "serde",
+ "serde_json",
  "wasm-bindgen",
  "web-sys",
 ]
@@ -2588,6 +2593,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "krate-lowering"
+version = "0.5.5"
+dependencies = [
+ "krate-adapter-common",
+ "krate-layout",
+]
+
+[[package]]
 name = "krate-manifest"
 version = "0.5.5"
 dependencies = [
@@ -2713,6 +2726,7 @@ dependencies = [
  "krate-gpu-names",
  "krate-http",
  "krate-layout",
+ "krate-lowering",
  "krate-manifest",
  "krate-orgkeys",
  "krate-policy",
@@ -2786,6 +2800,8 @@ dependencies = [
  "krate-bundle",
  "krate-orgkeys",
  "serde_json",
+ "sha2",
+ "wasmparser 0.244.0",
  "zeroize",
 ]
 

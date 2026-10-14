@@ -1,5 +1,0 @@
-/validator.wasm
-  Content-Type: application/wasm
-  Access-Control-Allow-Origin: *
-  Cache-Control: no-cache
-  Cross-Origin-Resource-Policy: cross-origin

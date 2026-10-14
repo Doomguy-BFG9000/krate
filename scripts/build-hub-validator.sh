@@ -36,8 +36,9 @@ RUSTFLAGS="${RUSTFLAGS:-} --cfg getrandom_backend=\"custom\"" \
 built=target/wasm32-unknown-unknown/release/krate_validator_wasm.wasm
 # The Worker imports one copy; the hub serves the other, byte for byte the
 # same, at /validator.wasm for a browser tab that signs as an
-# organisation's device (IC-958).
-for out in cloud/worker/src/validator.wasm cloud/worker/public/validator.wasm; do
+# organisation's device (IC-958). It lives in the Player's assets
+# (scripts/build-web-player.sh copies it there again after a rebuild).
+for out in cloud/worker/src/validator.wasm cloud/worker/player-dist/validator.wasm; do
   mkdir -p "$(dirname "$out")"
   cp "$built" "$out"
   printf 'wrote %s (%s bytes)\n' "$out" "$(wc -c < "$out" | tr -d ' ')"

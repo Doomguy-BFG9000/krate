@@ -43,8 +43,10 @@ const settle = () => new Promise((r) => setTimeout(r, 0));
   async function open(ua) {
     const doc = stubDocument([
       "taName", "taSize", "taShot", "theirApp", "pageHead", "galleryCard",
-      "taRow", "taGet", "openTitle", "openBody",
+      "taRow", "taGet", "taTab", "openTitle", "openBody",
     ]);
+    // As the page has them: the download shows, "Open in this tab" waits.
+    doc.els.taGet.hidden = false;
     const fetched = [];
     const fetch = async (url) => {
       fetched.push(url);
@@ -67,11 +69,17 @@ const settle = () => new Promise((r) => setTimeout(r, 0));
     "the link asks the hub for the bytes, so it cannot bounce back to this page");
   assert.match(mac.doc.taGet.textContent, /Weather/, "the button names the app");
   assert.match(mac.doc.openTitle.textContent, /Weather/, "the open step names the app too");
+  assert.equal(mac.doc.taTab.hidden, false, "a desktop browser can also open it in the tab (IC-956)");
+  assert.equal(mac.doc.taTab.href, `https://hub.krate.tech/run/${HASH}`, "the tab opens the hub's Player");
+  assert.equal(mac.doc.taGet.hidden, false, "the download stays the main way in on a desktop");
 
   const phone = await open("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)");
   assert.equal(phone.doc.theirApp.hidden, false, "a phone still sees what it was sent");
-  assert.equal(phone.doc.taRow.hidden, true, "a phone is not handed a file it cannot open");
-  console.log("ok  a shared link on a desktop browser offers the app itself (K-858)");
+  assert.equal(phone.doc.taGet.hidden, true, "a phone is not handed a file it cannot open");
+  assert.equal(phone.doc.taRow.hidden, false, "a phone is offered the app in the tab instead (IC-956)");
+  assert.equal(phone.doc.taTab.hidden, false, "the tab button shows on a phone");
+  assert.equal(phone.doc.taTab.className, "btn dark", "and it is the main button there");
+  console.log("ok  a shared link on a desktop browser offers the app itself (K-858), and the tab (IC-956)");
 }
 
 /* ---- K-865: the request that made an app is not its description ------

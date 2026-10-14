@@ -13,6 +13,10 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 krate-bundle = { path = "../bundle", default-features = false }
 serde_json = { workspace = true }
+# The browser Player's judgement names each core module of the judged
+# component by digest (IC-956).
+sha2 = "0.10.9"
+wasmparser.workspace = true
 # ring pulls getrandom, which on wasm32-unknown-unknown wants either a
 # JavaScript backend (wasm-bindgen imports the Worker cannot satisfy) or a
 # custom one. Verification never draws randomness, so the custom backend

@@ -16,6 +16,7 @@ members = [
     "crates/adapter-windows",
     "crates/bindings-rust",
     "crates/layout",
+    "crates/lowering",
     "crates/bundle",
     "crates/lease",
     "crates/orgkeys",

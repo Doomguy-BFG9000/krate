@@ -1,0 +1,116 @@
+/* The Krate Player page (IC-956): the site's own tokens and parts
+   (docs/landing/kit/site.css), kept to what this page uses. Served from the
+   hub, which cross-origin isolation keeps from loading the site's files. */
+@font-face { font-family: "Geist"; src: url("/player/geist-var-latin.woff2") format("woff2"); font-weight: 100 900; font-display: swap; }
+:root {
+  color-scheme: light;
+  --bg: #fbfbfd; --soft: #f5f5f7; --s1: #fff; --s2: #f5f5f7; --s3: #ececf0;
+  --ink: #1c1c1e; --ink-2: #52525b; --ink-3: #8a8a92; --ink-4: #b4b4bb; --mute: #6b6b72;
+  --line: #ececee; --line-2: #e2e2e6; --hair: rgba(24,24,27,.07);
+  --accent: #3d6df0; --accent-soft: #edf2fe;
+  --green: #22a35a; --green-soft: #e8f8ee; --warn: #b7791f; --warn-soft: #fdf3e2;
+  --btn: #0d0d0d; --btn-h: #2b2b2b; --btn-ink: #fff;
+  --sh-1: 0 0 0 1px var(--hair), 0 1px 2px rgba(24,24,27,.04), 0 8px 24px -14px rgba(24,24,27,.14);
+  --sh-2: 0 0 0 1px var(--hair), 0 24px 50px -28px rgba(24,24,27,.28);
+  --ease: cubic-bezier(.22,1,.36,1);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) { color-scheme: dark;
+    --bg: #08080a; --soft: #111113; --s1: #18181b; --s2: #202024; --s3: #2a2a2f;
+    --ink: #f4f4f5; --ink-2: #a1a1aa; --ink-3: #7c7c85; --ink-4: #4e4e56; --mute: #8e8e96;
+    --line: #232327; --line-2: #2c2c31; --hair: rgba(255,255,255,.08);
+    --accent: #6f94ff; --accent-soft: rgba(111,148,255,.13);
+    --green: #4ade80; --green-soft: rgba(74,222,128,.12); --warn: #f0b860; --warn-soft: rgba(240,184,96,.12);
+    --btn: #f4f4f5; --btn-h: #fff; --btn-ink: #08080a;
+    --sh-1: 0 0 0 1px var(--hair), 0 10px 30px -16px rgba(0,0,0,.7);
+    --sh-2: 0 0 0 1px var(--hair), 0 30px 70px -30px rgba(0,0,0,.85);
+  }
+}
+:root[data-theme="dark"] { color-scheme: dark;
+  --bg: #08080a; --soft: #111113; --s1: #18181b; --s2: #202024; --s3: #2a2a2f;
+  --ink: #f4f4f5; --ink-2: #a1a1aa; --ink-3: #7c7c85; --ink-4: #4e4e56; --mute: #8e8e96;
+  --line: #232327; --line-2: #2c2c31; --hair: rgba(255,255,255,.08);
+  --accent: #6f94ff; --accent-soft: rgba(111,148,255,.13);
+  --green: #4ade80; --green-soft: rgba(74,222,128,.12); --warn: #f0b860; --warn-soft: rgba(240,184,96,.12);
+  --btn: #f4f4f5; --btn-h: #fff; --btn-ink: #08080a;
+  --sh-1: 0 0 0 1px var(--hair), 0 10px 30px -16px rgba(0,0,0,.7);
+  --sh-2: 0 0 0 1px var(--hair), 0 30px 70px -30px rgba(0,0,0,.85);
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; }
+body { background: var(--bg); color: var(--ink); font: 400 16px/1.55 Geist, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; letter-spacing: -.006em; -webkit-font-smoothing: antialiased; display: flex; flex-direction: column; overflow: hidden; }
+a { color: inherit; text-decoration: none; }
+button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; }
+img { display: block; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 6px; }
+[hidden] { display: none !important; }
+
+.bar { flex: none; height: 56px; display: flex; align-items: center; gap: 14px; padding: 0 16px; border-bottom: 1px solid var(--line); background: var(--bg); }
+.brand { display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 16px; letter-spacing: -.035em; }
+.who { min-width: 0; flex: 1; display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--ink-2); }
+.who #whoName { font-weight: 500; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.who .dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--green); box-shadow: 0 0 0 4px var(--green-soft); }
+.who .sig { flex: none; font-size: 12.5px; color: var(--ink-3); }
+.acts { margin-left: auto; display: flex; gap: 6px; }
+
+.btn { height: 40px; padding: 0 18px; border-radius: 999px; display: inline-flex; align-items: center; justify-content: center; font-size: 14.5px; font-weight: 500; white-space: nowrap; transition: background .2s, box-shadow .2s; }
+.btn.small { height: 32px; padding: 0 12px; font-size: 13.5px; }
+.btn.dark { color: var(--btn-ink); background: var(--btn); }
+.btn.dark:hover { background: var(--btn-h); }
+.btn.ghost { color: var(--ink); box-shadow: inset 0 0 0 1px var(--line-2); }
+.btn.ghost:hover { box-shadow: inset 0 0 0 1px var(--ink-4); }
+
+#stage { flex: 1; min-height: 0; position: relative; display: flex; align-items: center; justify-content: center; padding: 16px; overflow: auto; }
+.card { width: min(440px, 100%); border-radius: 22px; padding: 26px 24px; background: var(--s1); box-shadow: var(--sh-2); }
+.card h1 { font-size: 21px; line-height: 1.25; letter-spacing: -.025em; font-weight: 600; }
+.card .say { margin-top: 8px; font-size: 15px; color: var(--mute); }
+.card .stack { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 18px; }
+.card details { margin-top: 12px; font-size: 13px; color: var(--ink-3); }
+.card details pre { margin-top: 6px; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.45 ui-monospace, "SF Mono", Menlo, monospace; }
+#loading { display: flex; align-items: center; gap: 14px; width: auto; padding: 18px 22px; box-shadow: var(--sh-1); }
+#loading .say { margin: 0; color: var(--ink-2); }
+.spin { width: 18px; height: 18px; border-radius: 50%; border: 2px solid var(--line-2); border-top-color: var(--accent); animation: spin .8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .spin { animation: none; } }
+
+/* the permission window, drawn the way Krate draws it (docs/open) */
+#consent { padding: 0; background: none; box-shadow: none; width: min(400px, 100%); }
+.perm { border-radius: 20px; padding: 20px 20px 18px; background: var(--s1); box-shadow: var(--sh-2); }
+.perm .ph2 { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+.perm .ph2 img { width: 26px; height: 26px; }
+.perm h1 { font-size: 16px; font-weight: 500; letter-spacing: -.01em; overflow-wrap: anywhere; }
+.rows { list-style: none; }
+.rows li { display: flex; gap: 10px; align-items: flex-start; padding: 9px 0; border-top: 1px solid var(--line); font-size: 14px; }
+.rows li:first-child { border-top: 0; }
+.rows li i { flex: none; width: 18px; height: 18px; margin-top: 2px; border-radius: 50%; display: grid; place-items: center; background: var(--green); color: #fff; }
+.rows li i svg { width: 10px; height: 10px; }
+.rows li span b { display: block; font-weight: 500; color: var(--ink); }
+.rows li span em { font-style: normal; font-size: 12.5px; color: var(--ink-3); }
+.rows li.away i { background: var(--s3); color: var(--ink-3); }
+.rows li.away span b { color: var(--ink-3); }
+.perm .note { margin-top: 10px; font-size: 13px; color: var(--ink-2); }
+.perm .note:empty { display: none; }
+.row-acts { margin-top: 16px; display: flex; justify-content: flex-end; gap: 8px; }
+.row-acts .btn { height: 36px; padding: 0 14px; font-size: 14px; }
+.fine { margin-top: 12px; font-size: 12.5px; color: var(--ink-3); text-align: center; }
+
+.app { width: 100%; height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; }
+.frame { position: relative; flex: none; border-radius: 14px; overflow: hidden; box-shadow: var(--sh-2); background: var(--s1); }
+.frame canvas { display: block; touch-action: none; outline: none; }
+.ime { position: absolute; left: 0; top: 0; width: 1px; height: 1px; opacity: 0; pointer-events: none; resize: none; border: 0; }
+.term { width: min(760px, 100%); max-height: 100%; overflow: auto; padding: 16px 18px; border-radius: 14px; background: var(--s1); box-shadow: var(--sh-2); font: 13px/1.5 ui-monospace, "SF Mono", Menlo, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+.term .err { color: var(--warn); }
+.ended { font-size: 14px; color: var(--ink-2); }
+
+.notice { position: absolute; left: 50%; bottom: 16px; transform: translateX(-50%); width: min(560px, calc(100% - 32px)); display: flex; align-items: center; gap: 12px; padding: 10px 10px 10px 16px; border-radius: 16px; background: var(--s1); box-shadow: var(--sh-2); font-size: 14px; color: var(--ink-2); }
+.notice #noticeWords { flex: 1; min-width: 0; }
+.notice .x { flex: none; width: 32px; height: 32px; border-radius: 50%; font-size: 18px; color: var(--ink-3); }
+.notice .x:hover { background: var(--s2); }
+
+@media (max-width: 560px) {
+  .bar { padding: 0 12px; gap: 10px; }
+  .who .sig { display: none; }
+  #inKrate { display: none; }
+  .card .stack .btn { width: 100%; }
+  .notice { flex-wrap: wrap; }
+}

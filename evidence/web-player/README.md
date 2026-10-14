@@ -1,4 +1,187 @@
-# The web Player, Phase 0: a Krate app in a browser tab
+# The web Player: a Krate app in a browser tab
+
+IC-956. Phase 1 (this section) builds on the Phase 0 spike (below). Contract:
+`Plan/org-pilot/ORG-FIRST-PLAN.md`, "IC-956 contract" and "IC-956 Phase 0
+result". Measured 2026-10-15 on this Mac (M-series, macOS 27.0 beta),
+headless Playwright 1.63.0 browsers only, against the real hub Worker code
+run in Node (`crates/adapter-web/player/hub-local.mjs`). Raw:
+`phase1.json`; screenshots: `phase1/`.
+
+## Phase 1: what runs
+
+A link `https://hub.krate.tech/run/<hash>` opens the app in the tab, nothing
+installed. In order:
+
+1. **The page** (`/run/<hash>`, served by the hub Worker with COOP
+   same-origin + COEP require-corp + a CSP that allows scripts only from the
+   hub and the Blob the glue becomes) fetches `/a/<hash>/web`: the bundle and
+   its web pack in one answer, behind exactly `/a/<hash>`'s checks.
+2. **The checks, in the tab**: the bytes hash to the link's address; the
+   bundle passes `crates/validator-wasm` (the hub's own validator, now with
+   `krate_judge_for_tab`), signature included -- a bundle changed after
+   signing is refused; every core module about to run is byte-for-byte one
+   of the judged component's own modules (the validator lists their
+   SHA-256), so whoever served the files, what runs is what was judged.
+3. **Consent** in the site's design, with the desktop's own words
+   (`Capability::plain`) and grants (`krate-policy`). A capability a tab
+   cannot give is greyed with "works in Krate on your computer"; a required
+   one turns the button into "Open in Krate". An app that asks for nothing
+   beyond a window opens with no screen, as on desktop.
+4. **The app** runs in a Web Worker on the browser's own engine (jco glue +
+   its core modules). `run()` blocks for real: `events.wait` on
+   `Atomics.wait` over an input ring; async host work (fetch, IndexedDB,
+   the clipboard, open-url) goes to the page over a **bridge**
+   (`web/bridge.js`): the worker posts the call and blocks, the page answers
+   into shared memory, in chunks of 1 MiB so an answer is never bounded by
+   the buffer. Frames go to the page through a shared frame buffer; the
+   page wakes on a shared counter with `Atomics.waitAsync` (the worker's
+   `frame` message arrives ~9 ms late in Chromium, measured: the Phase 0
+   p95 note).
+
+**The `ui` host is the desktop's.** The runtime's tree-to-widgets step moved
+out of `crates/runtime/src/phase3_gui_host.rs` into a new crate,
+`crates/lowering` (layout with text measurement, placements, scroll
+offsets and their clamp, press-to-focus, Enter/Space activation, the node
+rules, and the `canvas2d` rasterizer), which the runtime now calls and the
+Player compiles to wasm32 (`crates/adapter-web`, 3.29 MB / 1.18 MB gzip).
+Windows, trees, focus and the event queue are the `DraftUiAdapter` the
+desktop runs headless; the pixels are the painter with vector text (parley +
+vello_cpu) in Geist Regular, bundled (OFL 1.1). Light and dark follow the
+browser; a window takes the tab's room up to what the app asked for, and an
+app that never asked its canvas size draws in the size it asked for.
+
+**Hosts in a tab**: io (stdout, stderr, args from `?arg=`, log; stdin
+closed), random, time (clock, monotonic, sleep), locale (Intl),
+`net/http-client` (get, fetch, begin/poll/cancel) through the bridge with
+the desktop's `net.connect` judgement unchanged (`parse_url_endpoint`, the
+capability check, `check_app_http_header`, the 1 MiB response bound),
+`redirect: 'manual'` and `credentials: 'omit'`; `store/kv` under the
+desktop store's rules (`krate_adapter_common::kv`, now shared) over
+IndexedDB, written through before the app reads its own write back; `ui`
+window, tree, image, events, pointer, text-entry, screen, appearance,
+clipboard (navigator.clipboard), launcher (open-url); `gfx/canvas2d` and
+`canvas-images` (the desktop rasterizer). **Everything else** answers from a
+refusal table the hub made at publish (each imported function's own error
+case, e.g. `unsupported("... Open the app in Krate to use it.")`, or a
+neutral answer where the function has no error channel), and the page shows
+the person one line: "<App> wanted to use <thing>, which works in Krate on
+your computer, not in a tab yet. [Open in Krate]". `store.org` is one of
+these: the browser keyring (crates/orgkeys as a browser device) had not
+landed on this base.
+
+**The hub** (`cloud/worker/src/web-player.js`): at publish and at an
+organisation's candidate upload, the judged component goes through
+`crates/web-transpile` -- js-component-bindgen 2.12.0, the engine of jco
+1.35.0, compiled to wasm with no imports like the validator -- and the pack
+is stored at `web/jcb-2.12.0/<hash>` in R2, once (idempotent; a release
+published earlier gets its pack on its first open). `/a/<hash>/web` serves
+it behind `/a/`'s own takedown and organisation checks (refactored into one
+`privateAnswer` both use, so an open in a tab is audited as the download it
+is). A private app's tab signs in on the hub (`from=player:<hash>`) and
+comes back to `/run/<hash>#token...` with its own nonce, as
+`krate.tech/login/done` does. **The door**: `krate.tech/open/?a=<hash>`
+offers "Open in this tab" beside the download (the primary button on a
+phone).
+
+## Phase 1: what was proved (`phase1.mjs`, 58 of 59 checks; Firefox did not start)
+
+In Chromium 153 and WebKit 26.6 each:
+
+- krate-curl (CLI): asks in the desktop words; fetches through the bridge
+  and prints the body; a 302 is not followed (the echo server saw
+  `/redirect` and never `/elsewhere`); a host it was not granted is refused
+  before anything leaves the tab (`permission denied`, nothing reached the
+  server).
+- krate-hello-gui: the button, the checkbox, typing into the field and
+  Backspace, a list row chosen, the scroll area scrolled by the wheel,
+  dark mode followed, Close asked the app (which reported `typed:hi krat`),
+  no page errors; at 375 wide the window fits with no sideways scroll.
+- krate-bigscroll: 500 rows scrolled to the last one, and one more turn
+  moves nothing (needed a layout fix, K-1070, below).
+- krate-convert: every preset button answers.
+- krate-checklist (canvas2d, store.kv, text input): typed "Buy bread" +
+  Enter, saved through the store to IndexedDB; reopened in a new tab with
+  the same storage, it has the four items.
+- Guards: a bundle changed after signing refused ("This app was changed
+  after it was signed"); bytes that are not the ones the link names refused
+  ("changed on the way"); a required camera capability refused in words
+  before running, the button "Open in Krate"; store.org refused at the call
+  in words, the app told `unsupported`, the page says so; a signed app says
+  "Signed by acme".
+- A private organisation release: signed out, the tab asks for sign-in that
+  starts on the hub and comes back to this app; a member (dan) opens it; a
+  stranger is refused "This app was not shared with you" and learns no
+  organisation.
+
+Sabotage, each run and watched failing, then restored: tampered bundle
+accepted (signature check removed), redirect followed (`redirect:
+'follow'`), refused capability allowed (blocked list emptied), swapped bytes
+accepted (hash check removed) -- each failed exactly its check; in Rust, the
+`net.connect` check removed and camera marked tab-capable failed both
+`web_policy` tests; the hub's private check skipped failed the
+private-release hub test; the scroll minimum removed failed the layout test.
+
+## Phase 1 numbers
+
+Median of 10 cold runs each (new browser context, no HTTP cache), from
+navigation start. Click-to-frame: pointerdown to the putImageData that
+showed the change, 20 checkbox clicks; "painted" is the worker's half (the
+frame written to shared memory). The machine was shared with other agents'
+builds (load average 11 at the start, 9 at the end), so absolute numbers carry noise.
+
+| | Chromium 153 | WebKit 26.6 |
+|---|---|---|
+| hello-gui link to first frame (no consent) | 130 (119-192) ms | 237 (194-290) ms |
+| krate-curl link to consent shown | 81 (76-104) ms | 202 (163-241) ms |
+| krate-curl Allow to first output (fetch included) | 55 (48-58) ms | 21 (18-25) ms |
+| checklist Allow to first canvas frame | 105 (95-124) ms | 55 (46-62) ms |
+| click to frame, median / p95 | 1.66 / 2.14 ms | 2.26 / 4.38 ms |
+| click to painted (worker), median / p95 | 1.64 / 2.11 ms | 2.16 / 4.28 ms |
+
+Sizes: Player module 3.29 MB (1.18 MB gzip, includes the 58 KB font and
+vello_cpu); validator 0.90 MB (0.34 MB); page scripts 70 KB (22 KB);
+hello-gui's web pack 0.30 MB. The hub Worker grows from about 2.6 MB to
+6.97 MB uploaded (1.80 MB gzip) with the 4.37 MB transpiler (1.13 MB gzip),
+under the 3 MB free-plan and 10 MB paid limits.
+
+## Phase 1: what does not work yet
+
+- **Firefox**: Playwright's Firefox still does not launch on this macOS 27
+  beta ("Failed to launch the browser process"); run `phase1.mjs` on a
+  released OS.
+- Interfaces answered "open it in Krate" in a tab: audio, camera, speech,
+  gpu, scene3d, video, files (fs), store.sql/secret/shared/group/org,
+  net/ws and sockets, resources/assets, dialogs, notifications, reminders,
+  print, menus, location, bluetooth, photos, share, sign-in, web-page.
+- Text entry is keyboard events plus a hidden field for phone keyboards;
+  no IME composition, no selection or caret drawing by the host.
+- No accessibility tree yet (`on_screen` is the start of one).
+- A private app asks for sign-in again on the hub: the krate.tech session
+  is on another origin.
+- Non-Latin text falls back to missing glyphs (one bundled Latin font).
+- A page on https cannot fetch a plain http address (mixed content); the
+  app is told so in words.
+- A redirect's target is hidden from a tab (`opaqueredirect`), so the app
+  gets an error in words, not the 3xx the desktop gives it.
+
+## Rebuild and re-measure (Phase 1)
+
+```
+sh crates/adapter-web/player/build.sh     # apps, validator, transpiler, Player, bundles, browsers
+cd crates/adapter-web/player
+node phase1.mjs ../../../evidence/web-player/phase1.json 10
+node open-door.mjs                        # the krate.tech /open/ button
+```
+
+To deploy (the founder's step): `scripts/build-hub-validator.sh`, then
+`scripts/build-web-player.sh` (writes `cloud/worker/src/transpiler.wasm`,
+which the Worker now imports, and `cloud/worker/player-dist/`, its
+`[assets]`), then `wrangler deploy`. The transpiler crate pins Rust 1.96
+(its `rust-toolchain.toml`; wasmtime-environ 49 needs it).
+
+---
+
+## Phase 0: the measured spike
 
 IC-956 Phase 0, the measured spike (contract: `Plan/org-pilot/ORG-FIRST-PLAN.md`,
 "IC-956 contract"). Question: can a Krate app open in a tab in about a second
@@ -217,7 +400,12 @@ the interpreter's cost. Running on the browser's engine is the better road.
   builds it for wasm32 in CI. Fixed here; the engine probe moved behind an
   `engine-probe` feature so the painter builds without wasmtime.
 
-## Rebuild and re-measure
+## Rebuild and re-measure (Phase 0)
+
+Phase 1 replaced the Phase 0 pages that drove the spike's painter
+(`host.js`, `gui-worker.*`, `gui-jspi.html`, `cli.html`, `smoke.mjs`,
+`measure.mjs`); they are in git at 5f8920291. The isolation probe and the
+pulley comparison below still run as they were.
 
 ```
 sh crates/adapter-web/player/build.sh          # apps, jco glue, painter, pulley probe, browsers

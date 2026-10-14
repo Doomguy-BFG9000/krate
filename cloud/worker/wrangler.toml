@@ -21,6 +21,20 @@ globs = ["**/*.wasm"]
 fallthrough = true
 account_id = "1ded170dc582113e578faac5034be4ce"
 
+# The browser Player (IC-956): the page /run/<hash> serves and the files it
+# loads, built by scripts/build-web-player.sh (run it before deploying; it
+# also writes src/transpiler.wasm, which the publish door imports). The
+# Worker runs first for every request and serves these itself, so each one
+# carries the cross-origin-isolation headers the app's worker needs
+# (src/web-player.js) and nothing outside /run/, /player/ and
+# /validator.wasm changes. /validator.wasm is the same module the publish
+# door imports, for a krate.tech tab that signs as an organisation's device
+# (IC-958); scripts/build-hub-validator.sh writes it here too.
+[assets]
+directory = "./player-dist"
+binding = "ASSETS"
+run_worker_first = true
+
 [[r2_buckets]]
 binding = "BUNDLES"
 bucket_name = "krate-bundles"
@@ -134,10 +148,3 @@ class_name = "Org"
 tag = "v3-orgs"
 new_sqlite_classes = ["Org"]
 
-# The same validator module, served as a file at /validator.wasm for a
-# browser tab that signs as an organisation owner's device (IC-958). The
-# build script writes public/validator.wasm beside src/validator.wasm;
-# public/_headers lets krate.tech's pages fetch it. Only that file and
-# _headers are there, so every other path still reaches the Worker.
-[assets]
-directory = "./public"

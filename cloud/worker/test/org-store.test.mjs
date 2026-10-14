@@ -392,7 +392,9 @@ test("a retried candidate upload with its key stores nothing twice", async () =>
   await acme(env);
   let puts = 0;
   const put = env.BUNDLES.put;
-  env.BUNDLES.put = (...a) => ((puts += 1), put(...a));
+  // Puts of the bundle itself; the Player's web pack (web/<tag>/<hash>,
+  // IC-956) is made once beside it, and only on the first upload.
+  env.BUNDLES.put = (...a) => ((puts += String(a[0]).startsWith("web/") ? 0 : 1), put(...a));
   const bytes = fixture("candidate-v1.krate");
   const first = await call(env, "carol", "POST", "/orgs/acme/candidates", { bytes, key: "up-1" });
   const again = await call(env, "carol", "POST", "/orgs/acme/candidates", { bytes, key: "up-1" });

@@ -1,0 +1,538 @@
+{
+  "checks": [
+    {
+      "engine": "chromium",
+      "name": "curl: the consent screen asks in the desktop words",
+      "ok": true
+    },
+    {
+      "engine": "chromium",
+      "name": "curl: fetches through the bridge and prints the body",
+      "ok": true,
+      "detail": {
+        "out": "hello from the test server\n",
+        "exit": 0
+      }
+    },
+    {
+      "engine": "chromium",
+      "name": "curl: a redirect is not followed",
+      "ok": true,
+      "detail": {
+        "asked": [
+          "/redirect"
+        ],
+        "out": "krate-curl: fetch failed"
+      }
+    },
+    {
+      "engine": "chromium",
+      "name": "curl: a host the person did not grant is refused before anything is sent",
+      "ok": true,
+      "detail": {
+        "out": "krate-curl: permission denied",
+        "exit": 5
+      }
+    },
+    {
+      "engine": "chromium",
+      "name": "hello-gui: opens with no consent (it asks for nothing beyond a window)",
+      "ok": true
+    },
+    {
+      "engine": "chromium",
+      "name": "hello-gui: the button answers",
+      "ok": true
+    },
+    {
+      "engine": "chromium",
+      "name": "hello-gui: the checkbox ticks",
+      "ok": true
+    },
+    {
+      "engine": "chromium",
+      "name": "hello-gui: typing reaches the focused field",
+      "ok": true
+    },
+    {
+      "engine": "chromium",
+      "name": "hello-gui: Backspace deletes",
+      "ok": true
+    },
+    {
+      "engine": "chromium",
+      "name": "hello-gui: a list row is chosen",
+      "ok": true
+    },
+    {
+      "engine": "chromium",
+      "name": "hello-gui: the scroll area scrolls under the wheel",
+      "ok": true,
+      "detail": {
+        "before": 108,
+        "after": 68
+      }
+    },
+    {
+      "engine": "chromium",
+      "name": "hello-gui: follows the browser into dark",
+      "ok": true,
+      "detail": {
+        "corner": 56
+      }
+    },
+    {
+      "engine": "chromium",
+      "name": "hello-gui: Close asks the app, and it reports what was typed",
+      "ok": true,
+      "detail": {
+        "out": "typed:hi krat\nselected:pick beta\n",
+        "exit": 0
+      }
+    },
+    {
+      "engine": "chromium",
+      "name": "hello-gui: no page errors",
+      "ok": true,
+      "detail": []
+    },
+    {
+      "engine": "chromium",
+      "name": "bigscroll: the wheel reaches the last row and stops there",
+      "ok": true,
+      "detail": {
+        "firstRowBefore": 48,
+        "firstRowAfter": -18484,
+        "lastRow": "Row 500",
+        "bottom": 506,
+        "clipBottom": 506,
+        "afterOneMore": 478
+      }
+    },
+    {
+      "engine": "chromium",
+      "name": "convert: every preset button (4) answers",
+      "ok": true,
+      "detail": {
+        "out": "celsius:-40"
+      }
+    },
+    {
+      "engine": "chromium",
+      "name": "checklist: typed item saved through the store to the browser (IndexedDB)",
+      "ok": true,
+      "detail": "[x] Buy milk\n[ ] Write the pitch\n[ ] Ship the demo\n[ ] Buy bread\n"
+    },
+    {
+      "engine": "chromium",
+      "name": "checklist: no page errors",
+      "ok": true,
+      "detail": []
+    },
+    {
+      "engine": "chromium",
+      "name": "checklist: reopened, it has the saved items",
+      "ok": true,
+      "detail": {
+        "out": "items:4"
+      }
+    },
+    {
+      "engine": "chromium",
+      "name": "camera: a capability with no browser equivalent is refused in words before running",
+      "ok": true,
+      "detail": " “krate-hello-gui” wants to: use your cameraProof: a capability a tab cannot give - works in Krate on your computer krate-hello-gui needs use your camera, which works in Krate on your computer, not in a tab yet. Cancel O"
+    },
+    {
+      "engine": "chromium",
+      "name": "store.org in a tab answers the app unsupported(\"...open it in Krate\") and tells the person on the page",
+      "ok": true,
+      "detail": {
+        "out": "put n1 error=unsupported",
+        "notice": "orgstore-probe wanted to use your team's shared data, which works in Krate on your computer, not in a tab yet.\n    Open in Krate\n    ×"
+      }
+    },
+    {
+      "engine": "chromium",
+      "name": "a bundle changed after signing is refused in the tab",
+      "ok": true,
+      "detail": {
+        "title": "This app was changed after it was signed",
+        "words": "It was not opened: a signed app that no longer matches its signature could be anyone’s.",
+        "detail": "tampered: this app was changed after it was signed:\n  - code.wasm (component) was changed after signing"
+      }
+    },
+    {
+      "engine": "chromium",
+      "name": "bytes that are not the ones the link names are refused",
+      "ok": true,
+      "detail": {
+        "title": "This app was changed on the way",
+        "words": "What arrived is not the app the link names, so it was not opened.",
+        "detail": "expected a67f071dd1341fc9a328245d1b99b1b81befc7fb87785777834eb5cdaa059630\nreceived 106c4b26e8c4364b26ae003f9370fef5d1df4ce9be51917c564ab5ca20133fa4"
+      }
+    },
+    {
+      "engine": "chromium",
+      "name": "a signed app opens and says who signed it",
+      "ok": true,
+      "detail": {
+        "sig": "valid",
+        "frames": 1
+      }
+    },
+    {
+      "engine": "chromium",
+      "name": "org app: signed out, the tab asks for sign-in",
+      "ok": true,
+      "detail": "signin"
+    },
+    {
+      "engine": "chromium",
+      "name": "org app: sign-in starts on the hub and comes back to this app",
+      "ok": true
+    },
+    {
+      "engine": "chromium",
+      "name": "org app: a member signed in opens it in the tab (the private-link checks held)",
+      "ok": true,
+      "detail": {
+        "state": "app"
+      }
+    },
+    {
+      "engine": "chromium",
+      "name": "org app: someone it was not shared with is refused in words",
+      "ok": true,
+      "detail": {
+        "title": "This app was not shared with you",
+        "words": "this app was not shared with you -- ask whoever sent the link to invite you"
+      }
+    },
+    {
+      "engine": "chromium",
+      "name": "hello-gui at 375 wide: the window fits the phone, no sideways scroll",
+      "ok": true,
+      "detail": [
+        343,
+        375
+      ]
+    },
+    {
+      "engine": "webkit",
+      "name": "curl: the consent screen asks in the desktop words",
+      "ok": true
+    },
+    {
+      "engine": "webkit",
+      "name": "curl: fetches through the bridge and prints the body",
+      "ok": true,
+      "detail": {
+        "out": "hello from the test server\n",
+        "exit": 0
+      }
+    },
+    {
+      "engine": "webkit",
+      "name": "curl: a redirect is not followed",
+      "ok": true,
+      "detail": {
+        "asked": [
+          "/redirect"
+        ],
+        "out": "krate-curl: fetch failed"
+      }
+    },
+    {
+      "engine": "webkit",
+      "name": "curl: a host the person did not grant is refused before anything is sent",
+      "ok": true,
+      "detail": {
+        "out": "krate-curl: permission denied",
+        "exit": 5
+      }
+    },
+    {
+      "engine": "webkit",
+      "name": "hello-gui: opens with no consent (it asks for nothing beyond a window)",
+      "ok": true
+    },
+    {
+      "engine": "webkit",
+      "name": "hello-gui: the button answers",
+      "ok": true
+    },
+    {
+      "engine": "webkit",
+      "name": "hello-gui: the checkbox ticks",
+      "ok": true
+    },
+    {
+      "engine": "webkit",
+      "name": "hello-gui: typing reaches the focused field",
+      "ok": true
+    },
+    {
+      "engine": "webkit",
+      "name": "hello-gui: Backspace deletes",
+      "ok": true
+    },
+    {
+      "engine": "webkit",
+      "name": "hello-gui: a list row is chosen",
+      "ok": true
+    },
+    {
+      "engine": "webkit",
+      "name": "hello-gui: the scroll area scrolls under the wheel",
+      "ok": true,
+      "detail": {
+        "before": 108,
+        "after": 68
+      }
+    },
+    {
+      "engine": "webkit",
+      "name": "hello-gui: follows the browser into dark",
+      "ok": true,
+      "detail": {
+        "corner": 56
+      }
+    },
+    {
+      "engine": "webkit",
+      "name": "hello-gui: Close asks the app, and it reports what was typed",
+      "ok": true,
+      "detail": {
+        "out": "typed:hi krat\nselected:pick beta\n",
+        "exit": 0
+      }
+    },
+    {
+      "engine": "webkit",
+      "name": "hello-gui: no page errors",
+      "ok": true,
+      "detail": []
+    },
+    {
+      "engine": "webkit",
+      "name": "bigscroll: the wheel reaches the last row and stops there",
+      "ok": true,
+      "detail": {
+        "firstRowBefore": 48,
+        "firstRowAfter": -18484,
+        "lastRow": "Row 500",
+        "bottom": 506,
+        "clipBottom": 506,
+        "afterOneMore": 478
+      }
+    },
+    {
+      "engine": "webkit",
+      "name": "convert: every preset button (4) answers",
+      "ok": true,
+      "detail": {
+        "out": "celsius:-40"
+      }
+    },
+    {
+      "engine": "webkit",
+      "name": "checklist: typed item saved through the store to the browser (IndexedDB)",
+      "ok": true,
+      "detail": "[x] Buy milk\n[ ] Write the pitch\n[ ] Ship the demo\n[ ] Buy bread\n"
+    },
+    {
+      "engine": "webkit",
+      "name": "checklist: no page errors",
+      "ok": true,
+      "detail": []
+    },
+    {
+      "engine": "webkit",
+      "name": "checklist: reopened, it has the saved items",
+      "ok": true,
+      "detail": {
+        "out": "items:4"
+      }
+    },
+    {
+      "engine": "webkit",
+      "name": "camera: a capability with no browser equivalent is refused in words before running",
+      "ok": true,
+      "detail": " “krate-hello-gui” wants to: use your cameraProof: a capability a tab cannot give - works in Krate on your computer krate-hello-gui needs use your camera, which works in Krate on your computer, not in a tab yet. Cancel O"
+    },
+    {
+      "engine": "webkit",
+      "name": "store.org in a tab answers the app unsupported(\"...open it in Krate\") and tells the person on the page",
+      "ok": true,
+      "detail": {
+        "out": "put n1 error=unsupported",
+        "notice": "orgstore-probe wanted to use your team's shared data, which works in Krate on your computer, not in a tab yet.\n    Open in Krate\n    ×"
+      }
+    },
+    {
+      "engine": "webkit",
+      "name": "a bundle changed after signing is refused in the tab",
+      "ok": true,
+      "detail": {
+        "title": "This app was changed after it was signed",
+        "words": "It was not opened: a signed app that no longer matches its signature could be anyone’s.",
+        "detail": "tampered: this app was changed after it was signed:\n  - code.wasm (component) was changed after signing"
+      }
+    },
+    {
+      "engine": "webkit",
+      "name": "bytes that are not the ones the link names are refused",
+      "ok": true,
+      "detail": {
+        "title": "This app was changed on the way",
+        "words": "What arrived is not the app the link names, so it was not opened.",
+        "detail": "expected a67f071dd1341fc9a328245d1b99b1b81befc7fb87785777834eb5cdaa059630\nreceived 106c4b26e8c4364b26ae003f9370fef5d1df4ce9be51917c564ab5ca20133fa4"
+      }
+    },
+    {
+      "engine": "webkit",
+      "name": "a signed app opens and says who signed it",
+      "ok": true,
+      "detail": {
+        "sig": "valid",
+        "frames": 2
+      }
+    },
+    {
+      "engine": "webkit",
+      "name": "org app: signed out, the tab asks for sign-in",
+      "ok": true,
+      "detail": "signin"
+    },
+    {
+      "engine": "webkit",
+      "name": "org app: sign-in starts on the hub and comes back to this app",
+      "ok": true
+    },
+    {
+      "engine": "webkit",
+      "name": "org app: a member signed in opens it in the tab (the private-link checks held)",
+      "ok": true,
+      "detail": {
+        "state": "app"
+      }
+    },
+    {
+      "engine": "webkit",
+      "name": "org app: someone it was not shared with is refused in words",
+      "ok": true,
+      "detail": {
+        "title": "This app was not shared with you",
+        "words": "this app was not shared with you -- ask whoever sent the link to invite you"
+      }
+    },
+    {
+      "engine": "webkit",
+      "name": "hello-gui at 375 wide: the window fits the phone, no sideways scroll",
+      "ok": true,
+      "detail": [
+        343,
+        375
+      ]
+    },
+    {
+      "engine": "firefox",
+      "name": "the browser starts",
+      "ok": false,
+      "detail": "browserType.launch: Failed to launch the browser process."
+    }
+  ],
+  "measures": {
+    "chromium": {
+      "helloClickToFrame": {
+        "median": 1.66,
+        "p95": 2.14,
+        "n": 20
+      },
+      "helloClickToPainted": {
+        "median": 1.64,
+        "p95": 2.11,
+        "n": 20
+      },
+      "cliConsentShown": {
+        "median": 80.78,
+        "min": 75.77,
+        "max": 103.75,
+        "n": 10
+      },
+      "cliAllowToOutput": {
+        "median": 54.6,
+        "min": 47.91,
+        "max": 58.48,
+        "n": 10
+      },
+      "guiFirstFrame": {
+        "median": 129.93,
+        "min": 118.94,
+        "max": 192.31,
+        "n": 10
+      },
+      "canvasAllowToFirstFrame": {
+        "median": 104.57,
+        "min": 94.76,
+        "max": 124.04,
+        "n": 10
+      }
+    },
+    "webkit": {
+      "helloClickToFrame": {
+        "median": 2.26,
+        "p95": 4.38,
+        "n": 20
+      },
+      "helloClickToPainted": {
+        "median": 2.16,
+        "p95": 4.28,
+        "n": 20
+      },
+      "cliConsentShown": {
+        "median": 202.12,
+        "min": 163.18,
+        "max": 240.92,
+        "n": 10
+      },
+      "cliAllowToOutput": {
+        "median": 21.44,
+        "min": 17.8,
+        "max": 25.28,
+        "n": 10
+      },
+      "guiFirstFrame": {
+        "median": 237.12,
+        "min": 193.98,
+        "max": 289.72,
+        "n": 10
+      },
+      "canvasAllowToFirstFrame": {
+        "median": 54.84,
+        "min": 45.66,
+        "max": 62.08,
+        "n": 10
+      }
+    }
+  },
+  "environment": {
+    "chromium": "153.0.8010.12",
+    "webkit": "26.6"
+  },
+  "load": {
+    "start": [
+      11.1181640625,
+      21.11962890625,
+      18.43359375
+    ],
+    "end": [
+      8.66064453125,
+      19.115234375,
+      17.8349609375
+    ]
+  },
+  "when": "2026-10-14T19:22:10.990Z",
+  "method": "Headless Playwright 1.63.0 browsers against the real hub Worker in Node (hub-local.mjs) on 127.0.0.1, no HTTP cache (NO_CACHE). Times are ms from navigation start (performance.now) unless named as a difference; click-to-frame is pointerdown timeStamp to the putImageData that showed the change."
+}

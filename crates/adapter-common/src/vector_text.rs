@@ -128,6 +128,50 @@ pub fn clear_measure_cache() {
     MEASURE_CACHE.with(|cache| cache.borrow_mut().entries.clear());
 }
 
+/// Give the text engine a font file of the host's own, for a host that has
+/// no system fonts to find: the browser Player (IC-956), whose wasm32 build
+/// sees none. Every generic family (sans, serif, monospace, system UI)
+/// then resolves to it, so labels and canvas text are vector text rather
+/// than the 5x7 bitmap fallback. Returns whether the data held a font.
+pub fn register_bundled_font(data: Vec<u8>) -> bool {
+    use parley::fontique::Blob;
+    let registered = TEXT_ENGINE.with(|engine| {
+        let mut engine = engine.borrow_mut();
+        let families: Vec<_> = engine
+            .font_cx
+            .collection
+            .register_fonts(Blob::new(std::sync::Arc::new(data)), None)
+            .into_iter()
+            .map(|(family, _)| family)
+            .collect();
+        if families.is_empty() {
+            return false;
+        }
+        for generic in [
+            GenericFamily::SansSerif,
+            GenericFamily::Serif,
+            GenericFamily::Monospace,
+            GenericFamily::SystemUi,
+            GenericFamily::UiSansSerif,
+            GenericFamily::UiSerif,
+            GenericFamily::UiMonospace,
+        ] {
+            engine
+                .font_cx
+                .collection
+                .set_generic_families(generic, families.iter().copied());
+        }
+        engine.canvas_layouts.clear();
+        engine.canvas_rasters.clear();
+        engine.canvas_raster_bytes = 0;
+        engine.glyphs.clear();
+        engine.glyph_bytes = 0;
+        true
+    });
+    clear_measure_cache();
+    registered
+}
+
 fn measure_key(text: &str, font_size: f32, style: CanvasTextStyle) -> MeasureKey {
     MeasureKey {
         text: String::from(text),

@@ -282,19 +282,7 @@ pub fn build_plain_http_request(
     .into_bytes();
 
     for header in &req.headers {
-        if header.name.len() > MAX_HTTP_HEADER_NAME_BYTES
-            || header.value.len() > MAX_HTTP_HEADER_VALUE_BYTES
-        {
-            return Err(PlainHttpError::InvalidHeader);
-        }
-        if !is_valid_plain_http_header_name(&header.name)
-            || !is_safe_plain_http_header_value(&header.value)
-        {
-            return Err(PlainHttpError::InvalidHeader);
-        }
-        if is_host_controlled_http_header(&header.name) {
-            return Err(PlainHttpError::HostControlledHeader);
-        }
+        check_app_http_header(&header.name, &header.value)?;
         request.extend_from_slice(header.name.as_bytes());
         request.extend_from_slice(b": ");
         request.extend_from_slice(header.value.as_bytes());
@@ -311,6 +299,31 @@ pub fn build_plain_http_request(
 
     Ok(request)
 }
+
+/// The rule every app-set HTTP header passes, wherever the request is
+/// sent from: a bounded, well-formed name and value, and none of the
+/// headers that describe the transport (`Host`, `Connection`,
+/// `Content-Length`, `Transfer-Encoding`), which the host owns. The
+/// browser Player (IC-956) applies the same rule before a fetch.
+pub fn check_app_http_header(name: &str, value: &str) -> Result<(), PlainHttpError> {
+    if name.len() > MAX_HTTP_HEADER_NAME_BYTES || value.len() > MAX_HTTP_HEADER_VALUE_BYTES {
+        return Err(PlainHttpError::InvalidHeader);
+    }
+    if !is_valid_plain_http_header_name(name) || !is_safe_plain_http_header_value(value) {
+        return Err(PlainHttpError::InvalidHeader);
+    }
+    if is_host_controlled_http_header(name) {
+        return Err(PlainHttpError::HostControlledHeader);
+    }
+    Ok(())
+}
+
+/// The most headers one app request may carry.
+pub const MAX_APP_HTTP_HEADERS: usize = MAX_HTTP_HEADERS;
+
+/// The largest body an app request may carry, and the largest response
+/// body the plain adapter reads back.
+pub const MAX_APP_HTTP_BODY_BYTES: usize = MAX_HTTP_BODY_BYTES;
 
 /// Parse a plain HTTP response for the current Phase 2 adapter slice.
 pub fn parse_plain_http_response(bytes: &[u8]) -> Result<PlainHttpResponse, PlainHttpError> {
