@@ -5,5 +5,8 @@
   "description": "The Krate hub Worker. wrangler is here for local `wrangler dev` tests only (IC-945); deploys are the founder's.",
   "devDependencies": {
     "wrangler": "4.142.0"
+  },
+  "dependencies": {
+    "@node-saml/node-saml": "5.1.0"
   }
 }

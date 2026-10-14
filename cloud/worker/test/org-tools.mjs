@@ -36,6 +36,18 @@ export function sqlStorage() {
   return {
     db,
     sql,
+    // The object's one alarm, as milliseconds since the epoch; a test runs
+    // it by calling the object's alarm() (IC-955's audit export).
+    alarmAt: null,
+    async getAlarm() {
+      return this.alarmAt;
+    },
+    async setAlarm(at) {
+      this.alarmAt = Number(at);
+    },
+    async deleteAlarm() {
+      this.alarmAt = null;
+    },
     transactionSync(fn) {
       if (depth > 0) return fn();
       depth += 1;

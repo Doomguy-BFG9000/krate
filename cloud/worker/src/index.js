@@ -51,6 +51,12 @@ import { judgementCaps } from "./org-review.js";
 // Company connections (IC-952). After org-releases.js, whose checks a
 // credential fetch reuses.
 import { connectionRoute, connectionsAsked } from "./org-connections.js";
+// SCIM 2.0 provisioning (IC-955); after release control, whose groups it fills.
+import { scimRoute, orgScimRoute } from "./org-scim.js";
+// Audit export over a signed webhook (IC-955).
+import { auditExportRoute } from "./org-audit-export.js";
+// Company sign-in by SAML 2.0 (IC-955), beside OIDC.
+import { orgSamlRoute, samlStart, samlAcs, samlMetadata } from "./org-saml.js";
 // The organisation store (IC-946), one SQLite-backed Durable Object per
 // organisation; wrangler.toml binds it as ORGS.
 export { Org };
@@ -161,6 +167,9 @@ const RATE_LIMITS = {
   // cannot grow its audit -- and this bounds what they cost. A person
   // opening a private link before signing in sends one.
   "org/anonymous": 20,
+  // Requests to /scim/v2/ with no token or a wrong one (IC-955). They are
+  // never audited, so this is what bounds them.
+  "scim/refused": 20,
 };
 
 /// Who is asking, as far as the edge can tell.
@@ -393,6 +402,16 @@ export default {
       }
       if (request.method === "GET" && pathname === "/login/oidc/callback") {
         return noteStep(env, "signin", "oidc-done", oidcCallback(url, env, signInDeps()));
+      }
+      // ... and by SAML 2.0 (IC-955): SP-initiated, the Response posted back.
+      if (request.method === "GET" && pathname === "/login/saml/start") {
+        return noteStep(env, "signin", "saml-start", samlStart(url, env, signInDeps()));
+      }
+      if (request.method === "POST" && /^\/login\/saml\/acs\/[a-z0-9-]+$/.test(pathname)) {
+        return noteStep(env, "signin", "saml-done", samlAcs(request, url, env, { ...signInDeps(), readBounded }));
+      }
+      if (request.method === "GET" && /^\/saml\/[a-z0-9-]+$/.test(pathname)) {
+        return samlMetadata(url, env, signInDeps());
       }
       // The public half of the hub's offline-lease key (IC-948, G).
       if (request.method === "GET" && pathname === "/lease-key") {
@@ -684,6 +703,10 @@ export default {
       }
       if (request.method === "GET" && pathname.startsWith("/c/")) {
         return cors(await resolveChannel(request, url, pathname.slice(3), env));
+      }
+      // SCIM 2.0 provisioning (IC-955): server to server, so no CORS.
+      if (pathname.startsWith("/scim/v2/")) {
+        return await scimRoute(request, url, env, { orgAsk, readBounded, noteOrgOf, rateLimited, slugOk: (s) => SLUG.test(s) });
       }
       // Organisations (IC-946).
       if (pathname === "/orgs" || pathname.startsWith("/orgs/")) {
@@ -7419,7 +7442,7 @@ async function orgRouteCore(request, url, env, identity) {
     askRaw, mutateRaw, orgAsk, orgAnswer, json, readBody, isAdmin, smtpSend, fetchBundle, idempotencyOf,
   };
   const routed =
-    (await orgLifecycleRoute(h)) || (await orgBillingRoute(h)) || (await orgReleaseRoute(h)) || (await connectionRoute(h));
+    (await orgLifecycleRoute(h)) || (await orgBillingRoute(h)) || (await orgReleaseRoute(h)) || (await connectionRoute(h)) || (await orgScimRoute(h)) || (await auditExportRoute(h)) || (await orgSamlRoute(h));
   if (routed) return routed;
   return text("not found", 404);
 }

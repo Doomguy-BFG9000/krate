@@ -214,6 +214,11 @@ dialog.sheet .sheetin { margin-top: 14px; text-align: left; }
   .connbox .row2 .btn { flex: 1; }
   .mchecks .chk, .gchecks .chk { min-height: 44px; }
 }
+/* IC-955: SAML, SCIM, audit export */
+#samlCard .rec, #scimCard .rec { grid-template-columns: 74px minmax(0, 1fr) auto; }
+.proof.once { box-shadow: inset 0 0 0 1px var(--line-2); }
+.proof.once .linkbox code.k { flex: 1; min-width: 0; }
+@media (min-width: 681px) { #auditCard .kv { grid-template-columns: 110px minmax(0, 1fr); } }
 @media (max-width: 680px) {
   .orgp { padding-top: 28px; }
   .tab .long { display: none; } .tab .short { display: inline; }
@@ -324,6 +329,7 @@ dialog.sheet .sheetin { margin-top: 14px; text-align: left; }
 </footer>
 <script src="/kit/site.js"></script>
 <script src="/kit/org.js"></script>
+<script src="/org/doors.js"></script>
 <script src="/org/parts.js"></script>
 <script src="/org/releases.js"></script>
 <script src="/org/connections.js"></script>

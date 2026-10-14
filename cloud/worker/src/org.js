@@ -57,6 +57,12 @@ export const MATRIX = {
   "connection.manage": { owner: "yes", admin: "yes" },
   "connection.view": { owner: "yes", admin: "yes", developer: "yes", reviewer: "yes" },
   "connection.use": { owner: "yes", admin: "yes", developer: "yes", reviewer: "yes", recipient: "yes" },
+  // SCIM provisioning and audit export (IC-955): org-scim.js and
+  // org-audit-export.js. An owner sets them up; an admin may watch the
+  // export's delivery, as an admin reads the audit.
+  "scim.manage": { owner: "yes" },
+  "audit-export.manage": { owner: "yes" },
+  "audit-export.view": { owner: "yes", admin: "yes" },
 };
 
 /// What `role` may do for `action`: "yes", a narrower rule, or null.
@@ -356,7 +362,13 @@ const EXTENSIONS = { schema: [], columns: [], gates: [], ticks: [], views: [] };
 export function extendOrg({ schema = [], columns = [], ops = {}, mutations = [], tick, gate, view }) {
   EXTENSIONS.schema.push(...schema);
   EXTENSIONS.columns.push(...columns);
-  for (const [name, fn] of Object.entries(ops)) Org.prototype[`op_${name.replace(/-/g, "_")}`] = fn;
+  for (const [name, fn] of Object.entries(ops)) {
+    const key = `op_${name.replace(/-/g, "_")}`;
+    // Loud, not silent: two modules naming one command would leave only
+    // the last, and the other's route answering with the wrong command.
+    if (Object.prototype.hasOwnProperty.call(Org.prototype, key)) throw new Error(`extendOrg: the command ${name} already exists`);
+    Org.prototype[key] = fn;
+  }
   for (const m of mutations) MUTATIONS.add(m);
   if (tick) EXTENSIONS.ticks.push(tick);
   if (gate) EXTENSIONS.gates.push(gate);
