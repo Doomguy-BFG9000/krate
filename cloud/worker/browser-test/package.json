@@ -1,0 +1,9 @@
+{
+  "name": "krate-org-device-browser-test",
+  "private": true,
+  "type": "module",
+  "description": "IC-958: a browser that is an organisation owner's device, driven by Playwright against a local wrangler dev hub. See run.mjs.",
+  "devDependencies": {
+    "playwright": "1.63.0"
+  }
+}

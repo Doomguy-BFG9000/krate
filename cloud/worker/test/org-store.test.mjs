@@ -62,6 +62,10 @@ test("the executable matrix is the contract's table", () => {
     "keys.hold": "y y y y y",
     "keys.init": "y - - - -",
     "keys.recover": "y y - - -",
+    // The signing ring and publishers (IC-958, org-signing.js).
+    "signing.hold": "y y - - -",
+    "publishers.approve": "y y - - -",
+    "publishing.settings": "y - - - -",
   };
   assert.deepStrictEqual(Object.keys(MATRIX).sort(), Object.keys(table).sort());
   for (const [action, row] of Object.entries(table)) {
