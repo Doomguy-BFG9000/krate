@@ -1,32 +1,52 @@
 {
-  "about": "The ready apps a new organisation can release in its first minute (IC-958 addendum). The page reads this list as it is; each entry needs id, name, says (one line), can (what it can do, in plain words), why (the one line that says what only Krate does, or empty) and bundle (where its .krate is). PLACEHOLDERS until the real store.org starter bundles land: set placeholder to false and point bundle at the real file.",
+  "about": "The ready apps a new organisation can release in its first minute (IC-958 addendum): real apps built on store.org, the bundles in /orgs/starters/. The page reads this list as it is; each entry needs id, name, says (one line), can (what it can do, in plain words), why (the one line that says what only Krate does) and bundle.",
   "starters": [
     {
       "id": "team-notes",
       "name": "Team Notes",
-      "says": "Notes the whole team writes and reads together.",
-      "can": ["Keeps notes shared with your team"],
-      "why": "Encrypted on your team's computers: not even Krate can read your notes.",
+      "says": "Notes your whole team shares, saved as you type.",
+      "can": [
+        "Write and edit notes anyone in the team can open",
+        "Search every note",
+        "Pin the ones that matter to the top",
+        "See who changed each note last, and when",
+        "Bring back a deleted note with Undo",
+        "Keep working offline; it catches up by itself"
+      ],
+      "why": "Encrypted end to end: not even Krate can read your team's notes.",
       "bundle": "/orgs/starters/team-notes.krate",
-      "placeholder": true
+      "placeholder": false
     },
     {
       "id": "expenses",
       "name": "Expenses",
-      "says": "Log what you spent; a manager signs it off.",
-      "can": ["Keeps expenses shared with your team"],
-      "why": "Encrypted on your team's computers: not even Krate can read your expenses.",
+      "says": "Log what the team spends and see who is owed what.",
+      "can": [
+        "Log an amount, currency, what it was for, the day and a receipt note",
+        "See what each person is owed, per currency",
+        "See what each month cost",
+        "Mark an expense paid back, or undo it",
+        "Fix a mistake or delete an expense, with Undo"
+      ],
+      "why": "Encrypted end to end: not even Krate can see your team's spending.",
       "bundle": "/orgs/starters/expenses.krate",
-      "placeholder": true
+      "placeholder": false
     },
     {
       "id": "stock-list",
       "name": "Stock List",
-      "says": "What is on the shelf, and who took the last one.",
-      "can": ["Keeps the stock list shared with your team", "Works offline for 7 days"],
-      "why": "Works offline: the warehouse does not need Wi-Fi to count.",
+      "says": "Keep count of what the team has and what is running low.",
+      "can": [
+        "Add items with how many there are",
+        "Count things in and out with + and -",
+        "Set when each item counts as running low",
+        "See only what is running low",
+        "Set the count after a stocktake",
+        "Two people counting at once both count"
+      ],
+      "why": "Encrypted end to end: not even Krate can see what your team keeps.",
       "bundle": "/orgs/starters/stock-list.krate",
-      "placeholder": true
+      "placeholder": false
     }
   ]
 }
