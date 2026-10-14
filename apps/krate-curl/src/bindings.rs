@@ -9864,6 +9864,1636 @@ pub mod krate {
                 }
             }
         }
+        /// Data an organisation's own app keeps for the whole team, with no backend.
+        ///
+        /// An internal app -- an expenses list, a stock count, a rota -- needs one
+        /// set of records everyone in the team sees. On the web that means a server,
+        /// a database and sign-in code, and those are where AI-built apps go wrong.
+        /// Here the organisation's own store on Krate's hub holds the records, per
+        /// app, and the runtime handles who may see them: the app has no server,
+        /// no database to secure and no sign-in code.
+        ///
+        /// Only an organisation's private app uses it: one whose bundle carries the
+        /// organisation's mark under a signature that holds, opened as a release the
+        /// organisation approved and has not withdrawn, by a signed-in member inside
+        /// that release's audience. Anything else is `not-an-org-app` or `refused`.
+        /// The app id is the signed manifest's, so every version of the app shares
+        /// its data and no other app reaches it.
+        ///
+        /// End to end encrypted. The hub stores ciphertext only: each field is
+        /// sealed on the device with a key derived from the organisation's key,
+        /// which exists only on its members' devices (passed device to device, and
+        /// replaced when someone is removed). The hub sees which app, how many
+        /// records and fields and their sizes, when people sync, and the clock
+        /// stamps it merges by; never a collection name, an id, a field name or a
+        /// value. The sealed data is in the organisation's export and deleted with
+        /// the organisation. A device that does not hold the key yet keeps its
+        /// writes waiting, as it does offline.
+        ///
+        /// Offline first. Every call works on this device's copy and never waits
+        /// for the network; `sync` exchanges changes with the organisation's store,
+        /// and the runtime also syncs every five seconds while the app is open and
+        /// once when it closes. Being offline is never an error.
+        ///
+        /// Records merge per field: two people editing different fields of one
+        /// record both keep their change, and for one field the later edit wins by
+        /// a hybrid logical clock (wall time, a counter and the device), so a
+        /// device with a wrong clock cannot win by claiming a later time. A delete
+        /// is kept for 30 days so an offline device cannot bring the record back.
+        ///
+        /// Limits, enforced on the device and by the hub:
+        /// - a collection name, record id or field name is 1 to 128 bytes with no
+        ///   control characters;
+        /// - a record is at most 64 KiB, counting its fields' names and values
+        ///   (text and bytes by length, a number 8, a flag 1);
+        /// - one app's data in one organisation is at most 50 MiB by default,
+        ///   counting every stored field and its bookkeeping;
+        /// - `records` answers at most 200 records a page;
+        /// - `sync` called more often than every two seconds, with nothing of this
+        ///   device's waiting to go up, answers from this device without reaching
+        ///   the hub.
+        #[allow(dead_code, async_fn_in_trait, unused_imports, clippy::all)]
+        pub mod org {
+            #[used]
+            #[doc(hidden)]
+            static __FORCE_SECTION_REF: fn() = super::super::super::__link_custom_section_describing_imports;
+            use super::super::super::_rt;
+            /// One field's value.
+            #[derive(Clone)]
+            pub enum Value {
+                /// No value: writing `null` to a field removes that field.
+                Null,
+                /// UTF-8 text.
+                Text(_rt::String),
+                /// A number. It must be finite.
+                Number(f64),
+                /// True or false.
+                Boolean(bool),
+                /// Raw bytes.
+                Bytes(_rt::Vec<u8>),
+            }
+            impl ::core::fmt::Debug for Value {
+                fn fmt(
+                    &self,
+                    f: &mut ::core::fmt::Formatter<'_>,
+                ) -> ::core::fmt::Result {
+                    match self {
+                        Value::Null => f.debug_tuple("Value::Null").finish(),
+                        Value::Text(e) => f.debug_tuple("Value::Text").field(e).finish(),
+                        Value::Number(e) => {
+                            f.debug_tuple("Value::Number").field(e).finish()
+                        }
+                        Value::Boolean(e) => {
+                            f.debug_tuple("Value::Boolean").field(e).finish()
+                        }
+                        Value::Bytes(e) => {
+                            f.debug_tuple("Value::Bytes").field(e).finish()
+                        }
+                    }
+                }
+            }
+            /// One record, as this device holds it.
+            #[derive(Clone)]
+            pub struct Entry {
+                /// The record's id in its collection.
+                pub id: _rt::String,
+                /// Its fields, sorted by name. A field set to `null` is not listed.
+                pub fields: _rt::Vec<(_rt::String, Value)>,
+                /// Who changed it last, as the organisation names them: a GitHub
+                /// login or an email address.
+                pub changed_by: _rt::String,
+                /// When it was changed last: milliseconds since the Unix epoch.
+                pub changed_at: u64,
+            }
+            impl ::core::fmt::Debug for Entry {
+                fn fmt(
+                    &self,
+                    f: &mut ::core::fmt::Formatter<'_>,
+                ) -> ::core::fmt::Result {
+                    f.debug_struct("Entry")
+                        .field("id", &self.id)
+                        .field("fields", &self.fields)
+                        .field("changed-by", &self.changed_by)
+                        .field("changed-at", &self.changed_at)
+                        .finish()
+                }
+            }
+            /// A place in a collection's changes. Opaque: keep it and hand it back.
+            pub type Cursor = _rt::String;
+            /// One page of `records`.
+            #[derive(Clone)]
+            pub struct Page {
+                /// Records, the least recently changed first.
+                pub entries: _rt::Vec<Entry>,
+                /// Ids of records removed since the cursor; empty when listing from
+                /// the start.
+                pub removed: _rt::Vec<_rt::String>,
+                /// Pass this as `since` for the next page, or later to get only what
+                /// changed after this listing.
+                pub next: Cursor,
+                /// More are waiting now: call again with `next`.
+                pub more: bool,
+            }
+            impl ::core::fmt::Debug for Page {
+                fn fmt(
+                    &self,
+                    f: &mut ::core::fmt::Formatter<'_>,
+                ) -> ::core::fmt::Result {
+                    f.debug_struct("Page")
+                        .field("entries", &self.entries)
+                        .field("removed", &self.removed)
+                        .field("next", &self.next)
+                        .field("more", &self.more)
+                        .finish()
+                }
+            }
+            /// What one sync did.
+            #[repr(C)]
+            #[derive(Clone, Copy)]
+            pub struct SyncState {
+                /// The organisation's store was reached. False while offline, which
+                /// is not an error.
+                pub online: bool,
+                /// This device's copy changed: show it again.
+                pub changed: bool,
+                /// Changes made here that have not reached the organisation yet.
+                pub pending: u32,
+                /// When the organisation last accepted this device's changes, in
+                /// milliseconds since the Unix epoch; `none` before the first time.
+                pub last_synced: Option<u64>,
+            }
+            impl ::core::fmt::Debug for SyncState {
+                fn fmt(
+                    &self,
+                    f: &mut ::core::fmt::Formatter<'_>,
+                ) -> ::core::fmt::Result {
+                    f.debug_struct("SyncState")
+                        .field("online", &self.online)
+                        .field("changed", &self.changed)
+                        .field("pending", &self.pending)
+                        .field("last-synced", &self.last_synced)
+                        .finish()
+                }
+            }
+            /// The signed-in person, as the organisation knows them, so an app can
+            /// say who added something.
+            #[derive(Clone)]
+            pub struct Member {
+                /// Their name in the organisation: a GitHub login or an email address.
+                pub name: _rt::String,
+                /// Their role: owner, admin, developer, reviewer or recipient.
+                pub role: _rt::String,
+                /// The organisation's name.
+                pub org: _rt::String,
+            }
+            impl ::core::fmt::Debug for Member {
+                fn fmt(
+                    &self,
+                    f: &mut ::core::fmt::Formatter<'_>,
+                ) -> ::core::fmt::Result {
+                    f.debug_struct("Member")
+                        .field("name", &self.name)
+                        .field("role", &self.role)
+                        .field("org", &self.org)
+                        .finish()
+                }
+            }
+            /// Why the organisation refused.
+            #[derive(Clone)]
+            pub struct Refusal {
+                /// A stable reason: `removed`, `not-a-member`, `not-in-audience`,
+                /// `release-withdrawn`, `not-released`, `not-signed-in` or
+                /// `org-closed`.
+                pub reason: _rt::String,
+                /// Plain words to show the person, saying what to do next.
+                pub message: _rt::String,
+            }
+            impl ::core::fmt::Debug for Refusal {
+                fn fmt(
+                    &self,
+                    f: &mut ::core::fmt::Formatter<'_>,
+                ) -> ::core::fmt::Result {
+                    f.debug_struct("Refusal")
+                        .field("reason", &self.reason)
+                        .field("message", &self.message)
+                        .finish()
+                }
+            }
+            /// Error returned by an organisation-data operation.
+            #[derive(Clone)]
+            pub enum OrgError {
+                /// The app did not receive the `store.org` capability.
+                Denied,
+                /// This is not an organisation's private app opened as its release, so
+                /// it has no organisation data.
+                NotAnOrgApp,
+                /// A name, id or value broke a limit above; the words say which.
+                Invalid(_rt::String),
+                /// The record would be larger than 64 KiB.
+                TooLarge,
+                /// The app's data in the organisation is full.
+                OverQuota,
+                /// The organisation refused this person or this version of the app.
+                /// Its data is not served for the rest of the run.
+                Refused(Refusal),
+                /// This host cannot reach an organisation's store: a browser tab.
+                Unsupported,
+                /// This device's copy could not be read or written.
+                Io(_rt::String),
+            }
+            impl ::core::fmt::Debug for OrgError {
+                fn fmt(
+                    &self,
+                    f: &mut ::core::fmt::Formatter<'_>,
+                ) -> ::core::fmt::Result {
+                    match self {
+                        OrgError::Denied => f.debug_tuple("OrgError::Denied").finish(),
+                        OrgError::NotAnOrgApp => {
+                            f.debug_tuple("OrgError::NotAnOrgApp").finish()
+                        }
+                        OrgError::Invalid(e) => {
+                            f.debug_tuple("OrgError::Invalid").field(e).finish()
+                        }
+                        OrgError::TooLarge => {
+                            f.debug_tuple("OrgError::TooLarge").finish()
+                        }
+                        OrgError::OverQuota => {
+                            f.debug_tuple("OrgError::OverQuota").finish()
+                        }
+                        OrgError::Refused(e) => {
+                            f.debug_tuple("OrgError::Refused").field(e).finish()
+                        }
+                        OrgError::Unsupported => {
+                            f.debug_tuple("OrgError::Unsupported").finish()
+                        }
+                        OrgError::Io(e) => {
+                            f.debug_tuple("OrgError::Io").field(e).finish()
+                        }
+                    }
+                }
+            }
+            impl ::core::fmt::Display for OrgError {
+                fn fmt(
+                    &self,
+                    f: &mut ::core::fmt::Formatter<'_>,
+                ) -> ::core::fmt::Result {
+                    write!(f, "{:?}", self)
+                }
+            }
+            impl std::error::Error for OrgError {}
+            #[allow(unused_unsafe, clippy::all)]
+            /// Write the named fields of one record, creating it if needed. Fields
+            /// not named keep their values; a field given `null` is removed.
+            pub fn put(
+                collection: &str,
+                id: &str,
+                fields: &[(_rt::String, Value)],
+            ) -> Result<(), OrgError> {
+                unsafe {
+                    #[cfg_attr(target_pointer_width = "64", repr(align(8)))]
+                    #[cfg_attr(target_pointer_width = "32", repr(align(4)))]
+                    struct RetArea(
+                        [::core::mem::MaybeUninit<
+                            u8,
+                        >; 6 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let mut ret_area = RetArea(
+                        [::core::mem::MaybeUninit::uninit(); 6
+                            * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let vec0 = collection;
+                    let ptr0 = vec0.as_ptr().cast::<u8>();
+                    let len0 = vec0.len();
+                    let vec1 = id;
+                    let ptr1 = vec1.as_ptr().cast::<u8>();
+                    let len1 = vec1.len();
+                    let vec6 = fields;
+                    let len6 = vec6.len();
+                    let layout6 = _rt::alloc::Layout::from_size_align_unchecked(
+                        vec6.len() * (8 + 4 * ::core::mem::size_of::<*const u8>()),
+                        8,
+                    );
+                    let result6 = if layout6.size() != 0 {
+                        let ptr = _rt::alloc::alloc(layout6).cast::<u8>();
+                        if ptr.is_null() {
+                            _rt::alloc::handle_alloc_error(layout6);
+                        }
+                        ptr
+                    } else {
+                        ::core::ptr::null_mut()
+                    };
+                    for (i, e) in vec6.into_iter().enumerate() {
+                        let base = result6
+                            .add(i * (8 + 4 * ::core::mem::size_of::<*const u8>()));
+                        {
+                            let (t2_0, t2_1) = e;
+                            let vec3 = t2_0;
+                            let ptr3 = vec3.as_ptr().cast::<u8>();
+                            let len3 = vec3.len();
+                            *base
+                                .add(::core::mem::size_of::<*const u8>())
+                                .cast::<usize>() = len3;
+                            *base.add(0).cast::<*mut u8>() = ptr3.cast_mut();
+                            match t2_1 {
+                                Value::Null => {
+                                    *base
+                                        .add(2 * ::core::mem::size_of::<*const u8>())
+                                        .cast::<u8>() = (0i32) as u8;
+                                }
+                                Value::Text(e) => {
+                                    *base
+                                        .add(2 * ::core::mem::size_of::<*const u8>())
+                                        .cast::<u8>() = (1i32) as u8;
+                                    let vec4 = e;
+                                    let ptr4 = vec4.as_ptr().cast::<u8>();
+                                    let len4 = vec4.len();
+                                    *base
+                                        .add(8 + 3 * ::core::mem::size_of::<*const u8>())
+                                        .cast::<usize>() = len4;
+                                    *base
+                                        .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                        .cast::<*mut u8>() = ptr4.cast_mut();
+                                }
+                                Value::Number(e) => {
+                                    *base
+                                        .add(2 * ::core::mem::size_of::<*const u8>())
+                                        .cast::<u8>() = (2i32) as u8;
+                                    *base
+                                        .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                        .cast::<f64>() = _rt::as_f64(e);
+                                }
+                                Value::Boolean(e) => {
+                                    *base
+                                        .add(2 * ::core::mem::size_of::<*const u8>())
+                                        .cast::<u8>() = (3i32) as u8;
+                                    *base
+                                        .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                        .cast::<u8>() = (match e {
+                                        true => 1,
+                                        false => 0,
+                                    }) as u8;
+                                }
+                                Value::Bytes(e) => {
+                                    *base
+                                        .add(2 * ::core::mem::size_of::<*const u8>())
+                                        .cast::<u8>() = (4i32) as u8;
+                                    let vec5 = e;
+                                    let ptr5 = vec5.as_ptr().cast::<u8>();
+                                    let len5 = vec5.len();
+                                    *base
+                                        .add(8 + 3 * ::core::mem::size_of::<*const u8>())
+                                        .cast::<usize>() = len5;
+                                    *base
+                                        .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                        .cast::<*mut u8>() = ptr5.cast_mut();
+                                }
+                            }
+                        }
+                    }
+                    let ptr7 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:store/org@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "put"]
+                        fn wit_import8(
+                            _: *mut u8,
+                            _: usize,
+                            _: *mut u8,
+                            _: usize,
+                            _: *mut u8,
+                            _: usize,
+                            _: *mut u8,
+                        );
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import8(
+                        _: *mut u8,
+                        _: usize,
+                        _: *mut u8,
+                        _: usize,
+                        _: *mut u8,
+                        _: usize,
+                        _: *mut u8,
+                    ) {
+                        unreachable!()
+                    }
+                    unsafe {
+                        wit_import8(
+                            ptr0.cast_mut(),
+                            len0,
+                            ptr1.cast_mut(),
+                            len1,
+                            result6,
+                            len6,
+                            ptr7,
+                        )
+                    };
+                    let l9 = i32::from(*ptr7.add(0).cast::<u8>());
+                    let result24 = match l9 {
+                        0 => {
+                            let e = ();
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l10 = i32::from(
+                                    *ptr7.add(::core::mem::size_of::<*const u8>()).cast::<u8>(),
+                                );
+                                let v23 = match l10 {
+                                    0 => OrgError::Denied,
+                                    1 => OrgError::NotAnOrgApp,
+                                    2 => {
+                                        let e23 = {
+                                            let l11 = *ptr7
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l12 = *ptr7
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len13 = l12;
+                                            let bytes13 = _rt::Vec::from_raw_parts(
+                                                l11.cast(),
+                                                len13,
+                                                len13,
+                                            );
+                                            _rt::string_lift(bytes13)
+                                        };
+                                        OrgError::Invalid(e23)
+                                    }
+                                    3 => OrgError::TooLarge,
+                                    4 => OrgError::OverQuota,
+                                    5 => {
+                                        let e23 = {
+                                            let l14 = *ptr7
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l15 = *ptr7
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len16 = l15;
+                                            let bytes16 = _rt::Vec::from_raw_parts(
+                                                l14.cast(),
+                                                len16,
+                                                len16,
+                                            );
+                                            let l17 = *ptr7
+                                                .add(4 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l18 = *ptr7
+                                                .add(5 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len19 = l18;
+                                            let bytes19 = _rt::Vec::from_raw_parts(
+                                                l17.cast(),
+                                                len19,
+                                                len19,
+                                            );
+                                            Refusal {
+                                                reason: _rt::string_lift(bytes16),
+                                                message: _rt::string_lift(bytes19),
+                                            }
+                                        };
+                                        OrgError::Refused(e23)
+                                    }
+                                    6 => OrgError::Unsupported,
+                                    n => {
+                                        debug_assert_eq!(n, 7, "invalid enum discriminant");
+                                        let e23 = {
+                                            let l20 = *ptr7
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l21 = *ptr7
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len22 = l21;
+                                            let bytes22 = _rt::Vec::from_raw_parts(
+                                                l20.cast(),
+                                                len22,
+                                                len22,
+                                            );
+                                            _rt::string_lift(bytes22)
+                                        };
+                                        OrgError::Io(e23)
+                                    }
+                                };
+                                v23
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    };
+                    if layout6.size() != 0 {
+                        _rt::alloc::dealloc(result6.cast(), layout6);
+                    }
+                    result24
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Read one record. A record never written, or deleted, is `none`.
+            pub fn get(collection: &str, id: &str) -> Result<Option<Entry>, OrgError> {
+                unsafe {
+                    #[repr(align(8))]
+                    struct RetArea(
+                        [::core::mem::MaybeUninit<
+                            u8,
+                        >; 24 + 6 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let mut ret_area = RetArea(
+                        [::core::mem::MaybeUninit::uninit(); 24
+                            + 6 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let vec0 = collection;
+                    let ptr0 = vec0.as_ptr().cast::<u8>();
+                    let len0 = vec0.len();
+                    let vec1 = id;
+                    let ptr1 = vec1.as_ptr().cast::<u8>();
+                    let len1 = vec1.len();
+                    let ptr2 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:store/org@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "get"]
+                        fn wit_import3(
+                            _: *mut u8,
+                            _: usize,
+                            _: *mut u8,
+                            _: usize,
+                            _: *mut u8,
+                        );
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import3(
+                        _: *mut u8,
+                        _: usize,
+                        _: *mut u8,
+                        _: usize,
+                        _: *mut u8,
+                    ) {
+                        unreachable!()
+                    }
+                    unsafe {
+                        wit_import3(ptr0.cast_mut(), len0, ptr1.cast_mut(), len1, ptr2)
+                    };
+                    let l4 = i32::from(*ptr2.add(0).cast::<u8>());
+                    let result43 = match l4 {
+                        0 => {
+                            let e = {
+                                let l5 = i32::from(*ptr2.add(8).cast::<u8>());
+                                match l5 {
+                                    0 => None,
+                                    1 => {
+                                        let e = {
+                                            let l6 = *ptr2.add(16).cast::<*mut u8>();
+                                            let l7 = *ptr2
+                                                .add(16 + 1 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len8 = l7;
+                                            let bytes8 = _rt::Vec::from_raw_parts(
+                                                l6.cast(),
+                                                len8,
+                                                len8,
+                                            );
+                                            let l9 = *ptr2
+                                                .add(16 + 2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l10 = *ptr2
+                                                .add(16 + 3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let base24 = l9;
+                                            let len24 = l10;
+                                            let mut result24 = _rt::Vec::with_capacity(len24);
+                                            for i in 0..len24 {
+                                                let base = base24
+                                                    .add(i * (8 + 4 * ::core::mem::size_of::<*const u8>()));
+                                                let e24 = {
+                                                    let l11 = *base.add(0).cast::<*mut u8>();
+                                                    let l12 = *base
+                                                        .add(::core::mem::size_of::<*const u8>())
+                                                        .cast::<usize>();
+                                                    let len13 = l12;
+                                                    let bytes13 = _rt::Vec::from_raw_parts(
+                                                        l11.cast(),
+                                                        len13,
+                                                        len13,
+                                                    );
+                                                    let l14 = i32::from(
+                                                        *base
+                                                            .add(2 * ::core::mem::size_of::<*const u8>())
+                                                            .cast::<u8>(),
+                                                    );
+                                                    let v23 = match l14 {
+                                                        0 => Value::Null,
+                                                        1 => {
+                                                            let e23 = {
+                                                                let l15 = *base
+                                                                    .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                                                    .cast::<*mut u8>();
+                                                                let l16 = *base
+                                                                    .add(8 + 3 * ::core::mem::size_of::<*const u8>())
+                                                                    .cast::<usize>();
+                                                                let len17 = l16;
+                                                                let bytes17 = _rt::Vec::from_raw_parts(
+                                                                    l15.cast(),
+                                                                    len17,
+                                                                    len17,
+                                                                );
+                                                                _rt::string_lift(bytes17)
+                                                            };
+                                                            Value::Text(e23)
+                                                        }
+                                                        2 => {
+                                                            let e23 = {
+                                                                let l18 = *base
+                                                                    .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                                                    .cast::<f64>();
+                                                                l18
+                                                            };
+                                                            Value::Number(e23)
+                                                        }
+                                                        3 => {
+                                                            let e23 = {
+                                                                let l19 = i32::from(
+                                                                    *base
+                                                                        .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                                                        .cast::<u8>(),
+                                                                );
+                                                                _rt::bool_lift(l19 as u8)
+                                                            };
+                                                            Value::Boolean(e23)
+                                                        }
+                                                        n => {
+                                                            debug_assert_eq!(n, 4, "invalid enum discriminant");
+                                                            let e23 = {
+                                                                let l20 = *base
+                                                                    .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                                                    .cast::<*mut u8>();
+                                                                let l21 = *base
+                                                                    .add(8 + 3 * ::core::mem::size_of::<*const u8>())
+                                                                    .cast::<usize>();
+                                                                let len22 = l21;
+                                                                _rt::Vec::from_raw_parts(l20.cast(), len22, len22)
+                                                            };
+                                                            Value::Bytes(e23)
+                                                        }
+                                                    };
+                                                    (_rt::string_lift(bytes13), v23)
+                                                };
+                                                result24.push(e24);
+                                            }
+                                            _rt::cabi_dealloc(
+                                                base24,
+                                                len24 * (8 + 4 * ::core::mem::size_of::<*const u8>()),
+                                                8,
+                                            );
+                                            let l25 = *ptr2
+                                                .add(16 + 4 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l26 = *ptr2
+                                                .add(16 + 5 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len27 = l26;
+                                            let bytes27 = _rt::Vec::from_raw_parts(
+                                                l25.cast(),
+                                                len27,
+                                                len27,
+                                            );
+                                            let l28 = *ptr2
+                                                .add(16 + 6 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<i64>();
+                                            Entry {
+                                                id: _rt::string_lift(bytes8),
+                                                fields: result24,
+                                                changed_by: _rt::string_lift(bytes27),
+                                                changed_at: l28 as u64,
+                                            }
+                                        };
+                                        Some(e)
+                                    }
+                                    _ => _rt::invalid_enum_discriminant(),
+                                }
+                            };
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l29 = i32::from(*ptr2.add(8).cast::<u8>());
+                                let v42 = match l29 {
+                                    0 => OrgError::Denied,
+                                    1 => OrgError::NotAnOrgApp,
+                                    2 => {
+                                        let e42 = {
+                                            let l30 = *ptr2
+                                                .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l31 = *ptr2
+                                                .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len32 = l31;
+                                            let bytes32 = _rt::Vec::from_raw_parts(
+                                                l30.cast(),
+                                                len32,
+                                                len32,
+                                            );
+                                            _rt::string_lift(bytes32)
+                                        };
+                                        OrgError::Invalid(e42)
+                                    }
+                                    3 => OrgError::TooLarge,
+                                    4 => OrgError::OverQuota,
+                                    5 => {
+                                        let e42 = {
+                                            let l33 = *ptr2
+                                                .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l34 = *ptr2
+                                                .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len35 = l34;
+                                            let bytes35 = _rt::Vec::from_raw_parts(
+                                                l33.cast(),
+                                                len35,
+                                                len35,
+                                            );
+                                            let l36 = *ptr2
+                                                .add(8 + 3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l37 = *ptr2
+                                                .add(8 + 4 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len38 = l37;
+                                            let bytes38 = _rt::Vec::from_raw_parts(
+                                                l36.cast(),
+                                                len38,
+                                                len38,
+                                            );
+                                            Refusal {
+                                                reason: _rt::string_lift(bytes35),
+                                                message: _rt::string_lift(bytes38),
+                                            }
+                                        };
+                                        OrgError::Refused(e42)
+                                    }
+                                    6 => OrgError::Unsupported,
+                                    n => {
+                                        debug_assert_eq!(n, 7, "invalid enum discriminant");
+                                        let e42 = {
+                                            let l39 = *ptr2
+                                                .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l40 = *ptr2
+                                                .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len41 = l40;
+                                            let bytes41 = _rt::Vec::from_raw_parts(
+                                                l39.cast(),
+                                                len41,
+                                                len41,
+                                            );
+                                            _rt::string_lift(bytes41)
+                                        };
+                                        OrgError::Io(e42)
+                                    }
+                                };
+                                v42
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    };
+                    result43
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Delete one record everywhere. Deleting one that is not there
+            /// succeeds.
+            pub fn delete(collection: &str, id: &str) -> Result<(), OrgError> {
+                unsafe {
+                    #[cfg_attr(target_pointer_width = "64", repr(align(8)))]
+                    #[cfg_attr(target_pointer_width = "32", repr(align(4)))]
+                    struct RetArea(
+                        [::core::mem::MaybeUninit<
+                            u8,
+                        >; 6 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let mut ret_area = RetArea(
+                        [::core::mem::MaybeUninit::uninit(); 6
+                            * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let vec0 = collection;
+                    let ptr0 = vec0.as_ptr().cast::<u8>();
+                    let len0 = vec0.len();
+                    let vec1 = id;
+                    let ptr1 = vec1.as_ptr().cast::<u8>();
+                    let len1 = vec1.len();
+                    let ptr2 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:store/org@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "delete"]
+                        fn wit_import3(
+                            _: *mut u8,
+                            _: usize,
+                            _: *mut u8,
+                            _: usize,
+                            _: *mut u8,
+                        );
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import3(
+                        _: *mut u8,
+                        _: usize,
+                        _: *mut u8,
+                        _: usize,
+                        _: *mut u8,
+                    ) {
+                        unreachable!()
+                    }
+                    unsafe {
+                        wit_import3(ptr0.cast_mut(), len0, ptr1.cast_mut(), len1, ptr2)
+                    };
+                    let l4 = i32::from(*ptr2.add(0).cast::<u8>());
+                    let result19 = match l4 {
+                        0 => {
+                            let e = ();
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l5 = i32::from(
+                                    *ptr2.add(::core::mem::size_of::<*const u8>()).cast::<u8>(),
+                                );
+                                let v18 = match l5 {
+                                    0 => OrgError::Denied,
+                                    1 => OrgError::NotAnOrgApp,
+                                    2 => {
+                                        let e18 = {
+                                            let l6 = *ptr2
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l7 = *ptr2
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len8 = l7;
+                                            let bytes8 = _rt::Vec::from_raw_parts(
+                                                l6.cast(),
+                                                len8,
+                                                len8,
+                                            );
+                                            _rt::string_lift(bytes8)
+                                        };
+                                        OrgError::Invalid(e18)
+                                    }
+                                    3 => OrgError::TooLarge,
+                                    4 => OrgError::OverQuota,
+                                    5 => {
+                                        let e18 = {
+                                            let l9 = *ptr2
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l10 = *ptr2
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len11 = l10;
+                                            let bytes11 = _rt::Vec::from_raw_parts(
+                                                l9.cast(),
+                                                len11,
+                                                len11,
+                                            );
+                                            let l12 = *ptr2
+                                                .add(4 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l13 = *ptr2
+                                                .add(5 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len14 = l13;
+                                            let bytes14 = _rt::Vec::from_raw_parts(
+                                                l12.cast(),
+                                                len14,
+                                                len14,
+                                            );
+                                            Refusal {
+                                                reason: _rt::string_lift(bytes11),
+                                                message: _rt::string_lift(bytes14),
+                                            }
+                                        };
+                                        OrgError::Refused(e18)
+                                    }
+                                    6 => OrgError::Unsupported,
+                                    n => {
+                                        debug_assert_eq!(n, 7, "invalid enum discriminant");
+                                        let e18 = {
+                                            let l15 = *ptr2
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l16 = *ptr2
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len17 = l16;
+                                            let bytes17 = _rt::Vec::from_raw_parts(
+                                                l15.cast(),
+                                                len17,
+                                                len17,
+                                            );
+                                            _rt::string_lift(bytes17)
+                                        };
+                                        OrgError::Io(e18)
+                                    }
+                                };
+                                v18
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    };
+                    result19
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// The records in a collection: from the start with `none`, or what
+            /// changed after a cursor an earlier page gave.
+            pub fn records(
+                collection: &str,
+                since: Option<&str>,
+            ) -> Result<Page, OrgError> {
+                unsafe {
+                    #[cfg_attr(target_pointer_width = "64", repr(align(8)))]
+                    #[cfg_attr(target_pointer_width = "32", repr(align(4)))]
+                    struct RetArea(
+                        [::core::mem::MaybeUninit<
+                            u8,
+                        >; 8 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let mut ret_area = RetArea(
+                        [::core::mem::MaybeUninit::uninit(); 8
+                            * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let vec0 = collection;
+                    let ptr0 = vec0.as_ptr().cast::<u8>();
+                    let len0 = vec0.len();
+                    let (result2_0, result2_1, result2_2) = match since {
+                        Some(e) => {
+                            let vec1 = e;
+                            let ptr1 = vec1.as_ptr().cast::<u8>();
+                            let len1 = vec1.len();
+                            (1i32, ptr1.cast_mut(), len1)
+                        }
+                        None => (0i32, ::core::ptr::null_mut(), 0usize),
+                    };
+                    let ptr3 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:store/org@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "records"]
+                        fn wit_import4(
+                            _: *mut u8,
+                            _: usize,
+                            _: i32,
+                            _: *mut u8,
+                            _: usize,
+                            _: *mut u8,
+                        );
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import4(
+                        _: *mut u8,
+                        _: usize,
+                        _: i32,
+                        _: *mut u8,
+                        _: usize,
+                        _: *mut u8,
+                    ) {
+                        unreachable!()
+                    }
+                    unsafe {
+                        wit_import4(
+                            ptr0.cast_mut(),
+                            len0,
+                            result2_0,
+                            result2_1,
+                            result2_2,
+                            ptr3,
+                        )
+                    };
+                    let l5 = i32::from(*ptr3.add(0).cast::<u8>());
+                    let result56 = match l5 {
+                        0 => {
+                            let e = {
+                                let l6 = *ptr3
+                                    .add(::core::mem::size_of::<*const u8>())
+                                    .cast::<*mut u8>();
+                                let l7 = *ptr3
+                                    .add(2 * ::core::mem::size_of::<*const u8>())
+                                    .cast::<usize>();
+                                let base31 = l6;
+                                let len31 = l7;
+                                let mut result31 = _rt::Vec::with_capacity(len31);
+                                for i in 0..len31 {
+                                    let base = base31
+                                        .add(i * (8 + 6 * ::core::mem::size_of::<*const u8>()));
+                                    let e31 = {
+                                        let l8 = *base.add(0).cast::<*mut u8>();
+                                        let l9 = *base
+                                            .add(::core::mem::size_of::<*const u8>())
+                                            .cast::<usize>();
+                                        let len10 = l9;
+                                        let bytes10 = _rt::Vec::from_raw_parts(
+                                            l8.cast(),
+                                            len10,
+                                            len10,
+                                        );
+                                        let l11 = *base
+                                            .add(2 * ::core::mem::size_of::<*const u8>())
+                                            .cast::<*mut u8>();
+                                        let l12 = *base
+                                            .add(3 * ::core::mem::size_of::<*const u8>())
+                                            .cast::<usize>();
+                                        let base26 = l11;
+                                        let len26 = l12;
+                                        let mut result26 = _rt::Vec::with_capacity(len26);
+                                        for i in 0..len26 {
+                                            let base = base26
+                                                .add(i * (8 + 4 * ::core::mem::size_of::<*const u8>()));
+                                            let e26 = {
+                                                let l13 = *base.add(0).cast::<*mut u8>();
+                                                let l14 = *base
+                                                    .add(::core::mem::size_of::<*const u8>())
+                                                    .cast::<usize>();
+                                                let len15 = l14;
+                                                let bytes15 = _rt::Vec::from_raw_parts(
+                                                    l13.cast(),
+                                                    len15,
+                                                    len15,
+                                                );
+                                                let l16 = i32::from(
+                                                    *base
+                                                        .add(2 * ::core::mem::size_of::<*const u8>())
+                                                        .cast::<u8>(),
+                                                );
+                                                let v25 = match l16 {
+                                                    0 => Value::Null,
+                                                    1 => {
+                                                        let e25 = {
+                                                            let l17 = *base
+                                                                .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                                                .cast::<*mut u8>();
+                                                            let l18 = *base
+                                                                .add(8 + 3 * ::core::mem::size_of::<*const u8>())
+                                                                .cast::<usize>();
+                                                            let len19 = l18;
+                                                            let bytes19 = _rt::Vec::from_raw_parts(
+                                                                l17.cast(),
+                                                                len19,
+                                                                len19,
+                                                            );
+                                                            _rt::string_lift(bytes19)
+                                                        };
+                                                        Value::Text(e25)
+                                                    }
+                                                    2 => {
+                                                        let e25 = {
+                                                            let l20 = *base
+                                                                .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                                                .cast::<f64>();
+                                                            l20
+                                                        };
+                                                        Value::Number(e25)
+                                                    }
+                                                    3 => {
+                                                        let e25 = {
+                                                            let l21 = i32::from(
+                                                                *base
+                                                                    .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                                                    .cast::<u8>(),
+                                                            );
+                                                            _rt::bool_lift(l21 as u8)
+                                                        };
+                                                        Value::Boolean(e25)
+                                                    }
+                                                    n => {
+                                                        debug_assert_eq!(n, 4, "invalid enum discriminant");
+                                                        let e25 = {
+                                                            let l22 = *base
+                                                                .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                                                .cast::<*mut u8>();
+                                                            let l23 = *base
+                                                                .add(8 + 3 * ::core::mem::size_of::<*const u8>())
+                                                                .cast::<usize>();
+                                                            let len24 = l23;
+                                                            _rt::Vec::from_raw_parts(l22.cast(), len24, len24)
+                                                        };
+                                                        Value::Bytes(e25)
+                                                    }
+                                                };
+                                                (_rt::string_lift(bytes15), v25)
+                                            };
+                                            result26.push(e26);
+                                        }
+                                        _rt::cabi_dealloc(
+                                            base26,
+                                            len26 * (8 + 4 * ::core::mem::size_of::<*const u8>()),
+                                            8,
+                                        );
+                                        let l27 = *base
+                                            .add(4 * ::core::mem::size_of::<*const u8>())
+                                            .cast::<*mut u8>();
+                                        let l28 = *base
+                                            .add(5 * ::core::mem::size_of::<*const u8>())
+                                            .cast::<usize>();
+                                        let len29 = l28;
+                                        let bytes29 = _rt::Vec::from_raw_parts(
+                                            l27.cast(),
+                                            len29,
+                                            len29,
+                                        );
+                                        let l30 = *base
+                                            .add(6 * ::core::mem::size_of::<*const u8>())
+                                            .cast::<i64>();
+                                        Entry {
+                                            id: _rt::string_lift(bytes10),
+                                            fields: result26,
+                                            changed_by: _rt::string_lift(bytes29),
+                                            changed_at: l30 as u64,
+                                        }
+                                    };
+                                    result31.push(e31);
+                                }
+                                _rt::cabi_dealloc(
+                                    base31,
+                                    len31 * (8 + 6 * ::core::mem::size_of::<*const u8>()),
+                                    8,
+                                );
+                                let l32 = *ptr3
+                                    .add(3 * ::core::mem::size_of::<*const u8>())
+                                    .cast::<*mut u8>();
+                                let l33 = *ptr3
+                                    .add(4 * ::core::mem::size_of::<*const u8>())
+                                    .cast::<usize>();
+                                let base37 = l32;
+                                let len37 = l33;
+                                let mut result37 = _rt::Vec::with_capacity(len37);
+                                for i in 0..len37 {
+                                    let base = base37
+                                        .add(i * (2 * ::core::mem::size_of::<*const u8>()));
+                                    let e37 = {
+                                        let l34 = *base.add(0).cast::<*mut u8>();
+                                        let l35 = *base
+                                            .add(::core::mem::size_of::<*const u8>())
+                                            .cast::<usize>();
+                                        let len36 = l35;
+                                        let bytes36 = _rt::Vec::from_raw_parts(
+                                            l34.cast(),
+                                            len36,
+                                            len36,
+                                        );
+                                        _rt::string_lift(bytes36)
+                                    };
+                                    result37.push(e37);
+                                }
+                                _rt::cabi_dealloc(
+                                    base37,
+                                    len37 * (2 * ::core::mem::size_of::<*const u8>()),
+                                    ::core::mem::size_of::<*const u8>(),
+                                );
+                                let l38 = *ptr3
+                                    .add(5 * ::core::mem::size_of::<*const u8>())
+                                    .cast::<*mut u8>();
+                                let l39 = *ptr3
+                                    .add(6 * ::core::mem::size_of::<*const u8>())
+                                    .cast::<usize>();
+                                let len40 = l39;
+                                let bytes40 = _rt::Vec::from_raw_parts(
+                                    l38.cast(),
+                                    len40,
+                                    len40,
+                                );
+                                let l41 = i32::from(
+                                    *ptr3
+                                        .add(7 * ::core::mem::size_of::<*const u8>())
+                                        .cast::<u8>(),
+                                );
+                                Page {
+                                    entries: result31,
+                                    removed: result37,
+                                    next: _rt::string_lift(bytes40),
+                                    more: _rt::bool_lift(l41 as u8),
+                                }
+                            };
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l42 = i32::from(
+                                    *ptr3.add(::core::mem::size_of::<*const u8>()).cast::<u8>(),
+                                );
+                                let v55 = match l42 {
+                                    0 => OrgError::Denied,
+                                    1 => OrgError::NotAnOrgApp,
+                                    2 => {
+                                        let e55 = {
+                                            let l43 = *ptr3
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l44 = *ptr3
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len45 = l44;
+                                            let bytes45 = _rt::Vec::from_raw_parts(
+                                                l43.cast(),
+                                                len45,
+                                                len45,
+                                            );
+                                            _rt::string_lift(bytes45)
+                                        };
+                                        OrgError::Invalid(e55)
+                                    }
+                                    3 => OrgError::TooLarge,
+                                    4 => OrgError::OverQuota,
+                                    5 => {
+                                        let e55 = {
+                                            let l46 = *ptr3
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l47 = *ptr3
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len48 = l47;
+                                            let bytes48 = _rt::Vec::from_raw_parts(
+                                                l46.cast(),
+                                                len48,
+                                                len48,
+                                            );
+                                            let l49 = *ptr3
+                                                .add(4 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l50 = *ptr3
+                                                .add(5 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len51 = l50;
+                                            let bytes51 = _rt::Vec::from_raw_parts(
+                                                l49.cast(),
+                                                len51,
+                                                len51,
+                                            );
+                                            Refusal {
+                                                reason: _rt::string_lift(bytes48),
+                                                message: _rt::string_lift(bytes51),
+                                            }
+                                        };
+                                        OrgError::Refused(e55)
+                                    }
+                                    6 => OrgError::Unsupported,
+                                    n => {
+                                        debug_assert_eq!(n, 7, "invalid enum discriminant");
+                                        let e55 = {
+                                            let l52 = *ptr3
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l53 = *ptr3
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len54 = l53;
+                                            let bytes54 = _rt::Vec::from_raw_parts(
+                                                l52.cast(),
+                                                len54,
+                                                len54,
+                                            );
+                                            _rt::string_lift(bytes54)
+                                        };
+                                        OrgError::Io(e55)
+                                    }
+                                };
+                                v55
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    };
+                    result56
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Exchange changes with the organisation now: push this device's,
+            /// pull everyone else's.
+            pub fn sync() -> Result<SyncState, OrgError> {
+                unsafe {
+                    #[repr(align(8))]
+                    struct RetArea(
+                        [::core::mem::MaybeUninit<
+                            u8,
+                        >; 16 + 4 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let mut ret_area = RetArea(
+                        [::core::mem::MaybeUninit::uninit(); 16
+                            + 4 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:store/org@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "sync"]
+                        fn wit_import1(_: *mut u8);
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import1(_: *mut u8) {
+                        unreachable!()
+                    }
+                    unsafe { wit_import1(ptr0) };
+                    let l2 = i32::from(*ptr0.add(0).cast::<u8>());
+                    let result22 = match l2 {
+                        0 => {
+                            let e = {
+                                let l3 = i32::from(*ptr0.add(8).cast::<u8>());
+                                let l4 = i32::from(*ptr0.add(9).cast::<u8>());
+                                let l5 = *ptr0.add(12).cast::<i32>();
+                                let l6 = i32::from(*ptr0.add(16).cast::<u8>());
+                                SyncState {
+                                    online: _rt::bool_lift(l3 as u8),
+                                    changed: _rt::bool_lift(l4 as u8),
+                                    pending: l5 as u32,
+                                    last_synced: match l6 {
+                                        0 => None,
+                                        1 => {
+                                            let e = {
+                                                let l7 = *ptr0.add(24).cast::<i64>();
+                                                l7 as u64
+                                            };
+                                            Some(e)
+                                        }
+                                        _ => _rt::invalid_enum_discriminant(),
+                                    },
+                                }
+                            };
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l8 = i32::from(*ptr0.add(8).cast::<u8>());
+                                let v21 = match l8 {
+                                    0 => OrgError::Denied,
+                                    1 => OrgError::NotAnOrgApp,
+                                    2 => {
+                                        let e21 = {
+                                            let l9 = *ptr0
+                                                .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l10 = *ptr0
+                                                .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len11 = l10;
+                                            let bytes11 = _rt::Vec::from_raw_parts(
+                                                l9.cast(),
+                                                len11,
+                                                len11,
+                                            );
+                                            _rt::string_lift(bytes11)
+                                        };
+                                        OrgError::Invalid(e21)
+                                    }
+                                    3 => OrgError::TooLarge,
+                                    4 => OrgError::OverQuota,
+                                    5 => {
+                                        let e21 = {
+                                            let l12 = *ptr0
+                                                .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l13 = *ptr0
+                                                .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len14 = l13;
+                                            let bytes14 = _rt::Vec::from_raw_parts(
+                                                l12.cast(),
+                                                len14,
+                                                len14,
+                                            );
+                                            let l15 = *ptr0
+                                                .add(8 + 3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l16 = *ptr0
+                                                .add(8 + 4 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len17 = l16;
+                                            let bytes17 = _rt::Vec::from_raw_parts(
+                                                l15.cast(),
+                                                len17,
+                                                len17,
+                                            );
+                                            Refusal {
+                                                reason: _rt::string_lift(bytes14),
+                                                message: _rt::string_lift(bytes17),
+                                            }
+                                        };
+                                        OrgError::Refused(e21)
+                                    }
+                                    6 => OrgError::Unsupported,
+                                    n => {
+                                        debug_assert_eq!(n, 7, "invalid enum discriminant");
+                                        let e21 = {
+                                            let l18 = *ptr0
+                                                .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l19 = *ptr0
+                                                .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len20 = l19;
+                                            let bytes20 = _rt::Vec::from_raw_parts(
+                                                l18.cast(),
+                                                len20,
+                                                len20,
+                                            );
+                                            _rt::string_lift(bytes20)
+                                        };
+                                        OrgError::Io(e21)
+                                    }
+                                };
+                                v21
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    };
+                    result22
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// The signed-in person and their role, once a sync has reached the
+            /// organisation; `none` before that.
+            pub fn who() -> Result<Option<Member>, OrgError> {
+                unsafe {
+                    #[cfg_attr(target_pointer_width = "64", repr(align(8)))]
+                    #[cfg_attr(target_pointer_width = "32", repr(align(4)))]
+                    struct RetArea(
+                        [::core::mem::MaybeUninit<
+                            u8,
+                        >; 8 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let mut ret_area = RetArea(
+                        [::core::mem::MaybeUninit::uninit(); 8
+                            * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "krate:store/org@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "who"]
+                        fn wit_import1(_: *mut u8);
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import1(_: *mut u8) {
+                        unreachable!()
+                    }
+                    unsafe { wit_import1(ptr0) };
+                    let l2 = i32::from(*ptr0.add(0).cast::<u8>());
+                    let result27 = match l2 {
+                        0 => {
+                            let e = {
+                                let l3 = i32::from(
+                                    *ptr0.add(::core::mem::size_of::<*const u8>()).cast::<u8>(),
+                                );
+                                match l3 {
+                                    0 => None,
+                                    1 => {
+                                        let e = {
+                                            let l4 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l5 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len6 = l5;
+                                            let bytes6 = _rt::Vec::from_raw_parts(
+                                                l4.cast(),
+                                                len6,
+                                                len6,
+                                            );
+                                            let l7 = *ptr0
+                                                .add(4 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l8 = *ptr0
+                                                .add(5 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len9 = l8;
+                                            let bytes9 = _rt::Vec::from_raw_parts(
+                                                l7.cast(),
+                                                len9,
+                                                len9,
+                                            );
+                                            let l10 = *ptr0
+                                                .add(6 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l11 = *ptr0
+                                                .add(7 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len12 = l11;
+                                            let bytes12 = _rt::Vec::from_raw_parts(
+                                                l10.cast(),
+                                                len12,
+                                                len12,
+                                            );
+                                            Member {
+                                                name: _rt::string_lift(bytes6),
+                                                role: _rt::string_lift(bytes9),
+                                                org: _rt::string_lift(bytes12),
+                                            }
+                                        };
+                                        Some(e)
+                                    }
+                                    _ => _rt::invalid_enum_discriminant(),
+                                }
+                            };
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l13 = i32::from(
+                                    *ptr0.add(::core::mem::size_of::<*const u8>()).cast::<u8>(),
+                                );
+                                let v26 = match l13 {
+                                    0 => OrgError::Denied,
+                                    1 => OrgError::NotAnOrgApp,
+                                    2 => {
+                                        let e26 = {
+                                            let l14 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l15 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len16 = l15;
+                                            let bytes16 = _rt::Vec::from_raw_parts(
+                                                l14.cast(),
+                                                len16,
+                                                len16,
+                                            );
+                                            _rt::string_lift(bytes16)
+                                        };
+                                        OrgError::Invalid(e26)
+                                    }
+                                    3 => OrgError::TooLarge,
+                                    4 => OrgError::OverQuota,
+                                    5 => {
+                                        let e26 = {
+                                            let l17 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l18 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len19 = l18;
+                                            let bytes19 = _rt::Vec::from_raw_parts(
+                                                l17.cast(),
+                                                len19,
+                                                len19,
+                                            );
+                                            let l20 = *ptr0
+                                                .add(4 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l21 = *ptr0
+                                                .add(5 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len22 = l21;
+                                            let bytes22 = _rt::Vec::from_raw_parts(
+                                                l20.cast(),
+                                                len22,
+                                                len22,
+                                            );
+                                            Refusal {
+                                                reason: _rt::string_lift(bytes19),
+                                                message: _rt::string_lift(bytes22),
+                                            }
+                                        };
+                                        OrgError::Refused(e26)
+                                    }
+                                    6 => OrgError::Unsupported,
+                                    n => {
+                                        debug_assert_eq!(n, 7, "invalid enum discriminant");
+                                        let e26 = {
+                                            let l23 = *ptr0
+                                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l24 = *ptr0
+                                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let len25 = l24;
+                                            let bytes25 = _rt::Vec::from_raw_parts(
+                                                l23.cast(),
+                                                len25,
+                                                len25,
+                                            );
+                                            _rt::string_lift(bytes25)
+                                        };
+                                        OrgError::Io(e26)
+                                    }
+                                };
+                                v26
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    };
+                    result27
+                }
+            }
+        }
     }
     pub mod time {
         /// Host clock reads.
@@ -10189,8 +11819,8 @@ pub(crate) use __export_cli_impl as export;
 )]
 #[doc(hidden)]
 #[allow(clippy::octal_escapes)]
-pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 5966] = *b"\
-\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\xd4-\x01A\x02\x01A@\x01\
+pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 6614] = *b"\
+\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\xdc2\x01A\x02\x01AB\x01\
 B\x04\x01m\x05\x05trace\x05debug\x04info\x04warn\x05error\x04\0\x09log-level\x03\
 \0\0\x01q\x05\x06closed\0\0\x0binterrupted\0\0\x0eunexpected-eof\0\0\x0cinvalid-\
 utf8\0\0\x05other\x01s\0\x04\0\x08io-error\x03\0\x02\x03\0\x14krate:io/types@0.1\
@@ -10325,13 +11955,29 @@ group-error\x03\0\0\x01p}\x01k\x02\x01j\x01\x03\x01\x01\x01@\x02\x05groups\x03ke
 ys\0\x04\x04\0\x03get\x01\x05\x01j\0\x01\x01\x01@\x03\x05groups\x03keys\x05value\
 \x02\0\x06\x04\0\x03set\x01\x07\x01@\x02\x05groups\x03keys\0\x06\x04\0\x06delete\
 \x01\x08\x01ps\x01j\x01\x09\x01\x01\x01@\x01\x05groups\0\x0a\x04\0\x04keys\x01\x0b\
-\x03\0\x17krate:store/group@0.1.0\x05$\x01B\x0b\x01q\x04\x06denied\0\0\x09too-la\
-rge\0\0\x0bempty-range\0\0\x0bunavailable\x01s\0\x04\0\x0crandom-error\x03\0\0\x01\
-p}\x01j\x01\x02\x01\x01\x01@\x01\x05county\0\x03\x04\0\x03get\x01\x04\x01j\x01w\x01\
-\x01\x01@\0\0\x05\x04\0\x08next-u64\x01\x06\x01@\x01\x05boundw\0\x05\x04\0\x05be\
-low\x01\x07\x03\0\x18krate:random/bytes@0.1.0\x05%\x01@\0\0z\x04\0\x03run\x01&\x04\
-\0\x13krate:app/cli@0.1.0\x04\0\x0b\x09\x01\0\x03cli\x03\0\0\0G\x09producers\x01\
-\x0cprocessed-by\x02\x0dwit-component\x070.227.1\x10wit-bindgen-rust\x060.41.0";
+\x03\0\x17krate:store/group@0.1.0\x05$\x01B*\x01p}\x01q\x05\x04null\0\0\x04text\x01\
+s\0\x06number\x01u\0\x07boolean\x01\x7f\0\x05bytes\x01\0\0\x04\0\x05value\x03\0\x01\
+\x01o\x02s\x02\x01p\x03\x01r\x04\x02ids\x06fields\x04\x0achanged-bys\x0achanged-\
+atw\x04\0\x05entry\x03\0\x05\x01s\x04\0\x06cursor\x03\0\x07\x01p\x06\x01ps\x01r\x04\
+\x07entries\x09\x07removed\x0a\x04next\x08\x04more\x7f\x04\0\x04page\x03\0\x0b\x01\
+kw\x01r\x04\x06online\x7f\x07changed\x7f\x07pendingy\x0blast-synced\x0d\x04\0\x0a\
+sync-state\x03\0\x0e\x01r\x03\x04names\x04roles\x03orgs\x04\0\x06member\x03\0\x10\
+\x01r\x02\x06reasons\x07messages\x04\0\x07refusal\x03\0\x12\x01q\x08\x06denied\0\
+\0\x0enot-an-org-app\0\0\x07invalid\x01s\0\x09too-large\0\0\x0aover-quota\0\0\x07\
+refused\x01\x13\0\x0bunsupported\0\0\x02io\x01s\0\x04\0\x09org-error\x03\0\x14\x01\
+j\0\x01\x15\x01@\x03\x0acollections\x02ids\x06fields\x04\0\x16\x04\0\x03put\x01\x17\
+\x01k\x06\x01j\x01\x18\x01\x15\x01@\x02\x0acollections\x02ids\0\x19\x04\0\x03get\
+\x01\x1a\x01@\x02\x0acollections\x02ids\0\x16\x04\0\x06delete\x01\x1b\x01k\x08\x01\
+j\x01\x0c\x01\x15\x01@\x02\x0acollections\x05since\x1c\0\x1d\x04\0\x07records\x01\
+\x1e\x01j\x01\x0f\x01\x15\x01@\0\0\x1f\x04\0\x04sync\x01\x20\x01k\x11\x01j\x01!\x01\
+\x15\x01@\0\0\"\x04\0\x03who\x01#\x03\0\x15krate:store/org@0.1.0\x05%\x01B\x0b\x01\
+q\x04\x06denied\0\0\x09too-large\0\0\x0bempty-range\0\0\x0bunavailable\x01s\0\x04\
+\0\x0crandom-error\x03\0\0\x01p}\x01j\x01\x02\x01\x01\x01@\x01\x05county\0\x03\x04\
+\0\x03get\x01\x04\x01j\x01w\x01\x01\x01@\0\0\x05\x04\0\x08next-u64\x01\x06\x01@\x01\
+\x05boundw\0\x05\x04\0\x05below\x01\x07\x03\0\x18krate:random/bytes@0.1.0\x05&\x01\
+@\0\0z\x04\0\x03run\x01'\x04\0\x13krate:app/cli@0.1.0\x04\0\x0b\x09\x01\0\x03cli\
+\x03\0\0\0G\x09producers\x01\x0cprocessed-by\x02\x0dwit-component\x070.227.1\x10\
+wit-bindgen-rust\x060.41.0";
 #[inline(never)]
 #[doc(hidden)]
 pub fn __link_custom_section_describing_imports() {
