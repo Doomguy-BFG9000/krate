@@ -267,20 +267,26 @@
         return { title: "Card billing is not open yet", body: "Krate invoices pilot organisations directly: write to yashraj@krate.tech.", action: { label: "Write to yashraj@krate.tech", href: "mailto:yashraj@krate.tech" } };
       case "sso-required":
         return {
-          title: org + " asks for its company sign-in",
-          body: "Your address belongs to " + org + "'s company, so it asks you to sign in through the company. You come straight back here.",
+          title: org + " requires company sign-in",
+          body: "Your address is at " + org + "'s company domain, so it asks you to sign in through your company. You come straight back here.",
           action: { label: "Use company sign-in", href: "/login/?org=" + encodeURIComponent(ctx.slug || "") + "&next=" + encodeURIComponent(ctx.here || "/orgs/") },
         };
       case "rate-limited":
         return { title: "Too many refused attempts", body: "Wait a minute, then try again. Nothing changed.", action: null };
       case "domain-not-verified":
-        return { title: "The domain is not verified yet", body: (ctx.message ? String(ctx.message) + ". " : "") + "Add the TXT record below at your DNS provider, wait a few minutes, then press Verify again.", action: null };
+        return { title: "The domain is not verified yet", body: "The TXT record is not there yet. Add it at your DNS provider as shown above, wait a few minutes, then press Verify again.", action: null };
       case "sso-not-set-up":
         return { title: "Company sign-in is not set up", body: "An owner of " + org + " sets it up in Settings. Until then, sign in with GitHub, Google or email.", action: null };
       case "sso-unverified-email":
         return { title: "Your company did not confirm your email", body: "Company sign-in needs an address your company has verified. Ask your IT team, or sign in another way.", action: null };
       case "sso-wrong-domain":
         return { title: "That address is not at " + org + "'s domain", body: "Company sign-in takes addresses at the domain " + org + " verified. Sign in with your work account, or another way.", action: null };
+      case "sso-needs-break-glass":
+        return { title: "Keep a way in that does not need company sign-in", body: "Before " + org + " can require company sign-in, at least one owner must sign in another way, with GitHub or an address outside the company domain. Invite a second owner like that, then turn it on.", action: null };
+      case "sso-off":
+        return { title: "Company sign-in is not switched on on this hub yet", body: "Nothing changed. Sign in with GitHub, Google or email for now.", action: null };
+      case "leases-off":
+        return { title: "Offline access is not switched on on this hub yet", body: "Apps still open while you are online. Nothing changed.", action: null };
       case "recovery-not-waiting":
         return { title: "That recovery is not waiting any more", body: "It was already cancelled or has taken effect. The banner is gone once the page refreshes.", action: null };
       case "sso-failed":
@@ -495,8 +501,31 @@
   var PROVIDERS = [
     ["Google Workspace", "https://accounts.google.com"],
     ["Okta", "https://<your-company>.okta.com"],
-    ["Microsoft Entra", "https://login.microsoftonline.com/<tenant-id>/v2.0"],
+    ["Microsoft Entra", "https://login.microsoftonline.com/<tenant-id>/v2.0", "and its tenant must issue verified email claims, or sign-in is refused"],
   ];
+
+  /// What a finished company sign-in did (Addendum 3 F): the hub returns
+  /// `org` and `sso` in /login/done's fragment. Words for each.
+  function ssoNotice(state, org) {
+    var o = org || "the organisation";
+    return {
+      joined: "You signed in with " + o + "'s company sign-in and joined " + o + ".",
+      member: "You are signed in through " + o + "'s company sign-in.",
+      removed: "You are signed in, but you were removed from " + o + ", so company sign-in did not add you back. Ask one of its owners if that is a mistake.",
+      "no-auto-join": "You are signed in. " + o + " does not let people join by themselves: ask one of its owners for an invitation.",
+      "off-domain": "You are signed in, but your address is not at " + o + "'s verified domain, so it did not add you.",
+      "no-sso": "You are signed in. " + o + " has no company sign-in set up any more.",
+    }[state] || "You are signed in.";
+  }
+  /// A company sign-in's result, kept by /login/done for the page it
+  /// returns to, read once.
+  function takeSsoNotice(store, name) {
+    store = store || root.localStorage;
+    var raw = null;
+    try { raw = store.getItem("krate_sso_notice"); store.removeItem("krate_sso_notice"); } catch (e) {}
+    if (!raw) return "";
+    try { var n = JSON.parse(raw); return n && n.state ? ssoNotice(n.state, name || n.org) : ""; } catch (e) { return ""; }
+  }
 
   /// Money only as the hub sent it: Stripe's minor units and currency.
   function money(amount, currency) {
@@ -598,6 +627,7 @@
     can: can, tabsFor: tabsFor, invitable: invitable, memberActions: memberActions,
     refusal: refusal, signInHref: signInHref, eventWords: eventWords, fingerprint: fingerprint,
     day: day, moment: moment, appName: appName, joinUrl: joinUrl, fileName: fileName,
+    ssoNotice: ssoNotice, takeSsoNotice: takeSsoNotice,
     OFFLINE: OFFLINE, offlineName: offlineName, offlineNotice: offlineNotice, PROVIDERS: PROVIDERS, money: money,
     el: el, refusalBlock: refusalBlock, signInChoices: signInChoices, copy: copy, download: download,
   };

@@ -212,11 +212,11 @@ const two = [member(ALICE, "owner"), member("github:olga", "owner"), member("git
   const unv = await sso({ issuer: "https://acme.okta.com", client_id: "c", has_secret: true, domain: "acme.test", domain_verified: false, auto_join_role: null, enforce: false }, { "POST /orgs/acme/sso/verify-domain": () => [422, { error: "domain-not-verified", message: "no TXT record at _krate-verify.acme.test yet" }] });
   button(unv.el("ssoCard"), "Verify").click();
   await settle();
-  check(/not verified yet/.test(unv.el("ssoCard").shown) && /no TXT record/.test(unv.el("ssoCard").shown), "a domain that is not there yet is said in words");
+  check(/not verified yet/.test(unv.el("ssoCard").shown) && /TXT record is not there yet/.test(unv.el("ssoCard").shown) && !/ -- /.test(unv.el("ssoCard").shown), "a domain that is not there yet is said in words");
 
   const req = await page("https://krate.tech/org/?o=acme", DASH, { token: "t", routes: { "GET /orgs/acme": () => [403, { error: "sso-required", message: "" }] } });
   const a = req.el("stop").all((n) => n.tagName === "A")[0];
-  check(/company sign-in/.test(req.el("stop").shown) && a && a.href.startsWith("/login/?org=acme&next="), "sso-required offers the company sign-in, coming back here");
+  check(/requires company sign-in/.test(req.el("stop").shown) && a && a.href.startsWith("/login/?org=acme&next="), "sso-required offers the company sign-in, coming back here");
 }
 
 /* ---- G. offline access ------------------------------------------------- */

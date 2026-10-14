@@ -71,6 +71,7 @@
 </footer>
 <script src="/kit/site.js"></script>
 <script src="/login/signin.js"></script>
+<script src="/kit/org.js"></script>
 <script>
 // The sign-in lands here with the identity in the URL fragment, which never
 // leaves this browser. Coming from the desktop app (?app=1), hand it straight
@@ -126,6 +127,19 @@
   // account page.
   var next = "";
   try { next = localStorage.getItem("krate_next") || ""; } catch (e) {}
+  // A company sign-in (IC-948, Addendum 3 F) says what it did: org and sso
+  // in the fragment. Kept for the page this returns to, which says it in
+  // words, and said here too when there is no page to return to.
+  var ssoOrg = (got.get("org") || "").toLowerCase();
+  var ssoState = got.get("sso") || "";
+  if (/^[a-z][a-z0-9-]{1,38}$/.test(ssoOrg) && /^[a-z-]{2,20}$/.test(ssoState)) {
+    try { localStorage.setItem("krate_sso_notice", JSON.stringify({ org: ssoOrg, state: ssoState })); } catch (e) {}
+    if (!next && window.KrateOrg) {
+      document.getElementById("doneSub").textContent = window.KrateOrg.ssoNotice(ssoState, ssoOrg);
+      try { localStorage.removeItem("krate_sso_notice"); } catch (e) {}
+      return;
+    }
+  }
   function doneWithNext() {
     try { localStorage.removeItem("krate_next"); } catch (e) {}
   }

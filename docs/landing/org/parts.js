@@ -258,10 +258,10 @@
           issuer.value = /</.test(p[1]) ? "" : p[1];
           issuer.placeholder = p[1];
           issuer.focus();
-          shape.textContent = p[0] + ": " + p[1];
+          shape.textContent = p[0] + ": " + p[1] + (p[2] ? ", " + p[2] : "");
         } });
       }));
-      var shape = el("small", { text: K.PROVIDERS.map(function (p) { return p[0] + ": " + p[1]; }).join(" · ") });
+      var shape = el("small", { text: K.PROVIDERS.map(function (p) { return p[0] + ": " + p[1] + (p[2] ? ", " + p[2] : ""); }).join(" · ") });
       var out = el("div");
       var save = el("button", { class: "btn dark", type: "button", text: cur.issuer ? "Save changes" : "Turn on company sign-in" });
       save.addEventListener("click", function () {
@@ -274,7 +274,10 @@
         };
         if (secret.value) body.client_secret = secret.value;
         out.textContent = "";
-        if (!/^https:\/\/[^\s<>]+$/.test(body.issuer)) return hintOut("The issuer is a web address", "It starts with https://, like " + K.PROVIDERS[0][1] + ". Pick your provider above to see its shape.");
+        // https, or a loopback issuer on a copy of the site served from
+        // this machine (the hub allows that only on a development hub too).
+        var local = /^(127\.0\.0\.1|localhost)$/.test(location.hostname) && /^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?\//.test(body.issuer + "/");
+        if (!/^https:\/\/[^\s<>]+$/.test(body.issuer) && !local) return hintOut("The issuer is a web address", "It starts with https://, like " + K.PROVIDERS[0][1] + ". Pick your provider above to see its shape.");
         if (!body.client_id) return hintOut("The client ID is missing", "Your provider shows it when you add Krate as an app.");
         if (!cur.has_secret && !body.client_secret) return hintOut("The client secret is missing", "Your provider shows it once, when you create the app. It is stored encrypted and never shown again.");
         if (!/^[a-z0-9.-]+\.[a-z]{2,}$/.test(body.domain)) return hintOut("The domain is a name like acme.com", "The part of your people's work addresses after the @.");
@@ -310,12 +313,31 @@
       card.appendChild(el("div", { class: "row2" }, [save]));
       if (cur.domain) card.appendChild(domainProof(cur));
       if (cur.issuer) {
+        // Turning it off (DELETE /orgs/<slug>/sso), with a confirmation.
+        var off = el("button", { class: "btn quiet sm", type: "button", text: "Turn off company sign-in" });
+        off.addEventListener("click", function () {
+          var key = K.key();
+          D.confirmSheet({
+            title: "Turn off company sign-in for " + nameOf() + "?",
+            body: "Nobody can sign in through it any more, nothing is required, and the stored client secret is deleted. Members stay members and sign in with GitHub, Google or email.",
+            yes: "Turn it off",
+            no: "Keep it on",
+            busy: "Turning off",
+            ctx: { what: "turn off company sign-in", whoCan: "an owner" },
+            act: function () { return K.api("DELETE", path("/sso"), null, { key: key }); },
+            done: function () { D.toast("Company sign-in is off for " + nameOf() + "."); D.show("settings"); },
+          });
+        });
+        var offRow = el("div", { class: "row2" }, [off]);
+      }
+      if (cur.issuer) {
         var link = location.origin + "/login/?org=" + slug;
         var cp = el("button", { class: "btn ghost sm", type: "button", text: "Copy", onclick: function () { K.copy(link, cp); } });
         card.appendChild(el("div", { class: "proof" }, [
           el("b", { text: "Your people sign in here" }),
           el("div", { class: "linkbox" }, [el("code", { class: "k", text: link }), cp]),
         ]));
+        card.appendChild(offRow);
       }
     }
 
@@ -327,7 +349,7 @@
       }
       box.appendChild(el("b", { text: "Prove you own " + cur.domain }));
       box.appendChild(el("p", { class: "sub", text: "Add this TXT record at your DNS provider, wait a few minutes, then press Verify. Until then company sign-in works, but nobody joins by themselves and nothing is required." }));
-      var rec = el("dl", { class: "kv" }, [el("dt", { text: "Loading" })]);
+      var rec = el("div", { class: "recs" }, [el("p", { class: "sub", text: "Loading" })]);
       box.appendChild(rec);
       var out = el("div");
       var verify = el("button", { class: "btn dark sm", type: "button", text: "Verify" });
@@ -344,11 +366,12 @@
       });
       K.api("GET", path("/sso/domain-token")).then(function (res) {
         rec.textContent = "";
-        if (!res.ok) { rec.appendChild(el("dd", { text: line(res, {}) })); return; }
+        if (!res.ok) { rec.appendChild(el("p", { class: "note", text: line(res, {}) })); return; }
         var copyBtn = function (v) { var b = el("button", { class: "btn ghost sm", type: "button", text: "Copy" }); b.addEventListener("click", function () { K.copy(v, b); }); return b; };
-        rec.appendChild(el("dt", { text: "Type" })); rec.appendChild(el("dd", { text: "TXT" }));
-        rec.appendChild(el("dt", { text: "Name" })); rec.appendChild(el("dd", {}, [el("code", { class: "k", text: res.body.name }), " ", copyBtn(res.body.name)]));
-        rec.appendChild(el("dt", { text: "Value" })); rec.appendChild(el("dd", {}, [el("code", { class: "k", text: res.body.value }), " ", copyBtn(res.body.value)]));
+        // One line per part of the record: what it is, the text, Copy.
+        rec.appendChild(el("div", { class: "rec" }, [el("span", { text: "Type" }), el("code", { class: "k", text: "TXT" }), null]));
+        rec.appendChild(el("div", { class: "rec" }, [el("span", { text: "Name" }), el("code", { class: "k", text: res.body.name }), copyBtn(res.body.name)]));
+        rec.appendChild(el("div", { class: "rec" }, [el("span", { text: "Value" }), el("code", { class: "k", text: res.body.value }), copyBtn(res.body.value)]));
       });
       box.appendChild(el("div", { class: "row2" }, [verify]));
       box.appendChild(out);

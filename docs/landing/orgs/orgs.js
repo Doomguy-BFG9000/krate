@@ -21,6 +21,9 @@
 
   if (!K.token()) { signedOut(); return; }
   $("in").hidden = false;
+  // Back from a company sign-in: what it did, in words, above the list.
+  var signedVia = K.takeSsoNotice();
+  if (signedVia) $("in").insertBefore(el("div", { class: "call ok", role: "status", style: "margin-bottom:16px" }, [el("div", { text: signedVia })]), $("in").firstChild);
 
   var chev = function () {
     var s = document.createElementNS("http://www.w3.org/2000/svg", "svg");

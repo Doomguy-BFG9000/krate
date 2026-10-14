@@ -659,6 +659,9 @@
     $("oMeta").textContent = slug + " · you are " + (/^[AEIOU]/.test(r) ? "an " : "a ") + r.toLowerCase();
     $("in").hidden = false;
     if (q.get("new") === "1") toast(name + " is ready, and you are its owner. Invite your team below.");
+    // Back from a company sign-in: what it did, in words.
+    var signedVia = K.takeSsoNotice(undefined, name);
+    if (signedVia) toast(signedVia);
     show(S.tab);
     countWaiting();
   });

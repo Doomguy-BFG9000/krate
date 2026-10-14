@@ -244,9 +244,11 @@ html.krate-booting .booting { display: flex; }
   if (!/^[a-z][a-z0-9-]{1,38}$/.test(orgSlug)) orgSlug = "";
   var SSO_WHY = {
     "sso-not-set-up": "Company sign-in is not set up for " + orgSlug + " yet. Sign in another way below.",
-    "sso-unverified-email": "Your company did not confirm your email address. Ask your IT team, or sign in another way below.",
+    "sso-unverified-email": "Your company did not confirm your email address, so company sign-in cannot use it. Ask your IT team (a Microsoft Entra tenant must be set to issue verified email claims), or sign in another way below.",
     "sso-wrong-domain": "That account's address is not at " + orgSlug + "'s company domain. Use your work account, or sign in another way below.",
     "sso-failed": "Company sign-in did not finish. Nothing changed. Try again below.",
+    "domain-not-verified": orgSlug + " has not proved its company domain yet, so company sign-in cannot sign anyone in. An owner finishes it in Settings; until then, sign in another way below.",
+    "sso-off": "Company sign-in is not switched on on this hub yet. Sign in another way below.",
   };
   if (WHY[err] || (orgSlug && SSO_WHY[err])) {
     var sub = document.getElementById("loginSub");
