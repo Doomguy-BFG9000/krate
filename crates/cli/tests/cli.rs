@@ -20627,6 +20627,18 @@ fn a_member_outside_the_audience_is_refused_and_an_owner_passes() {
     assert!(out.contains("carol (GitHub) is out of finance"), "{out}");
 }
 
+/// `who` on a new laptop: the organisation device this computer made is
+/// gone, so the next Krate run registers a new one that holds no key yet --
+/// the first open a person makes after a teammate's computer last ran Krate.
+/// Every `krate org` command passes keys on in the background (IC-958), so
+/// without this the waiting path would only be reachable by timing.
+fn new_laptop(world: &OrgWorld, who: &str) {
+    let keys = world.homes[who].path().join(".krate/org-keys");
+    if keys.exists() {
+        std::fs::remove_dir_all(&keys).expect("forget this computer's device");
+    }
+}
+
 /// IC-950 through the CLI, against a real hub (its validator gives each
 /// capability its plain words, and its store compares a candidate with the
 /// version that opens now): an update that adds a capability is listed as
@@ -20956,6 +20968,7 @@ fn a_company_connection_reaches_the_api_and_the_app_never_holds_the_credential()
     // 0. The credential is encrypted to acme's key (F-316), and Dan's
     // computer does not have that key yet: the app opens, says why in plain
     // words, and nothing reaches the API.
+    new_laptop(&world, "dan");
     let early = world.probe("dan", &link, &["GET", &invoices]);
     assert!(early.status.success(), "{}", stderr_of(&early));
     assert!(
@@ -22797,6 +22810,7 @@ fn starter_team_notes_is_shared_by_two_people_through_its_window() {
     let root = world.acme();
     let (notes, digest) = released_starter(&world, &root, "team-notes.krate");
     let title = "Order chairs for the hall";
+    new_laptop(&world, "carol");
     use_starter(
         &world,
         "carol",
@@ -22826,6 +22840,7 @@ fn starter_team_notes_is_shared_by_two_people_through_its_window() {
             ("shoot", "team-notes-one-note.png"),
         ],
     );
+    new_laptop(&world, "dan");
     use_starter(
         &world,
         "dan",
@@ -22959,6 +22974,7 @@ fn starter_expenses_is_shared_by_two_people_through_its_window() {
     };
     let root = world.acme();
     let (expenses, _) = released_starter(&world, &root, "expenses.krate");
+    new_laptop(&world, "carol");
     use_starter(
         &world,
         "carol",
@@ -22991,6 +23007,7 @@ fn starter_expenses_is_shared_by_two_people_through_its_window() {
             ("expect_text", "You are owed \u{20ac}42.50"),
         ],
     );
+    new_laptop(&world, "dan");
     use_starter(
         &world,
         "dan",
@@ -23079,6 +23096,7 @@ fn starter_stock_list_is_shared_by_two_people_through_its_window() {
     };
     let root = world.acme();
     let (stock, _) = released_starter(&world, &root, "stock-list.krate");
+    new_laptop(&world, "carol");
     use_starter(
         &world,
         "carol",
@@ -23105,6 +23123,7 @@ fn starter_stock_list_is_shared_by_two_people_through_its_window() {
             ("expect_text", "Printer paper, 3 left"),
         ],
     );
+    new_laptop(&world, "dan");
     use_starter(
         &world,
         "dan",
