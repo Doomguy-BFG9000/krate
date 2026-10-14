@@ -278,6 +278,10 @@ jobs:
           # Company connections in Settings: only owners and admins manage
           # them, the credential is sent once and never shown again (IC-952).
           node docs/landing/studio/org-connections-test.mjs
+          # The company's apps on Studio's Home (IC-953): one card per app
+          # the engine lists, Open through its door, a withdrawn app gone,
+          # and a new laptop asked for its organisation's own sign-in.
+          node docs/landing/studio/company-apps-test.mjs
           # And the doors security asks for (IC-955): SAML, SCIM and the
           # audit export are each shown only to the roles the matrix gives
           # them, a token or secret is shown once and kept nowhere, nothing

@@ -69,5 +69,10 @@
 		<key>interpreter</key>
 		<false/>
 	</dict>
+	<key>org</key>
+	<dict>
+		<key>slug</key>
+		<string>acme</string>
+	</dict>
 </dict>
 </plist>

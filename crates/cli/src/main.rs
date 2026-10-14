@@ -15193,16 +15193,22 @@ fn judge_command(bundle: &Path, tier: &str) -> Result<u8> {
 }
 
 /// The smallest bundle worth an unpacked-cache entry (IC-944).
-const OPEN_CACHE_MIN_BYTES: u64 = 8 * 1024 * 1024;
+pub(crate) const OPEN_CACHE_MIN_BYTES: u64 = 8 * 1024 * 1024;
 
 /// Where opened bundles are kept unpacked (IC-944): `KRATE_CACHE_DIR`,
 /// else the platform's cache folder, under `opened` -- beside the compiled
 /// code the runtime keeps. `KRATE_NO_OPEN_CACHE=1` turns it off.
-fn opened_cache_root() -> Option<PathBuf> {
+pub(crate) fn opened_cache_root() -> Option<PathBuf> {
     if std::env::var_os("KRATE_NO_OPEN_CACHE").is_some() {
         return None;
     }
-    let root = if let Some(root) = std::env::var_os("KRATE_CACHE_DIR") {
+    Some(cache_root()?.join("opened"))
+}
+
+/// Krate's cache folder: `KRATE_CACHE_DIR`, else the platform's. What is
+/// here can be thrown away and fetched again; the person's data never is.
+pub(crate) fn cache_root() -> Option<PathBuf> {
+    Some(if let Some(root) = std::env::var_os("KRATE_CACHE_DIR") {
         PathBuf::from(root)
     } else if cfg!(windows) {
         PathBuf::from(std::env::var_os("LOCALAPPDATA")?)
@@ -15210,8 +15216,7 @@ fn opened_cache_root() -> Option<PathBuf> {
             .join("cache")
     } else {
         home_dir()?.join(".cache").join("krate")
-    };
-    Some(root.join("opened"))
+    })
 }
 
 /// A link's app, ready to run. An ordinary one is read and opened by the

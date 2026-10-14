@@ -2872,6 +2872,78 @@ fn org_targets_blocking() -> Result<Vec<serde_json::Value>, String> {
         .collect())
 }
 
+/// The company's apps for the signed-in person (IC-953): the engine's
+/// `krate org apps --json`, which lists each organisation's apps this
+/// person may open now (their audience, nothing withdrawn), keeps a copy for
+/// when there is no connection, and gets each app ready to open offline.
+/// Signed out, its answer says so and names the company sign-in when the
+/// machine policy names an organisation. An engine that cannot answer
+/// (too old, not there) is an empty list: the Home section is not drawn.
+#[tauri::command]
+async fn org_apps() -> Result<serde_json::Value, String> {
+    tauri::async_runtime::spawn_blocking(org_apps_blocking)
+        .await
+        .map_err(|err| err.to_string())?
+}
+
+fn org_apps_blocking() -> Result<serde_json::Value, String> {
+    let engine = engine()?;
+    let out = silent_cmd(&engine)
+        .args(["org", "apps", "--json"])
+        .output()
+        .map_err(|err| err.to_string())?;
+    let answer: serde_json::Value =
+        serde_json::from_slice(&out.stdout).unwrap_or(serde_json::Value::Null);
+    if !out.status.success() || !answer.is_object() {
+        return Ok(serde_json::json!({ "orgs": [] }));
+    }
+    Ok(answer)
+}
+
+/// Open one company app (IC-953): the engine's `krate org apps <slug>
+/// --open <app id> --window`, the double-click door, so every check holds:
+/// the machine policy, membership, audience, withdrawal, and offline only
+/// on a lease that holds. The engine's own words come back when it does
+/// not open.
+#[tauri::command]
+async fn org_app_open(slug: String, app_id: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || org_app_open_blocking(&slug, &app_id))
+        .await
+        .map_err(|err| err.to_string())?
+}
+
+fn org_app_open_blocking(slug: &str, app_id: &str) -> Result<(), String> {
+    // Names, never flags or paths: an app id is letters, digits, dots and
+    // dashes, a slug lower-case letters, digits and dashes.
+    let named = |text: &str, extra: &[char]| {
+        !text.is_empty()
+            && text.len() <= 120
+            && !text.starts_with('-')
+            && text
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || extra.contains(&c))
+    };
+    if !named(slug, &[]) || !named(app_id, &['.', '_']) {
+        return Err("That is not one of your company's apps.".to_string());
+    }
+    let engine = engine()?;
+    let out = silent_cmd(&engine)
+        .current_dir(studio_dir())
+        .args(["org", "apps", slug, "--open", app_id, "--window"])
+        .output()
+        .map_err(|err| err.to_string())?;
+    if out.status.success() {
+        return Ok(());
+    }
+    let words = String::from_utf8_lossy(&out.stderr);
+    let words = words.trim().trim_start_matches("error:").trim();
+    Err(if words.is_empty() {
+        "The app did not open.".to_string()
+    } else {
+        words.to_string()
+    })
+}
+
 /// The dashboard tab where an organisation's candidates wait.
 fn waiting_url(slug: &str) -> String {
     let slug: String = slug
@@ -3335,12 +3407,32 @@ fn login_browser(provider: Option<String>) -> Result<(), String> {
     // A provider picked in Studio's sign-in popup rides in the fragment
     // (no `&` to lose), and the page goes straight on to it.
     let nonce = begin_sign_in(&studio_dir());
-    let via = match provider.as_deref() {
-        Some("github") => "#github",
-        Some("google") => "#google",
-        _ => "",
-    };
+    let via = sign_in_fragment(provider.as_deref());
     open_url(&format!("https://krate.tech/login?app_nonce={nonce}{via}"))
+}
+
+/// The sign-in page's fragment for a provider picked in Studio: `#github`,
+/// `#google`, or `#org=<slug>` for an organisation's company sign-in
+/// (IC-953: the machine policy's `[org] slug`), which the page offers
+/// first. Anything else is no fragment at all.
+fn sign_in_fragment(provider: Option<&str>) -> String {
+    match provider {
+        Some("github") => "#github".to_string(),
+        Some("google") => "#google".to_string(),
+        Some(other) => match other.strip_prefix("org:") {
+            Some(slug)
+                if (2..=39).contains(&slug.len())
+                    && slug.starts_with(|c: char| c.is_ascii_lowercase())
+                    && slug
+                        .chars()
+                        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-') =>
+            {
+                format!("#org={slug}")
+            }
+            _ => String::new(),
+        },
+        None => String::new(),
+    }
 }
 
 /// Email a sign-in link, asked for from Studio's sign-in popup. The link
@@ -5709,6 +5801,8 @@ fn main() {
             report_send,
             publish,
             org_targets,
+            org_apps,
+            org_app_open,
             send_to_org,
             make_card,
             make_wrap,

@@ -183,6 +183,34 @@ The limit to know: this is enforced by Krate on the device. Someone who
 strips the mark and the signature has an unsigned copy of the code, not the
 organisation's app, and Krate cannot stop a file from being copied.
 
+## Your company's apps on every computer
+
+Every member sees the apps their organisations released to them, on any
+computer with Krate:
+
+```sh
+krate org apps
+```
+
+It lists each app you may open now, with its version, its size and what it
+can do on your computer, in the words the reviewer saw when they approved
+it. Only apps for you are listed: an app limited to groups you are not in is
+not there, and a withdrawn release is gone. Open one by its app id:
+
+```sh
+krate org apps acme --open com.acme.expenses
+```
+
+That opens the release the organisation chose to open now, through the
+same checks as any private app: after a rollback it is the older one.
+
+Apps that may be used offline are kept ready on your computer when they are
+listed, with their offline access, so they open at once, and with no
+connection until that access runs out. With no connection, `krate org apps`
+shows the list it last saw. Krate Studio shows the same apps on its Home
+under Company apps, refreshed when it opens and every 15 minutes while it is
+open. `krate org apps --json` is the same list for other tools.
+
 ## Company connections
 
 A connection lets the organisation's apps call one of its APIs without any

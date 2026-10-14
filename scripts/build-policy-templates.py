@@ -109,9 +109,12 @@ KEYS = [
     dict(table="runtime", key="interpreter", kind="bool", sample=False,
          title="Run apps on the interpreter",
          help="true: every app runs on Krate's interpreter (Pulley) instead of compiled machine code, so Krate never makes executable memory. For endpoint protection that blocks code generated at run time, and Windows Arbitrary Code Guard. Apps may run slower this way."),
+    dict(table="org", key="slug", kind="string", sample="acme",
+         title="Your organisation on Krate",
+         help="Your organisation's short name on the hub (the one in krate.tech/org/?o=acme). Krate Studio and krate org apps list its apps first, and on a new computer Studio asks the person to sign in with your company sign-in the first time it opens. It allows nothing extra."),
 ]
 
-TABLES = ["trust", "capabilities", "network", "usage", "hub", "studio", "updates", "audit", "runtime"]
+TABLES = ["trust", "capabilities", "network", "usage", "hub", "studio", "updates", "audit", "runtime", "org"]
 
 
 def sample_dict():
@@ -233,7 +236,7 @@ def build_mobileconfig():
 NS = "http://schemas.microsoft.com/GroupPolicy/2006/07/PolicyDefinitions"
 CATEGORY = {"": "Krate", "trust": "Krate_Trust", "capabilities": "Krate_Apps", "network": "Krate_Apps",
             "runtime": "Krate_Apps", "usage": "Krate_Krate", "hub": "Krate_Krate", "updates": "Krate_Krate",
-            "audit": "Krate_Krate", "studio": "Krate_Studio"}
+            "audit": "Krate_Krate", "studio": "Krate_Studio", "org": "Krate_Studio"}
 CATEGORY_TEXT = {"Krate": "Krate", "Krate_Trust": "Which apps may open",
                  "Krate_Apps": "What apps may do", "Krate_Krate": "Krate itself",
                  "Krate_Studio": "Krate Studio and AI builds"}
@@ -489,6 +492,8 @@ def self_test():
     # Every P2 key appears in every template, with the same name.
     want = {(k["table"], k["key"]) for k in KEYS}
     assert ("runtime", "interpreter") in want and ("trust", "roots") in want
+    # IC-953: the organisation whose apps come first, in every template.
+    assert ("org", "slug") in want
     assert {t for t, _ in want if t} == set(TABLES), "every table is listed"
     toml = build_toml()
     try:

@@ -21,6 +21,8 @@ use clap::{Subcommand, ValueEnum};
 
 use crate::github_auth;
 
+/// `krate org apps` (IC-953).
+mod apps;
 /// `krate org connection ...` (IC-952).
 mod connection;
 
@@ -158,6 +160,29 @@ pub enum OrgCommand {
     Connection {
         #[command(subcommand)]
         command: connection::ConnectionCommand,
+    },
+    /// Your company's apps: each one you may open, with what it can do.
+    /// With no organisation named, every one you are in, the one your
+    /// computer belongs to first. Apps that may be used offline are kept
+    /// ready on this computer, so they open at once and without a
+    /// connection while their offline access lasts.
+    Apps {
+        /// One organisation's apps only.
+        slug: Option<String>,
+        /// Open this app (its id, from the list) as it is released now:
+        /// `krate org apps acme --open com.acme.expenses`.
+        #[arg(long, value_name = "APP_ID")]
+        open: Option<String>,
+        /// The list as JSON, for Studio.
+        #[arg(long)]
+        json: bool,
+        /// With --open: open it in its own window, the way a double-click
+        /// does (`krate launch`), as Studio's Open does.
+        #[arg(long, requires = "open")]
+        window: bool,
+        /// Passed on to `krate run` when opening, after `--`.
+        #[arg(last = true, hide = true)]
+        run_args: Vec<String>,
     },
 }
 
@@ -406,14 +431,34 @@ impl Client {
                 Err(ureq::Error::Transport(err)) => last = Some(err),
             }
         }
-        anyhow::bail!(
-            "could not reach the hub at {}: {}. Is it running? Point --hub or KRATE_HUB_URL \
-             at a reachable one.",
-            self.hub,
-            last.map(|err| err.to_string()).unwrap_or_default()
+        Err(anyhow::Error::new(Unreachable {
+            hub: self.hub.clone(),
+            why: last.map(|err| err.to_string()).unwrap_or_default(),
+        }))
+    }
+}
+
+/// The hub did not answer at all: no connection, or nothing listening.
+/// Kept apart from a refusal, so a command that works offline (`krate org
+/// apps`) can tell "offline" from "no".
+#[derive(Debug)]
+pub struct Unreachable {
+    pub hub: String,
+    pub why: String,
+}
+
+impl std::fmt::Display for Unreachable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "could not reach the hub at {}: {}. Is it running? Point --hub or KRATE_HUB_URL at \
+             a reachable one.",
+            self.hub, self.why
         )
     }
 }
+
+impl std::error::Error for Unreachable {}
 
 /// The signed-in identity, signing in first when a person is there to do
 /// it -- the same as `krate publish`.
@@ -451,6 +496,7 @@ pub enum Action<'a> {
     Audience,
     Groups,
     Connection,
+    Apps,
 }
 
 /// A refusal in plain words: what the reason means here, and the next step.
@@ -530,6 +576,7 @@ pub fn words(refusal: &HubRefusal, org: &str, me: &str, action: Action) -> Strin
                     format!("set up or change {org}'s connections"),
                     owner_or_admin.clone(),
                 ),
+                Action::Apps => (format!("open {org}'s apps"), owner_or_admin.clone()),
             };
             format!("your role in {org} cannot {what}: ask {who}")
         }
@@ -869,6 +916,27 @@ pub fn run(command: OrgCommand, hub_override: Option<&str>) -> Result<u8> {
         return release_key_command(slug, delegation.as_deref());
     }
     let hub = hub_url(hub_override)?;
+    // The company's apps work signed out (it says how to sign in) and
+    // offline (from what this computer kept), so they sign in their own way.
+    if let OrgCommand::Apps {
+        slug,
+        open,
+        json,
+        window,
+        run_args,
+    } = command
+    {
+        return apps::run(
+            hub,
+            apps::Ask {
+                slug,
+                open,
+                json,
+                window,
+                run_args,
+            },
+        );
+    }
     let identity = identity_or_sign_in("Organisations know people by their sign-in.")?;
     let client = Client::new(hub, identity);
     let me = client.me();
@@ -1410,6 +1478,7 @@ pub fn run(command: OrgCommand, hub_override: Option<&str>) -> Result<u8> {
         OrgCommand::Release { command } => release_command(&client, &me, command),
         OrgCommand::Group { command } => group_command(&client, &me, command),
         OrgCommand::Connection { command } => connection::run(&client, &me, command),
+        OrgCommand::Apps { .. } => unreachable!("handled before signing in"),
         OrgCommand::Audit { slug } => {
             let answer = worded(
                 client.send("GET", &format!("/orgs/{}/audit", seg(&slug)?), &Body::Empty),

@@ -487,6 +487,10 @@ pub struct Policy {
     pub updates: UpdateMode,
     pub audit_path: Option<PathBuf>,
     pub interpreter: bool,
+    /// `[org] slug`: the organisation this computer belongs to. Its apps are
+    /// listed first, and a person who is not signed in is asked to sign in
+    /// with its company sign-in (IC-953). It narrows nothing.
+    pub org: Option<String>,
 }
 
 /// Reads one tree strictly: every table names only keys Krate knows.
@@ -608,6 +612,7 @@ fn parse(value: &PValue, kind: SourceKind) -> std::result::Result<Policy, String
             "updates",
             "audit",
             "runtime",
+            "org",
         ],
     )?;
     match top.get("version") {
@@ -853,6 +858,23 @@ fn parse(value: &PValue, kind: SourceKind) -> std::result::Result<Policy, String
         }
     }
 
+    let mut org = None;
+    if let Some(value) = top.get("org") {
+        let t = r.table(value, "org")?;
+        r.only(t, "org", &["slug"])?;
+        if let Some(v) = t.get("slug") {
+            let slug = r.string(v, "org.slug")?.trim().to_ascii_lowercase();
+            if !org_slug(&slug) {
+                return Err(format!(
+                    "`org.slug` is \"{slug}\", and it should be an organisation's short name: 2 \
+                     to 39 lower-case letters, digits and dashes, starting with a letter, like \
+                     acme"
+                ));
+            }
+            org = Some(slug);
+        }
+    }
+
     Ok(Policy {
         name,
         trust,
@@ -867,7 +889,24 @@ fn parse(value: &PValue, kind: SourceKind) -> std::result::Result<Policy, String
         updates,
         audit_path,
         interpreter,
+        org,
     })
+}
+
+/// An organisation's short name, as the hub allows it (org.js SLUG).
+fn org_slug(slug: &str) -> bool {
+    let bytes = slug.as_bytes();
+    (2..=39).contains(&bytes.len())
+        && bytes[0].is_ascii_lowercase()
+        && bytes
+            .iter()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || *b == b'-')
+}
+
+/// The organisation this computer's policy names (`[org] slug`): its apps
+/// are listed first, and its company sign-in is the one offered (IC-953).
+pub fn policy_org() -> Option<&'static str> {
+    policy().and_then(|p| p.org.as_deref())
 }
 
 // ---------------------------------------------------------------- words
@@ -1516,6 +1555,7 @@ fn policy_json(policy: &Policy) -> Value {
         "updates": { "mode": policy.updates.as_str() },
         "audit": { "path": policy.audit_path.as_ref().map(|p| p.display().to_string()) },
         "runtime": { "interpreter": policy.interpreter },
+        "org": policy.org.as_ref().map(|slug| json!({ "slug": slug })),
     })
 }
 
@@ -1695,6 +1735,12 @@ fn words_for(state: &State, record: &audit::Location) -> String {
             ));
             if let Some(hub) = &policy.hub {
                 line(format!("Hub: {hub} only."));
+            }
+            if let Some(slug) = &policy.org {
+                line(format!(
+                    "Organisation: {slug}. Its apps are listed first (`krate org apps`), and \
+                     signing in uses its company sign-in."
+                ));
             }
             match (&policy.ai, &policy.providers) {
                 (false, _) => line("Building apps with AI: off.".to_string()),
@@ -2118,6 +2164,30 @@ interpreter = true
         );
         assert_eq!(policy.updates, UpdateMode::Notify);
         assert!(!policy.interpreter);
+        assert_eq!(policy.org.as_deref(), Some("acme"));
+    }
+
+    /// `[org] slug` (IC-953) names the organisation whose apps come first:
+    /// a hub's slug, read strictly like every other key.
+    #[test]
+    fn the_org_slug_is_a_hub_slug_and_nothing_else() {
+        let base = "version = 1\n";
+        assert_eq!(toml_policy(base).expect("no org").org, None);
+        let read = toml_policy(&format!("{base}[org]\nslug = \"Acme-Labs\"\n")).expect("org");
+        assert_eq!(read.org.as_deref(), Some("acme-labs"));
+        for bad in ["a", "1acme", "acme labs", "acme_labs", &"a".repeat(40), ""] {
+            let err =
+                toml_policy(&format!("{base}[org]\nslug = \"{bad}\"\n")).expect_err("not a slug");
+            assert!(err.contains("`org.slug`"), "{bad}: {err}");
+        }
+        let err = toml_policy(&format!("{base}[org]\nslug = \"acme\"\nname = \"x\"\n"))
+            .expect_err("unknown key");
+        assert!(
+            err.contains("`org.name` is not a setting Krate knows"),
+            "{err}"
+        );
+        let err = toml_policy(&format!("{base}org = \"acme\"\n")).expect_err("not a table");
+        assert!(err.contains("`org` should be a table"), "{err}");
     }
 
     /// The sample policy.toml published at /deploy (read from

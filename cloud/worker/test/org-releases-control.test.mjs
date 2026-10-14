@@ -111,10 +111,13 @@ test("withdraw needs a reason and the authority; then downloads, check-ins and l
   const up = await call(env, "carol", "POST", "/orgs/acme/candidates", { bytes: fixture(V3) });
   assert.deepStrictEqual(pair(await call(env, "alice", "POST", `/orgs/acme/releases/${up.body.digest}/withdraw`, { json: { reason: "x" } })), [404, "digest-mismatch"]);
 
-  // The releases list leaves it out; the history keeps it, with its reason.
+  // The releases list leaves it out; the history keeps it, with its reason,
+  // for the people who manage releases. A recipient's list of the
+  // company's apps no longer has it at all (IC-953).
   const list = (await call(env, "dan", "GET", "/orgs/acme/releases")).body;
   assert.deepStrictEqual(list.map((r) => r.digest), [d1]);
-  const hist = (await call(env, "dan", "GET", "/orgs/acme/apps")).body.apps[0];
+  assert.deepStrictEqual((await call(env, "dan", "GET", "/orgs/acme/apps")).body.apps[0].releases.map((r) => r.digest), [d1]);
+  const hist = (await call(env, "alice", "GET", "/orgs/acme/apps")).body.apps[0];
   const gone = hist.releases.find((r) => r.digest === d2);
   assert.deepStrictEqual([gone.state, gone.withdraw_reason, gone.withdrawn_by], ["withdrawn", "crashes on open", "github:bob"]);
 

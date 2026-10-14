@@ -2883,6 +2883,93 @@ echo '   '"#,
         assert!(block(org_targets()).unwrap().is_empty());
     }
 
+    /* ---- the company's apps (IC-953) ---------------------------------- */
+
+    #[test]
+    fn company_apps_are_the_engines_list_and_nothing_when_it_cannot_answer() {
+        let t = TestHome::new();
+        t.engine(
+            r#"echo '{"v":1,"signed_in":true,"policy_org":"acme","orgs":[{"slug":"acme","name":"Acme","apps":[{"app_id":"com.acme.expenses","name":"Expenses"}]}]}'"#,
+        );
+        let answer = block(org_apps()).unwrap();
+        assert_eq!(t.args(), vec!["org", "apps", "--json"]);
+        assert_eq!(answer["orgs"][0]["apps"][0]["app_id"], "com.acme.expenses");
+        assert_eq!(answer["policy_org"], "acme");
+        // An engine too old to know the command, or one that fails: an
+        // empty list, so Home draws no section and shows no error.
+        t.engine("echo 'error: unrecognized subcommand apps' >&2; exit 2");
+        assert_eq!(
+            block(org_apps()).unwrap(),
+            serde_json::json!({ "orgs": [] })
+        );
+        t.engine("echo 'not json'");
+        assert_eq!(
+            block(org_apps()).unwrap(),
+            serde_json::json!({ "orgs": [] })
+        );
+    }
+
+    #[test]
+    fn opening_a_company_app_goes_through_the_engines_door_and_says_why_not() {
+        let t = TestHome::new();
+        t.engine("exit 0");
+        block(org_app_open("acme".into(), "com.acme.expenses".into())).unwrap();
+        assert_eq!(
+            t.args(),
+            vec![
+                "org",
+                "apps",
+                "acme",
+                "--open",
+                "com.acme.expenses",
+                "--window"
+            ]
+        );
+        t.engine(
+            "echo 'error: com.acme.expenses does not open: Acme withdrew Expenses 1.3.0' >&2; exit 1",
+        );
+        let err = block(org_app_open("acme".into(), "com.acme.expenses".into())).unwrap_err();
+        assert_eq!(
+            err,
+            "com.acme.expenses does not open: Acme withdrew Expenses 1.3.0"
+        );
+        // Names only: nothing that reads as a flag or a path reaches it.
+        t.engine("echo should-not-run > '/dev/null'; exit 0");
+        for (slug, app) in [
+            ("--hub", "x"),
+            ("acme", "--window"),
+            ("acme", "../../etc"),
+            ("", "x"),
+            ("acme", "a b"),
+        ] {
+            let before = t.args();
+            assert!(
+                block(org_app_open(slug.into(), app.into())).is_err(),
+                "{slug} {app}"
+            );
+            assert_eq!(t.args(), before, "the engine was not run for {slug} {app}");
+        }
+    }
+
+    #[test]
+    fn the_company_sign_in_is_named_in_the_fragment() {
+        assert_eq!(sign_in_fragment(Some("github")), "#github");
+        assert_eq!(sign_in_fragment(Some("google")), "#google");
+        assert_eq!(sign_in_fragment(Some("org:acme-labs")), "#org=acme-labs");
+        for bad in [
+            "org:",
+            "org:A",
+            "org:1acme",
+            "org:acme&x=1",
+            "org:a",
+            "email",
+            "org:acme#",
+        ] {
+            assert_eq!(sign_in_fragment(Some(bad)), "", "{bad}");
+        }
+        assert_eq!(sign_in_fragment(None), "");
+    }
+
     #[test]
     fn sending_to_an_organisation_waits_for_approval_with_a_link() {
         let t = TestHome::new();
