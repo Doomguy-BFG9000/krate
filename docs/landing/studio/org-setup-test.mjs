@@ -69,7 +69,7 @@ async function create(p, name) {
   p.el("createForm").dispatch("submit");
   await settle();
   const body = p.el("wBody");
-  check(/Give Acme its first app/.test(textOf(body)) && /Team Notes/.test(textOf(body)) && /Placeholder/.test(textOf(body)), "after Create comes the first app: the ready apps, each placeholder labelled so");
+  check(/Give Acme its first app/.test(textOf(body)) && /Team Notes/.test(textOf(body)) && /Expenses/.test(textOf(body)) && /Stock List/.test(textOf(body)) && !/Placeholder/.test(textOf(body)), "after Create comes the first app: the three real ready apps, none labelled a placeholder");
   const radios = body.all((n) => n.attrs.role === "radio");
   check(radios.length === STARTERS.starters.length && radios[0].attrs["aria-checked"] === "true", "the first ready app is already picked");
   const go = button(body, "Release Team Notes to Acme");
