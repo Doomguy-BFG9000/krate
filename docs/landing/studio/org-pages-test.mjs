@@ -76,7 +76,16 @@ import { KIT, ORGS, DASH, JOIN, OPEN, check, page, settle, storage, P, ACME, mem
   const out = await page("https://krate.tech/orgs/", ORGS);
   check(out.el("out").hidden === false && out.el("in").hidden === true, "/orgs/ signed out shows the sign-in choices");
   const links = out.el("outChoices").all((n) => n.tagName === "A").map((a) => a.href);
-  check(links.join() === "/login/?next=%2Forgs%2F#github,/login/?next=%2Forgs%2F#google,/login/?next=%2Forgs%2F#email", "each choice comes back to /orgs/");
+  check(links.join() === "/login/?next=%2Forgs%2F#github,/login/?next=%2Forgs%2F#google", "GitHub and Google, each coming back to /orgs/");
+  const form = out.el("outChoices").all((n) => n.tagName === "FORM")[0];
+  const box = form && form.all((n) => n.tagName === "INPUT")[0];
+  check(box && box.attrs.type === "email", "and an email box right there");
+  box.value = "not an address";
+  form.dispatch("submit");
+  check(!String(out.location.href).endsWith("#email"), "an address that is not one goes nowhere");
+  box.value = "sam@acme.test";
+  form.dispatch("submit");
+  check(String(out.location.href).endsWith("/login/?next=%2Forgs%2F#email") && !String(out.location.href).includes("sam"), "an address goes on to the email sign-in, never in the link");
 
   const p = await page("https://krate.tech/orgs/", ORGS, {
     token: "t", routes: { "GET /orgs": () => [200, [{ slug: "acme", name: "Acme", role: "owner" }, { slug: "beta-lab", name: "Beta Lab", role: "recipient" }]] },
