@@ -58,6 +58,9 @@ fn known_providers() -> Vec<&'static str> {
 /// What kind of place a policy came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SourceKind {
+    // Read only on macOS; elsewhere the variant is still the name a policy
+    // record and the tests use, so it is not dead, only unbuilt.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     ManagedPreferences,
     Registry,
     File,

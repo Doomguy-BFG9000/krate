@@ -4980,6 +4980,7 @@ fn check_address(final_url: &str, bytes: &[u8]) -> Result<Option<String>> {
 
 /// [`check_address`] against a digest already taken -- a big download is
 /// hashed as it streams to disk and never held whole (IC-945).
+#[cfg(feature = "fetch")]
 fn check_address_digest(final_url: &str, actual: &str) -> Result<Option<String>> {
     let path = final_url.split(['?', '#']).next().unwrap_or(final_url);
     let segment = path.rsplit('/').next().unwrap_or("");

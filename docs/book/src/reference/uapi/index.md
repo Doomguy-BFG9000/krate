@@ -624,6 +624,7 @@ HTTP client calls. Phase 2 starts with simple request and response bodies.
 Accepted capability strings for this module, generated from the runtime manifest table:
 
 - `net.connect:<host>:<port>` - manifest or session grant
+- `net.connection:<connection-name>` - manifest or session grant
 
 - `get` and `fetch` require a matching `net.connect:HOST:PORT` grant before the adapter opens a socket.
 - The current host adapter supports plain HTTP request framing first, with a 1 MiB full-response cap; HTTPS, redirects, streaming, and richer network behavior are still Phase 2 work.
@@ -687,6 +688,7 @@ krate::io::stdio::println(&body)?;
 Accepted capability strings for this module, generated from the runtime manifest table:
 
 - `net.connect:<host>:<port>` - manifest or session grant
+- `net.connection:<connection-name>` - manifest or session grant
 
 ### Functions
 
@@ -941,6 +943,7 @@ Shared network request, response, and error types.
 Accepted capability strings for this module, generated from the runtime manifest table:
 
 - `net.connect:<host>:<port>` - manifest or session grant
+- `net.connection:<connection-name>` - manifest or session grant
 
 ### Functions
 

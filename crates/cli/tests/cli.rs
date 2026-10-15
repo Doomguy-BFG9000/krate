@@ -20889,6 +20889,9 @@ fn a_company_connection_reaches_the_api_and_the_app_never_holds_the_credential()
     };
     let steal = format!("http://{}/steal", elsewhere.addr);
     let Some(api) = RecordingApi::start(Some(steal.clone())) else {
+        eprintln!(
+            "skipping a_company_connection_reaches_the_api...: no local port for the stand-in API"
+        );
         return;
     };
     let base = format!("http://{}/finance", api.addr);
@@ -22364,6 +22367,7 @@ fn company_apps_are_listed_kept_ready_and_opened_through_the_door() {
 
     if world.real_hub().is_some() {
         // The rest stops the hub, which a real one cannot be asked to do.
+        eprintln!("skipping the rest of company_apps_are_listed_...: it stops the hub, which a real hub cannot be asked to do");
         return;
     }
     // Offline: the hub is gone. The list is the one kept, and the app kept
