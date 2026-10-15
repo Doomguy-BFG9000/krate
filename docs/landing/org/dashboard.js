@@ -165,7 +165,7 @@
     var dlg = $("setDlg");
     var inWindow = (id === "settings" || id === "billing") && dlg && typeof dlg.showModal === "function";
     if (inWindow) { openSettings(id); return; }
-    if (dlg && dlg.open) closeSettings(true);
+    if (dlg && isOpen(dlg)) closeSettings(true);
     S.tab = id;
     try { history.replaceState(null, "", HERE + "&tab=" + id); } catch (e) {}
     drawTabs();
@@ -191,7 +191,7 @@
   // ------------------------------------------------------ settings window
   function openSettings(id) {
     var dlg = $("setDlg"), pane = $("pane"), slot = $("setSlot");
-    if (!dlg.open) {
+    if (!isOpen(dlg)) {
       S.back = S.tab && S.tab !== "settings" && S.tab !== "billing" ? S.tab : tabList()[0];
       // What was behind stays drawn, still, while the pane is away.
       var shadow = pane.cloneNode ? pane.cloneNode(true) : null;
@@ -212,11 +212,12 @@
     (id === "billing" ? P.panes.billing : settings)(pane);
     settingsNav(id);
   }
+  function isOpen(dlg) { return !!(dlg && dlg.getAttribute && dlg.getAttribute("open") !== null && dlg.getAttribute("open") !== undefined); }
   function closeSettings(quiet) {
     var dlg = $("setDlg"), pane = $("pane"), shadow = $("paneShadow");
     if (shadow && shadow.parentNode) { shadow.parentNode.insertBefore(pane, shadow); shadow.remove(); }
     else { var inner = document.querySelector && document.querySelector(".cmain .inner"); if (inner) inner.appendChild(pane); }
-    if (dlg.open) dlg.close();
+    if (isOpen(dlg)) dlg.close();
     if (!quiet) show(S.back || tabList()[0]);
   }
   /// The window's left side: a row per section of the open page (its cards'
@@ -228,26 +229,51 @@
       nav.textContent = "";
       var tabs = tabList();
       if (id === "billing" && tabs.indexOf("settings") >= 0) nav.appendChild(el("button", { type: "button", text: "Settings", onclick: function () { show("settings"); } }));
+      var group = null;
       Array.prototype.slice.call(pane.children || []).forEach(function (c) {
         var h = c.querySelector && c.querySelector("h3");
         if (!h || !c.classList || !c.classList.contains("card")) return;
-        nav.appendChild(el("button", { type: "button", text: h.textContent, onclick: function () {
+        var named = navName(h.textContent);
+        if (named[1] !== group) { group = named[1]; nav.appendChild(el("p", { class: "sd-group", text: group })); }
+        nav.appendChild(el("button", { type: "button", text: named[0], onclick: function () {
           Array.prototype.slice.call(nav.querySelectorAll("button")).forEach(function (b) { b.removeAttribute("aria-current"); });
           this.setAttribute("aria-current", "true");
           if (c.scrollIntoView) c.scrollIntoView({ block: "start" });
         } }));
       });
       if (id === "settings" && tabs.indexOf("billing") >= 0) {
-        nav.appendChild(el("div", { class: "sd-sep" }));
+        nav.appendChild(el("p", { class: "sd-group", text: "Plan" }));
         nav.appendChild(el("button", { type: "button", text: "Billing", onclick: function () { show("billing"); } }));
       }
     }
     draw();
+    // Sections arrive after the window opens: Settings redraws this list
+    // when it has drawn its own, and an observer catches the later ones.
+    S.navRedraw = draw;
     if (typeof MutationObserver === "function") {
       if (settingsNav.mo) settingsNav.mo.disconnect();
       settingsNav.mo = new MutationObserver(draw);
       settingsNav.mo.observe(pane, { childList: true });
     }
+  }
+  /// A Settings section's short name and its group, from its card heading.
+  var NAV = [
+    [/^Organisation$/, "General", "Organisation"],
+    [/signature$/, "Signature", "Organisation"],
+    [/^Send an app/, "Sending apps", "Organisation"],
+    [/^Who approves/, "Approvals", "Organisation"],
+    [/^Offline/, "Offline access", "Organisation"],
+    [/^Company connections/, "Connections", "Connected to"],
+    [/^Company sign-in by SAML/, "SAML sign-in", "Connected to"],
+    [/^Company sign-in/, "Company sign-in", "Connected to"],
+    [/SCIM/, "Directory", "Connected to"],
+    [/activity to your logs/, "Activity export", "Connected to"],
+    [/^Export/, "Download everything", "Data"],
+    [/^Close /, "Close the organisation", "Data"],
+  ];
+  function navName(text) {
+    for (var i = 0; i < NAV.length; i++) if (NAV[i][0].test(text)) return [NAV[i][1], NAV[i][2]];
+    return [text, "More"];
   }
   if ($("setClose") && $("setDlg").addEventListener) {
     $("setClose").addEventListener("click", function () { closeSettings(); });
@@ -293,11 +319,30 @@
     var act = function (label, svg, go) {
       return el("button", { class: "cr-act", type: "button", onclick: go }, [icon(svg), el("span", { text: label })]);
     };
-    if (K.can(role, "candidate.publish")) acts.push(act("Release an app", "releases", function () { show("releases"); }));
+    if (K.can(role, "candidate.publish")) acts.push(act("Release an app", "releases", releaseFlow));
     if (K.can(role, "invite.other")) acts.push(act("Invite people", "people", function () { show("people", { invite: true }); }));
     if (S.waiting && K.can(role, "candidate.approve")) acts.push(act("Review " + S.waiting + " waiting", "waiting", function () { show("waiting"); }));
     if (role && role !== "recipient") acts.push(act("Settings", "settings", function () { show("settings"); }));
     var feed = el("div", { class: "cr-feed" }, [el("p", { class: "cr-sub", text: "Loading" })]);
+    // On Activity itself the list is the page: the panel says the week.
+    if (S.tab === "activity") {
+      rail("Overview", [
+        acts.length ? el("div", { class: "cr-sec" }, [el("h3", { text: "Quick actions" }), el("div", { class: "cr-acts" }, acts)]) : null,
+        el("div", { class: "cr-sec" }, [el("h3", { text: "This week" }), feed]),
+      ], false);
+      K.api("GET", "/orgs/" + slug + "/audit").then(function (res) {
+        feed.textContent = "";
+        var weekAgo = Date.now() / 1000 - 7 * 86400;
+        var ev = res.ok ? (res.body.events || []).filter(function (e) { return e.at >= weekAgo; }) : [];
+        var denied = ev.filter(function (e) { return e.result === "denied"; }).length;
+        feed.appendChild(el("div", { class: "cr-list" }, [
+          el("div", {}, [el("b", { text: "Entries" }), el("small", { text: String(ev.length) })]),
+          el("div", {}, [el("b", { text: "Refused" }), el("small", { text: String(denied) })]),
+          el("div", {}, [el("b", { text: "Chain" }), el("small", { text: res.ok && res.body.chain_ok ? "intact" : "check" })]),
+        ]));
+      });
+      return;
+    }
     rail("Overview", [
       acts.length ? el("div", { class: "cr-sec" }, [el("h3", { text: "Quick actions" }), el("div", { class: "cr-acts" }, acts)]) : null,
       el("div", { class: "cr-sec" }, [el("h3", { text: K.can(role, "audit.read") ? "Lately" : "Your apps" }), feed]),
@@ -659,19 +704,11 @@
         ? "You receive " + (S.org.name || slug) + "'s apps. Recipients see only themselves here."
         : "Who is in " + (S.org.name || slug) + ", and what each person may do.");
       var roles = K.invitable(role);
-      if (Pub) Pub.peopleCard(pane);
-      if (roles.length && Setup) {
-        // Many at once, by email, with what they can do in plain words.
-        var bulk = el("div", { class: "card", id: "bulkCard" }, [
-          el("h3", { text: "Invite your team" }),
-          el("p", { text: "Paste their work emails. Each gets an email with one button to join " + (S.org.name || slug) + "." }),
-        ]);
-        var bulkBox = el("div");
-        bulk.appendChild(bulkBox);
-        Setup.invite(bulkBox, {});
-        pane.appendChild(bulk);
+      if (roles.length) {
+        var phd = pane.querySelector(".phd");
+        if (phd) phd.appendChild(el("div", { class: "pa" }, [el("button", { class: "btn sm dark", type: "button", text: "Invite people", onclick: function () { openInvite(); } })]));
       }
-      if (roles.length) pane.appendChild(inviteCard(roles));
+      if (Pub) Pub.peopleCard(pane);
       var groupsAt = el("div", { hidden: true });
 
       var active = S.members.filter(function (m) { return (m.state || "active") === "active"; });
@@ -679,7 +716,20 @@
       var owners = active.filter(function (m) { return m.role === "owner"; }).length;
       var team = active.filter(function (m) { return m.role !== "recipient"; });
       var recips = active.filter(function (m) { return m.role === "recipient"; });
-      var card = el("div", { class: "card rows" });
+      // Who is here, first: a count, and a search once the list is long.
+      var tools = el("div", { class: "ptools" }, [
+        el("p", { class: "sub", text: plural(active.length, "person", "people") + (recips.length && team.length ? ": " + team.length + " who run apps, " + recips.length + " who use them" : "") }),
+      ]);
+      var card = el("div", { class: "card rows", id: "peopleList" });
+      if (active.length > 5) {
+        var find = el("input", { class: "inp psearch", type: "search", placeholder: "Search people", "aria-label": "Search people", autocomplete: "off" });
+        find.addEventListener("input", function () {
+          var q = find.value.trim().toLowerCase();
+          Array.prototype.slice.call(card.querySelectorAll(".rw")).forEach(function (r) { r.hidden = !!q && r.textContent.toLowerCase().indexOf(q) < 0; });
+        });
+        tools.appendChild(find);
+      }
+      if (role !== "recipient") pane.appendChild(tools);
       pane.appendChild(card);
       if (team.length) {
         if (recips.length) card.appendChild(el("p", { class: "grp", text: "Members" }));
@@ -689,8 +739,9 @@
         if (role !== "recipient") card.appendChild(el("p", { class: "grp", text: "Recipients: they open the apps, and nothing else" }));
         recips.forEach(function (m) { card.appendChild(memberRow(m, owners)); });
       }
+      var goneCard = null;
       if (gone.length) {
-        var g = el("div", { class: "card rows" }, [el("p", { class: "grp", text: "Removed. What they sent and approved stays on record." })]);
+        var g = goneCard = el("div", { class: "card rows" }, [el("p", { class: "grp", text: "Removed. What they sent and approved stays on record." })]);
         gone.forEach(function (m) {
           var w = K.who(m);
           g.appendChild(el("div", { class: "rw flat" }, [
@@ -701,12 +752,76 @@
             ]),
           ]));
         });
-        pane.appendChild(g);
       }
+      // Inviting: many by email, or one by GitHub with any role, in one
+      // card under the people it adds to.
+      if (roles.length) {
+        var inv = el("div", { class: "card", id: "inviteCard" }, [
+          el("h3", { text: "Invite people" }),
+          el("p", { text: "Each gets an email with one button to join " + (S.org.name || slug) + "." }),
+        ]);
+        var bulkBox = el("div", { id: "bulkCard" });
+        var one = inviteCard(roles, true);
+        if (Setup) {
+          var mode = el("div", { class: "seg inv-mode", role: "group", "aria-label": "Invite" }, [
+            el("button", { type: "button", "aria-pressed": "true", text: "Emails", onclick: function () { pick(true); } }),
+            el("button", { type: "button", "aria-pressed": "false", text: "One person, any role", onclick: function () { pick(false); } }),
+          ]);
+          var pick = function (bulk) {
+            mode.children[0].setAttribute("aria-pressed", bulk ? "true" : "false");
+            mode.children[1].setAttribute("aria-pressed", bulk ? "false" : "true");
+            bulkBox.hidden = !bulk;
+            one.hidden = bulk;
+          };
+          inv.appendChild(mode);
+          inv.appendChild(bulkBox);
+          Setup.invite(bulkBox, {});
+          one.hidden = true;
+        }
+        inv.appendChild(one);
+        pane.appendChild(inv);
+        if (S.opts && S.opts.invite) openInvite();
+      }
+      if (gone.length) pane.appendChild(goneCard);
       // Groups (IC-949, R), below the people they are made of.
       pane.appendChild(groupsAt);
       if (R) R.groupsCard(groupsAt, active);
     });
+  }
+  function openInvite() {
+    var c = $("inviteCard");
+    if (!c) { show("people", { invite: true }); return; }
+    if (c.scrollIntoView) c.scrollIntoView({ block: "start", behavior: "smooth" });
+    var f = c.querySelector("textarea, input");
+    if (f && f.focus) setTimeout(function () { f.focus(); }, 250);
+  }
+  function plural(n, one, many) { return n + " " + (n === 1 ? one : many); }
+  /// Releasing an app from anywhere: the first-app flow, in the panel.
+  function releaseFlow() {
+    if (!Setup) { show("releases"); return; }
+    var box = el("div", { class: "cr-release" });
+    inspect("Release an app", [box]);
+    Setup.firstApp(box, {
+      title: false,
+      onDone: function () { toast("Released. Everyone it is for can open it now."); show("releases"); },
+      onWaiting: function (label) { toast(label + " was sent. It waits for a second person to approve it."); show("waiting"); },
+    });
+  }
+  /// One person, in the right-hand panel.
+  function inspectMember(m) {
+    var w = K.who(m);
+    inspect(w.label, [
+      el("div", { class: "cr-sec" }, [
+        el("span", { class: "tag" + (m.role === "owner" ? " blue" : ""), text: K.ROLE_NAME[m.role] || m.role }),
+        el("p", { class: "cr-sub", style: "margin-top:8px", text: K.ROLE_SAYS[m.role] || "" }),
+      ]),
+      el("dl", { class: "cr-kv" }, [
+        el("dt", { text: "Signs in with" }), el("dd", { text: w.kind === "email" ? "Email, " + w.display : "GitHub, @" + w.display.replace(/^@/, "") }),
+        m.since ? el("dt", { text: "Joined" }) : null, m.since ? el("dd", { text: K.day(m.since) }) : null,
+        m.added_by ? el("dt", { text: "Added by" }) : null, m.added_by ? el("dd", { text: K.who(m.added_by).label }) : null,
+      ]),
+      el("p", { class: "cr-sub", text: "Change their role or remove them from the row in People." }),
+    ]);
   }
 
   function memberRow(m, owners) {
@@ -738,7 +853,7 @@
       }
       acts.push(rm);
     }
-    return el("div", { class: "rw" }, [
+    var row = el("div", { class: "rw opens" }, [
       el("span", { class: "who", "aria-hidden": "true", text: w.display.slice(0, 1).toUpperCase() }),
       el("div", { class: "t" }, [
         el("b", {}, [w.label + (mine ? " (you)" : ""), el("span", { class: "tag kind", text: w.kind === "email" ? "Email" : "GitHub" })]),
@@ -747,6 +862,13 @@
       ]),
       el("div", { class: "ra" }, acts),
     ]);
+    // A click on the row, not on its controls, opens the person on the right.
+    row.addEventListener("click", function (e) {
+      var t = e && e.target;
+      if (t && t.closest && t.closest("select, button, a, input")) return;
+      inspectMember(m);
+    });
+    return row;
   }
 
   function changeRole(m, sel, note) {
@@ -787,9 +909,9 @@
     });
   }
 
-  function inviteCard(roles) {
+  function inviteCard(roles, bare) {
     var by = "github";
-    var card = el("div", { class: "card" });
+    var card = el("div", { class: bare ? "inv-one" : "card" });
     var seg = el("div", { class: "seg", role: "group", "aria-label": "Invite by" });
     var input = el("input", { class: "inp", id: "invWho", autocomplete: "off", autocapitalize: "none", spellcheck: "false", "aria-label": "GitHub username", placeholder: "GitHub username, like octocat" });
     var sel = el("select", { class: "sel", id: "invRole", "aria-label": "Role" });
@@ -857,8 +979,12 @@
       out.appendChild(K.refusalBlock({ title: t, body: b, action: null }, "warn"));
       input.focus();
     }
-    card.appendChild(el("h3", { text: Setup ? "Invite one person, by GitHub or with any role" : "Invite someone" }));
-    card.appendChild(el("p", { text: "By GitHub username, or by the work email they sign in with. You get a link to send them; it works once, only for them." }));
+    if (!bare) {
+      card.appendChild(el("h3", { text: Setup ? "Invite one person, by GitHub or with any role" : "Invite someone" }));
+      card.appendChild(el("p", { text: "By GitHub username, or by the work email they sign in with. You get a link to send them; it works once, only for them." }));
+    } else {
+      card.appendChild(el("p", { class: "sub", text: "By GitHub username or work email, with any role you may give. You get a link to send them; it works once, only for them." }));
+    }
     card.appendChild(el("div", { style: "margin-top:14px" }, [seg]));
     card.appendChild(form);
     card.appendChild(out);
@@ -915,19 +1041,50 @@
         ]),
       ]);
       pane.appendChild(badge);
+      // Narrow it down: a kind of entry, and words to look for.
+      var KINDS = [
+        ["all", "All", function () { return true; }],
+        ["denied", "Refused", function (e) { return e.result === "denied"; }],
+        ["people", "People", function (e) { return /^(member|invite|scim|sso|saml|group)\./.test(e.action); }],
+        ["apps", "Releases", function (e) { return /^(candidate|release|lease|offline|app|publisher)\./.test(e.action); }],
+        ["setup", "Settings and security", function (e) { return /^(key|signing|root-key|release-key|settings|review|connection|audit-export|billing|org|data)\./.test(e.action) || /^(org\.|billing\.)/.test(e.action); }],
+      ];
+      var kind = "all", words = "";
+      var bar = el("div", { class: "evtools" });
+      var chips = el("div", { class: "chips", role: "group", "aria-label": "Show" }, KINDS.map(function (k) {
+        var n = ev.filter(k[2]).length;
+        return el("button", { class: "chip", type: "button", "aria-pressed": k[0] === "all" ? "true" : "false", text: k[1] + (k[0] === "all" ? "" : " " + n), onclick: function () {
+          kind = k[0];
+          Array.prototype.slice.call(chips.children).forEach(function (c, i) { c.setAttribute("aria-pressed", KINDS[i][0] === kind ? "true" : "false"); });
+          redraw();
+        } });
+      }));
+      var find = el("input", { class: "inp psearch", type: "search", placeholder: "Search the activity", "aria-label": "Search the activity", autocomplete: "off" });
+      find.addEventListener("input", function () { words = find.value.trim().toLowerCase(); redraw(); });
+      bar.appendChild(chips);
+      bar.appendChild(find);
+      pane.appendChild(bar);
       var card = el("div", { class: "card rows" });
       pane.appendChild(card);
-      var shown = 0;
+      var shown = 0, list = ev;
+      function redraw() {
+        var test = KINDS.filter(function (k) { return k[0] === kind; })[0][2];
+        list = ev.filter(function (e) { return test(e) && (!words || K.eventWords(e, S.names).toLowerCase().indexOf(words) >= 0 || K.who(e.actor).label.toLowerCase().indexOf(words) >= 0); });
+        card.textContent = "";
+        shown = 0;
+        if (!list.length) { card.appendChild(el("p", { class: "sub", style: "padding:16px 0", text: "Nothing matches. Try All, or other words." })); return; }
+        more();
+      }
       function more() {
-        ev.slice(shown, shown + 60).forEach(function (e) {
+        list.slice(shown, shown + 60).forEach(function (e) {
           var denied = e.result === "denied";
-          card.appendChild(el("div", { class: "ev" + (denied ? " denied" : "") }, [
+          card.appendChild(el("button", { class: "ev opens" + (denied ? " denied" : ""), type: "button", onclick: function () { inspectEvent(e); } }, [
             el("p", {}, [denied ? el("span", { class: "tag warn", text: "Refused" }) : null, K.eventWords(e, S.names)]),
             el("time", { datetime: new Date(e.at * 1000).toISOString(), text: K.moment(e.at) }),
           ]));
         });
         shown += 60;
-        if (shown < ev.length) {
+        if (shown < list.length) {
           var b = el("button", { class: "btn ghost sm", type: "button", text: "Show older", style: "margin:12px 0" });
           b.addEventListener("click", function () { b.remove(); more(); });
           card.appendChild(b);
@@ -1010,6 +1167,7 @@
       if (C) C.settings(pane);
 
       P.settings(pane, key);
+      if (S.navRedraw) S.navRedraw();
     });
   }
 
@@ -1085,11 +1243,12 @@
     R = window.KrateOrgReleases({
       S: S, slug: slug, words: words, confirmSheet: confirmSheet, head: head, failed: failed,
       toast: toast, show: function (id) { show(id); }, roleOf: roleOf, P: P, flat: flatReleases, empty: emptyReleases,
+      inspect: inspect, releaseFlow: releaseFlow,
     });
   }
   // The Dashboard (home.js): where an organisation starts.
   var H = window.KrateOrgHome
-    ? window.KrateOrgHome({ S: S, slug: slug, head: head, placeStart: placeStart, show: function (id, o) { show(id, o); }, roleOf: roleOf, inspect: inspect, tabs: tabList })
+    ? window.KrateOrgHome({ S: S, slug: slug, head: head, placeStart: placeStart, releaseFlow: releaseFlow, show: function (id, o) { show(id, o); }, roleOf: roleOf, inspect: inspect, tabs: tabList })
     : null;
   function home(pane) {
     if (H) { H.pane(pane); return; }

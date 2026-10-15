@@ -46,7 +46,7 @@ const rowOf = (p, text) => p.el("pane").querySelectorAll(".rw").find((r) => r.qu
     token: "t", routes: as(ALICE, { [`POST /orgs/acme/releases/${D2}/withdraw`]: () => [200, { release: rel(D2, "1.0.2", { state: "withdrawn" }), current: { app_id: APP, digest: D1 }, leases: { active: 2, until: UNTIL } }] }),
   });
   const pane = t(p.el("pane").shown);
-  check(/Bounce dev\.krate\.bounce/.test(pane), "each app is a card named by its name and app id");
+  check(/Bounce/.test(pane) && !/dev\.krate\.bounce/.test(pane), "each app is a card named by its name; its app id waits under Technical details");
   const cur = rowOf(p, "Bounce 1.0.2");
   check(cur && /Opens now/.test(cur.shown) && p.el("pane").querySelectorAll(".rw")[0] === cur, "the version that opens now comes first, marked Opens now");
   check(/Other versions/.test(pane), "then the other versions");

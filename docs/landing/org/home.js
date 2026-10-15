@@ -104,6 +104,8 @@
           open: function () { inspectRefusals(o); },
         }),
       ]));
+      // Getting started under the numbers and above the detail.
+      if (D.placeStart) D.placeStart(p);
 
       // People opening apps: 30 days or 12 weeks.
       var mode = "days";
@@ -245,6 +247,7 @@
         tiles.push(stat({ label: "Your computers", value: String((yours.devices || []).length), note: "that can open team data", open: function () { D.show("insights"); } }));
       }
       p.appendChild(el("div", { class: "hstats" }, tiles));
+      if (D.placeStart) D.placeStart(p);
       kids.push(card("Apps you used", "Last 30 days", [(yours.apps || []).length
         ? el("div", { class: "cr-list" }, yours.apps.map(function (x) { return el("div", {}, [el("b", { text: x.name }), el("small", { text: plural(x.days, "day", "days") })]); }))
         : el("p", { class: "sub", text: "You have not opened one of " + nameOf() + "'s apps in 30 days." }), go("releases", "See the apps you can open")]));
@@ -256,7 +259,7 @@
     function pane(p) {
       var role = D.roleOf();
       var acts = [];
-      if (K.can(role, "candidate.publish")) acts.push({ label: "Release an app", dark: true, onclick: function () { D.show("releases"); } });
+      if (K.can(role, "candidate.publish")) acts.push({ label: "Release an app", dark: true, onclick: function () { if (D.releaseFlow) D.releaseFlow(); else D.show("releases"); } });
       if (K.can(role, "invite.other")) acts.push({ label: "Invite people", onclick: function () { D.show("people", { invite: true }); } });
       K.api("GET", "/orgs/" + slug + "/insights").then(function (res) {
         D.head(p, "Dashboard", role === "owner" || role === "admin"
@@ -270,9 +273,7 @@
         }
         var b = res.body;
         if (b.org) orgView(p, b); else memberView(p, b);
-        // Getting started under the numbers and above the detail.
-        var grid = p.querySelector(".hgrid");
-        if (D.placeStart) { D.placeStart(p); var st = p.lastChild; if (grid && st && st !== grid) p.insertBefore(st, grid); }
+
         p.appendChild(el("p", { class: "sub hfoot", text: "Days run midnight to midnight, " + K.zoneName(b.time_zone || "UTC") + ". Counts only: Krate never sees what anyone does inside an app." }));
       });
     }

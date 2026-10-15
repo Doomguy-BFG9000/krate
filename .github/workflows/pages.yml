@@ -297,6 +297,7 @@ jobs:
           # text, "fewer than 3" where the hub masked a count, every state,
           # and 500 people drawn well inside a second.
           node docs/landing/studio/org-insights-test.mjs
+          node docs/landing/studio/org-home-test.mjs
           # And the doors security asks for (IC-955): SAML, SCIM and the
           # audit export are each shown only to the roles the matrix gives
           # them, a token or secret is shown once and kept nowhere, nothing

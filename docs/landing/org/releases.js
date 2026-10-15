@@ -50,7 +50,8 @@
         // A hub without release control answers 404 for /apps: the flat
         // list is what it has.
         if (!res.ok && res.status === 404 && res.body.error !== "no-such-org") { D.flat(p); return; }
-        D.head(p, "Releases", "Approved apps, each with the version that opens now. A copied link alone opens nothing.");
+        D.head(p, "Releases", "Approved apps, each with the version that opens now. A copied link alone opens nothing.",
+          D.releaseFlow && can("candidate.publish") ? [{ label: "Release an app", dark: true, onclick: function () { D.releaseFlow(); } }] : null);
         if (!res.ok) return D.failed(p, res, { what: "see the releases" });
         var apps = (res.body && res.body.apps) || [];
         apps.forEach(function (a) { a.releases.forEach(function (r) { D.S.names[r.digest] = K.appName(r); }); });
@@ -75,7 +76,6 @@
       card.appendChild(el("div", { class: "apph" }, [
         el("div", { class: "t" }, [
           el("h3", { text: a.name || a.app_id }),
-          el("small", { class: "dg", text: a.app_id }),
           offNote,
         ]),
         offline ? el("div", { class: "ra" }, [offline]) : null,
@@ -120,7 +120,13 @@
         facts.push(el("small", { class: "aud", text: audienceWords(r) }));
       }
       facts.push(note);
-      var row = el("div", { class: "rw flat rel" + (gone ? " gone" : "") }, [el("div", { class: "t" }, facts)]);
+      var row = el("div", { class: "rw flat rel" + (gone ? " gone" : "") + (D.inspect ? " opens" : "") }, [el("div", { class: "t" }, facts)]);
+      // A click on the row, not its buttons, opens the version on the right.
+      if (D.inspect) row.addEventListener("click", function (e) {
+        var t = e && e.target;
+        if (t && t.closest && t.closest("select, button, a, input")) return;
+        inspectRelease(a, r, isCurrent);
+      });
       if (gone) return row;
 
       var acts = [];
@@ -159,6 +165,35 @@
 
     /// The withdraw sheet: what stops at once, what offline access already
     /// given out still does until it runs out, and what opens instead.
+    /// One version, in full, in the right-hand panel.
+    function inspectRelease(a, r, isCurrent) {
+      var gone = r.state === "withdrawn";
+      var kv = [
+        ["State", gone ? "Withdrawn" : isCurrent ? "Opens now" : "Released, not the one that opens"],
+        ["Sent by", K.who(r.uploaded_by).label],
+        ["Approved by", r.solo ? "Its sender, alone (no second approver yet)" : K.who(r.approved_by).label],
+        ["Released", K.moment(r.at)],
+        ["Who opens it", audienceWords(r).replace(/^For /, "")],
+      ];
+      if (r.offline) kv.push(["Offline", K.offlineName ? K.offlineName(r.offline) : r.offline]);
+      if (gone) kv.push(["Withdrawn", K.day(r.withdrawn_at) + " by " + K.who(r.withdrawn_by).label + ": " + (r.withdraw_reason || "no reason given")]);
+      var dl = el("dl", { class: "cr-kv" });
+      kv.forEach(function (x) { dl.appendChild(el("dt", { text: x[0] })); dl.appendChild(el("dd", { text: x[1] })); });
+      var copyBtn = el("button", { class: "btn ghost sm", type: "button", text: "Copy link" });
+      copyBtn.addEventListener("click", function () { K.copy(r.url, copyBtn); });
+      D.inspect(K.appName(r), [
+        dl,
+        gone ? null : el("div", { class: "row2" }, [copyBtn]),
+        el("details", { class: "cr-tech" }, [
+          el("summary", { text: "Technical details" }),
+          el("dl", { class: "cr-kv" }, [
+            el("dt", { text: "App" }), el("dd", { class: "dg", text: a.app_id }),
+            el("dt", { text: "Fingerprint" }), el("dd", { class: "dg", text: r.digest }),
+          ]),
+        ]),
+      ]);
+    }
+
     function withdraw(a, r, isCurrent) {
       var key = K.key();
       var leases = r.leases || { active: 0, until: null };
