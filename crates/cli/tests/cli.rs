@@ -12485,20 +12485,21 @@ fn a_threaded_app_packs_into_a_krate_and_runs_from_it() {
         "{stdout}"
     );
     // The pool is really parallel from the .krate, built on stable Rust
-    // (K-1055): 7x on this ten-core Mac when quiet. The floor is low on
-    // purpose -- a gate shares the machine with other builds -- and only
-    // asked of a machine with four cores or more.
+    // (K-1055): two or more of its threads were working at the same moment.
+    // Counted, not timed -- a speed-up says how busy the machine was (1.01x
+    // on a 4-core CI runner beside 250 other tests, 7x on a quiet Mac), and
+    // only overlap says the threads are real. Asked of two cores or more.
     let cores = std::thread::available_parallelism().map_or(1, |n| n.get());
-    if cores >= 4 {
-        let speed_up: f64 = stdout
-            .split("speed-up ")
+    if cores >= 2 {
+        let at_once: usize = stdout
+            .split("at most ")
             .nth(1)
-            .and_then(|rest| rest.split('x').next())
+            .and_then(|rest| rest.split(' ').next())
             .and_then(|n| n.parse().ok())
-            .unwrap_or(0.0);
+            .unwrap_or(0);
         assert!(
-            speed_up >= 1.5,
-            "rayon on {cores} cores must beat one thread: {stdout}"
+            at_once >= 2,
+            "rayon on {cores} cores must run two threads at once: {stdout}"
         );
     }
 }

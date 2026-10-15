@@ -80,9 +80,28 @@ impl krate::Guest for App {
         let t0 = Instant::now();
         let one: u64 = jobs.iter().map(|&n| work(n)).fold(0, |a, b| a ^ b);
         let serial = t0.elapsed().as_secs_f64();
+        // How many pool threads were working at the same moment: proof of
+        // real parallelism that does not depend on how busy the machine is,
+        // which a speed-up does.
+        let active = std::sync::atomic::AtomicUsize::new(0);
+        let most = std::sync::atomic::AtomicUsize::new(0);
         let t1 = Instant::now();
-        let many: u64 = jobs.par_iter().map(|&n| work(n)).reduce(|| 0, |a, b| a ^ b);
+        let many: u64 = jobs
+            .par_iter()
+            .map(|&n| {
+                use std::sync::atomic::Ordering::SeqCst;
+                let now = active.fetch_add(1, SeqCst) + 1;
+                most.fetch_max(now, SeqCst);
+                let r = work(n);
+                active.fetch_sub(1, SeqCst);
+                r
+            })
+            .reduce(|| 0, |a, b| a ^ b);
         let parallel = t1.elapsed().as_secs_f64();
+        println!(
+            "rayon: at most {} threads working at once",
+            most.load(std::sync::atomic::Ordering::SeqCst)
+        );
         println!(
             "one thread {:.0} ms; rayon on {} threads {:.0} ms; speed-up {:.2}x; same answer: {}",
             serial * 1000.0,
