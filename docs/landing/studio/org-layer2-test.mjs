@@ -257,7 +257,9 @@ const two = [member(ALICE, "owner"), member("github:olga", "owner"), member("git
     "PUT /orgs/acme/offline-default": (_h, b) => [200, { class: b.class }],
     "GET /orgs/acme/sso": () => [200, null], "GET /orgs/acme/exports": () => [200, []] });
   const own = await page("https://krate.tech/org/?o=acme&tab=releases", DASH, { token: "t", routes: routes(ALICE, "owner") });
-  const sel = own.el("pane").querySelector("select");
+  // The release row's own picker: Getting started sits above the rows with
+  // a picker of its own.
+  const sel = own.el("pane").all((n) => n.tagName === "SELECT" && n.all((o) => o.tagName === "OPTION").some((o) => o.value === "days-7"))[0];
   check(sel && sel.value === "days-30" && sel.all((n) => n.tagName === "OPTION").map((o) => o.value).join() === "online,days-7,days-30", "an owner sets each release's offline class: online, 7 days, 30 days, nothing longer");
   sel.value = "online";
   sel.dispatch("change");

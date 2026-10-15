@@ -186,13 +186,21 @@
         why.hidden = !why.textContent;
         out.textContent = "";
       }
-      function card(c, title, says, can, tag) {
-        var b = el("button", { class: "starter", type: "button", role: "radio", "aria-checked": "false" }, [
-          el("span", { class: "st-tile", "aria-hidden": "true", text: title.slice(0, 1).toUpperCase() }),
+      /// One choice: a picture of the app in use (or a file's tile), its
+      /// name, what it is for in a line, and its three best things. The
+      /// whole list of what it can do stays on the button for a reader.
+      function card(c, title, says, top, tag, shot, can) {
+        var b = el("button", { class: "starter" + (shot ? " has-shot" : ""), type: "button", role: "radio", "aria-checked": "false", "aria-description": can || null }, [
+          shot
+            ? el("span", { class: "st-shot", "aria-hidden": "true" }, [el("img", { src: shot, alt: "", loading: "lazy", decoding: "async" })])
+            : el("span", { class: "st-tile", "aria-hidden": "true", text: title.slice(0, 1).toUpperCase() }),
           el("span", { class: "st-t" }, [
-            el("b", {}, [title, tag ? el("span", { class: "tag", text: tag }) : null]),
+            el("span", { class: "st-name" }, [
+              el("b", {}, [title, tag ? el("span", { class: "tag", text: tag }) : null]),
+              el("span", { class: "st-tick", "aria-hidden": "true" }),
+            ]),
             el("small", { text: says }),
-            can ? el("small", { class: "st-can", text: can }) : null,
+            top && top.length ? el("ul", { class: "st-top" }, top.map(function (t) { return el("li", { text: t }); })) : null,
           ]),
         ]);
         b.addEventListener("click", function () { choose(c, b); });
@@ -202,7 +210,7 @@
       starters().then(function (all) {
         list.textContent = "";
         all.forEach(function (s) {
-          list.appendChild(card({ kind: "starter", s: s }, s.name, s.says || "", (s.can || []).join(" · "), s.placeholder ? "Placeholder" : ""));
+          list.appendChild(card({ kind: "starter", s: s }, s.name, s.says || "", s.top || (s.can || []).slice(0, 3), s.placeholder ? "Placeholder" : "", s.shot || "", (s.can || []).join(". ")));
         });
         // Decided for them: the first ready app is already picked.
         if (all.length) choose({ kind: "starter", s: all[0] }, cards[0]);
@@ -216,7 +224,7 @@
         var f = file.files && file.files[0];
         if (!f) return;
         cards = cards.filter(function (x) { return !x.classList.contains("mine"); });
-        var mine = card({ kind: "file", f: f }, f.name.replace(/\.krate$/i, ""), Math.max(1, Math.round(f.size / 1024)) + " KB, from this computer", "", "");
+        var mine = card({ kind: "file", f: f }, f.name.replace(/\.krate$/i, ""), Math.max(1, Math.round(f.size / 1024)) + " KB, from this computer", null, "", "", "");
         mine.classList.add("mine");
         var old = list.querySelector(".mine");
         if (old && old !== mine) old.remove();

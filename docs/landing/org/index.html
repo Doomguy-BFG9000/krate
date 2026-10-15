@@ -13,23 +13,68 @@
 <link rel="preload" href="/fonts/geist-var-latin.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="/kit/site.css">
 <style>
-.orgp { padding-top: 48px; }
-.back { display: inline-flex; align-items: center; gap: 6px; min-height: 36px; font-size: 14px; color: var(--ink-3); transition: color .2s; }
-.back:hover { color: var(--ink); }
-.back svg { width: 12px; height: 12px; transform: scaleX(-1); }
-.ohead { display: flex; align-items: center; gap: 16px; margin-top: 10px; }
-.otile { flex: none; width: 52px; height: 52px; border-radius: 15px; display: grid; place-items: center; font-weight: 600; font-size: 21px; color: var(--accent); background: var(--accent-soft); }
-.ohead .t { min-width: 0; }
-.ohead h1 { margin: 0; font-size: clamp(28px, 3.2vw, 38px); letter-spacing: -.045em; overflow-wrap: anywhere; }
-.ohead p { margin-top: 2px; font-size: 14.5px; color: var(--mute); }
-/* tabs: one row, scrolls sideways inside itself on a narrow phone */
-.tabs { display: flex; gap: 4px; margin: 26px 0 22px; padding: 4px; border-radius: 14px; background: var(--soft); overflow-x: auto; scrollbar-width: none; }
-.tabs::-webkit-scrollbar { display: none; }
-.tab { flex: none; display: inline-flex; align-items: center; gap: 7px; height: 38px; padding: 0 14px; border-radius: 10px; font-size: 14px; font-weight: 500; color: var(--ink-2); white-space: nowrap; transition: background .2s, color .2s, box-shadow .2s; }
-.tab:hover { color: var(--ink); }
+/* ---- the console: a sidebar for the organisation, a panel for the work.
+ * The org side is its own product, the way Studio is: no website header or
+ * footer, the organisation and its sections on the left, one section open
+ * on the right. Under 900px the sidebar is a drawer behind a top bar. */
+body.console { overflow-x: hidden; }
+.con { min-height: 100vh; }
+.con > .panel, .con > #stop { max-width: 560px; margin: 0 auto; padding-top: 12vh; }
+.shell { --side: 256px; display: grid; grid-template-columns: var(--side) minmax(0, 1fr); min-height: 100vh; }
+.cside { position: sticky; top: 0; height: 100vh; display: flex; flex-direction: column; gap: 6px; padding: 14px 12px 12px; background: var(--soft); border-right: 1px solid var(--line); overflow-y: auto; scrollbar-width: thin; }
+.cs-top { display: flex; align-items: center; justify-content: space-between; height: 36px; padding: 0 4px; }
+.cs-mark { display: inline-flex; align-items: center; gap: 8px; height: 32px; padding: 0 6px; margin-left: -6px; border-radius: 8px; font-size: 14px; font-weight: 600; letter-spacing: -.02em; color: var(--ink-2); transition: background .15s, color .15s; }
+.cs-mark:hover { background: color-mix(in srgb, var(--ink) 6%, transparent); color: var(--ink); }
+.cs-mark img { width: 20px; height: 20px; }
+.cs-x { display: none; width: 36px; height: 36px; border-radius: 9px; place-items: center; color: var(--ink-2); }
+.cs-x:hover { background: color-mix(in srgb, var(--ink) 6%, transparent); color: var(--ink); }
+/* the organisation: which one, and who you are in it; opens the list */
+.cs-org { display: flex; align-items: center; gap: 10px; min-height: 52px; margin: 6px 0 10px; padding: 8px 10px; border-radius: 12px; background: var(--s1); box-shadow: var(--sh-1); transition: box-shadow .2s; }
+.cs-org:hover { box-shadow: 0 0 0 1px var(--ink-4), 0 1px 2px rgba(0,0,0,.06); }
+.otile { flex: none; width: 34px; height: 34px; border-radius: 9px; display: grid; place-items: center; font-weight: 600; font-size: 15px; color: var(--accent); background: var(--accent-soft); }
+.cs-org .t { flex: 1; min-width: 0; }
+.cs-org .t b { display: block; font-size: 14.5px; font-weight: 600; letter-spacing: -.02em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cs-org .t small { display: block; font-size: 12.5px; color: var(--ink-3); }
+.cs-org svg { flex: none; color: var(--ink-3); }
+.cs-nav { display: flex; flex-direction: column; gap: 1px; }
+.cs-label { margin: 14px 10px 4px; font-size: 11.5px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-3); }
+.tab { position: relative; display: flex; align-items: center; gap: 10px; width: 100%; min-height: 36px; padding: 0 10px; border-radius: 9px; font-size: 14px; font-weight: 500; color: var(--ink-2); text-align: left; transition: background .15s, color .15s, box-shadow .15s; }
+.tab svg { flex: none; width: 16px; height: 16px; opacity: .72; }
+.tab:hover { color: var(--ink); background: color-mix(in srgb, var(--ink) 5%, transparent); }
+.tab:hover svg { opacity: .95; }
 .tab[aria-selected="true"] { color: var(--ink); background: var(--s1); box-shadow: var(--sh-1); }
+.tab[aria-selected="true"] svg { opacity: 1; color: var(--accent); }
+.tab[aria-selected="true"]::before { content: ""; position: absolute; left: 0; top: 50%; width: 2.5px; height: 16px; margin-top: -8px; border-radius: 0 2px 2px 0; background: var(--accent); }
+.tab .lb { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .tab .n { min-width: 20px; height: 20px; padding: 0 6px; border-radius: 99px; display: inline-grid; place-items: center; font-size: 12px; font-weight: 600; color: var(--btn-ink); background: var(--accent); }
-.tab .short { display: none; }
+.cs-foot { margin-top: auto; padding-top: 12px; display: flex; align-items: center; gap: 6px; border-top: 1px solid var(--line); }
+.cs-me { flex: 1; min-width: 0; display: flex; align-items: center; gap: 9px; min-height: 40px; padding: 0 8px; border-radius: 9px; font-size: 13.5px; color: var(--ink-2); transition: background .15s, color .15s; }
+.cs-me:hover { background: color-mix(in srgb, var(--ink) 5%, transparent); color: var(--ink); }
+.cs-me .av { flex: none; width: 26px; height: 26px; border-radius: 99px; display: grid; place-items: center; font-size: 12px; font-weight: 600; color: var(--ink); background: var(--s3); }
+.cs-me span:last-child { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cs-foot .thm { flex: none; width: 40px; height: 40px; border-radius: 9px; display: grid; place-items: center; color: var(--ink-2); }
+.cs-foot .thm:hover { background: color-mix(in srgb, var(--ink) 5%, transparent); color: var(--ink); }
+/* the panel */
+.cmain { min-width: 0; padding: 36px 44px 64px; }
+.cmain > .inner { max-width: 1040px; margin: 0 auto; }
+.cmainwrap { min-width: 0; }
+.cbar { display: none; }
+.scrim { display: none; }
+@media (max-width: 899px) {
+  .shell { grid-template-columns: minmax(0, 1fr); }
+  .cside { position: fixed; z-index: 70; left: 0; top: 0; bottom: 0; width: min(300px, 86vw); height: auto; transform: translateX(-102%); transition: transform .3s var(--ease); box-shadow: var(--sh-2); }
+  .shell.drawer .cside { transform: none; }
+  .shell.drawer .scrim { display: block; position: fixed; inset: 0; z-index: 65; background: rgba(0,0,0,.42); }
+  .cs-x { display: grid; }
+  .cbar { position: sticky; top: 0; z-index: 40; display: flex; align-items: center; gap: 10px; height: 56px; padding: 0 12px; background: color-mix(in srgb, var(--bg) 86%, transparent); -webkit-backdrop-filter: saturate(180%) blur(18px); backdrop-filter: saturate(180%) blur(18px); border-bottom: 1px solid var(--line); }
+  .cbar button { flex: none; width: 44px; height: 44px; border-radius: 10px; display: grid; place-items: center; color: var(--ink); }
+  .cbar .t { min-width: 0; display: flex; flex-direction: column; line-height: 1.25; }
+  .cbar .t b { font-size: 15px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .cbar .t small { font-size: 12.5px; color: var(--ink-3); }
+  .cmain { padding: 22px 16px 48px; }
+  .tab { min-height: 44px; }
+}
+@media (prefers-reduced-motion: reduce) { .cside { transition: none; } }
 /* a pane: a heading line, then cards */
 .pane > * + * { margin-top: 14px; }
 .phd h2 { font-size: 21px; letter-spacing: -.03em; }
@@ -123,8 +168,7 @@ dialog.sheet .sheetpts li.key { color: var(--ink); font-weight: 500; }
 .toast { margin-bottom: 14px; }
 #pubNote { margin-bottom: 22px; }
 /* Addendum 3: banners, settings forms, exports, billing */
-.banners { display: grid; gap: 10px; margin-top: 22px; }
-.banners + .tabs { margin-top: 16px; }
+.banners { display: grid; gap: 10px; margin-bottom: 22px; }
 .banner .bacts { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
 .banner .bacts .btn { margin-top: 0; }
 .row2 { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin-top: 14px; }
@@ -249,9 +293,6 @@ p.connsafe::before, small.connsafe::before { content: ""; display: inline-block;
 .proof.once .linkbox code.k { flex: 1; min-width: 0; }
 @media (min-width: 681px) { #auditCard .kv { grid-template-columns: 110px minmax(0, 1fr); } }
 @media (max-width: 680px) {
-  .orgp { padding-top: 28px; }
-  .tab .long { display: none; } .tab .short { display: inline; }
-  .tab { padding: 0 12px; }
   .rows { padding: 2px 16px; }
   .rw { flex-wrap: wrap; }
   .rw { gap: 10px 14px; }
@@ -268,7 +309,7 @@ p.connsafe::before, small.connsafe::before { content: ""; display: inline-block;
   .fp { font-size: 19px; }
   dialog.sheet .acts2 .btn { flex: 1; }
   /* a thumb's 44px on a narrow screen, whatever the pointer reports */
-  .tab, .sel, .seg button, .rw .btn.sm, .btn.sm, .chip { min-height: 44px; }
+  .sel, .seg button, .rw .btn.sm, .btn.sm, .chip { min-height: 44px; }
   .panel.signedout { padding: 30px 20px 26px; }
   .appc .apph { flex-wrap: wrap; }
   .appc .apph .ra { width: 100%; }
@@ -365,36 +406,8 @@ details.nums small { display: block; max-width: 62ch; line-height: 1.45; }
 @media (max-width: 359px) { .tiles { grid-template-columns: minmax(0, 1fr); } }
 </style>
 </head>
-<body>
-<header class="hd">
-  <a class="brand" href="/"><img src="/krate-mark-3d-96.png" alt="" width="26" height="26">Krate</a>
-  <nav class="menu" id="menu" aria-label="Main">
-    <a class="mi" href="/" data-set="product">Product</a>
-    <a class="mi" href="/studio/" data-set="studio">Studio</a>
-    <a class="mi" href="/cloud/" data-set="apps">Apps</a>
-    <a class="mi" href="/docs/" data-set="docs">Docs</a>
-    <a class="mi" href="/download/">Download</a>
-    <div class="drawer" id="drawer" role="menu">
-      <div class="set" data-set="product"><a href="/">Overview</a><a href="/reports/">Measurements</a><a href="/progress/">Progress</a><a href="/faq/">Questions</a><a href="https://github.com/incyashraj/krate/releases" target="_blank" rel="noopener">Changelog <span class="ext">↗</span></a></div>
-      <div class="set" data-set="studio"><a href="/studio/">Krate Studio</a><a href="/app/">Make an app in your browser</a><a href="/download/">Download Studio</a></div>
-      <div class="set" data-set="apps"><a href="/cloud/">Apps</a><a href="/open/">Received an app?</a><a href="/publish/">Publish an app</a></div>
-      <div class="set" data-set="docs"><a href="/docs/">Docs</a><a href="/docs/quickstart.html">Quickstart</a><a href="/docs/pages/make-an-app-with-ai.html">Make an app with AI</a><a href="https://github.com/incyashraj/krate" target="_blank" rel="noopener">GitHub <span class="ext">↗</span></a></div>
-    </div>
-  </nav>
-  <div class="hr">
-    <button class="thm" id="thm" aria-label="Switch between light and dark"><svg class="sun" width="17" height="17" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="9" cy="9" r="3.4"/><path d="M9 1.8v1.6M9 14.6v1.6M1.8 9h1.6M14.6 9h1.6M3.9 3.9l1.1 1.1M13 13l1.1 1.1M3.9 14.1L5 13M13 5l1.1-1.1"/></svg><svg class="moon" width="16" height="16" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><path d="M15.2 11.2A6.6 6.6 0 0 1 6.8 2.8a6.6 6.6 0 1 0 8.4 8.4z"/></svg></button>
-    <a class="signin" href="/login/">Sign in</a>
-    <a class="cta" href="/app/">Try Krate</a>
-    <button class="burger" id="burger" aria-label="Menu" aria-expanded="false"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M3 6.5h12M3 11.5h12"/></svg></button>
-  </div>
-</header>
-<nav class="mnav" id="mnav" aria-label="Menu">
-  <h6>Krate</h6><a href="/">Overview</a><a href="/studio/">Studio</a><a href="/app/">Make an app in your browser</a><a href="/cloud/">Apps</a><a href="/download/">Download</a>
-  <h6>Help</h6><a href="/docs/">Docs</a><a href="/faq/">Questions</a><a href="/open/">Received an app?</a><a href="/contact/">Contact</a><a href="/login/">Sign in</a>
-</nav>
-
-<main>
-<section class="orgp wrap n">
+<body class="console" data-kit="app">
+<main class="con">
   <div class="panel signedout" id="out" hidden>
     <img class="mk" src="/krate-mark-3d-96.png" alt="">
     <h1>Sign in to open this organisation</h1>
@@ -404,21 +417,41 @@ details.nums small { display: block; max-width: 62ch; line-height: 1.45; }
 
   <div id="stop" hidden></div>
 
-  <div id="in" hidden>
-    <a class="back" href="/orgs/"><svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4.5 2.5L8 6l-3.5 3.5"/></svg>Organisations</a>
-    <div class="ohead">
-      <div class="otile" id="oTile" aria-hidden="true"></div>
-      <div class="t"><h1 class="page" id="oName">Loading</h1><p id="oMeta"></p></div>
+  <div id="in" class="shell" hidden>
+    <aside class="cside" id="cside" aria-label="Organisation">
+      <div class="cs-top">
+        <a class="cs-mark" href="/"><img src="/krate-mark-3d-96.png" alt="" width="20" height="20">Krate</a>
+        <button class="cs-x" id="csClose" type="button" aria-label="Close the menu"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M4 4l8 8M12 4l-8 8"/></svg></button>
+      </div>
+      <a class="cs-org" href="/orgs/" title="Your organisations">
+        <span class="otile" id="oTile" aria-hidden="true"></span>
+        <span class="t"><b id="oName">Loading</b><small id="oMeta"></small></span>
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 6l3-3 3 3M5 10l3 3 3-3"/></svg>
+      </a>
+      <nav class="cs-nav" role="tablist" id="tabs" aria-label="Organisation" aria-orientation="vertical"></nav>
+      <div class="cs-foot">
+        <a class="cs-me" id="csMe" href="/account/"><span class="av" id="csAv" aria-hidden="true"></span><span id="csWho">Account</span></a>
+        <button class="thm" id="thm" type="button" aria-label="Switch between light and dark"><svg class="sun" width="17" height="17" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="9" cy="9" r="3.4"/><path d="M9 1.8v1.6M9 14.6v1.6M1.8 9h1.6M14.6 9h1.6M3.9 3.9l1.1 1.1M13 13l1.1 1.1M3.9 14.1L5 13M13 5l1.1-1.1"/></svg><svg class="moon" width="16" height="16" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><path d="M15.2 11.2A6.6 6.6 0 0 1 6.8 2.8a6.6 6.6 0 1 0 8.4 8.4z"/></svg></button>
+      </div>
+    </aside>
+    <div class="scrim" id="csScrim"></div>
+    <div class="cmainwrap">
+      <div class="cbar">
+        <button id="csOpen" type="button" aria-label="Open the menu" aria-controls="cside" aria-expanded="false"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M3 6h12M3 12h12"/></svg></button>
+        <span class="t"><b id="cbarOrg"></b><small id="cbarTab"></small></span>
+      </div>
+      <section class="cmain">
+        <div class="inner">
+          <div id="banner" class="banners" hidden></div>
+          <div id="toast" class="toast" hidden></div>
+          <div id="start" class="start" hidden></div>
+          <div id="pubNote" hidden></div>
+          <div class="pane" role="tabpanel" id="pane"></div>
+        </div>
+      </section>
     </div>
-    <div id="banner" class="banners" hidden></div>
-    <div class="tabs" role="tablist" id="tabs" aria-label="Organisation"></div>
-    <div id="toast" class="toast" hidden></div>
-    <div id="start" class="start" hidden></div>
-    <div id="pubNote" hidden></div>
-    <div class="pane" role="tabpanel" id="pane"></div>
   </div>
   <noscript><div class="panel"><h1>Organisation</h1><p>This page talks to the organisation through Krate's hub, which needs JavaScript. The command line does all of it too: <code class="k">krate org show</code>.</p></div></noscript>
-</section>
 </main>
 
 <dialog class="sheet" id="sheet" aria-labelledby="sheetH">
@@ -434,15 +467,6 @@ details.nums small { display: block; max-width: 62ch; line-height: 1.45; }
   </div>
 </dialog>
 
-<footer class="foot">
-  <div class="fm"><img src="/krate-mark-3d-96.png" alt="Krate" width="30" height="30"></div>
-  <div><h5>Krate</h5><a href="/studio/">Studio</a><a href="/app/">Make in your browser</a><a href="/cloud/">Apps</a><a href="/download/">Download</a><a href="/about/">About</a></div>
-  <div><h5>Developers</h5><a href="/docs/">Docs</a><a href="/docs/quickstart.html">Quickstart</a><a href="https://github.com/incyashraj/krate" target="_blank" rel="noopener">GitHub</a><a href="https://github.com/incyashraj/krate/releases" target="_blank" rel="noopener">Changelog</a></div>
-  <div><h5>Ship an app</h5><a href="/how-to-distribute-a-desktop-app.html">Ship a desktop app</a><a href="/krate-vs-electron.html">Krate vs Electron</a><a href="/krate-vs-tauri.html">Krate vs Tauri</a><a href="/electron-alternatives.html">Electron alternatives</a><a href="/answers/">All answers</a><a href="/facts/">Facts</a></div>
-  <div><h5>Help</h5><a href="/faq/">Questions</a><a href="/open/">Received an app?</a><a href="/contact/">Contact</a><a href="/account/">Account</a></div>
-  <div><h5>Terms &amp; policies</h5><a href="/terms/">Terms</a><a href="/privacy/">Privacy</a><a href="/copyright/">Copyright</a><a href="/reports/">Measurements</a></div>
-  <div class="copy"><span>Krate © 2026 Krate Labs</span><span>Open source under MIT or Apache-2.0</span></div>
-</footer>
 <script src="/kit/site.js"></script>
 <script src="/kit/org.js"></script>
 <script src="/kit/policy.js"></script>

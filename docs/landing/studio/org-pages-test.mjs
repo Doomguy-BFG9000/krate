@@ -115,7 +115,7 @@ import { KIT, ORGS, DASH, JOIN, OPEN, check, page, settle, storage, P, ACME, mem
 {
   const owner = await page("https://krate.tech/org/?o=acme", DASH, { token: "tok-alice", routes: orgRoutes("github:alice") });
   check(tabNames(owner) === "releases,apps,insights,waiting,people,activity,billing,settings", "/org/ shows an owner all eight tabs, Apps (IC-954) beside Releases, then Insights (IC-959)");
-  check(/you are an owner/.test(owner.el("oMeta").textContent), "and says which role they hold");
+  check(/you are an owner/i.test(owner.el("oMeta").textContent), "and says which role they hold");
   check(/Bounce 1\.0\.0/.test(owner.el("pane").shown) && /Sent by @carol · approved by @bob/.test(owner.el("pane").shown), "Releases names who sent and who approved");
   check(button(owner.el("pane"), "Open in Krate") && button(owner.el("pane"), "Copy link"), "each release has Open in Krate and Copy link");
   check(/Waiting for approval|Waiting/.test(owner.el("tabs").shown) && owner.el("tab-waiting").shown.includes("1"), "the Waiting tab counts what is waiting");

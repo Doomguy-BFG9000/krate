@@ -16,16 +16,41 @@
   var HERE = "/org/?o=" + encodeURIComponent(slug);
   var S = { org: null, me: null, members: [], tab: q.get("tab") || "", waiting: 0, names: {} };
 
-  var TAB = {
-    releases: { long: "Releases" },
-    apps: { long: "Apps" },
-    insights: { long: "Insights" },
-    waiting: { long: "Waiting for approval", short: "Waiting" },
-    people: { long: "People" },
-    activity: { long: "Activity" },
-    billing: { long: "Billing" },
-    settings: { long: "Settings" },
+  // The sidebar: each section's name, its group, and its icon (16px, drawn
+  // with the stroke the rest of Krate uses).
+  var ICON = {
+    releases: '<path d="M8 2.5v7.5M5 7l3 3 3-3"/><path d="M3 11v1.5A1.5 1.5 0 0 0 4.5 14h7a1.5 1.5 0 0 0 1.5-1.5V11"/>',
+    apps: '<rect x="2.5" y="2.5" width="4.5" height="4.5" rx="1.1"/><rect x="9" y="2.5" width="4.5" height="4.5" rx="1.1"/><rect x="2.5" y="9" width="4.5" height="4.5" rx="1.1"/><rect x="9" y="9" width="4.5" height="4.5" rx="1.1"/>',
+    waiting: '<circle cx="8" cy="8" r="5.6"/><path d="M8 5v3.2l2 1.3"/>',
+    insights: '<path d="M2.5 13.5h11"/><path d="M4.5 11V8M8 11V4.5M11.5 11V6.5"/>',
+    people: '<circle cx="6" cy="5.5" r="2.3"/><path d="M2 13c.4-2.2 2-3.5 4-3.5s3.6 1.3 4 3.5"/><path d="M10.5 3.4a2.2 2.2 0 0 1 0 4.2M11.6 9.7c1.3.4 2.2 1.6 2.4 3.3"/>',
+    activity: '<path d="M2 8.5h2.6l1.6-4 3.2 8 1.6-4H14"/>',
+    billing: '<rect x="2" y="3.5" width="12" height="9" rx="1.6"/><path d="M2 6.5h12M4.5 10h2.5"/>',
+    settings: '<circle cx="8" cy="8" r="2.1"/><path d="M8 1.8v1.7M8 12.5v1.7M1.8 8h1.7M12.5 8h1.7M3.6 3.6l1.2 1.2M11.2 11.2l1.2 1.2M3.6 12.4l1.2-1.2M11.2 4.8l1.2-1.2"/>',
   };
+  var TAB = {
+    releases: { long: "Releases", group: "" },
+    apps: { long: "Apps", group: "" },
+    waiting: { long: "Waiting for approval", group: "" },
+    insights: { long: "Insights", group: "" },
+    people: { long: "People", group: "Team" },
+    activity: { long: "Activity", group: "Team" },
+    billing: { long: "Billing", group: "Organisation" },
+    settings: { long: "Settings", group: "Organisation" },
+  };
+  var GROUPS = ["", "Team", "Organisation"];
+  function icon(id) {
+    var svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("viewBox", "0 0 16 16");
+    svg.setAttribute("fill", "none");
+    svg.setAttribute("stroke", "currentColor");
+    svg.setAttribute("stroke-width", "1.4");
+    svg.setAttribute("stroke-linecap", "round");
+    svg.setAttribute("stroke-linejoin", "round");
+    svg.setAttribute("aria-hidden", "true");
+    svg.innerHTML = ICON[id] || "";
+    return svg;
+  }
   // Filled in at the bottom: the Addendum 3 parts (parts.js).
   var P = null;
   function tabList() { var t = K.tabsFor(roleOf()); return P ? P.tabs(t) : t; }
@@ -86,7 +111,14 @@
   function drawTabs() {
     var bar = $("tabs");
     bar.textContent = "";
-    tabList().forEach(function (id) {
+    var list = tabList();
+    GROUPS.forEach(function (g) {
+      var mine = list.filter(function (id) { return (TAB[id] ? TAB[id].group : "") === g; });
+      if (!mine.length) return;
+      if (g) bar.appendChild(el("p", { class: "cs-label", text: g }));
+      mine.forEach(drawTab);
+    });
+    function drawTab(id) {
       var t = TAB[id];
       var b = el("button", {
         class: "tab", type: "button", role: "tab", id: "tab-" + id,
@@ -94,15 +126,33 @@
         "aria-selected": S.tab === id ? "true" : "false",
         onclick: function () { show(id); },
       }, [
-        el("span", { class: t.short ? "long" : "", text: t.long }),
-        t.short ? el("span", { class: "short", text: t.short }) : null,
+        icon(id),
+        el("span", { class: "lb", text: t.long }),
         id === "waiting" && S.waiting ? el("span", { class: "n", text: String(S.waiting) }) : null,
         // Publishers an owner's computer has not approved yet (IC-958 A).
         id === "people" && S.pubWaiting ? el("span", { class: "n", text: String(S.pubWaiting) }) : null,
       ]);
       bar.appendChild(b);
-    });
+    }
   }
+
+  // The sidebar is a drawer on a narrow screen.
+  function drawer(open) {
+    var shell = $("in"), opener = $("csOpen");
+    if (!shell || !opener || !shell.classList) return;
+    var was = shell.classList.contains("drawer");
+    shell.classList.toggle("drawer", open);
+    opener.setAttribute("aria-expanded", open ? "true" : "false");
+    if (open) $("csClose").focus();
+    else if (was) opener.focus();
+  }
+  if ($("csOpen")) {
+    $("csOpen").addEventListener("click", function () { drawer(true); });
+    $("csClose").addEventListener("click", function () { drawer(false); });
+    $("csScrim").addEventListener("click", function () { drawer(false); });
+    if (typeof document.addEventListener === "function") document.addEventListener("keydown", function (e) { if (e.key === "Escape") drawer(false); });
+  }
+  function setText(id, text) { var n = $(id); if (n) n.textContent = text; }
 
   function show(id) {
     var tabs = tabList();
@@ -110,9 +160,14 @@
     S.tab = id;
     try { history.replaceState(null, "", HERE + "&tab=" + id); } catch (e) {}
     drawTabs();
+    setText("cbarTab", TAB[id] ? TAB[id].long : "");
+    drawer(false);
+    if (window.scrollTo) window.scrollTo(0, 0);
     if (P) P.banner($("banner"));
-    // Getting started (IC-958), above Releases, for those who run it.
-    var start = $("start");
+    // Getting started (IC-958), under the Releases heading, for those who
+    // run it. One box, kept here: head() moves it into the pane, and a pane
+    // that redraws would otherwise take it out of the page for good.
+    var start = startBox;
     if (Setup && id === "releases" && S.org && S.org.state !== "closed") Setup.checklist(start, { S: S, show: show, refresh: refresh });
     else { start.hidden = true; start.textContent = ""; }
     if (Pub) Pub.notice($("pubNote"), id);
@@ -126,7 +181,9 @@
   function head(pane, title, sub) {
     pane.textContent = "";
     pane.appendChild(el("div", { class: "phd" }, [el("h2", { text: title }), sub ? el("p", { text: sub }) : null]));
+    if (S.tab === "releases" && startBox && !startBox.hidden) pane.appendChild(startBox);
   }
+  var startBox = $("start");
 
   function failed(pane, res, ctx) {
     var c = el("div", { class: "card" }, [K.refusalBlock(words(res, ctx))]);
@@ -896,9 +953,13 @@
     var name = S.org.name || slug;
     document.title = name + " on Krate";
     $("oName").textContent = name;
+    setText("cbarOrg", name);
     $("oTile").textContent = name.slice(0, 1).toUpperCase();
     var r = K.ROLE_NAME[roleOf()] || roleOf();
-    $("oMeta").textContent = slug + " · you are " + (/^[AEIOU]/.test(r) ? "an " : "a ") + r.toLowerCase();
+    $("oMeta").textContent = "You are " + (/^[AEIOU]/.test(r) ? "an " : "a ") + r.toLowerCase();
+    var who = me();
+    setText("csWho", who.label || "Account");
+    setText("csAv", String(who.label || "?").replace(/^@/, "").slice(0, 1).toUpperCase());
     $("in").hidden = false;
     if (q.get("new") === "1") toast(name + " is ready, and you are its owner. Getting started has what is left to do.");
     // Sent while the two-person rule holds: who approves it now.

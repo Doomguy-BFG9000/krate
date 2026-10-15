@@ -1,5 +1,5 @@
 {
-  "about": "The ready apps a new organisation can release in its first minute (IC-958 addendum): real apps built on store.org, the bundles in /orgs/starters/. The page reads this list as it is; each entry needs id, name, says (one line), can (what it can do, in plain words), why (the one line that says what only Krate does) and bundle.",
+  "about": "The ready apps a new organisation can release in its first minute (IC-958 addendum): real apps built on store.org, the bundles in /orgs/starters/. The page reads this list as it is; each entry needs id, name, says (one line), can (what it can do, in plain words), why (the one line that says what only Krate does), bundle, shot (a picture of the app in use, from its real-hub test) and top (its three best things, a few words each).",
   "starters": [
     {
       "id": "team-notes",
@@ -15,7 +15,13 @@
       ],
       "why": "Encrypted end to end: not even Krate can read your team's notes.",
       "bundle": "/orgs/starters/team-notes.krate",
-      "placeholder": false
+      "placeholder": false,
+      "shot": "/orgs/starters/team-notes.webp",
+      "top": [
+        "Shared as you type",
+        "Search and pin",
+        "Works offline"
+      ]
     },
     {
       "id": "expenses",
@@ -30,7 +36,13 @@
       ],
       "why": "Encrypted end to end: not even Krate can see your team's spending.",
       "bundle": "/orgs/starters/expenses.krate",
-      "placeholder": false
+      "placeholder": false,
+      "shot": "/orgs/starters/expenses.webp",
+      "top": [
+        "Who is owed what",
+        "What each month cost",
+        "Paid back, with Undo"
+      ]
     },
     {
       "id": "stock-list",
@@ -46,7 +58,13 @@
       ],
       "why": "Encrypted end to end: not even Krate can see what your team keeps.",
       "bundle": "/orgs/starters/stock-list.krate",
-      "placeholder": false
+      "placeholder": false,
+      "shot": "/orgs/starters/stock-list.webp",
+      "top": [
+        "Count in and out",
+        "See what is running low",
+        "Two people count at once"
+      ]
     }
   ]
 }

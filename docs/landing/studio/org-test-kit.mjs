@@ -192,7 +192,8 @@ function orgRoutes(me, extra = {}) {
     ...extra,
   };
 }
-const tabNames = (p) => p.el("tabs").children.map((b) => b.attrs.id.replace("tab-", "")).join(",");
+// The sidebar holds group labels between its tabs; the tabs are its buttons.
+const tabNames = (p) => p.el("tabs").children.filter((b) => b.tagName === "BUTTON").map((b) => b.attrs.id.replace("tab-", "")).join(",");
 const button = (root, text) => root.all((n) => n.tagName === "BUTTON" && n.textContent === text)[0];
 
 export { KIT, ORGS, DASH, JOIN, OPEN, check, page, settle, storage, P, ACME, member, DIGEST, orgRoutes, tabNames, button };

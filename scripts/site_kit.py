@@ -91,10 +91,24 @@ def is_kit(html: str) -> bool:
     return re.search(r'<link[^>]+href="[^"]*/kit/site(?:\.[0-9a-f]{12})?\.css"', html) is not None
 
 
+# An app screen rather than a page of the website: the organisation console
+# and the focused screens that set one up or join one. They wear the kit's
+# tokens, theme script and site.js, and none of the website's header, menu
+# or footer -- a person working in an organisation is not browsing the site.
+# Marked on the page itself, so the exception is visible where it is taken.
+APP_SCREEN = re.compile(r'<body[^>]*\bdata-kit="app"')
+WEBSITE_PARTS = {"header", "menu", "footer"}
+
+
 def problems(html: str) -> list:
     out = []
+    app = APP_SCREEN.search(html) is not None
     for name, (pat, want) in PARTS.items():
         found = pat.findall(html)
+        if app and name in WEBSITE_PARTS:
+            if found:
+                out.append(f"is an app screen and still has the website's {name}")
+            continue
         if len(found) != 1:
             out.append(f"has {len(found)} {name}s, wants 1")
         elif found[0] != want:
@@ -169,6 +183,11 @@ def self_test() -> int:
     assert not is_kit('<link rel="stylesheet" href="/site.css">'), "the old /site.css is not the kit"
     assert is_kit('<link rel="stylesheet" href="/kit/site.0123456789ab.css">'), "a hashed kit sheet is the kit"
     assert "has an unclosed HTML comment" in problems(page.replace("<main>", "<main><!-- note </main>"))
+    screen = f'<html><head>{HEAD_THEME}{KIT_LINKS}</head><body data-kit="app"><main>x</main>{KIT_SCRIPT}</body></html>'
+    assert problems(screen) == [], problems(screen)
+    assert "is an app screen and still has the website's header" in problems(screen.replace("<main>", HEADER + "<main>"))
+    assert "has 0 headers, wants 1" in problems(screen.replace(' data-kit="app"', "")), "only the marker exempts a page"
+    assert "has 1 theme scripts, wants 1" not in problems(screen) and any("theme script" in p for p in problems(screen.replace(HEAD_THEME, ""))), "an app screen still needs the theme script"
     nojs = page.replace(KIT_SCRIPT, "")
     assert "does not load /kit/site.js" in problems(nojs)
     assert hidden_ungated(".rv { opacity: 0; }") == [".rv"], "an ungated reveal is reported"
