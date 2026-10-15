@@ -422,7 +422,7 @@
     inp.value = "";
     if (opts.input) { $("sheetInLabel").textContent = opts.input.label; inp.placeholder = opts.input.placeholder || ""; }
     if (opts.digest) {
-      dg.appendChild(el("span", { text: opts.digestLabel || "Exact bytes (sha256)" }));
+      dg.appendChild(el("span", { text: opts.digestLabel || "Fingerprint of these exact bytes" }));
       dg.appendChild(document.createTextNode(opts.digest));
       dg.hidden = false;
     } else dg.hidden = true;
@@ -598,7 +598,6 @@
           el("div", { class: "t" }, [
             el("b", { text: K.appName(c) }),
             el("small", { text: "Sent by " + K.who(c.uploaded_by).label + " · " + K.moment(c.uploaded_at) }),
-            el("small", { class: "dg", text: "sha256 " + c.digest.slice(0, 16) + "…" }),
             review.node,
             note,
           ]),
@@ -1133,17 +1132,24 @@
         key.appendChild(el("p", { class: "fp", text: K.fingerprint(o.root_key) }));
         key.appendChild(el("dl", { class: "kv" }, [
           el("dt", { text: "Made" }), el("dd", { text: (K.moment(o.root_key_set_at) || "Unknown") + (o.root_key_set_by ? " by " + K.who(o.root_key_set_by).label : "") }),
-          el("dt", { text: "Full public key" }), el("dd", { class: "dg", text: o.root_key }),
         ]));
       } else {
         key.appendChild(el("p", { text: name + " gets its signature when its first app is released, from Releases in this browser or from Krate Studio. Until then nothing can be sent to " + name + "." }));
         key.appendChild(el("div", { class: "row2" }, [el("button", { class: "btn dark sm", type: "button", text: "Release an app", onclick: function () { show("releases"); } })]));
       }
+      // The key itself, and replacing it with one an owner keeps in a
+      // file, are for those who look for them: under Technical details.
+      var tech = el("details", { class: "term tech" }, [el("summary", { text: "Technical details" })]);
+      var techBody = el("div", { class: "tb" });
+      tech.appendChild(techBody);
+      if (o.root_key) techBody.appendChild(el("dl", { class: "kv" }, [el("dt", { text: "Full public key" }), el("dd", { class: "dg", text: o.root_key })]));
       if (owner) {
-        key.appendChild(terminal([[o.root_key
+        techBody.appendChild(el("p", { class: "sub", text: o.root_key
           ? "Replace it from a terminal with the new key's file (Activity records the change):"
-          : "Or make it from a terminal, on the computer that keeps it:", "krate org root-key " + slug + " " + slug + "-root.pkcs8" + (o.root_key ? "" : " --new")]]));
+          : "Or make it from a terminal, on the computer that keeps it:" }));
+        techBody.appendChild(el("pre", { class: "k", text: "krate org root-key " + slug + " " + slug + "-root.pkcs8" + (o.root_key ? "" : " --new") }));
       }
+      if (o.root_key || owner) key.appendChild(tech);
       pane.appendChild(key);
 
       pane.appendChild(el("div", { class: "card" }, [
@@ -1166,7 +1172,7 @@
       // Company connections (connections.js, IC-952).
       if (C) C.settings(pane);
 
-      P.settings(pane, key);
+      P.settings(pane, techBody);
       if (S.navRedraw) S.navRedraw();
     });
   }

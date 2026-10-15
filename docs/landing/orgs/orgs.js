@@ -166,7 +166,20 @@
     goLabel();
     sayAddr();
     liveCheck();
+    // A reload (or a sign-in round trip) keeps what was typed.
+    try { sessionStorage.setItem("krate-org-name", $("cName").value); } catch (e) {}
   });
+  (function () {
+    var kept = null;
+    try { kept = sessionStorage.getItem("krate-org-name"); } catch (e) {}
+    if (kept && !$("cName").value) {
+      $("cName").value = kept;
+      if (!slugTouched) $("cSlug").value = slugFrom(kept);
+      goLabel();
+      sayAddr();
+      liveCheck();
+    }
+  })();
   $("cSlug").addEventListener("input", function () {
     slugTouched = true;
     var v = $("cSlug").value.toLowerCase().replace(/[^a-z0-9-]/g, "");
@@ -192,6 +205,7 @@
       go.disabled = false;
       goLabel();
       if (res.ok) {
+        try { sessionStorage.removeItem("krate-org-name"); } catch (e) {}
         var org = (res.body && res.body.org) || { slug: slug, name: name };
         wizard(org, { role: "owner", principal: (res.body && res.body.membership && res.body.membership.principal) || "" }, [], "app");
         return;

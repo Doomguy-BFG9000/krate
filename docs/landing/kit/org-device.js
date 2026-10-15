@@ -188,7 +188,7 @@
       var iv = root.crypto.getRandomValues(new Uint8Array(12));
       var secret = hex(fromB64url(jwk.d));
       var sealed = await subtle.encrypt({ name: "AES-GCM", iv: iv }, wrap, enc.encode(secret));
-      rec = { v: 1, public_key: hex(fromB64url(jwk.x)), wrap: wrap, iv: iv, sealed: new Uint8Array(sealed), name: opts.name || "This browser" };
+      rec = { v: 1, public_key: hex(fromB64url(jwk.x)), wrap: wrap, iv: iv, sealed: new Uint8Array(sealed), name: opts.name || browserName() };
       await store.put("device", rec);
     }
     return {
@@ -446,12 +446,24 @@
     return K && K.token ? K.token() : "";
   }
 
+  /// What a person calls this browser when they see it in a list of the
+  /// organisation's computers: "Chrome on Mac", "Safari on iPhone".
+  function browserName() {
+    var nav = typeof navigator !== "undefined" ? navigator : {};
+    var ua = nav.userAgent || "";
+    var b = nav.brave ? "Brave" : /Edg\//.test(ua) ? "Edge" : /Firefox\//.test(ua) ? "Firefox" : /OPR\//.test(ua) ? "Opera"
+      : /Chrome\//.test(ua) ? "Chrome" : /Safari\//.test(ua) ? "Safari" : "This browser";
+    var o = /iPhone/.test(ua) ? "iPhone" : /iPad/.test(ua) ? "iPad" : /Android/.test(ua) ? "Android"
+      : /Macintosh|Mac OS X/.test(ua) ? "Mac" : /Windows/.test(ua) ? "Windows" : /CrOS/.test(ua) ? "Chromebook" : /Linux/.test(ua) ? "Linux" : "";
+    return b + (o && b !== "This browser" ? " on " + o : "");
+  }
+
   async function parts(name) {
     if (!(await supported())) {
       throw refuse("unsupported", "this browser cannot keep the organisation's keys -- use a current Chrome, Edge, Safari or Firefox, or Krate on a computer");
     }
     if (!cached.mod) cached.mod = await loadModule(hubOf() + "/validator.wasm");
-    if (!cached.device) cached.device = await openDevice({ store: cfg.store, name: name || "This browser" });
+    if (!cached.device) cached.device = await openDevice({ store: cfg.store, name: name || browserName() });
     return { hub: hubOf(), token: tokenOf(), mod: cached.mod, device: cached.device };
   }
 

@@ -83,7 +83,7 @@ async function create(p, name) {
   check(up && up.headers["content-type"] === "application/octet-stream" && up.headers["idempotency-key"] && up.body.length === 7, "the signed bytes go to Acme, once, with an Idempotency-Key");
   const ap = p.sent.find((s) => s.key === `POST /orgs/acme/candidates/${DIG}/approve`);
   check(!!ap, "then it is released (solo release while nobody else can approve)");
-  check(/Acme can use Team Notes now/.test(textOf(body)) && body.all((n) => n.tagName === "INPUT")[0].value === `https://hub.krate.tech/a/${DIG}`, "Acme can use it now, with the link to copy");
+  check(/Acme can use Team Notes now/.test(textOf(body)) && body.all((n) => n.tagName === "A" && n.className === "lchip")[0].attrs["data-url"] === `https://hub.krate.tech/a/${DIG}` && !textOf(body).includes(DIG), "Acme can use it now, with the link to copy, its address shortened on the page");
   check(/nobody else in Acme can approve yet/.test(textOf(body)), "a solo release says so");
   check(!!body.all((n) => n.tagName === "TEXTAREA")[0] && /Invite your team/.test(textOf(body)), "and Invite your team is right there");
   check(p.location.href.endsWith("/orgs/?o=acme&step=done") && p.el("wSteps").children[2].className === "on", "the address and the steps say where it is");

@@ -179,7 +179,7 @@
       function label() { return chosen ? (chosen.kind === "starter" ? chosen.s.name : chosen.f.name.replace(/\.krate$/i, "")) : "it"; }
       function choose(c, card) {
         chosen = c;
-        cards.forEach(function (x) { x.setAttribute("aria-checked", x === card ? "true" : "false"); });
+        cards.forEach(function (x) { x.setAttribute("aria-checked", x === card ? "true" : "false"); x.setAttribute("tabindex", x === card ? "0" : "-1"); });
         go.textContent = "Release " + label() + " to " + nameOf();
         go.disabled = false;
         why.textContent = c.kind === "starter" && c.s.why ? c.s.why : "";
@@ -204,6 +204,16 @@
           ]),
         ]);
         b.addEventListener("click", function () { choose(c, b); });
+        // A radio group: arrow keys move the choice, Tab leaves the group.
+        b.addEventListener("keydown", function (e) {
+          var k = e.key, i = cards.indexOf(b);
+          var to = k === "ArrowRight" || k === "ArrowDown" ? i + 1 : k === "ArrowLeft" || k === "ArrowUp" ? i - 1 : k === "Home" ? 0 : k === "End" ? cards.length - 1 : null;
+          if (to === null) return;
+          if (e.preventDefault) e.preventDefault();
+          var next = cards[(to + cards.length) % cards.length];
+          next.click();
+          if (next.focus) next.focus();
+        });
         cards.push(b);
         return b;
       }
@@ -265,7 +275,9 @@
             return Promise.reject({ studio: true });
           }
           step("Setting up " + nameOf() + "'s signature in this browser");
-          return Promise.resolve(dev.ready(slug, { name: nameOf() })).then(function () {
+          // The browser names itself ("Chrome on Mac"); the organisation's
+          // name is not a computer's name (K-1113).
+          return Promise.resolve(dev.ready(slug, {})).then(function () {
             step("Signing " + name + " for " + nameOf());
             return dev.sign(slug, bytes, { name: nameOf() });
           });
@@ -330,14 +342,20 @@
       o = o || {};
       box.textContent = "";
       var url = release.url || (release.digest ? K.hub() + "/a/" + release.digest : "");
-      var inp = el("input", { class: "inp", readonly: true, value: url, "aria-label": "Link to " + label });
-      var cp = el("button", { class: "btn ghost", type: "button", text: "Copy link", onclick: function () { inp.select(); K.copy(url, cp); } });
+      // The link as a person reads it: the app's name and a short form of
+      // the address; the whole address is what Copy puts on the clipboard.
+      var short = url.replace(/^https?:\/\//, "").replace(/([0-9a-f]{6})[0-9a-f]{52}([0-9a-f]{6})/, "$1…$2");
+      var link = el("a", { class: "lchip", href: url, title: url, "data-url": url }, [
+        el("b", { text: label }),
+        el("small", { text: short }),
+      ]);
+      var cp = el("button", { class: "btn dark", type: "button", text: "Copy link", onclick: function () { K.copy(url, cp); } });
       var invBox = el("div", { class: "rel-inv" });
       var kids = [
         el("div", { class: "done-mark", "aria-hidden": "true", text: "✓" }),
         el("h2", { tabindex: "-1", class: "rel-h", text: nameOf() + " can use " + label + " now" }),
         el("p", { text: "Anyone in " + nameOf() + " opens it from this link. Nobody else can, even with the link." }),
-        el("div", { class: "linkbox" }, [inp, cp]),
+        el("div", { class: "linkbox" }, [link, cp]),
         el("p", { class: "fa-why", text: "Every version is signed by " + nameOf() + " and checked on each computer before it opens." }),
         release.solo
           ? el("p", { class: "sub", text: "You released it yourself because nobody else in " + nameOf() + " can approve yet. Once a reviewer joins, each new version waits for a second person." })
