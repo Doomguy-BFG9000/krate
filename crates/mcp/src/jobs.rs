@@ -252,20 +252,19 @@ fn run_build(
         command.arg("--agent").arg(agent);
     }
 
-    let mut child = command
-        // Nothing may read this process's stdin: it belongs to the MCP client.
-        // A child that inherited it would eat the client's messages.
+    // Nothing may read this process's stdin: it belongs to the MCP client.
+    // A child that inherited it would eat the client's messages.
+    command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|err| {
-            format!(
-                "could not run `{}`: {err}. The MCP server needs the krate binary it was \
+        .stderr(Stdio::piped());
+    let mut child = spawn_unless_busy(&mut command).map_err(|err| {
+        format!(
+            "could not run `{}`: {err}. The MCP server needs the krate binary it was \
                  launched beside; check the `command` path in your client's MCP config.",
-                spec.krate_bin.display()
-            )
-        })?;
+            spec.krate_bin.display()
+        )
+    })?;
 
     // stderr carries the human-readable progress an agent run emits. Drain it on
     // a thread: if nobody reads it the pipe fills, the child blocks writing to
@@ -396,6 +395,25 @@ fn exit_label(status: &std::process::ExitStatus) -> String {
     }
 }
 
+/// Start `command`, trying again a few times while Linux says the binary is
+/// busy (ETXTBSY). That happens when the file was written a moment ago and
+/// another thread forked while it was still open for writing: the fork
+/// holds the write handle until it execs. Nothing is wrong with the binary,
+/// so a short wait is the fix, as cargo itself does.
+fn spawn_unless_busy(command: &mut Command) -> std::io::Result<std::process::Child> {
+    const TEXT_FILE_BUSY: i32 = 26;
+    let mut tries = 0;
+    loop {
+        match command.spawn() {
+            Err(err) if err.raw_os_error() == Some(TEXT_FILE_BUSY) && tries < 10 => {
+                tries += 1;
+                std::thread::sleep(Duration::from_millis(20 * tries));
+            }
+            other => return other,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -483,7 +501,8 @@ mod tests {
         // about: a model confidently telling someone their app is ready when
         // there is no file.
         assert_eq!(done.phase, Phase::Failed);
-        assert!(done.error.expect("error").contains("wrote no file"));
+        let error = done.error.expect("error");
+        assert!(error.contains("wrote no file"), "{error}");
     }
 
     #[cfg(unix)]
