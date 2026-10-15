@@ -225,25 +225,47 @@
   function settingsNav(id) {
     var nav = $("setNav"), pane = $("pane");
     if (!nav) return;
+    // One list whichever part is open: Settings' sections (remembered from
+    // the last time Settings drew them) and Billing.
     function draw() {
       nav.textContent = "";
       var tabs = tabList();
-      if (id === "billing" && tabs.indexOf("settings") >= 0) nav.appendChild(el("button", { type: "button", text: "Settings", onclick: function () { show("settings"); } }));
       var group = null;
-      Array.prototype.slice.call(pane.children || []).forEach(function (c) {
-        var h = c.querySelector && c.querySelector("h3");
-        if (!h || !c.classList || !c.classList.contains("card")) return;
-        var named = navName(h.textContent);
+      var sections = [];
+      if (id === "settings") {
+        Array.prototype.slice.call(pane.children || []).forEach(function (c) {
+          var h = c.querySelector && c.querySelector("h3");
+          if (!h || !c.classList || !c.classList.contains("card")) return;
+          sections.push({ title: h.textContent, card: c });
+        });
+        S.navSections = sections.map(function (x) { return x.title; });
+      } else if (tabs.indexOf("settings") >= 0) {
+        sections = (S.navSections || ["Organisation"]).map(function (t) { return { title: t, card: null }; });
+      }
+      // In group order, each group once, keeping the page's order inside it.
+      var ORDER = ["Organisation", "Connected to", "Data", "More"];
+      sections = sections.map(function (x, i) { return { x: x, i: i, g: ORDER.indexOf(navName(x.title)[1]) }; })
+        .sort(function (a, b) { return a.g - b.g || a.i - b.i; }).map(function (y) { return y.x; });
+      sections.forEach(function (x) {
+        var named = navName(x.title);
         if (named[1] !== group) { group = named[1]; nav.appendChild(el("p", { class: "sd-group", text: group })); }
         nav.appendChild(el("button", { type: "button", text: named[0], onclick: function () {
+          if (!x.card) { S.navGo = x.title; show("settings"); return; }
           Array.prototype.slice.call(nav.querySelectorAll("button")).forEach(function (b) { b.removeAttribute("aria-current"); });
           this.setAttribute("aria-current", "true");
-          if (c.scrollIntoView) c.scrollIntoView({ block: "start" });
+          if (x.card.scrollIntoView) x.card.scrollIntoView({ block: "start" });
         } }));
       });
-      if (id === "settings" && tabs.indexOf("billing") >= 0) {
+      // Arrived from Billing for one section: go to it once it is drawn.
+      if (id === "settings" && S.navGo) {
+        var want = sections.filter(function (x) { return x.title === S.navGo; })[0];
+        if (want) { S.navGo = null; if (want.card.scrollIntoView) want.card.scrollIntoView({ block: "start" }); }
+      }
+      if (tabs.indexOf("billing") >= 0) {
         nav.appendChild(el("p", { class: "sd-group", text: "Plan" }));
-        nav.appendChild(el("button", { type: "button", text: "Billing", onclick: function () { show("billing"); } }));
+        var bill = el("button", { type: "button", text: "Billing", onclick: function () { show("billing"); } });
+        if (id === "billing") bill.setAttribute("aria-current", "true");
+        nav.appendChild(bill);
       }
     }
     draw();
