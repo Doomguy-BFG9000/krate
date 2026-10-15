@@ -227,6 +227,22 @@ button.ev { width: 100%; text-align: left; border-radius: 0; }
   .igrid.many { grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; }
   .igrid.many > :first-child { grid-column: 1 / -1; }
 }
+/* a coloured tile for an app with no picture: its initial */
+.apptile { flex: none; width: 40px; height: 40px; border-radius: 11px; display: grid; place-items: center; font-size: 17px; font-weight: 600; color: #fff; background: linear-gradient(135deg, var(--accent), var(--violet)); }
+/* Waiting: one card a version */
+.wcard { display: grid; gap: 12px; }
+.wc-h { display: flex; align-items: flex-start; gap: 12px; }
+.wc-h .t { flex: 1; min-width: 0; display: grid; gap: 2px; }
+.wc-h .t b { font-size: 15.5px; font-weight: 600; }
+.wc-h .t small { font-size: 13px; color: var(--ink-3); }
+.wc-h > .tag { flex: none; }
+.wcard .row2 { margin-top: 0; }
+/* Apps: the filters and the count above a grid of cards */
+.invbar { display: grid; gap: 10px; }
+.invgrid { display: grid; gap: 14px; }
+@media (min-width: 1200px) { .invgrid { grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; } }
+.appc .apph { gap: 12px; align-items: center; }
+.appc .apph.opens { margin: -6px -8px 0; padding: 6px 8px; border-radius: 12px; }
 /* a row that opens its details on the right */
 .opens { cursor: pointer; }
 .opens:hover { background: color-mix(in srgb, var(--ink) 3%, transparent); }
@@ -411,9 +427,11 @@ dialog.sheet .sheetin { margin-top: 14px; text-align: left; }
 .gform { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; margin-top: 16px; }
 .gform .btn { height: 46px; }
 /* IC-954: the Apps tab -- every app, its owner and its record */
-.invbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; margin-bottom: 14px; }
-.invbar .sum { flex: 1 1 220px; min-width: 0; font-size: 14px; color: var(--ink-2); }
-.invbar .note { flex-basis: 100%; font-size: 13px; color: var(--ink-2); }
+.invbar .ptools { flex-wrap: nowrap; }
+.invbar .sum { flex: 1 1 auto; min-width: 0; margin: 0; font-size: 14px; color: var(--ink-2); }
+.invbar .ptools .btn { flex: none; margin: 0; }
+.invbar .note { font-size: 13px; color: var(--ink-2); }
+@media (max-width: 560px) { .invbar .ptools { flex-wrap: wrap; } }
 .appc.inv h3 .tag { height: 22px; margin-left: 4px; font-size: 12px; vertical-align: 2px; }
 .appc.inv.needs { box-shadow: inset 0 0 0 1.5px var(--warn); }
 .rw.own { flex-wrap: wrap; }

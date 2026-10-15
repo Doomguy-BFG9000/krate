@@ -35,7 +35,8 @@ const as = (me, extra = {}) => ({
   "GET /orgs/acme/candidates": () => [200, CANDIDATES],
   ...extra,
 });
-const rowOf = (p, text) => p.el("pane").querySelectorAll(".rw").find((r) => r.querySelector("b") && r.querySelector("b").textContent.startsWith(text));
+// A waiting version is a card of its own (.wcard); anything else a row.
+const rowOf = (p, text) => p.el("pane").querySelectorAll(".wcard").concat(p.el("pane").querySelectorAll(".rw")).find((r) => r.querySelector("b") && r.querySelector("b").textContent.startsWith(text));
 const ticksIn = (row) => row.all((n) => n.tagName === "INPUT" && n.getAttribute("type") === "checkbox");
 
 {

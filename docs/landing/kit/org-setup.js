@@ -289,6 +289,9 @@
           if (!sent.ok) return Promise.reject({ res: sent, what: "send apps" });
           var digest = sent.body && sent.body.digest;
           if (sent.body && sent.body.state === "released") return { ok: true, body: { release: { digest: digest, url: K.hub() + "/a/" + digest } } };
+          // The hub says when the sender may not release it alone (someone
+          // else can approve): it waits, with no refused attempt on record.
+          if (sent.body && sent.body.solo_release === false) return { ok: false, body: { error: "self-approval" } };
           step("Releasing " + name);
           return K.api("POST", path("/candidates/" + digest + "/approve"), { accept: [] }, { key: K.key() }).then(function (r) { r.digest = digest; return r; });
         }).then(function (rel) {

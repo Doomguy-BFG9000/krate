@@ -117,5 +117,44 @@ const shown = (n) => t(n.shown);
   check(p.el("crTitle").textContent === "What happened" && /Who @alice/.test(shown(p.el("crBody"))), "an entry opens in full on the right");
 }
 
-console.log(failures() ? `${failures()} check(s) failed` : "ok  the console: Dashboard, panel, Settings, Activity");
+/* ---- Waiting: what is for you first, oldest first, how long, and what was decided ---- */
+{
+  const T = Math.floor(Date.now() / 1000);
+  const cand = (name, who, at, extra = {}) => ({ digest: name[0].repeat(64), name, version: "1.0.0", app_id: "com.acme." + name.toLowerCase(), state: "waiting-for-approval", uploaded_by: who, uploaded_at: at, capabilities: [], changes: { against: null, added: [], removed: [], kept: 0 }, ...extra });
+  const list = [
+    cand("Rota", "github:carol", T - 3600),
+    cand("Mine", "github:bob", T - 600),
+    cand("Payroll", "github:carol", T - 3 * DAY, { changes: { against: "0.9.0", added: [], removed: [], kept: 2 } }),
+    cand("Notes", "github:carol", T - 9 * DAY, { state: "released", approved_by: "github:bob", approved_at: T - 8 * DAY }),
+  ];
+  const p = await page("https://krate.tech/org/?o=acme&tab=waiting", DASH, { token: "t", routes: { ...routes("reviewer"), "GET /orgs/acme/candidates": () => [200, list] } });
+  await settle();
+  const pane = p.el("pane");
+  const s = shown(pane);
+  check(/3 versions are waiting · the oldest for 3 days · 2 for you/.test(s), "how many wait, the oldest, and how many are this person's to decide");
+  check(s.indexOf("Waiting for you") < s.indexOf("Payroll") && s.indexOf("Payroll") < s.indexOf("Rota") && s.indexOf("Rota") < s.indexOf("Waiting for someone else") && s.indexOf("Waiting for someone else") < s.indexOf("Mine"), "for you first, oldest first; your own under someone else");
+  check(/Payroll 1\.0\.0 Update from 0\.9\.0/.test(s) && /Rota 1\.0\.0 New app/.test(s), "each says whether it is new or an update, and from what");
+  const tags = pane.all((n) => n.tagName === "SPAN" && /^Waiting \d/.test(n.textContent));
+  check(tags.length === 3 && tags[0].className.includes("warn") && !tags[1].className.includes("warn"), "how long each has waited, marked once it is past two days");
+  check(/Recently decided Notes 1\.0\.0 Approved by @bob/.test(s), "and what was decided lately");
+}
+
+/* ---- Apps: narrowed by what needs doing ---- */
+{
+  const app = (name, extra) => ({ app_id: "com.acme." + name.toLowerCase(), name, state: "released", version: "1.0.0", audience: null, owner: { principal: "github:carol" }, needs_owner: false, last_sent_by: "github:carol", last_sent_at: NOW, capabilities: [], people: { month: 2 }, ...extra });
+  const inv = { apps: [app("Rota", { needs_owner: true, owner: { principal: "github:gone" } }), app("Expenses", {}), app("Old", { state: "withdrawn" })] };
+  const p = await page("https://krate.tech/org/?o=acme&tab=apps", DASH, { token: "t", routes: { ...routes("owner"), "GET /orgs/acme/inventory": () => [200, inv] } });
+  await settle();
+  const pane = p.el("pane");
+  const cards = () => pane.all((n) => n.tagName === "DIV" && /\bappc\b/.test(String(n.className)) && !n.hidden).length;
+  check(cards() === 3 && button(pane, "Needs an owner 1") && button(pane, "Withdrawn 1"), "every app, and a filter for each kind there is");
+  button(pane, "Needs an owner 1").click();
+  check(cards() === 1 && /Rota/.test(shown(pane)), "Needs an owner shows only the app that needs one");
+  button(pane, "All 3").click();
+  pane.all((n) => n.tagName === "DIV" && /\bapph\b/.test(String(n.className)))[1].click();
+  await settle();
+  check(p.el("crTitle").textContent === "Expenses" && /Owner @carol/.test(shown(p.el("crBody"))), "an app's head opens it on the right");
+}
+
+console.log(failures() ? `${failures()} check(s) failed` : "ok  the console: Dashboard, panel, Settings, Activity, Waiting, Apps");
 process.exit(failures() ? 1 : 0);

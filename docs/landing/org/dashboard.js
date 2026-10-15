@@ -575,6 +575,10 @@
       res.body.forEach(function (c) { S.names[c.digest] = K.appName(c); });
       S.waiting = res.body.filter(function (c) { return c.state === "waiting-for-approval"; }).length;
       drawTabs();
+      // The panel's quick actions offer the review once the count is known,
+      // unless it is showing something the person picked.
+      var sh = $("in");
+      if (S.waiting && !(sh && sh.classList && sh.classList.contains("inspect")) && $("crBack") && $("crBack").hidden) railHome();
     });
   }
 
@@ -587,50 +591,109 @@
       var list = all.filter(function (c) { return c.state === "waiting-for-approval"; });
       S.waiting = list.length;
       drawTabs();
-      var card = el("div", { class: "card rows" });
-      pane.appendChild(card);
       if (!list.length) {
-        card.appendChild(el("div", { class: "empty" }, [
+        var none = el("div", { class: "card rows" });
+        pane.appendChild(none);
+        none.appendChild(el("div", { class: "empty" }, [
           el("b", { text: "Nothing is waiting" }),
           el("p", { text: "When someone sends an app from Releases or from Krate Studio, it waits here until a second person approves it." }),
         ]));
+        decided(pane, all);
         return;
       }
       var approver = K.can(roleOf(), "candidate.approve") === "yes";
       // While the organisation is closing nothing new is released
       // (Addendum 3 D), so Approve is not offered then.
       var closing = S.org && S.org.state === "closing";
-      list.forEach(function (c) {
-        var mine = isMe(c.uploaded_by);
-        var acts = null, note = null, btn = null;
-        // What it can do, and what changed (IC-950). Built first so the
-        // Approve button can wait on its ticks.
-        var review = capsReview(c, approver && !mine && !closing);
-        if (closing) {
-          note = el("p", { class: "note", text: "Approvals stop while " + (S.org.name || slug) + " is closing. If an owner cancels the closing, this can be approved again." });
-        } else if (approver && !mine) {
-          btn = el("button", {
-            class: "btn dark sm", type: "button", text: "Approve",
-            onclick: function () { approve(c, review.accepted()); },
-          });
-          acts = el("div", { class: "ra" }, [btn]);
-        } else {
-          note = el("p", { class: "note", text: mine
-            ? "You sent this one, so someone else approves it."
-            : "A reviewer or an owner approves this." });
-        }
-        card.appendChild(el("div", { class: "rw flat" }, [
-          el("div", { class: "t" }, [
-            el("b", { text: K.appName(c) }),
-            el("small", { text: "Sent by " + K.who(c.uploaded_by).label + " · " + K.moment(c.uploaded_at) }),
-            review.node,
-            note,
-          ]),
-          acts,
-        ]));
-        if (btn) review.gate(btn);
-      });
+      var now = Date.now() / 1000;
+      // Oldest first: the one that has waited longest is the one to do.
+      list.sort(function (x, y) { return (x.uploaded_at || 0) - (y.uploaded_at || 0); });
+      var forMe = list.filter(function (c) { return approver && !isMe(c.uploaded_by) && !closing; });
+      var others = list.filter(function (c) { return forMe.indexOf(c) < 0; });
+      pane.appendChild(el("div", { class: "ptools" }, [el("p", { class: "sub", text: plural(list.length, "version is", "versions are") + " waiting · the oldest for " + age(now - list[0].uploaded_at) + (forMe.length ? " · " + forMe.length + " for you" : "") })]));
+      function group(title, items) {
+        if (!items.length) return;
+        if (forMe.length && others.length) pane.appendChild(el("h3", { class: "igrp", text: title }));
+        items.forEach(function (c) { pane.appendChild(waitCard(c, approver, closing, now)); });
+      }
+      group("Waiting for you", forMe);
+      group("Waiting for someone else", others);
+      decided(pane, all);
     });
+  }
+  function age(sec) {
+    sec = Math.max(0, sec || 0);
+    if (sec < 3600) return plural(Math.max(1, Math.round(sec / 60)), "minute", "minutes");
+    if (sec < 2 * 86400) return plural(Math.round(sec / 3600), "hour", "hours");
+    return plural(Math.round(sec / 86400), "day", "days");
+  }
+  /// One version waiting: what it is, how long it has waited, what it can
+  /// do and what changed, and the one thing to do about it.
+  function waitCard(c, approver, closing, now) {
+    var mine = isMe(c.uploaded_by);
+    var acts = [], note = null, btn = null;
+    // What it can do, and what changed (IC-950). Built first so the
+    // Approve button can wait on its ticks.
+    var review = capsReview(c, approver && !mine && !closing);
+    if (closing) {
+      note = el("p", { class: "note", text: "Approvals stop while " + (S.org.name || slug) + " is closing. If an owner cancels the closing, this can be approved again." });
+    } else if (approver && !mine) {
+      btn = el("button", {
+        class: "btn dark sm", type: "button", text: "Approve",
+        onclick: function () { approve(c, review.accepted()); },
+      });
+      acts.push(btn);
+    } else {
+      note = el("p", { class: "note", text: mine
+        ? "You sent this one, so someone else approves it."
+        : "A reviewer or an owner approves this." });
+    }
+    acts.push(el("button", { class: "btn ghost sm", type: "button", text: "Details", onclick: function () { inspectCandidate(c); } }));
+    var waited = now - (c.uploaded_at || now);
+    var update = c.changes && c.changes.against;
+    var name = K.appName(c);
+    var card = el("div", { class: "card wcard" }, [
+      el("div", { class: "wc-h" }, [
+        el("span", { class: "apptile", "aria-hidden": "true", text: String(c.name || name).slice(0, 1).toUpperCase() }),
+        el("div", { class: "t" }, [
+          el("b", {}, [name, " ", el("span", { class: "tag", text: update ? "Update from " + update : "New app" })]),
+          el("small", { text: "Sent by " + K.who(c.uploaded_by).label + " · " + K.moment(c.uploaded_at) }),
+        ]),
+        el("span", { class: "tag" + (waited > 2 * 86400 ? " warn" : ""), text: "Waiting " + age(waited) }),
+      ]),
+      review.node,
+      note,
+      el("div", { class: "row2" }, acts),
+    ]);
+    if (btn) review.gate(btn);
+    return card;
+  }
+  /// What was decided lately: the last few versions released or withdrawn.
+  function decided(pane, all) {
+    var done = all.filter(function (c) { return c.state !== "waiting-for-approval" && c.approved_at; })
+      .sort(function (x, y) { return (y.approved_at || 0) - (x.approved_at || 0); }).slice(0, 5);
+    if (!done.length) return;
+    pane.appendChild(el("div", { class: "card rows" }, [el("p", { class: "grp", text: "Recently decided" })].concat(done.map(function (c) {
+      return el("div", { class: "rw flat opens", onclick: function () { inspectCandidate(c); } }, [el("div", { class: "t" }, [
+        el("b", { text: K.appName(c) }),
+        el("small", { text: (c.state === "withdrawn" ? "Withdrawn" : "Approved") + " by " + K.who(c.approved_by).label + " · " + K.moment(c.approved_at) + (c.approved_by === c.uploaded_by ? " · released by its sender alone" : "") }),
+      ])]);
+    }))));
+  }
+  /// One version, in full, in the right-hand panel.
+  function inspectCandidate(c) {
+    var caps = Array.isArray(c.capabilities) ? c.capabilities : [];
+    inspect(K.appName(c), [
+      el("dl", { class: "cr-kv" }, [
+        el("dt", { text: "State" }), el("dd", { text: c.state === "waiting-for-approval" ? "Waiting for approval" : c.state === "withdrawn" ? "Withdrawn" : "Released" }),
+        el("dt", { text: "Sent by" }), el("dd", { text: K.who(c.uploaded_by).label }),
+        el("dt", { text: "Sent" }), el("dd", { text: K.moment(c.uploaded_at) }),
+        c.approved_by ? el("dt", { text: "Approved by" }) : null, c.approved_by ? el("dd", { text: K.who(c.approved_by).label }) : null,
+        c.changes && c.changes.against ? el("dt", { text: "Replaces" }) : null, c.changes && c.changes.against ? el("dd", { text: c.changes.against }) : null,
+      ]),
+      caps.length ? el("div", { class: "cr-sec" }, [el("h3", { text: "It can" }), el("div", { class: "cr-list" }, caps.map(function (x) { return el("div", {}, [el("b", { text: x.words || x.cap })]); }))]) : null,
+      el("details", { class: "cr-tech" }, [el("summary", { text: "Technical details" }), el("dl", { class: "cr-kv" }, [el("dt", { text: "Fingerprint" }), el("dd", { class: "dg", text: c.digest })])]),
+    ]);
   }
 
   /// What a waiting candidate can do, and what it changes against the
@@ -1371,7 +1434,7 @@
   }
   // The Apps tab (inventory.js, IC-954).
   var I = window.KrateOrgInventory
-    ? window.KrateOrgInventory({ S: S, slug: slug, words: words, head: head, failed: failed, toast: toast, show: function (id) { show(id); }, roleOf: roleOf })
+    ? window.KrateOrgInventory({ S: S, slug: slug, words: words, head: head, failed: failed, toast: toast, show: function (id) { show(id); }, roleOf: roleOf, inspect: inspect, releaseFlow: releaseFlow })
     : null;
   function apps(pane) {
     if (I) { I.pane(pane); return; }

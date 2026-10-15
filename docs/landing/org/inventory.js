@@ -57,7 +57,9 @@
 
     function pane(p) {
       K.api("GET", path("/inventory")).then(function (res) {
-        D.head(p, "Apps", "Every app " + nameOf() + " has: who owns it, how it was made, what it can do and who uses it.");
+        var acts = [];
+        if (D.releaseFlow && K.can(D.roleOf(), "candidate.publish") === "yes") acts.push({ label: "Release an app", dark: true, onclick: function () { D.releaseFlow(); } });
+        D.head(p, "Apps", "Every app " + nameOf() + " has: who owns it, how it was made, what it can do and who uses it.", acts);
         if (!res.ok) return D.failed(p, res, { what: "see the organisation's apps", whoCan: "owners, admins and reviewers" });
         var apps = (res.body && res.body.apps) || [];
         if (!apps.length) {
@@ -67,13 +69,15 @@
           ])]));
           return;
         }
-        p.appendChild(exportBar(apps));
-        apps.forEach(function (a) { p.appendChild(appCard(a, p)); });
+        var grid = el("div", { class: "invgrid" });
+        p.appendChild(exportBar(apps, grid));
+        p.appendChild(grid);
+        apps.forEach(function (a) { var c = appCard(a, p); c.dataset.state = a.needs_owner ? "needs" : a.state || "none"; grid.appendChild(c); });
       });
     }
 
     /// The one action for the whole list: take it to a spreadsheet.
-    function exportBar(apps) {
+    function exportBar(apps, grid) {
       var note = el("p", { class: "note", role: "status", hidden: true });
       var b = el("button", { class: "btn ghost sm", type: "button", text: "Download the list as a spreadsheet" });
       b.addEventListener("click", function () {
@@ -87,9 +91,35 @@
         });
       });
       var needs = apps.filter(function (a) { return a.needs_owner; }).length;
+      // Narrow it down: by what needs doing, and by name.
+      var KINDS = [["all", "All"], ["needs", "Needs an owner"], ["released", "In use"], ["waiting", "Waiting"], ["withdrawn", "Withdrawn"]];
+      var kind = "all", words = "";
+      function filter() {
+        Array.prototype.slice.call(grid.children || []).forEach(function (c) {
+          var st = c.dataset ? c.dataset.state : "";
+          var okKind = kind === "all" || st === kind;
+          var okWords = !words || String(c.textContent || "").toLowerCase().indexOf(words) >= 0;
+          c.hidden = !(okKind && okWords);
+        });
+      }
+      var chips = el("div", { class: "chips", role: "group", "aria-label": "Show" }, KINDS.filter(function (k) {
+        return k[0] === "all" || apps.some(function (a) { return (a.needs_owner ? "needs" : a.state || "none") === k[0]; });
+      }).map(function (k, i, list) {
+        var n = k[0] === "all" ? apps.length : apps.filter(function (a) { return (a.needs_owner ? "needs" : a.state || "none") === k[0]; }).length;
+        return el("button", { class: "chip", type: "button", "aria-pressed": i === 0 ? "true" : "false", text: k[1] + " " + n, onclick: function () {
+          kind = k[0];
+          Array.prototype.slice.call(chips.children).forEach(function (c, j) { c.setAttribute("aria-pressed", list[j][0] === kind ? "true" : "false"); });
+          filter();
+        } });
+      }));
+      var find = el("input", { class: "inp psearch", type: "search", placeholder: "Search apps", "aria-label": "Search apps", autocomplete: "off" });
+      find.addEventListener("input", function () { words = find.value.trim().toLowerCase(); filter(); });
       return el("div", { class: "invbar" }, [
-        el("p", { class: "sum", text: apps.length + (apps.length === 1 ? " app" : " apps") + (needs ? " · " + needs + " need" + (needs === 1 ? "s" : "") + " an owner" : "") }),
-        b,
+        el("div", { class: "evtools" }, [chips, apps.length > 3 ? find : null]),
+        el("div", { class: "ptools" }, [
+          el("p", { class: "sum", text: apps.length + (apps.length === 1 ? " app" : " apps") + (needs ? " · " + needs + " need" + (needs === 1 ? "s" : "") + " an owner" : "") }),
+          b,
+        ]),
         note,
       ]);
     }
@@ -97,12 +127,16 @@
     function appCard(a, p) {
       var st = STATE[a.state] || STATE.none;
       var card = el("div", { class: "card rows appc inv" + (a.needs_owner ? " needs" : "") });
-      card.appendChild(el("div", { class: "apph" }, [
+      var head = el("div", { class: "apph" + (D.inspect ? " opens" : "") }, [
+        el("span", { class: "apptile", "aria-hidden": "true", text: String(a.name || a.app_id).slice(0, 1).toUpperCase() }),
         el("div", { class: "t" }, [
           el("h3", {}, [a.name || a.app_id, " ", el("span", { class: "tag " + st.tag, text: st.text })]),
           el("small", { text: (a.version ? "Version " + a.version : "No version yet") + " · " + forWords(a) }),
         ]),
-      ]));
+      ]);
+      // The app's head opens the whole of it on the right.
+      if (D.inspect) head.addEventListener("click", function () { inspectApp(a); });
+      card.appendChild(head);
       card.appendChild(ownerRow(a, p));
       var facts = [
         el("small", { text: (a.built ? "Made with " + a.built_words : "Made by hand") + (a.built && a.built.revisions ? ", changed " + a.built.revisions + (a.built.revisions === 1 ? " time" : " times") + " since" : "") }),
@@ -121,6 +155,30 @@
       (a.capabilities || []).forEach(function (c) { details.push(el("small", { class: "dg", text: c.cap })); });
       card.appendChild(el("details", { class: "invdet" }, details));
       return card;
+    }
+
+    /// One app, in full, in the right-hand panel.
+    function inspectApp(a) {
+      var st = STATE[a.state] || STATE.none;
+      var kv = [
+        ["State", st.text],
+        ["Version", a.version || "None yet"],
+        ["For", forWords(a)],
+        ["Owner", a.owner ? K.who(a.owner.principal).label + (a.needs_owner ? " (no longer here)" : "") : "Nobody"],
+        ["Made", a.built ? "With " + a.built_words : "By hand"],
+        ["Last sent", K.who(a.last_sent_by).label + (a.last_sent_at ? " on " + K.day(a.last_sent_at) : "")],
+        ["Used", peopleWords(a)],
+      ];
+      var dl = el("dl", { class: "cr-kv" });
+      kv.forEach(function (x) { dl.appendChild(el("dt", { text: x[0] })); dl.appendChild(el("dd", { text: x[1] })); });
+      D.inspect(a.name || a.app_id, [
+        dl,
+        el("div", { class: "cr-sec" }, [el("h3", { text: "It can" }), el("p", { class: "cr-sub", text: canWords(a) })]),
+        el("div", { class: "row2" }, [el("button", { class: "btn ghost sm", type: "button", text: "Its releases", onclick: function () { D.show("releases"); } })]),
+        el("details", { class: "cr-tech" }, [el("summary", { text: "Technical details" }), el("dl", { class: "cr-kv" }, [
+          el("dt", { text: "App id" }), el("dd", { class: "dg", text: a.app_id }),
+        ].concat(a.built && a.built.prompt ? [el("dt", { text: "Asked for" }), el("dd", { text: a.built.prompt })] : []))]),
+      ]);
     }
 
     function ownerRow(a, p) {
