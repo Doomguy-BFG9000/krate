@@ -533,11 +533,16 @@
       if (body.since && body.now - body.since < 30 * 86400 && body.since - born > 86400) {
         p.appendChild(el("div", { class: "call", role: "note" }, [el("div", { text: "Counting since " + K.day(body.since) + ". Days before that were not counted, so they show as 0." })]));
       }
+      // The sections, pinned at the top of the panel while it scrolls, the
+      // one in view marked.
+      var nav = null;
       if (sections.length > 1) {
-        p.appendChild(el("nav", { class: "inav", "aria-label": "Insights sections" }, sections.map(function (s) {
-          return el("a", { class: "chip", href: "#ins-g-" + s, text: GROUP[s] });
-        })));
+        nav = el("nav", { class: "inav", "aria-label": "Insights sections" }, sections.map(function (s, i) {
+          return el("a", { class: "chip", href: "#ins-g-" + s, text: GROUP[s], "aria-current": i === 0 ? "true" : null });
+        }));
+        p.appendChild(nav);
       }
+      var marks = [];
       sections.forEach(function (s) {
         var make = { org: orgSection, developer: developerSection, reviewer: reviewerSection, yours: yoursSection }[s];
         if (!make || !body[s]) return;
@@ -546,11 +551,25 @@
         var h = cards.length === 1 ? cards[0].querySelector("h4") : null;
         var named = Boolean(h) && h.textContent === GROUP[s];
         if (sections.length > 1) {
-          if (named) cards[0].id = "ins-g-" + s;
-          else p.appendChild(el("h3", { class: "igrp", id: "ins-g-" + s, text: GROUP[s] }));
+          if (named) { cards[0].id = "ins-g-" + s; marks.push(cards[0]); }
+          else { var g = el("h3", { class: "igrp", id: "ins-g-" + s, text: GROUP[s] }); p.appendChild(g); marks.push(g); }
         }
-        cards.forEach(function (c) { p.appendChild(c); });
+        // Side by side on a wide screen, the first of a section across.
+        var grid = el("div", { class: "igrid" + (cards.length > 1 ? " many" : "") });
+        cards.forEach(function (c) { grid.appendChild(c); });
+        p.appendChild(grid);
       });
+      if (nav && marks.length && typeof IntersectionObserver === "function") {
+        var scroller = document.querySelector && document.querySelector(".cmainwrap");
+        var io = new IntersectionObserver(function (es) {
+          es.forEach(function (e) {
+            if (!e.isIntersecting) return;
+            var id = "#" + e.target.id;
+            Array.prototype.slice.call(nav.children).forEach(function (a) { a.setAttribute("aria-current", a.getAttribute("href") === id ? "true" : "false"); });
+          });
+        }, { root: scroller && getComputedStyle(scroller).overflowY === "auto" ? scroller : null, rootMargin: "0px 0px -70% 0px" });
+        marks.forEach(function (m) { io.observe(m); });
+      }
     }
 
     return { pane: pane };

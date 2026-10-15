@@ -212,9 +212,36 @@ dialog.setdlg::backdrop { background: rgba(0,0,0,.5); -webkit-backdrop-filter: b
 .evtools { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
 .chip[aria-pressed="true"] { color: var(--btn-ink); background: var(--btn); box-shadow: none; }
 button.ev { width: 100%; text-align: left; border-radius: 0; }
+/* the organisation's logo: in the sidebar tile, and in Settings */
+.otile.logo { background: var(--s1); box-shadow: inset 0 0 0 1px var(--line-2); overflow: hidden; }
+.otile.logo img { width: 100%; height: 100%; object-fit: contain; }
+.lg-row { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.lg-view { flex: none; width: 56px; height: 56px; border-radius: 14px; display: grid; place-items: center; overflow: hidden; font-size: 22px; font-weight: 600; color: var(--accent); background: var(--accent-soft); }
+.lg-view.has { background: var(--s1); box-shadow: inset 0 0 0 1px var(--line-2); }
+.lg-view img { width: 100%; height: 100%; object-fit: contain; }
+/* Insights: the sections pinned while the panel scrolls; cards in pairs */
+.inav { position: sticky; top: 0; z-index: 5; margin: 0 -2px; padding: 10px 2px; background: color-mix(in srgb, var(--bg) 92%, transparent); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); }
+.inav .chip[aria-current="true"] { color: var(--btn-ink); background: var(--btn); box-shadow: none; }
+.igrid { display: grid; gap: 14px; }
+@media (min-width: 1200px) {
+  .igrid.many { grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; }
+  .igrid.many > :first-child { grid-column: 1 / -1; }
+}
 /* a row that opens its details on the right */
 .opens { cursor: pointer; }
 .opens:hover { background: color-mix(in srgb, var(--ink) 3%, transparent); }
+/* The work sits in rounded panels on the sidebar's colour, as Studio's
+   does: the main panel, and the right-hand one beside it. Each scrolls by
+   itself, so the sidebar and the panel edges never move. */
+@media (min-width: 900px) {
+  body.console { background: var(--soft); }
+  .shell { background: var(--soft); }
+  .cside { border-right: 0; }
+  .cmainwrap { position: sticky; top: 8px; height: calc(100vh - 16px); margin: 8px 8px 8px 0; overflow-y: auto; border-radius: 16px; background: var(--bg); box-shadow: 0 0 0 1px var(--line), 0 1px 2px rgba(0,0,0,.04); scrollbar-width: thin; }
+}
+@media (min-width: 1280px) {
+  .crail { top: 8px; height: calc(100vh - 16px); margin: 8px 8px 8px 0; border-left: 0; border-radius: 16px; box-shadow: 0 0 0 1px var(--line); }
+}
 @media (prefers-reduced-motion: reduce) { .cside { transition: none; } }
 /* a pane: a heading line, then cards */
 .pane > * + * { margin-top: 14px; }

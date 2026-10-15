@@ -184,6 +184,7 @@
     "insights.people": { owner: "yes", admin: "yes" },
     // F-319: the organisation's time zone (org-time.js).
     "org.time-zone": { owner: "yes", admin: "yes" },
+    "org.logo": { owner: "yes", admin: "yes" },
   };
 
   function can(role, action) {
@@ -528,6 +529,8 @@
         "inventory.view": "see the organisation's apps",
         "app.owner": "choose who owns " + (t.value || "an app"),
         "usage.view": "see how the apps are used",
+        "org.logo": "change the organisation's logo",
+        "org.time-zone": "change the organisation's time zone",
       }[ev.action] || "do " + ev.action;
       // Shown beside a Refused badge, so the sentence says why, not "refused" again.
       return a + " tried to " + tried + ": " + (SHORT_WHY[ev.reason] || ev.reason || "not allowed") + ".";
@@ -591,6 +594,7 @@
       case "settings.publishers": return a + " chose to " + (ev.reason || "change how new senders are approved") + ".";
       case "settings.two-person": return a + " set it so " + (ev.reason || "the release rule changed") + ".";
       case "review.two-person.on": return "A second person now approves every release.";
+      case "settings.logo": return a + (ev.reason === "removed" ? " removed the organisation's logo." : " set the organisation's logo.");
       case "settings.time-zone": return a + " changed the time zone the days are counted in: " + String(ev.reason || "").replace(" -> ", " to ") + ".";
       case "data.daily": return "The team's data was written to" + (ev.reason ? ": " + ev.reason : "") + ".";
       case "data.deleted": return a + " deleted an app's team data.";

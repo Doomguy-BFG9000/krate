@@ -79,6 +79,7 @@ test("the executable matrix is the contract's table", () => {
     "insights.people": "y y - - -",
     // F-319: the organisation's time zone (org-time.js).
     "org.time-zone": "y y - - -",
+    "org.logo": "y y - - -",
   };
   assert.deepStrictEqual(Object.keys(MATRIX).sort(), Object.keys(table).sort());
   for (const [action, row] of Object.entries(table)) {

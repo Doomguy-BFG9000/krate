@@ -171,6 +171,9 @@
     drawTabs();
     setText("cbarTab", TAB[id] ? TAB[id].long : "");
     drawer(false);
+    // The panel scrolls by itself on a wide screen, the page on a narrow one.
+    var wrap = document.querySelector && document.querySelector(".cmainwrap");
+    if (wrap) wrap.scrollTop = 0;
     if (window.scrollTo) window.scrollTo(0, 0);
     if (P) P.banner($("banner"));
     // Getting started (IC-958), under the Dashboard heading, for those who
@@ -1146,6 +1149,7 @@
           el("dt", { text: "Short name" }), el("dd", { text: o.slug || slug }),
           el("dt", { text: "Created" }), el("dd", { text: K.day(o.created_at) + (o.created_by ? " by " + K.who(o.created_by).label : "") }),
         ]),
+        logoSetting(o, name),
         o.time_zone ? zoneSetting(o, name) : null,
       ]));
       var key = el("div", { class: "card", id: "sigCard" }, [el("h3", { text: name + "'s signature" })]);
@@ -1196,6 +1200,88 @@
 
       P.settings(pane, techBody);
       if (S.navRedraw) S.navRedraw();
+    });
+  }
+
+  /// The organisation's tile at the top of the sidebar: its logo when it
+  /// has one, its initial when not.
+  function drawTile() {
+    var t = $("oTile");
+    if (!t) return;
+    t.textContent = "";
+    var name = (S.org && S.org.name) || slug;
+    if (S.org && S.org.logo) {
+      t.className = "otile logo";
+      t.appendChild(el("img", { src: S.org.logo, alt: "" }));
+    } else {
+      t.className = "otile";
+      t.textContent = name.slice(0, 1).toUpperCase();
+    }
+  }
+
+  /// Settings, General: the organisation's logo. The picture is shrunk
+  /// here to a square of at most 160 pixels and sent as a small PNG or
+  /// WebP, whatever was chosen; an SVG is drawn first, so no script in it
+  /// can travel.
+  function logoSetting(o, name) {
+    var may = roleOf() === "owner" || roleOf() === "admin";
+    var view = el("span", { class: "lg-view" + (o.logo ? " has" : "") }, o.logo ? [el("img", { src: o.logo, alt: name + "'s logo" })] : [name.slice(0, 1).toUpperCase()]);
+    var note = el("p", { class: "note", hidden: true });
+    var file = el("input", { type: "file", id: "logoFile", class: "vh", accept: "image/png,image/jpeg,image/webp,image/svg+xml", "aria-label": "Choose a logo" });
+    var pick = el("label", { class: "btn ghost sm", for: "logoFile", text: o.logo ? "Change logo" : "Upload logo" });
+    var drop = el("button", { class: "btn quiet sm", type: "button", text: "Remove", hidden: !o.logo });
+    function shown(v) {
+      o.logo = v; S.org.logo = v;
+      view.textContent = "";
+      view.className = "lg-view" + (v ? " has" : "");
+      if (v) view.appendChild(el("img", { src: v, alt: name + "'s logo" })); else view.textContent = name.slice(0, 1).toUpperCase();
+      pick.textContent = v ? "Change logo" : "Upload logo";
+      drop.hidden = !v;
+      drawTile();
+    }
+    file.addEventListener("change", function () {
+      var f = file.files && file.files[0];
+      note.hidden = true;
+      if (!f) return;
+      shrinkLogo(f).then(function (data) {
+        return K.api("PUT", "/orgs/" + slug + "/logo", { data_url: data }, { key: K.key() }).then(function (r) {
+          if (!r.ok) throw r;
+          shown(r.body.logo);
+          toast(name + "'s logo is set. Everyone in " + name + " sees it.");
+        });
+      }).catch(function (e) {
+        note.textContent = e && e.body ? K.refusal(e.body.error, { message: e.body.message }).body || e.body.message : "That picture could not be used. Try a PNG or JPEG.";
+        note.hidden = false;
+      });
+      file.value = "";
+    });
+    drop.addEventListener("click", function () {
+      K.api("DELETE", "/orgs/" + slug + "/logo", {}, { key: K.key() }).then(function (r) { if (r.ok) { shown(null); toast("The logo is removed. " + name + "'s initial shows instead."); } });
+    });
+    return el("div", { class: "zone lg" }, [
+      el("span", { class: "lbl", text: "Logo" }),
+      el("div", { class: "lg-row" }, [view, may ? el("div", { class: "row2", style: "margin:0" }, [pick, file, drop]) : null]),
+      el("p", { class: "sub", text: may ? "Shown at the top of " + name + "'s pages for everyone in it. A square picture works best." : "Owners and admins choose it." }),
+      note,
+    ]);
+  }
+  function shrinkLogo(f) {
+    return new Promise(function (resolve, reject) {
+      var url = URL.createObjectURL(f);
+      var img = new Image();
+      img.onload = function () {
+        var side = 160, w = img.naturalWidth || side, h = img.naturalHeight || side, k = Math.min(1, side / Math.max(w, h));
+        var c = document.createElement("canvas");
+        c.width = Math.max(1, Math.round(w * k)); c.height = Math.max(1, Math.round(h * k));
+        c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+        URL.revokeObjectURL(url);
+        var out = c.toDataURL("image/webp", 0.9);
+        if (!/^data:image\/webp/.test(out) || out.length > 46000) out = c.toDataURL("image/png");
+        if (out.length > 46000) out = c.toDataURL("image/jpeg", 0.85);
+        resolve(out);
+      };
+      img.onerror = function () { URL.revokeObjectURL(url); reject(null); };
+      img.src = url;
     });
   }
 
@@ -1317,7 +1403,7 @@
     document.title = name + " on Krate";
     $("oName").textContent = name;
     setText("cbarOrg", name);
-    $("oTile").textContent = name.slice(0, 1).toUpperCase();
+    drawTile();
     var r = K.ROLE_NAME[roleOf()] || roleOf();
     $("oMeta").textContent = "You are " + (/^[AEIOU]/.test(r) ? "an " : "a ") + r.toLowerCase();
     var who = me();
