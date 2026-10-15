@@ -206,10 +206,18 @@ const dashRoutes = (org, extra = {}) => ({
   const start = p.el("start");
   const ticks = start.all((n) => n.classList.contains("cl-tick")).map((n) => n.classList.contains("on"));
   check(ticks.slice(0, 3).every(Boolean) && ticks[4] === true && /4 of 6 done/.test(textOf(start)), "it ticks itself from what the hub says: app out, someone joined, company sign-in, a computer");
-  check(/Released by its sender, @alice \(no second approver yet\)/.test(textOf(p.el("pane"))), "a solo release is marked as such in Releases");
-  // The IT pack, made here.
+  const rp = await page("https://krate.tech/org/?o=acme&tab=releases", DASH, {
+    token: "t",
+    routes: dashRoutes(org, { releases: rel, members: [ME, member("email:sam@acme.test", "recipient")] }),
+  });
+  check(/Released by its sender, @alice \(no second approver yet\)/.test(textOf(rp.el("pane"))), "a solo release is marked as such in Releases");
+  // The IT pack, made here. On the Dashboard the next step is marked, one
+  // line like the rest, and opens on a click.
   const rows = start.all((n) => n.classList.contains("cl-row"));
-  check(rows[3].attrs["aria-expanded"] === "true", "the open item is the first not done: the IT pack");
+  check(rows[3].attrs["aria-expanded"] === "false" && rows[3].parent.className === "next", "the next item is the first not done, the IT pack, marked Next");
+  rows[3].click();
+  await settle();
+  check(rows[3].attrs["aria-expanded"] === "true", "and it opens when clicked");
   button(start, "Download for Mac").click();
   await settle();
   const blob = p.win.saved[0];

@@ -193,7 +193,8 @@
 
   /// The tabs a role sees on /org/, in order.
   function tabsFor(role) {
-    var out = ["releases"];
+    // The Dashboard first, for everyone: where an organisation starts.
+    var out = ["home", "releases"];
     // Every app the organisation has, with its record (IC-954).
     if (can(role, "inventory.view")) out.push("apps");
     // The numbers each role's decisions need (IC-959).
@@ -570,7 +571,29 @@
       case "saml.set": return a + " set up company sign-in by SAML.";
       case "saml.update": return a + " changed the SAML sign-in.";
       case "saml.clear": return a + " turned off SAML sign-in.";
-      case "root-key.register": return a + " registered the root key " + fingerprint(t.value) + ".";
+      case "root-key.register": return a + " set up the organisation's signature.";
+      // The keyring and the signing ring (F-316, IC-958): said as what a
+      // person did, never as keys.
+      case "key.init": return a + " turned on end-to-end encryption for the team's data.";
+      case "key.device.add": return a + " added a computer that can open the team's data.";
+      case "key.device.remove": return a + " removed a computer from the team's data.";
+      case "key.rotate": return a + " renewed the team's encryption, so a removed computer cannot read anything new.";
+      case "key.stale": return "The team's encryption is due to be renewed, after someone left.";
+      case "key.recovery.read": return a + " read the recovery code.";
+      case "key.deleted": return "Older encryption was deleted after it was replaced.";
+      case "signing.init": return a + " set up signing, so every release is signed as the organisation.";
+      case "signing.device.remove": return a + " removed a computer that could sign releases.";
+      case "signing.recovery.read": return a + " read the signing recovery code.";
+      case "publisher.request": return a + " asked to send apps.";
+      case "publisher.approve": return a + " let " + who(t.value).label + " send apps.";
+      case "publisher.close": return who(t.value).label + " can no longer send apps.";
+      case "publisher.revoke-due": return who(t.value).label + "'s permission to send apps ended.";
+      case "settings.publishers": return a + " chose to " + (ev.reason || "change how new senders are approved") + ".";
+      case "settings.two-person": return a + " set it so " + (ev.reason || "the release rule changed") + ".";
+      case "review.two-person.on": return "A second person now approves every release.";
+      case "settings.time-zone": return a + " changed the time zone the days are counted in: " + String(ev.reason || "").replace(" -> ", " to ") + ".";
+      case "data.daily": return "The team's data was written to" + (ev.reason ? ": " + ev.reason : "") + ".";
+      case "data.deleted": return a + " deleted an app's team data.";
       case "root-key.rotate": return a + " replaced the root key with " + fingerprint(t.value) + ".";
       case "release-key.revoke": return a + " withdrew the release key " + fingerprint(t.value) + ".";
       case "candidate.publish": return a + " sent " + app() + " for approval.";

@@ -74,10 +74,134 @@ body.console { overflow-x: hidden; }
   .cmain { padding: 22px 16px 48px; }
   .tab { min-height: 44px; }
 }
+/* the right panel */
+.crail { display: none; }
+.cr-head { display: flex; align-items: center; gap: 6px; min-height: 52px; padding: 10px 10px 10px 18px; border-bottom: 1px solid var(--line); }
+.cr-head h2 { flex: 1; min-width: 0; font-size: 15px; font-weight: 600; letter-spacing: -.02em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cr-btn { flex: none; width: 36px; height: 36px; border-radius: 9px; display: grid; place-items: center; color: var(--ink-2); }
+.cr-btn:hover { background: color-mix(in srgb, var(--ink) 6%, transparent); color: var(--ink); }
+.cr-body { padding: 16px 18px 24px; display: grid; gap: 18px; align-content: start; }
+.cr-sec h3 { margin-bottom: 8px; font-size: 11.5px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-3); }
+.cr-sub { font-size: 13.5px; color: var(--ink-2); text-wrap: pretty; }
+.cr-big { font-size: 30px; font-weight: 600; letter-spacing: -.04em; line-height: 1.1; }
+.cr-acts { display: grid; gap: 6px; }
+.cr-act { display: flex; align-items: center; gap: 10px; min-height: 40px; padding: 0 10px; border-radius: 10px; font-size: 14px; font-weight: 500; color: var(--ink); background: var(--s1); box-shadow: inset 0 0 0 1px var(--line-2); text-align: left; transition: box-shadow .15s; }
+.cr-act:hover { box-shadow: inset 0 0 0 1px var(--ink-4); }
+.cr-act svg { flex: none; width: 16px; height: 16px; color: var(--accent); }
+.cr-feed { display: grid; gap: 2px; }
+.cr-ev { display: grid; grid-template-columns: 8px minmax(0, 1fr); gap: 4px 10px; padding: 8px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
+.cr-ev:last-child { border-bottom: 0; }
+.cr-ev i { width: 7px; height: 7px; margin-top: 6px; border-radius: 99px; background: var(--ink-4); }
+.cr-ev.allowed i { background: var(--green); } .cr-ev.denied i { background: var(--danger); }
+.cr-ev span { color: var(--ink-2); text-wrap: pretty; }
+.cr-ev small { grid-column: 2; font-size: 12px; color: var(--ink-3); }
+.cr-kv { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 8px 14px; font-size: 13.5px; }
+.cr-kv dt { color: var(--ink-3); }
+.cr-kv dd { color: var(--ink); overflow-wrap: anywhere; }
+.cr-list { display: grid; }
+.cr-list > * { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 38px; border-bottom: 1px solid var(--line); font-size: 13.5px; }
+.cr-list > *:last-child { border-bottom: 0; }
+.cr-list b { font-weight: 500; }
+.cr-list small { color: var(--ink-3); white-space: nowrap; }
+@media (min-width: 1280px) {
+  .shell { grid-template-columns: var(--side) minmax(0, 1fr) 320px; }
+  .crail { position: sticky; top: 0; display: block; height: 100vh; overflow-y: auto; border-left: 1px solid var(--line); background: var(--bg); }
+  .crail #crClose { display: none; }
+  .cmain { padding-left: 36px; padding-right: 36px; }
+}
+@media (max-width: 1279px) {
+  .crail { position: fixed; z-index: 70; top: 0; right: 0; bottom: 0; display: block; width: min(380px, 92vw); overflow-y: auto; background: var(--bg); box-shadow: var(--sh-2); transform: translateX(104%); transition: transform .3s var(--ease); visibility: hidden; }
+  .shell.inspect .crail { transform: none; visibility: visible; }
+  .shell.inspect .cr-scrim { display: block; position: fixed; inset: 0; z-index: 65; background: rgba(0,0,0,.36); }
+}
+/* Settings, over the page */
+dialog.setdlg { width: min(980px, calc(100vw - 32px)); height: min(720px, calc(100vh - 48px)); max-width: none; max-height: none; margin: auto; padding: 0; border: 0; border-radius: 18px; color: var(--ink); background: var(--bg); box-shadow: var(--sh-2); overflow: hidden; }
+dialog.setdlg[open] { display: grid; grid-template-columns: 236px minmax(0, 1fr); }
+dialog.setdlg::backdrop { background: rgba(0,0,0,.5); -webkit-backdrop-filter: blur(4px); backdrop-filter: blur(4px); }
+.sd-side { padding: 22px 12px; background: var(--soft); border-right: 1px solid var(--line); overflow-y: auto; }
+.sd-side h2 { margin: 0 10px 14px; font-size: 17px; letter-spacing: -.02em; }
+.sd-nav { display: grid; gap: 1px; }
+.sd-nav button { display: flex; align-items: center; min-height: 36px; padding: 0 10px; border-radius: 9px; font-size: 14px; font-weight: 500; color: var(--ink-2); text-align: left; }
+.sd-nav button:hover { color: var(--ink); background: color-mix(in srgb, var(--ink) 5%, transparent); }
+.sd-nav button[aria-current="true"] { color: var(--ink); background: var(--s1); box-shadow: var(--sh-1); }
+.sd-nav .sd-sep { height: 1px; margin: 8px 10px; background: var(--line); }
+.sd-main { position: relative; overflow-y: auto; padding: 28px 36px 40px; scroll-behavior: smooth; }
+.sd-main .pane > .card { scroll-margin-top: 16px; }
+.sd-x { position: absolute; top: 14px; right: 14px; z-index: 2; width: 36px; height: 36px; border-radius: 9px; display: grid; place-items: center; color: var(--ink-2); background: var(--bg); }
+.sd-x:hover { color: var(--ink); background: color-mix(in srgb, var(--ink) 6%, transparent); }
+@media (max-width: 760px) {
+  dialog.setdlg { width: 100vw; height: 100vh; border-radius: 0; }
+  dialog.setdlg[open] { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
+  .sd-side { padding: 14px 12px 10px; border-right: 0; border-bottom: 1px solid var(--line); }
+  .sd-side h2 { margin: 4px 8px 10px; }
+  .sd-nav { display: flex; gap: 4px; overflow-x: auto; scrollbar-width: none; }
+  .sd-nav button { flex: none; min-height: 40px; white-space: nowrap; }
+  .sd-nav .sd-sep { display: none; }
+  .sd-main { padding: 20px 16px 40px; }
+}
+/* a section's header: the title, what it is for, and its one action */
+.phd { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+.phd .pt { min-width: 0; flex: 1 1 320px; }
+.phd h2 { font-size: 24px; letter-spacing: -.035em; }
+.phd .pa { display: flex; flex-wrap: wrap; gap: 8px; }
+.phd .pa .btn { margin-top: 0; }
+/* ---- the Dashboard (home.js) */
+.hstats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border-radius: 16px; background: var(--s1); box-shadow: var(--sh-1); overflow: hidden; }
+.hstat { display: grid; align-content: start; gap: 6px; min-height: 112px; padding: 18px 20px; text-align: left; border-right: 1px solid var(--line); transition: background .15s; }
+.hstat:last-child { border-right: 0; }
+.hstat:hover { background: color-mix(in srgb, var(--ink) 3%, transparent); }
+.hs-l { font-size: 13px; font-weight: 500; color: var(--ink-2); }
+.hs-v { display: flex; align-items: baseline; gap: 6px; }
+.hs-v b { font-size: 30px; font-weight: 600; letter-spacing: -.04em; line-height: 1.1; font-variant-numeric: tabular-nums; }
+.hs-v small { font-size: 13.5px; color: var(--ink-3); }
+.hs-d { font-size: 12.5px; color: var(--ink-3); }
+.hs-d.good { color: var(--green); } .hs-d.bad { color: var(--danger); }
+.hstat.warn .hs-v b { color: var(--warn); }
+.hgrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.hgrid > .wide { grid-column: 1 / -1; }
+.hcard { display: grid; gap: 12px; align-content: start; }
+.hc-h h3 { font-size: 15.5px; }
+.hc-tools { display: flex; justify-content: flex-end; margin-top: -40px; }
+.hchart { display: grid; gap: 6px; }
+.hc-plot { position: relative; height: 150px; padding-left: 26px; }
+.hc-max { position: absolute; left: 0; top: -4px; font-size: 11px; color: var(--ink-3); font-variant-numeric: tabular-nums; }
+.hc-bars { height: 100%; display: grid; grid-template-columns: repeat(var(--n), minmax(0, 1fr)); gap: 3px; align-items: end; border-bottom: 1px solid var(--line-2); }
+.hc-b { height: 100%; display: flex; align-items: flex-end; padding: 0; border-radius: 4px 4px 0 0; }
+.hc-b span { display: block; width: 100%; border-radius: 4px 4px 1px 1px; background: color-mix(in srgb, var(--accent) 55%, transparent); transition: background .15s; }
+.hc-b.now span { background: var(--accent); }
+.hc-b.masked span { background: repeating-linear-gradient(135deg, color-mix(in srgb, var(--accent) 35%, transparent) 0 3px, transparent 3px 6px); }
+.hc-b:hover span, .hc-b:focus-visible span { background: var(--accent); }
+.hc-tip { position: absolute; top: -8px; transform: translate(-50%, -100%); padding: 5px 9px; border-radius: 8px; font-size: 12.5px; white-space: nowrap; color: var(--btn-ink); background: var(--btn); pointer-events: none; }
+.hc-axis { display: flex; justify-content: space-between; padding-left: 26px; font-size: 11.5px; color: var(--ink-3); }
+.hbars { display: grid; gap: 6px; }
+.hbar { position: relative; display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 40px; padding: 0 12px; border-radius: 10px; overflow: hidden; font-size: 14px; text-align: left; }
+.hbar:hover { box-shadow: inset 0 0 0 1px var(--line-2); }
+.hb-fill { position: absolute; left: 0; top: 0; bottom: 0; z-index: 0; border-radius: 10px; background: var(--accent-soft); }
+.hb-t, .hb-n { position: relative; z-index: 1; }
+.hb-t { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.hb-n { flex: none; font-size: 13px; color: var(--ink-2); }
+.hneeds { display: grid; }
+.hn { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 44px; border-bottom: 1px solid var(--line); font-size: 14px; }
+.hn:last-child { border-bottom: 0; }
+.hn span { min-width: 0; text-wrap: pretty; }
+.hn.urgent span::before { content: ""; display: inline-block; width: 7px; height: 7px; margin-right: 8px; border-radius: 99px; background: var(--warn); vertical-align: 1px; }
+.hn .btn { flex: none; margin: 0; }
+.hnone { display: flex; align-items: center; gap: 10px; font-size: 14px; color: var(--ink-2); }
+.hnone .ok { flex: none; width: 22px; height: 22px; border-radius: 99px; background: var(--green-soft) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12' fill='none' stroke='%2322a35a' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M2.5 6.2l2.3 2.3 4.7-4.9'/%3E%3C/svg%3E") no-repeat center; }
+.hfoot { font-size: 12.5px; color: var(--ink-3); }
+@media (max-width: 1100px) { .hstats { grid-template-columns: repeat(2, minmax(0, 1fr)); } .hstat:nth-child(2) { border-right: 0; } .hstat:nth-child(-n+2) { border-bottom: 1px solid var(--line); } }
+@media (max-width: 720px) { .hgrid { grid-template-columns: minmax(0, 1fr); } .hc-tools { margin-top: 0; justify-content: flex-start; } .hc-plot { height: 120px; } .hs-v b { font-size: 26px; } .hstat { min-height: 96px; padding: 14px 16px; } }
+/* Getting started on the Dashboard: two columns of one-line steps */
+.cl-card.compact .cl { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 18px; }
+.cl-card.compact .cl > li:has(> .cl-b:not([hidden])) { grid-column: 1 / -1; }
+.cl-card.compact .cl > li.next .cl-t b::after { content: "Next"; margin-left: 8px; padding: 1px 7px; border-radius: 99px; font-size: 11px; font-weight: 600; color: var(--accent); background: var(--accent-soft); vertical-align: 1px; }
+@media (max-width: 720px) { .cl-card.compact .cl { grid-template-columns: minmax(0, 1fr); } }
+/* a row that opens its details on the right */
+.opens { cursor: pointer; }
+.opens:hover { background: color-mix(in srgb, var(--ink) 3%, transparent); }
 @media (prefers-reduced-motion: reduce) { .cside { transition: none; } }
 /* a pane: a heading line, then cards */
 .pane > * + * { margin-top: 14px; }
-.phd h2 { font-size: 21px; letter-spacing: -.03em; }
 .phd p { margin-top: 4px; font-size: 14.5px; color: var(--mute); text-wrap: pretty; }
 .card h3 { font-size: 16.5px; letter-spacing: -.02em; }
 .card h3 + p, .card .sub { margin-top: 4px; font-size: 14px; color: var(--mute); text-wrap: pretty; }
@@ -450,9 +574,32 @@ details.nums small { display: block; max-width: 62ch; line-height: 1.45; }
         </div>
       </section>
     </div>
+    <!-- The right panel: what was clicked, in detail; with nothing picked,
+         what changed lately and the quick actions. Beside the work on a
+         wide screen, over it on a narrow one. -->
+    <aside class="crail" id="crail" aria-label="Details" aria-live="polite">
+      <div class="cr-head">
+        <button class="cr-btn" id="crBack" type="button" aria-label="Back" hidden><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M10 3.5L5.5 8l4.5 4.5"/></svg></button>
+        <h2 id="crTitle">Recent</h2>
+        <button class="cr-btn" id="crClose" type="button" aria-label="Close the panel"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M4 4l8 8M12 4l-8 8"/></svg></button>
+      </div>
+      <div class="cr-body" id="crBody"></div>
+    </aside>
+    <div class="scrim cr-scrim" id="crScrim"></div>
   </div>
   <noscript><div class="panel"><h1>Organisation</h1><p>This page talks to the organisation through Krate's hub, which needs JavaScript. The command line does all of it too: <code class="k">krate org show</code>.</p></div></noscript>
 </main>
+
+<!-- Settings: one window over the page, its sections down the left, the
+     way Studio's are. The page's own pane moves in while it is open. -->
+<dialog class="setdlg" id="setDlg" aria-labelledby="setH">
+  <div class="sd-side">
+    <h2 id="setH">Settings</h2>
+    <nav class="sd-nav" id="setNav" aria-label="Settings sections"></nav>
+  </div>
+  <div class="sd-main" id="setSlot"></div>
+  <button class="sd-x" id="setClose" type="button" aria-label="Close settings"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M4 4l8 8M12 4l-8 8"/></svg></button>
+</dialog>
 
 <dialog class="sheet" id="sheet" aria-labelledby="sheetH">
   <h2 id="sheetH"></h2>
@@ -480,6 +627,7 @@ details.nums small { display: block; max-width: 62ch; line-height: 1.45; }
 <script src="/org/inventory.js"></script>
 <script src="/org/insights.js"></script>
 <script src="/org/publishers.js"></script>
+<script src="/org/home.js"></script>
 <script src="/org/dashboard.js"></script>
 </body>
 </html>

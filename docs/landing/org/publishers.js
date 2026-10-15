@@ -57,7 +57,7 @@
       if (!box) return;
       box.textContent = "";
       box.hidden = true;
-      if (!state || (tab !== "releases" && tab !== "waiting")) return;
+      if (!state || (tab !== "home" && tab !== "releases" && tab !== "waiting")) return;
       var me = state.me;
       if (me && me.state === "waiting") {
         var msg = "Could you open Krate on your computer? It approves me as a publisher for " + nameOf() + " by itself.";

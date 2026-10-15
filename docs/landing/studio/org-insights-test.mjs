@@ -355,7 +355,7 @@ const linkTo = (root, tab) => root.all((n) => n.tagName === "A" && n.className =
   const K = ctx.KrateOrg;
   const row = (a) => ["owner", "admin", "developer", "reviewer", "recipient"].map((r) => (K.MATRIX[a][r] ? "y" : "-")).join(" ");
   check(row("insights.view") === "y y y y y" && row("insights.org") === "y y - - -" && row("insights.developer") === "y - y - -" && row("insights.reviewer") === "y - - y -" && row("insights.people") === "y y - - -", "the page's matrix has IC-959's rows, as the hub's (org.js MATRIX)");
-  check(K.tabsFor("recipient").join(",") === "releases,insights,people" && K.tabsFor("developer").includes("insights"), "every role has the Insights tab");
+  check(K.tabsFor("recipient").join(",") === "home,releases,insights,people" && K.tabsFor("developer").includes("insights"), "every role has the Insights tab");
 }
 
 console.log(failures() ? `${failures()} check(s) failed` : "ok  the Insights tab");

@@ -19,6 +19,7 @@
   // The sidebar: each section's name, its group, and its icon (16px, drawn
   // with the stroke the rest of Krate uses).
   var ICON = {
+    home: '<path d="M2.6 7.2L8 2.8l5.4 4.4V13a.9.9 0 0 1-.9.9H9.6V10H6.4v3.9H3.5a.9.9 0 0 1-.9-.9z"/>',
     releases: '<path d="M8 2.5v7.5M5 7l3 3 3-3"/><path d="M3 11v1.5A1.5 1.5 0 0 0 4.5 14h7a1.5 1.5 0 0 0 1.5-1.5V11"/>',
     apps: '<rect x="2.5" y="2.5" width="4.5" height="4.5" rx="1.1"/><rect x="9" y="2.5" width="4.5" height="4.5" rx="1.1"/><rect x="2.5" y="9" width="4.5" height="4.5" rx="1.1"/><rect x="9" y="9" width="4.5" height="4.5" rx="1.1"/>',
     waiting: '<circle cx="8" cy="8" r="5.6"/><path d="M8 5v3.2l2 1.3"/>',
@@ -29,6 +30,7 @@
     settings: '<circle cx="8" cy="8" r="2.1"/><path d="M8 1.8v1.7M8 12.5v1.7M1.8 8h1.7M12.5 8h1.7M3.6 3.6l1.2 1.2M11.2 11.2l1.2 1.2M3.6 12.4l1.2-1.2M11.2 4.8l1.2-1.2"/>',
   };
   var TAB = {
+    home: { long: "Dashboard", group: "" },
     releases: { long: "Releases", group: "" },
     apps: { long: "Apps", group: "" },
     waiting: { long: "Waiting for approval", group: "" },
@@ -154,9 +156,16 @@
   }
   function setText(id, text) { var n = $(id); if (n) n.textContent = text; }
 
-  function show(id) {
+  function show(id, opts) {
     var tabs = tabList();
     if (tabs.indexOf(id) < 0) id = tabs[0];
+    S.opts = opts || {};
+    // Settings and Billing open in the settings window, over the section
+    // that was open; the page's pane moves into it and back.
+    var dlg = $("setDlg");
+    var inWindow = (id === "settings" || id === "billing") && dlg && typeof dlg.showModal === "function";
+    if (inWindow) { openSettings(id); return; }
+    if (dlg && dlg.open) closeSettings(true);
     S.tab = id;
     try { history.replaceState(null, "", HERE + "&tab=" + id); } catch (e) {}
     drawTabs();
@@ -164,24 +173,181 @@
     drawer(false);
     if (window.scrollTo) window.scrollTo(0, 0);
     if (P) P.banner($("banner"));
-    // Getting started (IC-958), under the Releases heading, for those who
+    // Getting started (IC-958), under the Dashboard heading, for those who
     // run it. One box, kept here: head() moves it into the pane, and a pane
     // that redraws would otherwise take it out of the page for good.
     var start = startBox;
-    if (Setup && id === "releases" && S.org && S.org.state !== "closed") Setup.checklist(start, { S: S, show: show, refresh: refresh });
+    if (Setup && id === "home" && S.org && S.org.state !== "closed") Setup.checklist(start, { S: S, show: show, refresh: refresh, compact: true });
     else { start.hidden = true; start.textContent = ""; }
     if (Pub) Pub.notice($("pubNote"), id);
     var pane = $("pane");
     pane.textContent = "";
     pane.setAttribute("aria-labelledby", "tab-" + id);
     pane.appendChild(el("p", { class: "loading", text: "Loading" }));
-    ({ releases: releases, apps: apps, insights: insights, waiting: waiting, people: people, activity: activity, settings: settings, billing: P && P.panes.billing })[id](pane);
+    railHome();
+    ({ home: home, releases: releases, apps: apps, insights: insights, waiting: waiting, people: people, activity: activity, settings: settings, billing: P && P.panes.billing })[id](pane);
   }
 
-  function head(pane, title, sub) {
+  // ------------------------------------------------------ settings window
+  function openSettings(id) {
+    var dlg = $("setDlg"), pane = $("pane"), slot = $("setSlot");
+    if (!dlg.open) {
+      S.back = S.tab && S.tab !== "settings" && S.tab !== "billing" ? S.tab : tabList()[0];
+      // What was behind stays drawn, still, while the pane is away.
+      var shadow = pane.cloneNode ? pane.cloneNode(true) : null;
+      if (shadow) {
+        // A copy for the eye only: no ids, or a lookup would find the copy.
+        shadow.querySelectorAll("[id]").forEach(function (n) { n.removeAttribute("id"); });
+        shadow.id = "paneShadow"; shadow.setAttribute("aria-hidden", "true"); shadow.setAttribute("inert", "");
+        pane.parentNode.insertBefore(shadow, pane);
+      }
+      slot.appendChild(pane);
+      dlg.showModal();
+    }
+    S.tab = id;
+    try { history.replaceState(null, "", HERE + "&tab=" + id); } catch (e) {}
+    drawTabs();
     pane.textContent = "";
-    pane.appendChild(el("div", { class: "phd" }, [el("h2", { text: title }), sub ? el("p", { text: sub }) : null]));
-    if (S.tab === "releases" && startBox && !startBox.hidden) pane.appendChild(startBox);
+    pane.appendChild(el("p", { class: "loading", text: "Loading" }));
+    (id === "billing" ? P.panes.billing : settings)(pane);
+    settingsNav(id);
+  }
+  function closeSettings(quiet) {
+    var dlg = $("setDlg"), pane = $("pane"), shadow = $("paneShadow");
+    if (shadow && shadow.parentNode) { shadow.parentNode.insertBefore(pane, shadow); shadow.remove(); }
+    else { var inner = document.querySelector && document.querySelector(".cmain .inner"); if (inner) inner.appendChild(pane); }
+    if (dlg.open) dlg.close();
+    if (!quiet) show(S.back || tabList()[0]);
+  }
+  /// The window's left side: a row per section of the open page (its cards'
+  /// headings, kept up to date as they arrive), and Billing beside Settings.
+  function settingsNav(id) {
+    var nav = $("setNav"), pane = $("pane");
+    if (!nav) return;
+    function draw() {
+      nav.textContent = "";
+      var tabs = tabList();
+      if (id === "billing" && tabs.indexOf("settings") >= 0) nav.appendChild(el("button", { type: "button", text: "Settings", onclick: function () { show("settings"); } }));
+      Array.prototype.slice.call(pane.children || []).forEach(function (c) {
+        var h = c.querySelector && c.querySelector("h3");
+        if (!h || !c.classList || !c.classList.contains("card")) return;
+        nav.appendChild(el("button", { type: "button", text: h.textContent, onclick: function () {
+          Array.prototype.slice.call(nav.querySelectorAll("button")).forEach(function (b) { b.removeAttribute("aria-current"); });
+          this.setAttribute("aria-current", "true");
+          if (c.scrollIntoView) c.scrollIntoView({ block: "start" });
+        } }));
+      });
+      if (id === "settings" && tabs.indexOf("billing") >= 0) {
+        nav.appendChild(el("div", { class: "sd-sep" }));
+        nav.appendChild(el("button", { type: "button", text: "Billing", onclick: function () { show("billing"); } }));
+      }
+    }
+    draw();
+    if (typeof MutationObserver === "function") {
+      if (settingsNav.mo) settingsNav.mo.disconnect();
+      settingsNav.mo = new MutationObserver(draw);
+      settingsNav.mo.observe(pane, { childList: true });
+    }
+  }
+  if ($("setClose") && $("setDlg").addEventListener) {
+    $("setClose").addEventListener("click", function () { closeSettings(); });
+    // Escape closes a dialog by itself; the pane must still come home.
+    $("setDlg").addEventListener("cancel", function (e) { e.preventDefault(); closeSettings(); });
+  }
+
+  /// A section's header: its title, what it is for, and at most one or
+  /// two actions, `acts` being [{label, onclick, dark}].
+  function head(pane, title, sub, acts) {
+    pane.textContent = "";
+    pane.appendChild(el("div", { class: "phd" }, [
+      el("div", { class: "pt" }, [el("h2", { text: title }), sub ? el("p", { text: sub }) : null]),
+      acts && acts.length ? el("div", { class: "pa" }, acts.map(function (a) {
+        return el("button", { class: "btn sm " + (a.dark ? "dark" : "ghost"), type: "button", text: a.label, onclick: a.onclick });
+      })) : null,
+    ]));
+  }
+  /// Getting started (IC-958) goes where the Dashboard puts it: under the
+  /// numbers. Moved, not copied: it is the one box show() fills.
+  function placeStart(pane) { if (S.tab === "home" && startBox) pane.appendChild(startBox); }
+
+  // ---------------------------------------------------------- right panel
+  /// What was clicked, in detail, on the right: `nodes` under `title`.
+  /// Beside the work on a wide screen, over it on a narrow one.
+  function inspect(title, nodes) { rail(title, nodes, true); }
+  function rail(title, nodes, detail) {
+    var body = $("crBody");
+    if (!body) return;
+    setText("crTitle", title);
+    body.textContent = "";
+    (Array.isArray(nodes) ? nodes : [nodes]).forEach(function (n) { if (n) body.appendChild(n); });
+    var back = $("crBack");
+    if (back) back.hidden = !detail;
+    var shell = $("in");
+    if (shell && shell.classList) shell.classList.toggle("inspect", !!detail);
+  }
+  function uninspect() { railHome(); }
+  /// With nothing picked: the quick actions and what changed lately.
+  function railHome() {
+    var role = roleOf();
+    var acts = [];
+    var act = function (label, svg, go) {
+      return el("button", { class: "cr-act", type: "button", onclick: go }, [icon(svg), el("span", { text: label })]);
+    };
+    if (K.can(role, "candidate.publish")) acts.push(act("Release an app", "releases", function () { show("releases"); }));
+    if (K.can(role, "invite.other")) acts.push(act("Invite people", "people", function () { show("people", { invite: true }); }));
+    if (S.waiting && K.can(role, "candidate.approve")) acts.push(act("Review " + S.waiting + " waiting", "waiting", function () { show("waiting"); }));
+    if (role && role !== "recipient") acts.push(act("Settings", "settings", function () { show("settings"); }));
+    var feed = el("div", { class: "cr-feed" }, [el("p", { class: "cr-sub", text: "Loading" })]);
+    rail("Overview", [
+      acts.length ? el("div", { class: "cr-sec" }, [el("h3", { text: "Quick actions" }), el("div", { class: "cr-acts" }, acts)]) : null,
+      el("div", { class: "cr-sec" }, [el("h3", { text: K.can(role, "audit.read") ? "Lately" : "Your apps" }), feed]),
+    ], false);
+    if (K.can(role, "audit.read")) {
+      // App names first, so an entry says "Team Notes", not its digest.
+      var named = K.api("GET", "/orgs/" + slug + "/candidates").then(function (res) {
+        if (res.ok && Array.isArray(res.body)) res.body.forEach(function (c) { S.names[c.digest] = K.appName(c); });
+      }, function () {});
+      Promise.all([named, K.api("GET", "/orgs/" + slug + "/audit")]).then(function (both) {
+        var res = both[1];
+        feed.textContent = "";
+        var ev = res.ok ? (res.body.events || []).slice(-8).reverse() : [];
+        if (!ev.length) { feed.appendChild(el("p", { class: "cr-sub", text: res.ok ? "Nothing yet." : "Activity did not load." })); return; }
+        ev.forEach(function (e) {
+          var row = el("button", { class: "cr-ev " + (e.result || ""), type: "button", style: "text-align:left", onclick: function () { inspectEvent(e); } }, [
+            el("i", { "aria-hidden": "true" }), el("span", { text: K.eventWords(e, S.names) }), el("small", { text: K.moment(e.at) }),
+          ]);
+          feed.appendChild(row);
+        });
+        feed.appendChild(el("button", { class: "btn link sm", type: "button", text: "All activity", onclick: function () { show("activity"); } }));
+      });
+    } else {
+      K.api("GET", "/orgs/" + slug + "/releases").then(function (res) {
+        feed.textContent = "";
+        var list = res.ok && Array.isArray(res.body) ? res.body.slice(0, 6) : [];
+        if (!list.length) { feed.appendChild(el("p", { class: "cr-sub", text: "Nothing released yet." })); return; }
+        feed.appendChild(el("div", { class: "cr-list" }, list.map(function (r) {
+          return el("a", { href: K.joinUrl ? r.url : r.url }, [el("b", { text: K.appName(r) }), el("small", { text: r.version || "" })]);
+        })));
+      });
+    }
+  }
+  /// One audit entry, in full.
+  function inspectEvent(e) {
+    inspect(e.result === "denied" ? "Refused" : "What happened", [
+      el("p", { text: K.eventWords(e, S.names) }),
+      el("dl", { class: "cr-kv" }, [
+        el("dt", { text: "When" }), el("dd", { text: K.moment(e.at) }),
+        el("dt", { text: "Who" }), el("dd", { text: K.who(e.actor).label }),
+        el("dt", { text: "Result" }), el("dd", { text: e.result === "denied" ? "Refused" : "Allowed" }),
+        e.reason ? el("dt", { text: "Why" }) : null, e.reason ? el("dd", { text: e.reason }) : null,
+      ]),
+      K.can(roleOf(), "audit.read") ? el("button", { class: "btn ghost sm", type: "button", text: "All activity", onclick: function () { show("activity"); } }) : null,
+    ]);
+  }
+  if ($("crBack")) {
+    $("crBack").addEventListener("click", uninspect);
+    $("crClose").addEventListener("click", function () { var sh = $("in"); if (sh && sh.classList) sh.classList.remove("inspect"); });
+    $("crScrim").addEventListener("click", function () { var sh = $("in"); if (sh && sh.classList) sh.classList.remove("inspect"); });
   }
   var startBox = $("start");
 
@@ -794,6 +960,16 @@
           })),
         ]);
       };
+      // The organisation itself first: its name and the day it counts by.
+      pane.appendChild(el("div", { class: "card" }, [
+        el("h3", { text: "Organisation" }),
+        el("dl", { class: "kv" }, [
+          el("dt", { text: "Name" }), el("dd", { text: o.name || slug }),
+          el("dt", { text: "Short name" }), el("dd", { text: o.slug || slug }),
+          el("dt", { text: "Created" }), el("dd", { text: K.day(o.created_at) + (o.created_by ? " by " + K.who(o.created_by).label : "") }),
+        ]),
+        o.time_zone ? zoneSetting(o, name) : null,
+      ]));
       var key = el("div", { class: "card", id: "sigCard" }, [el("h3", { text: name + "'s signature" })]);
       if (o.root_key) {
         key.appendChild(el("p", { text: "Every app " + name + " releases is signed by " + name + ", and every computer checks it before the app opens. Compare this fingerprint with an owner's copy." }));
@@ -833,15 +1009,6 @@
       // Company connections (connections.js, IC-952).
       if (C) C.settings(pane);
 
-      pane.appendChild(el("div", { class: "card" }, [
-        el("h3", { text: "Organisation" }),
-        el("dl", { class: "kv" }, [
-          el("dt", { text: "Name" }), el("dd", { text: o.name || slug }),
-          el("dt", { text: "Short name" }), el("dd", { text: o.slug || slug }),
-          el("dt", { text: "Created" }), el("dd", { text: K.day(o.created_at) + (o.created_by ? " by " + K.who(o.created_by).label : "") }),
-        ]),
-        o.time_zone ? zoneSetting(o, name) : null,
-      ]));
       P.settings(pane, key);
     });
   }
@@ -919,6 +1086,15 @@
       S: S, slug: slug, words: words, confirmSheet: confirmSheet, head: head, failed: failed,
       toast: toast, show: function (id) { show(id); }, roleOf: roleOf, P: P, flat: flatReleases, empty: emptyReleases,
     });
+  }
+  // The Dashboard (home.js): where an organisation starts.
+  var H = window.KrateOrgHome
+    ? window.KrateOrgHome({ S: S, slug: slug, head: head, placeStart: placeStart, show: function (id, o) { show(id, o); }, roleOf: roleOf, inspect: inspect, tabs: tabList })
+    : null;
+  function home(pane) {
+    if (H) { H.pane(pane); return; }
+    head(pane, "Dashboard", "");
+    pane.appendChild(el("div", { class: "card" }, [el("p", { text: "This page did not load completely. Reload it." })]));
   }
   // The Apps tab (inventory.js, IC-954).
   var I = window.KrateOrgInventory

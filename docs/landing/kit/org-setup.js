@@ -670,14 +670,14 @@
           var btn = el("button", { class: "cl-row", type: "button", "aria-expanded": "false" }, [
             tick, el("span", { class: "cl-t" }, [el("b", { text: it.title }), said]), sr,
           ]);
-          var li = el("li", {}, [btn, body]);
+          var li = el("li", { class: it === open ? "next" : "" }, [btn, body]);
           /// A step that finished here ticks in place: nothing jumps.
           function up(done, words) {
             it.done = done || it.done;
             tick.className = "cl-tick" + (it.done ? " on" : "");
             tick.textContent = it.done ? "✓" : "";
             sr.textContent = it.done ? "Done" : "Not done yet";
-            li.className = it.done ? "done" : "";
+            li.className = it.done ? "done" : (it === open ? "next" : "");
             if (words) said.textContent = words;
             tally();
           }
@@ -693,10 +693,13 @@
           btn.addEventListener("click", function () { toggle(body.hidden); });
           togglers.push(toggle);
           list.appendChild(li);
-          if (it === open) toggle(true);
+          // Compact (the Dashboard): every step one line and the next one
+          // marked -- except a new organisation's first app, the one thing
+          // it has to do, which stays open.
+          if (it === open && (!D.compact || it === items[0])) toggle(true);
         });
         tally();
-        box.appendChild(el("div", { class: "card cl-card", id: "gettingStarted" }, [
+        box.appendChild(el("div", { class: "card cl-card" + (D.compact ? " compact" : ""), id: "gettingStarted" }, [
           el("div", { class: "cl-h" }, [el("div", {}, [el("h2", { text: "Getting started" }), counter]), hide]),
           bar,
           list,
