@@ -181,6 +181,8 @@
     if (!name) { why({ title: "Give it a name", body: "The name your team sees, for example Acme.", action: null }); $("cName").focus(); return; }
     if (!SLUG.test(slug)) { $("cSlugBox").hidden = false; $("cAddr").hidden = true; why(K.refusal("slug-invalid")); $("cSlug").focus(); return; }
     var body = { slug: slug, name: name };
+    // The organisation's days start at midnight where its owner is (F-319).
+    if (K.zone()) body.time_zone = K.zone();
     var sig = JSON.stringify(body);
     if (!pending || pending.sig !== sig) pending = { sig: sig, key: K.key() };
     var go = $("cGo");

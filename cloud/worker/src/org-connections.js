@@ -46,6 +46,8 @@ import { Org, extendOrg, addReasons, allows } from "./org.js";
 import { GROUP, appOf } from "./org-releases.js";
 // The keyring first too: its rotation and its view are extended here.
 import "./org-keys.js";
+// Days are the organisation's own (org-time.js, F-319).
+import { dayBefore } from "./org-time.js";
 
 export const CONNECTION = /^[a-z][a-z0-9-]{1,38}$/;
 export const METHODS = ["GET", "HEAD", "OPTIONS", "POST", "PUT", "PATCH", "DELETE"];
@@ -119,7 +121,6 @@ const SCHEMA = [
 // 0 is one that must be entered again (the one-time migration below).
 const COLUMNS = [["candidates", "connections", "TEXT"], ["connections", "credential_v", "INTEGER"]];
 
-const isoDay = (seconds) => new Date(seconds * 1000).toISOString().slice(0, 10);
 
 const list = (text) => {
   if (!text) return null;
@@ -241,8 +242,8 @@ const ops = {
   /// What anyone who may see connections reads: everything but the
   /// credential, which is only ever "set, by whom, when".
   connectionView(c, now) {
-    const since = isoDay(now - 29 * DAY);
-    const today = isoDay(now);
+    const since = dayBefore(this.orgDay(now), 29);
+    const today = this.orgDay(now);
     const uses = this.rows("SELECT day, n FROM connection_uses WHERE name = ? AND day >= ?", c.name, since);
     return {
       name: c.name,
@@ -492,7 +493,7 @@ const ops = {
       `INSERT INTO connection_uses (name, day, n) VALUES (?, ?, 1)
        ON CONFLICT (name, day) DO UPDATE SET n = n + 1`,
       name,
-      isoDay(ctx.now),
+      this.orgDay(ctx.now),
     );
     return this.ok({
       name,
@@ -530,7 +531,7 @@ const ops = {
   /// credential was handed out. `before` is the first moment not yet
   /// finished; `only` limits it to one connection.
   connectionFlushUses(before, only) {
-    const day = isoDay(before);
+    const day = this.orgDay(before);
     const due = this.rows(
       `SELECT name, day, n FROM connection_uses WHERE audited = 0 AND day < ? ${only ? "AND name = ?" : ""} ORDER BY day, name`,
       ...(only ? [day, only] : [day]),

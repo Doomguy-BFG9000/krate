@@ -182,6 +182,8 @@
     "insights.developer": { owner: "yes", developer: "yes" },
     "insights.reviewer": { owner: "yes", reviewer: "yes" },
     "insights.people": { owner: "yes", admin: "yes" },
+    // F-319: the organisation's time zone (org-time.js).
+    "org.time-zone": { owner: "yes", admin: "yes" },
   };
 
   function can(role, action) {
@@ -826,6 +828,22 @@
     }, function () { return { ok: false, body: { error: "offline" } }; });
   }
 
+  /// This browser's time zone by name ("Asia/Singapore"), or null. An
+  /// organisation counts its days in one (F-319, the hub's org-time.js).
+  function zone() {
+    try {
+      var z = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      return typeof z === "string" && z ? z : null;
+    } catch (e) {
+      return null;
+    }
+  }
+  /// A zone as a person says it: "Singapore time", "Los Angeles time".
+  function zoneName(z) {
+    if (!z || z === "UTC" || z === "Etc/UTC") return "UTC";
+    return String(z).split("/").pop().replace(/_/g, " ") + " time";
+  }
+
   function fileName(name) {
     var s = String(name || "app").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
     return (s || "app") + ".krate";
@@ -836,7 +854,7 @@
     who: who, ROLES: ROLES, ROLE_NAME: ROLE_NAME, ROLE_SAYS: ROLE_SAYS, ROLE_PLAIN: ROLE_PLAIN, MATRIX: MATRIX,
     can: can, tabsFor: tabsFor, invitable: invitable, memberActions: memberActions,
     refusal: refusal, signInHref: signInHref, eventWords: eventWords, fingerprint: fingerprint,
-    day: day, moment: moment, appName: appName, joinUrl: joinUrl, fileName: fileName,
+    day: day, moment: moment, zone: zone, zoneName: zoneName, appName: appName, joinUrl: joinUrl, fileName: fileName,
     ssoNotice: ssoNotice, takeSsoNotice: takeSsoNotice,
     OFFLINE: OFFLINE, offlineName: offlineName, offlineNotice: offlineNotice, PROVIDERS: PROVIDERS, money: money,
     el: el, refusalBlock: refusalBlock, signInChoices: signInChoices, copy: copy, download: download,

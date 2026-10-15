@@ -77,6 +77,8 @@ async function create(p, name) {
   go.click();
   await settle();
   check(log.map((l) => l[0]).join() === "ready,sign" && log[0][1] === "acme" && log[1][2] === 6, "this browser sets up Acme's signature and signs the app's bytes");
+  const made = p.sent.find((s) => s.key === "POST /orgs");
+  check(made && made.body.time_zone === Intl.DateTimeFormat().resolvedOptions().timeZone, "the organisation is made in this browser's time zone, so its days start at the owner's midnight (F-319)");
   const up = p.sent.find((s) => s.key === "POST /orgs/acme/candidates");
   check(up && up.headers["content-type"] === "application/octet-stream" && up.headers["idempotency-key"] && up.body.length === 7, "the signed bytes go to Acme, once, with an Idempotency-Key");
   const ap = p.sent.find((s) => s.key === `POST /orgs/acme/candidates/${DIG}/approve`);

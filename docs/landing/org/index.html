@@ -140,6 +140,14 @@ dialog.sheet .sheetpts li.key { color: var(--ink); font-weight: 500; }
 .form.sso { margin-top: 16px; }
 .form.sso select.sel { height: 46px; padding-right: 36px; border-radius: 12px; font-size: 15px; background: var(--s1) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' fill='none' stroke='%238a8a92' stroke-width='1.5'%3E%3Cpath d='M1 1l4 4 4-4'/%3E%3C/svg%3E") no-repeat right 14px center; }
 .form.sso small, .fld small { overflow-wrap: anywhere; }
+/* Settings, Organisation: the time zone its days count in (F-319). */
+.zone { display: grid; gap: 8px; margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--line); }
+.zone .lbl { font-size: 14px; font-weight: 500; color: var(--ink-2); }
+.zone select { width: 100%; max-width: 360px; min-height: 44px; padding: 0 36px 0 12px; border-radius: 12px; font: inherit; font-size: 15px; color: var(--ink); appearance: none; -webkit-appearance: none; box-shadow: inset 0 0 0 1px var(--line-2); background: var(--s1) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' fill='none' stroke='%238a8a92' stroke-width='1.5'%3E%3Cpath d='M1 1l4 4 4-4'/%3E%3C/svg%3E") no-repeat right 14px center; }
+.zone select:disabled { opacity: .6; }
+.zone .sub { margin: 0; }
+.zone-line { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; margin: 0 0 14px; }
+.zone-line .act { margin-top: 0; }
 .proof { margin-top: 18px; padding: 16px; border-radius: 16px; background: var(--soft); }
 .proof b { display: block; font-weight: 500; font-size: 15px; }
 .proof .kv { grid-template-columns: 70px minmax(0, 1fr); align-items: center; }

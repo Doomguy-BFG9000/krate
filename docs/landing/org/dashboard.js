@@ -783,9 +783,44 @@
           el("dt", { text: "Short name" }), el("dd", { text: o.slug || slug }),
           el("dt", { text: "Created" }), el("dd", { text: K.day(o.created_at) + (o.created_by ? " by " + K.who(o.created_by).label : "") }),
         ]),
+        o.time_zone ? zoneSetting(o, name) : null,
       ]));
       P.settings(pane, key);
     });
+  }
+
+  /// Settings, Organisation: where its days start (F-319). Owners and
+  /// admins pick a zone; everyone else reads it.
+  function zoneSetting(o, name) {
+    var mayChange = roleOf() === "owner" || roleOf() === "admin";
+    var said = el("p", { class: "sub", id: "zoneSaid", text: "Insights count each day from midnight to midnight, " + K.zoneName(o.time_zone) + "." });
+    if (!mayChange) return el("div", { class: "zone" }, [said]);
+    var zones = [];
+    try { zones = Intl.supportedValuesOf("timeZone").slice(); } catch (e) {}
+    [o.time_zone, K.zone(), "UTC"].forEach(function (z) { if (z && zones.indexOf(z) < 0) zones.push(z); });
+    zones.sort();
+    var pick = el("select", { id: "zonePick", "aria-label": name + "'s time zone" }, zones.map(function (z) {
+      var opt = el("option", { value: z, text: z.replace(/_/g, " ") + (z === K.zone() ? " (this computer)" : "") });
+      if (z === o.time_zone) opt.selected = true;
+      return opt;
+    }));
+    pick.addEventListener("change", function () {
+      var z = pick.value;
+      pick.disabled = true;
+      K.api("PUT", "/orgs/" + slug + "/time-zone", { time_zone: z }, { key: K.key() }).then(function (r) {
+        pick.disabled = false;
+        if (!r.ok) { pick.value = o.time_zone; toast(K.refusal(r.body.error, r.body.message).body || "That time zone was not saved. Try again."); return; }
+        o.time_zone = r.body.time_zone;
+        o.time_zone_chosen = true;
+        said.textContent = "Insights count each day from midnight to midnight, " + K.zoneName(o.time_zone) + ".";
+        toast("From now on " + name + "'s days start at midnight, " + K.zoneName(o.time_zone) + ". Days already counted keep theirs.");
+      });
+    });
+    return el("div", { class: "zone" }, [
+      el("label", { class: "lbl", for: "zonePick", text: "Time zone" }),
+      pick,
+      said,
+    ]);
   }
 
   // -------------------------------------------------------------- start
@@ -871,8 +906,18 @@
     // Back from a company sign-in: what it did, in words.
     var signedVia = K.takeSsoNotice(undefined, name);
     if (signedVia) toast(signedVia);
-    if (Pub) Pub.load();
-    show(S.tab);
-    countWaiting();
+    // An organisation made without a time zone (by the terminal, or before
+    // F-319) takes its owner's, once: its days then start at their midnight.
+    // The panes wait for it, so Insights counts by the new zone at once.
+    var zoned = roleOf() === "owner" && S.org.time_zone_chosen === false && K.zone()
+      ? K.api("PUT", "/orgs/" + slug + "/time-zone", { time_zone: K.zone() }, { key: K.key() }).then(function (r) {
+          if (r.ok) { S.org.time_zone = r.body.time_zone; S.org.time_zone_chosen = true; }
+        }, function () {})
+      : Promise.resolve();
+    zoned.then(function () {
+      if (Pub) Pub.load();
+      show(S.tab);
+      countWaiting();
+    });
   });
 })();

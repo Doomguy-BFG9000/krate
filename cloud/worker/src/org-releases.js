@@ -30,6 +30,8 @@ import { Org, extendOrg, addReasons, allows, parsePrincipal, displayOf } from ".
 // out-of-audience release must never renew offline access. Importing it
 // here makes the order this module's own, not the order of index.js.
 import "./org-lease.js";
+// Days are the organisation's own (org-time.js, F-319).
+import "./org-time.js";
 
 /// Who passes every audience: they must be able to review (section R).
 const SEES_ALL = new Set(["owner", "admin", "reviewer"]);
@@ -121,7 +123,6 @@ function spoken(list) {
   return `${list.slice(0, -1).join(", ")} and ${list[list.length - 1]}`;
 }
 
-const isoDay = (seconds) => new Date(seconds * 1000).toISOString().slice(0, 10);
 
 const ops = {
   // ------------------------------------------------------------- helpers
@@ -151,7 +152,7 @@ const ops = {
       action,
       target,
       "release-withdrawn",
-      `${name} withdrew ${c.name || "this app"} ${c.version || ""} on ${isoDay(c.withdrawn_at || ctx.now)}: "${c.withdraw_reason || "no reason given"}" -- ask an admin of ${name} which version to use now`.replace(/ {2,}/g, " "),
+      `${name} withdrew ${c.name || "this app"} ${c.version || ""} on ${this.orgDay(c.withdrawn_at || ctx.now)}: "${c.withdraw_reason || "no reason given"}" -- ask an admin of ${name} which version to use now`.replace(/ {2,}/g, " "),
     );
     refusal.body.withdrawn = { at: c.withdrawn_at, reason: c.withdraw_reason };
     return refusal;
@@ -259,7 +260,7 @@ const ops = {
     if (!reason || reason.length > REASON_MAX) return this.deny(ctx, "release.withdraw", target, "reason-required");
     const c = this.row("SELECT * FROM candidates WHERE digest = ?", digest);
     if (c && c.state === "withdrawn") {
-      return this.deny(ctx, "release.withdraw", target, "release-withdrawn", `it was already withdrawn on ${isoDay(c.withdrawn_at)}`);
+      return this.deny(ctx, "release.withdraw", target, "release-withdrawn", `it was already withdrawn on ${this.orgDay(c.withdrawn_at)}`);
     }
     if (!c || c.state !== "released") {
       return this.deny(

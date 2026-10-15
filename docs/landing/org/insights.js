@@ -492,6 +492,15 @@
 
     // ---------------------------------------------------------------- pane
 
+    /// Which day the numbers count by (F-319), and where to change it.
+    function zoneLine(body) {
+      if (!body.time_zone) return null;
+      var role = D.roleOf();
+      var kids = [el("span", { text: "Days run midnight to midnight, " + K.zoneName(body.time_zone) + "." })];
+      if (role === "owner" || role === "admin") kids.push(go("settings", "Change", "Change " + nameOf() + "'s time zone"));
+      return el("p", { class: "sub zone-line" }, kids);
+    }
+
     function pane(p) {
       D.head(p, "Insights", subtitle(D.roleOf()));
       var wait = el("div", { class: "card ins-wait", role: "status", "aria-live": "polite" }, [
@@ -516,6 +525,8 @@
 
     function draw(p, body) {
       var sections = body.sections || [];
+      var zl = zoneLine(body);
+      if (zl) p.appendChild(zl);
       // Partial: counting began after the organisation did (a store older
       // than the insights), so the first days of a window are missing.
       var born = (D.S.org && D.S.org.created_at) || 0;

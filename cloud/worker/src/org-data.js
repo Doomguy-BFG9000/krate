@@ -39,6 +39,8 @@ import { appOf } from "./org-releases.js";
 import "./org-keys.js";
 import "./org-lifecycle-store.js";
 import { parseStamp, formatStamp, rebase, wins } from "./org-data-merge.js";
+// Days are the organisation's own (org-time.js, F-319).
+import { dayBefore } from "./org-time.js";
 
 const DAY = 24 * 60 * 60;
 /// Deleted records keep their tombstone this long (the contract's 30 days).
@@ -110,7 +112,6 @@ export const DATA_DAYS_KEPT = 90;
 const HEX64 = /^[0-9a-f]{64}$/;
 const B64 = /^[A-Za-z0-9+/]+={0,2}$/;
 const KINDS = new Set(["v", "n", "t"]);
-const isoDay = (seconds) => new Date(seconds * 1000).toISOString().slice(0, 10);
 const bad = (message) => ({ status: 400, body: { error: "bad-request", message } });
 
 /// The bytes a base64 string stands for.
@@ -325,7 +326,7 @@ const ops = {
     this.sql.exec("UPDATE org_data_apps SET seq = ?, used = ?, purged_seq = ? WHERE app_id = ?", seq, Math.max(0, used), purgedSeq, app);
 
     // Counts for the day's audit line: writes, and who synced.
-    const day = isoDay(ctx.now);
+    const day = this.orgDay(ctx.now);
     this.sql.exec(
       `INSERT INTO org_data_daily (day, app_id, writes) VALUES (?, ?, ?)
        ON CONFLICT (day, app_id) DO UPDATE SET writes = writes + excluded.writes`,
@@ -383,7 +384,7 @@ const ops = {
     if (allows(me.role, "data.usage") !== "yes") {
       return this.deny(ctx, "data.usage", target, "role-cannot", `a ${me.role} cannot see how ${ctx.slug}'s apps use its data`);
     }
-    const day = isoDay(ctx.now);
+    const day = this.orgDay(ctx.now);
     const quota = quotaOf(this.env);
     const apps = this.rows("SELECT * FROM org_data_apps ORDER BY app_id").map((a) => {
       const records = this.row("SELECT COUNT(DISTINCT rec) AS n FROM org_data WHERE app_id = ? AND kind = 'v'", a.app_id).n;
@@ -398,7 +399,7 @@ const ops = {
 /// The day's audit line for every app that synced on an earlier day:
 /// counts, never content. Runs before any command.
 function tick(ctx) {
-  const today = isoDay(ctx.now);
+  const today = this.orgDay(ctx.now);
   for (const d of this.rows("SELECT * FROM org_data_daily WHERE day < ? ORDER BY day, app_id", today)) {
     const readers = this.row("SELECT COUNT(*) AS n FROM org_data_readers WHERE day = ? AND app_id = ?", d.day, d.app_id).n;
     this.audit("system:krate", "data.daily", `app:${d.app_id}`, "allowed", `${d.day}: ${d.writes} writes, ${readers} readers`);
@@ -409,7 +410,7 @@ function tick(ctx) {
       d.writes,
       readers,
     );
-    this.sql.exec("DELETE FROM org_data_days WHERE day < ?", isoDay(ctx.now - DATA_DAYS_KEPT * DAY));
+    this.sql.exec("DELETE FROM org_data_days WHERE day < ?", dayBefore(this.orgDay(ctx.now), DATA_DAYS_KEPT));
     this.sql.exec("DELETE FROM org_data_daily WHERE day = ? AND app_id = ?", d.day, d.app_id);
     this.sql.exec("DELETE FROM org_data_readers WHERE day = ? AND app_id = ?", d.day, d.app_id);
   }

@@ -71,6 +71,8 @@ import { inventoryRoute, provenanceArg } from "./org-inventory.js";
 import { playerPage, playerAsset, validatorFile, webPackRoute, ensureWebPack } from "./web-player.js";
 // Insights (IC-959), after everything whose counts it reads.
 import { insightsRoute } from "./org-insights.js";
+// The organisation's own day (F-319): its time zone, set by an owner or admin.
+import { orgTimeRoute } from "./org-time.js";
 // The organisation store (IC-946), one SQLite-backed Durable Object per
 // organisation; wrangler.toml binds it as ORGS.
 export { Org };
@@ -7396,7 +7398,7 @@ async function orgRouteCore(request, url, env, identity) {
     if (!SLUG.test(slug)) return orgError(400, "slug-invalid", slug);
     if (!signedIn) return anonymousOrgRefusal(request, env, 401, slug);
     const idempotency = await idempotencyOf(request, url.pathname, body.text);
-    const answer = await orgAsk(env, slug, { op: "create", principals, args: { name: body.value.name }, idempotency });
+    const answer = await orgAsk(env, slug, { op: "create", principals, args: { name: body.value.name, time_zone: body.value.time_zone }, idempotency });
     if (answer.status === 201 && answer.body.membership) {
       await noteOrgOf(env, answer.body.membership.principal, slug, answer.body.org.name, "owner");
     }
@@ -7534,7 +7536,7 @@ async function orgRouteCore(request, url, env, identity) {
     validate: callValidator,
   };
   const routed =
-    (await orgLifecycleRoute(h)) || (await orgBillingRoute(h)) || (await inventoryRoute(h)) || (await insightsRoute(h)) || (await orgReleaseRoute(h)) || (await connectionRoute(h)) ||
+    (await orgLifecycleRoute(h)) || (await orgBillingRoute(h)) || (await inventoryRoute(h)) || (await insightsRoute(h)) || (await orgTimeRoute(h)) || (await orgReleaseRoute(h)) || (await connectionRoute(h)) ||
     (await orgScimRoute(h)) || (await auditExportRoute(h)) || (await orgSamlRoute(h)) ||
     (await orgKeysRoute(h)) ||
     (await orgSigningRoute(h)) ||

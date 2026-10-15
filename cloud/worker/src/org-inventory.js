@@ -28,6 +28,8 @@ import { Org, extendOrg, addReasons, allows, parsePrincipal, displayOf } from ".
 // one counts; it must be installed first.
 import { appOf } from "./org-releases.js";
 import "./org-review.js";
+// Days are the organisation's own (org-time.js, F-319).
+import { dayBefore } from "./org-time.js";
 
 const KEEP_DAYS = 90;
 const RECENT_DAYS = 30;
@@ -58,7 +60,6 @@ const SCHEMA = [
 const COLUMNS = [["candidates", "provenance", "TEXT"]];
 
 const clip = (v, n = TEXT_MAX) => (v == null ? null : String(v).slice(0, n));
-const dayOf = (seconds) => new Date(seconds * 1000).toISOString().slice(0, 10);
 
 /// The build record a judgement carries, bounded, or null for an app made
 /// by hand. The validator has already read it strictly; this only keeps
@@ -137,7 +138,7 @@ const ops = {
   /// older than 90 days (at most once a day).
   noteUse(ctx, c) {
     if (!c || !ctx.actor) return;
-    const day = dayOf(ctx.now);
+    const day = this.orgDay(ctx.now);
     this.sql.exec(
       "INSERT OR IGNORE INTO usage_daily (day, app_id, digest, version, principal) VALUES (?, ?, ?, ?, ?)",
       day,
@@ -148,7 +149,7 @@ const ops = {
     );
     const last = this.row("SELECT value FROM inventory_meta WHERE key = 'pruned'");
     if (!last || last.value !== day) {
-      this.sql.exec("DELETE FROM usage_daily WHERE day < ?", dayOf(ctx.now - KEEP_DAYS * DAY));
+      this.sql.exec("DELETE FROM usage_daily WHERE day < ?", dayBefore(this.orgDay(ctx.now), KEEP_DAYS));
       this.sql.exec(
         "INSERT INTO inventory_meta (key, value) VALUES ('pruned', ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value",
         day,
@@ -166,7 +167,7 @@ const ops = {
 
   inventoryRows(ctx, me) {
     const names = allows(me.role, "inventory.people") === "yes";
-    const since = dayOf(ctx.now - (RECENT_DAYS - 1) * DAY);
+    const since = dayBefore(this.orgDay(ctx.now), RECENT_DAYS - 1);
     const all = this.rows("SELECT *, rowid FROM candidates ORDER BY uploaded_at DESC, rowid DESC");
     const byApp = new Map();
     for (const c of all) {
@@ -317,7 +318,7 @@ const ops = {
       return this.deny(ctx, "usage.view", target, "role-cannot", `a ${me.role} cannot see how ${ctx.slug}'s apps are used`);
     }
     const days = Math.min(KEEP_DAYS, Math.max(1, Math.floor(Number(ctx.args.days) || RECENT_DAYS)));
-    const since = dayOf(ctx.now - (days - 1) * DAY);
+    const since = dayBefore(this.orgDay(ctx.now), days - 1);
     const rows = this.rows(
       `SELECT day, app_id, digest, version, COUNT(DISTINCT principal) AS people
        FROM usage_daily WHERE day >= ? GROUP BY day, app_id, digest, version ORDER BY day, app_id, version`,

@@ -45,6 +45,8 @@ import "./org-saml.js";
 import "./org-scim.js";
 import "./org-audit-export.js";
 import { seatsUsed, billingState, freeSeats } from "./org-lifecycle-store.js";
+// Days are the organisation's own (org-time.js, F-319).
+import { dayBefore } from "./org-time.js";
 
 export const KEEP_DAYS = 90;
 export const SILENT_DAYS = 60;
@@ -56,7 +58,6 @@ export const FEWER = "<3";
 /// more than twice the weekly average of the four weeks before.
 export const SPIKE_MIN = 10;
 
-export const dayOf = (seconds) => new Date(seconds * 1000).toISOString().slice(0, 10);
 
 /// The refusals that stop someone using an app, counted against that app.
 const OPENING = /^(release\.download|lease\.issue|data\.|connection\.use)/;
@@ -230,7 +231,8 @@ const ops = {
   /// The last `n` days, oldest first, as ISO days.
   insightsDays(now, n) {
     const out = [];
-    for (let k = n - 1; k >= 0; k--) out.push(dayOf(now - k * DAY));
+    const today = this.orgDay(now);
+    for (let k = n - 1; k >= 0; k--) out.push(dayBefore(today, k));
     return out;
   },
 
@@ -238,8 +240,8 @@ const ops = {
 
   insightsOrg(ctx) {
     const now = ctx.now;
-    const today = dayOf(now);
-    const ago = (k) => dayOf(now - k * DAY);
+    const today = this.orgDay(now);
+    const ago = (k) => dayBefore(today, k);
     const since = this.insightsSince();
     const members = this.rows("SELECT principal, role, added_at FROM members WHERE state = 'active' ORDER BY added_at, rowid");
     const person = (p) => ({ principal: p, display: displayOf(p) });
@@ -482,8 +484,8 @@ const ops = {
 
   insightsDeveloper(ctx, names) {
     const now = ctx.now;
-    const today = dayOf(now);
-    const ago = (k) => dayOf(now - k * DAY);
+    const today = this.orgDay(now);
+    const ago = (k) => dayBefore(today, k);
     const mine = new Set(ctx.principals);
     const count = (n) => (names || n === 0 || n >= 3 ? n : FEWER);
     const owned = new Set(this.rows("SELECT app_id, principal FROM app_owners").filter((o) => mine.has(o.principal)).map((o) => o.app_id));
@@ -606,7 +608,7 @@ const ops = {
       `SELECT app_id, COUNT(DISTINCT day) AS days, MAX(day) AS last FROM usage_daily
        WHERE principal IN (${marks}) AND day >= ? GROUP BY app_id ORDER BY days DESC, app_id`,
       ...ctx.principals,
-      dayOf(now - 29 * DAY),
+      dayBefore(this.orgDay(now), 29),
     ).map((r) => ({ app_id: r.app_id, name: names.get(r.app_id) || r.app_id, days: r.days, last: r.last }));
     return { devices, apps };
   },
@@ -622,7 +624,7 @@ const ops = {
     }
     const names = allows(me.role, "insights.people") === "yes";
     const sections = sectionsFor(me.role);
-    const out = { v: 1, now: ctx.now, today: dayOf(ctx.now), role: me.role, names, since: this.insightsSince() || null, sections };
+    const out = { v: 1, now: ctx.now, today: this.orgDay(ctx.now), time_zone: this.timeZone(), time_zone_chosen: Boolean(this.timeZoneRow()), role: me.role, names, since: this.insightsSince() || null, sections };
     if (sections.includes("org")) out.org = this.insightsOrg(ctx);
     if (sections.includes("developer")) out.developer = this.insightsDeveloper(ctx, names);
     if (sections.includes("reviewer")) out.reviewer = this.insightsReviewer(ctx, names);
@@ -635,9 +637,9 @@ const ops = {
 /// pruning (once a day) and the actor's last day here.
 function tick(ctx) {
   if (!this.insightsMeta("insights_since")) this.insightsBackfill(ctx);
-  const today = dayOf(ctx.now);
+  const today = this.orgDay(ctx.now);
   if (this.insightsMeta("insights_pruned") !== today) {
-    const oldest = dayOf(ctx.now - KEEP_DAYS * DAY);
+    const oldest = dayBefore(this.orgDay(ctx.now), KEEP_DAYS);
     for (const t of ["people_daily", "app_daily", "insights_daily"]) this.sql.exec(`DELETE FROM ${t} WHERE day < ?`, oldest);
     this.insightsSetMeta("insights_pruned", today);
   }
@@ -666,7 +668,7 @@ function install(OrgClass) {
   const noteUse = P.noteUse;
   P.noteUse = function (ctx, c) {
     if (!c || !ctx.actor) return noteUse.call(this, ctx, c);
-    const day = dayOf(ctx.now);
+    const day = this.orgDay(ctx.now);
     const app = appOf(c);
     const already = this.row("SELECT 1 AS y FROM usage_daily WHERE day = ? AND app_id = ? AND principal = ? LIMIT 1", day, app, ctx.actor);
     noteUse.call(this, ctx, c);
@@ -691,7 +693,7 @@ function install(OrgClass) {
       // opening, offline access, its data, a connection -- not when, say,
       // someone without the role tried to approve it.
       const app = OPENING.test(String(action || "")) ? this.insightsAppOf(ctx, target) : "";
-      this.insightsCount(dayOf(ctx.now), "refusal", `${reason}|${app}`);
+      this.insightsCount(this.orgDay(ctx.now), "refusal", `${reason}|${app}`);
     }
     return answer;
   };
@@ -708,7 +710,7 @@ function install(OrgClass) {
         const a = this.row("SELECT approved_at, rowid FROM candidates WHERE digest = ?", now);
         const b = this.row("SELECT approved_at, rowid FROM candidates WHERE digest = ?", was);
         if (a && b && (a.approved_at < b.approved_at || (a.approved_at === b.approved_at && a.rowid < b.rowid))) {
-          this.insightsCount(dayOf(ctx.now), "rollback", app);
+          this.insightsCount(this.orgDay(ctx.now), "rollback", app);
         }
       }
     }
@@ -756,7 +758,7 @@ function install(OrgClass) {
       } catch (_) {}
       const outcome = status === 401 ? "refused" : status >= 400 ? "failed" : "ok";
       this.ctx.storage.transactionSync(() => {
-        if (this.org()) this.insightsCount(dayOf(this.now()), "scim", outcome);
+        if (this.org()) this.insightsCount(this.orgDay(this.now()), "scim", outcome);
       });
     }
     return res;

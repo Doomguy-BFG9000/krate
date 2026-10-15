@@ -277,6 +277,16 @@ const linkTo = (root, tab) => root.all((n) => n.tagName === "A" && n.className =
   const yo2 = await open("owner", young);
   check(/1 person has not opened one in a month; 1 more joined recently See who has not/.test(shown(yo2)), "a mix: the settled one is counted, the new one named apart");
 
+  // Which day the numbers count by (F-319): said to everyone, changed by
+  // owners and admins in Settings.
+  const zoned = await open("owner", body("owner", { time_zone: "Asia/Singapore", time_zone_chosen: true }));
+  check(/Days run midnight to midnight, Singapore time\. Change/.test(shown(zoned)), "the owner reads which day the numbers count by, and can change it");
+  const change = linkTo(pane(zoned), "settings")[0];
+  check(change && /time zone/.test(change.attrs["aria-label"] || ""), "Change goes to Settings and says what it changes");
+  const devZoned = await open("developer", body("developer", { time_zone: "America/Los_Angeles", time_zone_chosen: true }));
+  check(/Days run midnight to midnight, Los Angeles time\./.test(shown(devZoned)) && !linkTo(pane(devZoned), "settings").length, "a developer reads it too, without a Change they cannot use");
+  check(!/Days run midnight/.test(shown(o)), "a hub without time zones draws no line");
+
   const fresh = body("owner", { since: NOW - 5 * DAY });
   const f = await open("owner", fresh);
   check(/Counting since .*\. Days before that were not counted, so they show as 0\./.test(shown(f)), "partial: counting began after the organisation did, and it says so");
