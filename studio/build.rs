@@ -26,8 +26,7 @@ fn ensure_resource_glob_matches() {
     }
 
     fs::create_dir_all(bin_dir).expect("failed to create Studio resource directory");
-    fs::write(placeholder, [])
-        .expect("failed to create Studio resource placeholder");
+    fs::write(placeholder, []).expect("failed to create Studio resource placeholder");
 }
 
 fn main() {
